@@ -18,7 +18,7 @@ use crate::transfers::{
 use crate::{
     Club, ClubLevelAnchor, ContractType, Country, HappinessEventType, Person, Player,
     PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
-    ReputationLevel,
+    ReputationLevel, Team,
 };
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
@@ -94,6 +94,33 @@ struct PendingListing {
     decided_by: String,
 }
 
+/// What one club's listing pass reads for every player it looks at: the
+/// pricing inputs that do not change between players, and the coach whose
+/// name goes on each decision.
+struct ClubListingScope<'c> {
+    club: &'c Club,
+    date: NaiveDate,
+    price_level: f32,
+    league_reputation: u16,
+    club_reputation: u16,
+    decided_by: String,
+}
+
+/// What the numeric listing gates measure a player against: his own
+/// numbers, his squad's, his club's standing, and what the club can hold.
+/// Read once, at the top of the evaluation, so every gate below asks the
+/// same questions of the same reading.
+#[derive(Clone, Copy)]
+struct ListingReading {
+    age: u8,
+    ca_i: i16,
+    avg: i16,
+    is_promising_youth: bool,
+    rep_level: ReputationLevel,
+    parent_holds: bool,
+    affordability: AffordabilityInput,
+}
+
 impl CountryResult {
     /// List players for transfer based on pipeline decisions and staff evaluations.
     pub(crate) fn list_players_from_pipeline(
@@ -132,258 +159,31 @@ impl CountryResult {
             // a club with strong domestic standing but limited continental
             // exposure should still command a domestic premium.
             let club_reputation = main_team.reputation.market_value_score();
-            let decided_by = main_team.staffs.head_coach_name();
+            let scope = ClubListingScope {
+                club,
+                date,
+                price_level,
+                league_reputation,
+                club_reputation,
+                decided_by: main_team.staffs.head_coach_name(),
+            };
 
-            for player in &main_team.players.players {
-                let presence = MarketPresence::of(&country.transfer_market, player.id);
-                match Self::evaluate_player_listing(
-                    player,
-                    &squad_analysis,
-                    club,
-                    date,
-                    current_window,
-                    presence,
-                ) {
-                    ListingDecision::Keep => {}
-                    ListingDecision::UpgradeLoanToTransfer => {
-                        let asking_price = Self::calculate_asking_price(
-                            player,
-                            club,
-                            date,
-                            price_level,
-                            league_reputation,
-                            club_reputation,
-                        );
-                        listings_to_upgrade.push((player.id, asking_price));
-                    }
-                    ListingDecision::FreeTransfer => {
-                        let free_price = CurrencyValue {
-                            amount: 0.0,
-                            currency: Currency::Usd,
-                        };
-                        listings_to_add.push(PendingListing {
-                            player_id: player.id,
-                            club_id: club.id,
-                            team_id: main_team.id,
-                            asking_price: free_price,
-                            listing_type: TransferListingType::EndOfContract,
-                            reason: "dec_reason_under16_release".to_string(),
-                            decided_by: decided_by.clone(),
-                        });
-                    }
-                    ListingDecision::Transfer { reason } => {
-                        let asking_price = Self::calculate_asking_price(
-                            player,
-                            club,
-                            date,
-                            price_level,
-                            league_reputation,
-                            club_reputation,
-                        );
-                        listings_to_add.push(PendingListing {
-                            player_id: player.id,
-                            club_id: club.id,
-                            team_id: main_team.id,
-                            asking_price,
-                            listing_type: TransferListingType::Transfer,
-                            reason,
-                            decided_by: decided_by.clone(),
-                        });
-                    }
-                    ListingDecision::Loan { reason } => {
-                        listings_to_add.push(PendingListing {
-                            player_id: player.id,
-                            club_id: club.id,
-                            team_id: main_team.id,
-                            asking_price: CurrencyValue {
-                                amount: 0.0,
-                                currency: Currency::Usd,
-                            },
-                            listing_type: TransferListingType::Loan,
-                            reason,
-                            decided_by: decided_by.clone(),
-                        });
-                    }
-                }
-            }
+            Self::main_squad_listings(
+                country,
+                &scope,
+                main_team,
+                &squad_analysis,
+                current_window,
+                &mut listings_to_add,
+                &mut listings_to_upgrade,
+            );
 
-            // Explicit club listings outside the main squad. The evaluation
-            // above deliberately reads only the main roster — its numeric
-            // triggers measure players against main-squad analysis and must
-            // not auto-list reserve/youth players — but other systems (the
-            // season-start surplus trim) flag players across every team via
-            // `contract.is_transfer_listed`. Those flags must still become
-            // market listings, carrying the player's real team, or the
-            // player is stranded flagged-but-invisible to every buyer.
-            for team in club.teams.teams.iter().skip(1) {
-                for player in &team.players.players {
-                    if player.is_on_loan() || player.is_force_match_selection {
-                        continue;
-                    }
-                    // Board loan flag (`Loa`) on a reserve/youth player —
-                    // stamped by the squad-utilization audit, the surplus
-                    // demotion, or an accepted loan-request talk — must
-                    // become a real loan listing, or the badge is cosmetic
-                    // and no club can ever bid (the numeric evaluation above
-                    // reads only the main roster, so these players are
-                    // otherwise stranded off-market). Idempotent via the
-                    // existing-listing guard; the flag-setter already wrote
-                    // the decision-history entry, so `dec_reason_club_listed`
-                    // suppresses a duplicate. Fee mirrors the main-squad
-                    // board loan listing (zero — the borrower-side scan sets
-                    // the actual terms), keeping the path consistent.
-                    if player.statuses.has(PlayerStatusType::Loa) && player.contract.is_some() {
-                        match country.transfer_market.get_listing_by_player(player.id) {
-                            None => {
-                                listings_to_add.push(PendingListing {
-                                    player_id: player.id,
-                                    club_id: club.id,
-                                    team_id: team.id,
-                                    asking_price: CurrencyValue {
-                                        amount: 0.0,
-                                        currency: Currency::Usd,
-                                    },
-                                    listing_type: TransferListingType::Loan,
-                                    reason: "dec_reason_club_listed".to_string(),
-                                    decided_by: decided_by.clone(),
-                                });
-                            }
-                            Some(existing) => {
-                                // A loan listing that found no borrower for
-                                // half a year, on a player the club has ALSO
-                                // flagged for permanent sale, upgrades to a
-                                // real transfer listing. Without this the
-                                // `Loa` badge was a life sentence: the loan
-                                // row never expires, the flagged-for-sale
-                                // branch below skips loan-listed players, and
-                                // the unsold-exit valve only reads permanent
-                                // listings — so a warehoused reserve (the
-                                // 29-keeper U20 case) could never leave by
-                                // any route. The original listed date is
-                                // kept, so a long-stranded player reaches the
-                                // valve's one-year clock immediately instead
-                                // of restarting it.
-                                let flagged_for_sale = player
-                                    .contract
-                                    .as_ref()
-                                    .map(|c| c.is_transfer_listed)
-                                    .unwrap_or(false);
-                                if existing.listing_type == TransferListingType::Loan
-                                    && flagged_for_sale
-                                    && (date - existing.listed_date).num_days()
-                                        >= LOAN_UNSOLD_UPGRADE_DAYS
-                                {
-                                    let asking_price = Self::calculate_asking_price(
-                                        player,
-                                        club,
-                                        date,
-                                        price_level,
-                                        league_reputation,
-                                        club_reputation,
-                                    );
-                                    listings_to_upgrade.push((player.id, asking_price));
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    // Player-initiated departures from a squad below the
-                    // first team. The numeric evaluation above deliberately
-                    // reads only the main roster — its triggers measure a
-                    // player against main-squad analysis and must not
-                    // auto-list reserves — but a formal request is not a
-                    // numeric trigger. It is the player's own decision, and
-                    // a senior reserve squad is exactly where the
-                    // reserve-ambition audit produces one.
-                    //
-                    // Without this the request was a closed loop: the audit
-                    // fired, the manager talk failed, `Req` was stamped, no
-                    // listing pass could see it, and the weekly desire tick
-                    // then cleared the status again for want of a live
-                    // reason. The player asked to leave every month for
-                    // years and nothing ever happened.
-                    //
-                    // Youth squads stay out of it: a boy asking for football
-                    // is a development-loan case, which the pathway owns.
-                    let is_senior_reserve = team.team_type.is_senior_reserve();
-                    let is_youth_contract = player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.contract_type == ContractType::Youth)
-                        .unwrap_or(false);
-                    if is_senior_reserve && !is_youth_contract && player.contract.is_some() {
-                        let requested = player.statuses.has(PlayerStatusType::Req);
-                        let long_unhappy = player
-                            .statuses
-                            .held_for_days(PlayerStatusType::Unh, date)
-                            .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
-                        let already_on_market = player.statuses.has(PlayerStatusType::Lst)
-                            || player.statuses.has(PlayerStatusType::Frt);
-                        if (requested || long_unhappy) && !already_on_market {
-                            let asking_price = Self::calculate_asking_price(
-                                player,
-                                club,
-                                date,
-                                price_level,
-                                league_reputation,
-                                club_reputation,
-                            );
-                            listings_to_add.push(PendingListing {
-                                player_id: player.id,
-                                club_id: club.id,
-                                team_id: team.id,
-                                asking_price,
-                                listing_type: TransferListingType::Transfer,
-                                reason: if requested {
-                                    "dec_reason_player_requested".to_string()
-                                } else {
-                                    "dec_reason_player_unhappy".to_string()
-                                },
-                                decided_by: decided_by.clone(),
-                            });
-                            continue;
-                        }
-                    }
-
-                    // Explicit permanent club listings: the season-start
-                    // surplus trim flags players across every team via
-                    // `contract.is_transfer_listed`. Those flags must still
-                    // become market listings, carrying the player's real
-                    // team, or the player is stranded flagged-but-invisible.
-                    let flagged = player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.is_transfer_listed)
-                        .unwrap_or(false);
-                    if !flagged {
-                        continue;
-                    }
-                    if player.statuses.has(PlayerStatusType::Lst)
-                        || player.statuses.has(PlayerStatusType::Loa)
-                        || player.statuses.has(PlayerStatusType::Frt)
-                    {
-                        continue;
-                    }
-                    let asking_price = Self::calculate_asking_price(
-                        player,
-                        club,
-                        date,
-                        price_level,
-                        league_reputation,
-                        club_reputation,
-                    );
-                    listings_to_add.push(PendingListing {
-                        player_id: player.id,
-                        club_id: club.id,
-                        team_id: team.id,
-                        asking_price,
-                        listing_type: TransferListingType::Transfer,
-                        reason: "dec_reason_club_listed".to_string(),
-                        decided_by: decided_by.clone(),
-                    });
-                }
-            }
+            Self::reserve_squad_listings(
+                country,
+                &scope,
+                &mut listings_to_add,
+                &mut listings_to_upgrade,
+            );
         }
 
         // Cap club-decided listings so no position group on a main team
@@ -410,130 +210,9 @@ impl CountryResult {
             );
         }
 
-        // Apply listings
-        for listing_data in listings_to_add {
-            let status_type = match listing_data.listing_type {
-                TransferListingType::Loan => PlayerStatusType::Loa,
-                TransferListingType::EndOfContract => PlayerStatusType::Frt,
-                _ => PlayerStatusType::Lst,
-            };
+        Self::apply_listings(country, date, summary, listings_to_add);
 
-            let movement = match listing_data.listing_type {
-                TransferListingType::Loan => "dec_loan_listed",
-                TransferListingType::EndOfContract => "dec_free_transfer_listed",
-                _ => "dec_transfer_listed",
-            };
-
-            // Captured before `listing_data.listing_type` is moved into the
-            // listing below — an end-of-contract listing is the under-16
-            // free release and is the only producer of this listing type.
-            let is_under16_release = matches!(
-                listing_data.listing_type,
-                TransferListingType::EndOfContract
-            );
-
-            let listing = TransferListing::new(
-                listing_data.player_id,
-                listing_data.club_id,
-                listing_data.team_id,
-                listing_data.asking_price,
-                date,
-                listing_data.listing_type,
-            );
-
-            country.transfer_market.add_listing(listing);
-            summary.total_listings += 1;
-
-            for club in &mut country.clubs {
-                for team in &mut club.teams.teams {
-                    if let Some(player) = team
-                        .players
-                        .players
-                        .iter_mut()
-                        .find(|p| p.id == listing_data.player_id)
-                    {
-                        if !player.statuses.has(status_type) {
-                            player.statuses.add(date, status_type);
-                        }
-                        // An end-of-contract listing is the under-16 free
-                        // release. Record the explicit origin so when the
-                        // deal lapses the free-agent sweep labels the
-                        // departure as an under-16 release rather than
-                        // falling back to a generic mutual agreement.
-                        if is_under16_release {
-                            player.set_release_reason(FreeAgentReleaseReason::Under16Release);
-                        }
-                        // `dec_reason_club_listed` materializes a flag another
-                        // system set (`contract.is_transfer_listed`) — that
-                        // system already wrote the decision-history entry with
-                        // the real reason (surplus trim, salary fallback) when
-                        // it flagged the player. Adding a second, vaguer entry
-                        // here duplicated the decision on the player page; the
-                        // flag-setter owns the history.
-                        if listing_data.reason != "dec_reason_club_listed" {
-                            player.decision_history.add(
-                                date,
-                                movement.to_string(),
-                                listing_data.reason.clone(),
-                                listing_data.decided_by.clone(),
-                            );
-                        }
-                        // A CLUB-decision transfer listing for a player who
-                        // never asked out is the "you're not in my plans"
-                        // conversation — say it to his face instead of
-                        // letting him find out from the transfer page.
-                        // Player-initiated listings (his own request, his
-                        // own hardened unhappiness) need no telling.
-                        let player_initiated = listing_data.reason == "dec_reason_player_requested"
-                            || listing_data.reason == "dec_reason_player_unhappy";
-                        if status_type == PlayerStatusType::Lst
-                            && !player_initiated
-                            && !is_under16_release
-                        {
-                            let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
-                            player.happiness.add_event_with_cooldown(
-                                HappinessEventType::ToldNotInPlans,
-                                magnitude,
-                                180,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Upgrade stale loan listings to permanent listings (see the
-        // collection above). In-place: same row, same `listed_date` — only
-        // the type, origin and asking price change, so the unsold-exit
-        // valve's clock keeps the time already served on the loan list.
-        for (player_id, asking_price) in listings_to_upgrade {
-            let Some(listing) = country.transfer_market.listings.iter_mut().find(|l| {
-                l.player_id == player_id
-                    && l.listing_type == TransferListingType::Loan
-                    && l.status == TransferListingStatus::Available
-            }) else {
-                continue;
-            };
-            listing.listing_type = TransferListingType::Transfer;
-            listing.origin = TransferListingOrigin::SellerListed;
-            listing.asking_price = asking_price.clone();
-            listing.original_asking_price = asking_price;
-            summary.total_listings += 1;
-            for club in &mut country.clubs {
-                for team in &mut club.teams.teams {
-                    if let Some(player) =
-                        team.players.players.iter_mut().find(|p| p.id == player_id)
-                    {
-                        if !player.statuses.has(PlayerStatusType::Lst) {
-                            player.statuses.add(date, PlayerStatusType::Lst);
-                        }
-                        // No decision-history entry: the flag-setter (surplus
-                        // trim / salary fallback) already recorded the listing
-                        // decision when it stamped `is_transfer_listed`.
-                    }
-                }
-            }
-        }
+        Self::upgrade_stale_loan_listings(country, date, summary, listings_to_upgrade);
 
         // Self-healing: clear any `Lst` / `Loa` badge no longer backed by a
         // live market listing or a pending listing intent, so the flag and
@@ -1090,38 +769,8 @@ impl CountryResult {
         current_window: Option<(NaiveDate, NaiveDate)>,
         presence: MarketPresence,
     ) -> ListingDecision {
-        // Loan players belong to another club — cannot be listed by the loan club
-        if player.is_on_loan() {
-            return ListingDecision::Keep;
-        }
-
-        // Manager has pinned this player to the squad — never auto-list.
-        // The pin only protects contracted players; once the contract
-        // ends the player is a free agent and must be free to move.
-        if player.is_force_match_selection && player.contract.is_some() {
-            return ListingDecision::Keep;
-        }
-
-        // Same-window protection: signed during this open window → can't be listed
-        if let (Some(transfer_date), Some((window_start, window_end))) =
-            (player.last_transfer_date, current_window)
-        {
-            if transfer_date >= window_start && transfer_date <= window_end {
-                return ListingDecision::Keep;
-            }
-        }
-
-        // Already on the market — read the market rows, not the badges.
-        // `Lst` / `Loa` are claims about the market and this pass is what
-        // makes them true: the board audit stamps the badge the day it
-        // decides. Treating the badge as proof of a row stranded every
-        // board-listed main-squad player — badge, no row, nothing for a
-        // buyer, the seller push or the unsold-exit valve to read — while
-        // the reconcile stripped the badge again and the renewal manager
-        // saw a clean player. A free-transfer release is a decision
-        // already made.
-        if presence.for_sale || player.statuses.has(PlayerStatusType::Frt) {
-            return ListingDecision::Keep;
+        if let Some(decision) = Self::already_settled(player, current_window, presence) {
+            return decision;
         }
         let flagged_for_sale = player
             .contract
@@ -1131,34 +780,14 @@ impl CountryResult {
             .contract
             .as_ref()
             .is_some_and(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded));
-        if let Some(loan_listed_since) = presence.loan_listed_since {
-            // On the loan market. The row upgrades in place to a permanent
-            // listing — the reserve branch's rule, on the same clock —
-            // when the player himself wants out, or when the club has also
-            // decided to sell and half a year has found no borrower.
-            // Otherwise the loan market keeps him.
-            let player_wants_out = player.statuses.has(PlayerStatusType::Req)
-                || player
-                    .statuses
-                    .held_for_days(PlayerStatusType::Unh, date)
-                    .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
-            let club_wants_sale = flagged_for_sale
-                || player.statuses.has(PlayerStatusType::Lst)
-                || labelled_not_needed;
-            let unsold_for_months =
-                (date - loan_listed_since).num_days() >= LOAN_UNSOLD_UPGRADE_DAYS;
-            if player_wants_out || (club_wants_sale && unsold_for_months) {
-                return ListingDecision::UpgradeLoanToTransfer;
-            }
-            return ListingDecision::Keep;
-        }
-
-        // Club signing plan: the club bought this player with intent and is
-        // still inside the evaluation window it committed to. Same helper
-        // the weekly rebalance / season trim / idle-days audit consult, so
-        // every automatic surplus mechanism honours one patience clock.
-        if player.signing_protection_active(date) {
-            return ListingDecision::Keep;
+        if let Some(decision) = Self::market_row_verdict(
+            player,
+            date,
+            presence,
+            flagged_for_sale,
+            labelled_not_needed,
+        ) {
+            return decision;
         }
 
         let age = player.age(date);
@@ -1168,6 +797,7 @@ impl CountryResult {
         let pa = PotentialEstimator::observable_ceiling(player, date);
         let ca_i = ca as i16;
         let avg = analysis.quality_level as i16;
+        let is_promising_youth = age <= 23 && pa > ca + 10;
 
         let rep_level = club
             .teams
@@ -1191,53 +821,8 @@ impl CountryResult {
             current_salary: player.contract.as_ref().map(|c| c.salary).unwrap_or(0),
         };
 
-        // Check if evaluation pipeline already identified as loan candidate
-        let loan_candidate = club
-            .transfer_plan
-            .loan_out_candidates
-            .iter()
-            .find(|c| c.player_id == player.id);
-
-        if let Some(candidate) = loan_candidate {
-            // The board audit stamps `Loa` and writes the decision-history
-            // row when it adds the candidate; materialising that badge here
-            // must not add a second, vaguer entry.
-            if player.statuses.has(PlayerStatusType::Loa) {
-                return ListingDecision::Loan {
-                    reason: "dec_reason_club_listed".to_string(),
-                };
-            }
-            let reason = match &candidate.reason {
-                LoanOutReason::NeedsGameTime => "dec_reason_needs_game_time",
-                LoanOutReason::BlockedByBetterPlayer => "dec_reason_blocked_by_better",
-                LoanOutReason::Surplus => "dec_reason_surplus_tactical",
-                LoanOutReason::FinancialRelief => "dec_reason_financial_relief",
-                LoanOutReason::LackOfPlayingTime => "dec_reason_lack_playing_time",
-                LoanOutReason::PostInjuryFitness => "dec_reason_post_injury_fitness",
-                LoanOutReason::DevelopmentPathway => "dec_reason_development_pathway",
-                // Stalled-prospect pathway reasons carry their own keys so
-                // UI diagnostics can tell "blocked by depth" from "needs
-                // first-team minutes" from "protecting resale value".
-                LoanOutReason::BlockedByDepth => "dec_reason_blocked_by_depth",
-                LoanOutReason::NeedsFirstTeamMinutes => "dec_reason_needs_first_team_minutes",
-                LoanOutReason::AssetValueProtection => "dec_reason_asset_value_protection",
-                LoanOutReason::UnsettledAbroad => "dec_reason_unsettled_abroad",
-            };
-            return ListingDecision::Loan {
-                reason: reason.to_string(),
-            };
-        }
-
-        // Player-initiated departures outrank persisted club decisions: a
-        // player who formally requested out (or hardened into Unh) is
-        // listed under his own reason and exempted from the position-group
-        // minimums. The transfer-request handler also sets
-        // `contract.is_transfer_listed`, so checking the flag first used to
-        // mislabel these as "club listed".
-        if player.statuses.has(PlayerStatusType::Req) {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_player_requested".to_string(),
-            };
+        if let Some(decision) = Self::plan_and_request_verdict(player, club) {
+            return decision;
         }
 
         // Would the club entertain a loan of this man at all? Read once —
@@ -1245,93 +830,29 @@ impl CountryResult {
         // may decide to SELL its starter, it does not lend him out.
         let parent_holds = LoanAssetGuard::parent_holds_for(club, player, date);
 
-        // Unhappiness is not, on its own, a reason to sell. The formal
-        // `Unh` status is also reached by playing-time frustration — a
-        // benched but still-useful squad member — and shipping such a
-        // player out is the wrong response: the manager-talk and loan
-        // paths own him. We only treat the unhappiness as a sell signal
-        // once it has held for 6+ months (`UNHAPPY_LISTING_MIN_DAYS`)
-        // without resolving — a sustained grievance the club has had a
-        // full half-season to fix. The same threshold gates the player's
-        // own transfer request, so the two systems escalate together.
-        // Before then a playing-time complaint routes by squad value:
-        // useful seniors / rotation and not-yet-evaluated players are kept,
-        // a development-profile youngster is loaned for minutes, and only a
-        // genuinely surplus unhappy player is actually transfer-listed.
-        if player.statuses.has(PlayerStatusType::Unh) {
-            let unhappy_days = player
-                .statuses
-                .held_for_days(PlayerStatusType::Unh, date)
-                .unwrap_or(0);
-            if unhappy_days >= UNHAPPY_LISTING_MIN_DAYS {
-                return ListingDecision::Transfer {
-                    reason: "dec_reason_player_unhappy".to_string(),
-                };
-            }
-            return match SquadAssetProtection::classify(player, club, date) {
-                SquadAssetClass::CorePlayer
-                | SquadAssetClass::FirstTeamUseful
-                | SquadAssetClass::RotationUseful
-                | SquadAssetClass::UnknownNeedsEvaluation => ListingDecision::Keep,
-                // A grumbling prospect goes out for minutes — but the
-                // club's own first choice in that shirt is not a prospect
-                // whatever his birth year says, and unhappiness is not the
-                // club's cue to lend him away.
-                SquadAssetClass::ProspectDevelopment => {
-                    if LoanAssetGuard::parent_holds_for(club, player, date) {
-                        ListingDecision::Keep
-                    } else {
-                        ListingDecision::Loan {
-                            reason: "dec_reason_young_needs_practice".to_string(),
-                        }
-                    }
-                }
-                SquadAssetClass::TrueSurplus => ListingDecision::Transfer {
-                    reason: "dec_reason_player_unhappy".to_string(),
-                },
-            };
+        let reading = ListingReading {
+            age,
+            ca_i,
+            avg,
+            is_promising_youth,
+            rep_level,
+            parent_holds,
+            affordability,
+        };
+
+        if let Some(decision) = Self::unhappiness_verdict(player, club, date) {
+            return decision;
         }
 
-        // A just-appointed head coach reviews the squad before honouring
-        // the old regime's exit decisions — no NEW club-driven listings
-        // during the review window. The player-initiated paths above
-        // (formal request, long unhappiness) keep their course: the new
-        // manager can't make a player un-ask to leave.
-        if club
-            .transfer_plan
-            .manager_review_until
-            .map(|until| date < until)
-            .unwrap_or(false)
-        {
-            return ListingDecision::Keep;
-        }
-
-        // Club decisions recorded on the player but not yet on the market:
-        // the contract flag (surplus trim, salary fallback, the board audit)
-        // or a bare badge the board audit stamped the day it decided.
-        // `dec_reason_club_listed` writes no history — the decider already
-        // did. Checked before the `NotNeeded` label: a badge is a concrete
-        // listing verdict, the label is what this pass turns into one when
-        // nobody else has.
-        if flagged_for_sale || player.statuses.has(PlayerStatusType::Lst) {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_club_listed".to_string(),
-            };
-        }
-        if player.statuses.has(PlayerStatusType::Loa) {
-            return ListingDecision::Loan {
-                reason: "dec_reason_club_listed".to_string(),
-            };
-        }
-        if labelled_not_needed {
-            return Self::decide_listing_type(
-                player,
-                &rep_level,
-                avg,
-                date,
-                parent_holds,
-                "dec_reason_surplus_squad".to_string(),
-            );
+        if let Some(decision) = Self::club_decision_verdict(
+            player,
+            club,
+            date,
+            flagged_for_sale,
+            labelled_not_needed,
+            reading,
+        ) {
+            return decision;
         }
 
         // Squad members the club wouldn't move on pure maths. Runs after
@@ -1342,129 +863,14 @@ impl CountryResult {
             return ListingDecision::Keep;
         }
 
-        let is_promising_youth = age <= 23 && pa > ca + 10;
-
-        // Below the CLUB's level. Every gate from here down measures a
-        // player against his squad-mates — the squad average, a surplus
-        // position, his age — and none of them asked what this club
-        // expects of a starter. The buy side asks exactly that when it
-        // briefs a shirt, so a giant could decide its striker was below
-        // the standard it recruits at, buy better, and then keep the man
-        // for years because he was never twenty-five points under the
-        // squad mean. Same anchor the brief shops against; listable only
-        // once the club has somebody in the group who does clear its
-        // level (a squad that is weak everywhere has nothing to cycle
-        // him out for), once the season has produced a sample, and never
-        // below the group's depth floor.
-        if let Some(level) = Self::club_level(club) {
-            let group = player.position().position_group();
-            if !is_promising_youth
-                && level.is_below_rotation_band(ca, group)
-                && !SquadEvidenceContext::current_season_sample(date, club).is_early_season()
-                && Self::group_has_starter_at_level(club, group, &level)
-                && Self::position_group_has_depth(club, player, date)
-            {
-                return Self::decide_listing_type(
-                    player,
-                    &rep_level,
-                    avg,
-                    date,
-                    parent_holds,
-                    "dec_reason_below_club_level".to_string(),
-                );
-            }
+        if let Some(decision) = Self::below_club_level(player, club, date, reading) {
+            return decision;
         }
 
-        // Wealth-aware quality gap threshold — shared with the buy-side
-        // squad-fit gate so selling and buying agree on what "too far
-        // below the squad" means.
-        let quality_gap_threshold: i16 = rep_level.surplus_quality_gap();
-
-        // Well below squad average
-        if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth
+        if let Some(decision) =
+            Self::numeric_listing_triggers(player, analysis, club, date, reading)
         {
-            if !Self::position_group_has_depth(club, player, date) {
-                return ListingDecision::Keep;
-            }
-            return Self::decide_listing_type(
-                player,
-                &rep_level,
-                avg,
-                date,
-                parent_holds,
-                "dec_reason_well_below_avg".to_string(),
-            );
-        }
-
-        // Surplus position and below average
-        let player_group = player.position().position_group();
-        for surplus_pos in &analysis.surplus_positions {
-            if surplus_pos.position_group() == player_group {
-                if ca_i < avg && !is_promising_youth {
-                    return Self::decide_listing_type(
-                        player,
-                        &rep_level,
-                        avg,
-                        date,
-                        parent_holds,
-                        "dec_reason_below_avg_surplus".to_string(),
-                    );
-                }
-            }
-        }
-
-        // Aging players past their prime — only top clubs cycle aging
-        // squad-average players out. Smaller clubs keep them to the end of
-        // their careers: loyalty, shorter shopping lists, a 35-year-old
-        // stalwart at a regional club is a feature, not a problem.
-        if rep_level.cycles_aging_squad() {
-            let aging_threshold = ListingBars::aging(player.position().position_group());
-            if age >= aging_threshold && ca_i < avg + 5 {
-                return ListingDecision::Transfer {
-                    reason: "dec_reason_aging_declining".to_string(),
-                };
-            }
-        }
-
-        // Below-average players in large squads — wealth-aware threshold
-        let squad_size = club
-            .teams
-            .teams
-            .first()
-            .map(|t| t.players.players.len())
-            .unwrap_or(0);
-        let max_comfortable_squad = match rep_level {
-            ReputationLevel::Elite => 45,
-            ReputationLevel::Continental => 40,
-            ReputationLevel::National => 32,
-            ReputationLevel::Regional => 26,
-            _ => 22,
-        };
-
-        if squad_size > max_comfortable_squad && ca_i < avg - 10 && !is_promising_youth {
-            return Self::decide_listing_type(
-                player,
-                &rep_level,
-                avg,
-                date,
-                parent_holds,
-                "dec_reason_squad_oversized".to_string(),
-            );
-        }
-
-        // Contract stalemate. The renewal manager has already had its
-        // window to lock this player down; if it has tried and failed
-        // (rejections in the last 365 days) we treat that — not the
-        // bare expiry date — as the listing trigger. Pure expiry
-        // without failed renewal evidence is intentionally NOT a
-        // listing reason: that would conflict with the AI transfer-list
-        // prompt and pre-empt the renewal flow on players the club
-        // actually wants to keep.
-        let stalemate = ContractStalemate::assess(player, date, affordability);
-        if stalemate.rejections_12m > 0 && stalemate.permits_listing() {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_contract_stalemate".to_string(),
-            };
+            return decision;
         }
 
         ListingDecision::Keep
@@ -1834,6 +1240,872 @@ impl CountryResult {
             amount: base_value.amount * multiplier,
             currency: base_value.currency,
         }
+    }
+
+    /// The main roster's own numeric evaluation — the one pass allowed to
+    /// decide, on the club's behalf, that a player it never flagged is for
+    /// sale, on loan, or released.
+    fn main_squad_listings(
+        country: &Country,
+        scope: &ClubListingScope<'_>,
+        main_team: &Team,
+        squad_analysis: &SquadAnalysis,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        listings_to_add: &mut Vec<PendingListing>,
+        listings_to_upgrade: &mut Vec<(u32, CurrencyValue)>,
+    ) {
+        let club = scope.club;
+        let date = scope.date;
+        let price_level = scope.price_level;
+        let league_reputation = scope.league_reputation;
+        let club_reputation = scope.club_reputation;
+        let decided_by = &scope.decided_by;
+
+        for player in &main_team.players.players {
+            let presence = MarketPresence::of(&country.transfer_market, player.id);
+            match CountryResult::evaluate_player_listing(
+                player,
+                &squad_analysis,
+                club,
+                date,
+                current_window,
+                presence,
+            ) {
+                ListingDecision::Keep => {}
+                ListingDecision::UpgradeLoanToTransfer => {
+                    let asking_price = CountryResult::calculate_asking_price(
+                        player,
+                        club,
+                        date,
+                        price_level,
+                        league_reputation,
+                        club_reputation,
+                    );
+                    listings_to_upgrade.push((player.id, asking_price));
+                }
+                ListingDecision::FreeTransfer => {
+                    let free_price = CurrencyValue {
+                        amount: 0.0,
+                        currency: Currency::Usd,
+                    };
+                    listings_to_add.push(PendingListing {
+                        player_id: player.id,
+                        club_id: club.id,
+                        team_id: main_team.id,
+                        asking_price: free_price,
+                        listing_type: TransferListingType::EndOfContract,
+                        reason: "dec_reason_under16_release".to_string(),
+                        decided_by: decided_by.clone(),
+                    });
+                }
+                ListingDecision::Transfer { reason } => {
+                    let asking_price = CountryResult::calculate_asking_price(
+                        player,
+                        club,
+                        date,
+                        price_level,
+                        league_reputation,
+                        club_reputation,
+                    );
+                    listings_to_add.push(PendingListing {
+                        player_id: player.id,
+                        club_id: club.id,
+                        team_id: main_team.id,
+                        asking_price,
+                        listing_type: TransferListingType::Transfer,
+                        reason,
+                        decided_by: decided_by.clone(),
+                    });
+                }
+                ListingDecision::Loan { reason } => {
+                    listings_to_add.push(PendingListing {
+                        player_id: player.id,
+                        club_id: club.id,
+                        team_id: main_team.id,
+                        asking_price: CurrencyValue {
+                            amount: 0.0,
+                            currency: Currency::Usd,
+                        },
+                        listing_type: TransferListingType::Loan,
+                        reason,
+                        decided_by: decided_by.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Explicit club listings outside the main squad. The numeric evaluation
+    /// deliberately reads only the main roster — its triggers measure players
+    /// against main-squad analysis and must not auto-list reserve or youth
+    /// players — but a badge another system stamped, and a formal request a
+    /// senior reserve made, must still become a market row, or the player is
+    /// stranded flagged-but-invisible to every buyer.
+    fn reserve_squad_listings(
+        country: &Country,
+        scope: &ClubListingScope<'_>,
+        listings_to_add: &mut Vec<PendingListing>,
+        listings_to_upgrade: &mut Vec<(u32, CurrencyValue)>,
+    ) {
+        let club = scope.club;
+        let date = scope.date;
+        let price_level = scope.price_level;
+        let league_reputation = scope.league_reputation;
+        let club_reputation = scope.club_reputation;
+        let decided_by = &scope.decided_by;
+
+        // Explicit club listings outside the main squad. The evaluation
+        // above deliberately reads only the main roster — its numeric
+        // triggers measure players against main-squad analysis and must
+        // not auto-list reserve/youth players — but other systems (the
+        // season-start surplus trim) flag players across every team via
+        // `contract.is_transfer_listed`. Those flags must still become
+        // market listings, carrying the player's real team, or the
+        // player is stranded flagged-but-invisible to every buyer.
+        for team in club.teams.teams.iter().skip(1) {
+            for player in &team.players.players {
+                if player.is_on_loan() || player.is_force_match_selection {
+                    continue;
+                }
+                // Board loan flag (`Loa`) on a reserve/youth player —
+                // stamped by the squad-utilization audit, the surplus
+                // demotion, or an accepted loan-request talk — must
+                // become a real loan listing, or the badge is cosmetic
+                // and no club can ever bid (the numeric evaluation above
+                // reads only the main roster, so these players are
+                // otherwise stranded off-market). Idempotent via the
+                // existing-listing guard; the flag-setter already wrote
+                // the decision-history entry, so `dec_reason_club_listed`
+                // suppresses a duplicate. Fee mirrors the main-squad
+                // board loan listing (zero — the borrower-side scan sets
+                // the actual terms), keeping the path consistent.
+                if player.statuses.has(PlayerStatusType::Loa) && player.contract.is_some() {
+                    match country.transfer_market.get_listing_by_player(player.id) {
+                        None => {
+                            listings_to_add.push(PendingListing {
+                                player_id: player.id,
+                                club_id: club.id,
+                                team_id: team.id,
+                                asking_price: CurrencyValue {
+                                    amount: 0.0,
+                                    currency: Currency::Usd,
+                                },
+                                listing_type: TransferListingType::Loan,
+                                reason: "dec_reason_club_listed".to_string(),
+                                decided_by: decided_by.clone(),
+                            });
+                        }
+                        Some(existing) => {
+                            // A loan listing that found no borrower for
+                            // half a year, on a player the club has ALSO
+                            // flagged for permanent sale, upgrades to a
+                            // real transfer listing. Without this the
+                            // `Loa` badge was a life sentence: the loan
+                            // row never expires, the flagged-for-sale
+                            // branch below skips loan-listed players, and
+                            // the unsold-exit valve only reads permanent
+                            // listings — so a warehoused reserve (the
+                            // 29-keeper U20 case) could never leave by
+                            // any route. The original listed date is
+                            // kept, so a long-stranded player reaches the
+                            // valve's one-year clock immediately instead
+                            // of restarting it.
+                            let flagged_for_sale = player
+                                .contract
+                                .as_ref()
+                                .map(|c| c.is_transfer_listed)
+                                .unwrap_or(false);
+                            if existing.listing_type == TransferListingType::Loan
+                                && flagged_for_sale
+                                && (date - existing.listed_date).num_days()
+                                    >= LOAN_UNSOLD_UPGRADE_DAYS
+                            {
+                                let asking_price = CountryResult::calculate_asking_price(
+                                    player,
+                                    club,
+                                    date,
+                                    price_level,
+                                    league_reputation,
+                                    club_reputation,
+                                );
+                                listings_to_upgrade.push((player.id, asking_price));
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Player-initiated departures from a squad below the
+                // first team. The numeric evaluation above deliberately
+                // reads only the main roster — its triggers measure a
+                // player against main-squad analysis and must not
+                // auto-list reserves — but a formal request is not a
+                // numeric trigger. It is the player's own decision, and
+                // a senior reserve squad is exactly where the
+                // reserve-ambition audit produces one.
+                //
+                // Without this the request was a closed loop: the audit
+                // fired, the manager talk failed, `Req` was stamped, no
+                // listing pass could see it, and the weekly desire tick
+                // then cleared the status again for want of a live
+                // reason. The player asked to leave every month for
+                // years and nothing ever happened.
+                //
+                // Youth squads stay out of it: a boy asking for football
+                // is a development-loan case, which the pathway owns.
+                let is_senior_reserve = team.team_type.is_senior_reserve();
+                let is_youth_contract = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.contract_type == ContractType::Youth)
+                    .unwrap_or(false);
+                if is_senior_reserve && !is_youth_contract && player.contract.is_some() {
+                    let requested = player.statuses.has(PlayerStatusType::Req);
+                    let long_unhappy = player
+                        .statuses
+                        .held_for_days(PlayerStatusType::Unh, date)
+                        .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
+                    let already_on_market = player.statuses.has(PlayerStatusType::Lst)
+                        || player.statuses.has(PlayerStatusType::Frt);
+                    if (requested || long_unhappy) && !already_on_market {
+                        let asking_price = CountryResult::calculate_asking_price(
+                            player,
+                            club,
+                            date,
+                            price_level,
+                            league_reputation,
+                            club_reputation,
+                        );
+                        listings_to_add.push(PendingListing {
+                            player_id: player.id,
+                            club_id: club.id,
+                            team_id: team.id,
+                            asking_price,
+                            listing_type: TransferListingType::Transfer,
+                            reason: if requested {
+                                "dec_reason_player_requested".to_string()
+                            } else {
+                                "dec_reason_player_unhappy".to_string()
+                            },
+                            decided_by: decided_by.clone(),
+                        });
+                        continue;
+                    }
+                }
+
+                // Explicit permanent club listings: the season-start
+                // surplus trim flags players across every team via
+                // `contract.is_transfer_listed`. Those flags must still
+                // become market listings, carrying the player's real
+                // team, or the player is stranded flagged-but-invisible.
+                let flagged = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.is_transfer_listed)
+                    .unwrap_or(false);
+                if !flagged {
+                    continue;
+                }
+                if player.statuses.has(PlayerStatusType::Lst)
+                    || player.statuses.has(PlayerStatusType::Loa)
+                    || player.statuses.has(PlayerStatusType::Frt)
+                {
+                    continue;
+                }
+                let asking_price = CountryResult::calculate_asking_price(
+                    player,
+                    club,
+                    date,
+                    price_level,
+                    league_reputation,
+                    club_reputation,
+                );
+                listings_to_add.push(PendingListing {
+                    player_id: player.id,
+                    club_id: club.id,
+                    team_id: team.id,
+                    asking_price,
+                    listing_type: TransferListingType::Transfer,
+                    reason: "dec_reason_club_listed".to_string(),
+                    decided_by: decided_by.clone(),
+                });
+            }
+        }
+    }
+
+    /// Put the collected decisions on the market: a row, a badge, the
+    /// decision-history line the flag-setter did not already write, and — for
+    /// a club-decided sale nobody asked for — the conversation it deserves.
+    fn apply_listings(
+        country: &mut Country,
+        date: NaiveDate,
+        summary: &mut TransferActivitySummary,
+        listings_to_add: Vec<PendingListing>,
+    ) {
+        // Apply listings
+        for listing_data in listings_to_add {
+            let status_type = match listing_data.listing_type {
+                TransferListingType::Loan => PlayerStatusType::Loa,
+                TransferListingType::EndOfContract => PlayerStatusType::Frt,
+                _ => PlayerStatusType::Lst,
+            };
+
+            let movement = match listing_data.listing_type {
+                TransferListingType::Loan => "dec_loan_listed",
+                TransferListingType::EndOfContract => "dec_free_transfer_listed",
+                _ => "dec_transfer_listed",
+            };
+
+            // Captured before `listing_data.listing_type` is moved into the
+            // listing below — an end-of-contract listing is the under-16
+            // free release and is the only producer of this listing type.
+            let is_under16_release = matches!(
+                listing_data.listing_type,
+                TransferListingType::EndOfContract
+            );
+
+            let listing = TransferListing::new(
+                listing_data.player_id,
+                listing_data.club_id,
+                listing_data.team_id,
+                listing_data.asking_price,
+                date,
+                listing_data.listing_type,
+            );
+
+            country.transfer_market.add_listing(listing);
+            summary.total_listings += 1;
+
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) = team
+                        .players
+                        .players
+                        .iter_mut()
+                        .find(|p| p.id == listing_data.player_id)
+                    {
+                        if !player.statuses.has(status_type) {
+                            player.statuses.add(date, status_type);
+                        }
+                        // An end-of-contract listing is the under-16 free
+                        // release. Record the explicit origin so when the
+                        // deal lapses the free-agent sweep labels the
+                        // departure as an under-16 release rather than
+                        // falling back to a generic mutual agreement.
+                        if is_under16_release {
+                            player.set_release_reason(FreeAgentReleaseReason::Under16Release);
+                        }
+                        // `dec_reason_club_listed` materializes a flag another
+                        // system set (`contract.is_transfer_listed`) — that
+                        // system already wrote the decision-history entry with
+                        // the real reason (surplus trim, salary fallback) when
+                        // it flagged the player. Adding a second, vaguer entry
+                        // here duplicated the decision on the player page; the
+                        // flag-setter owns the history.
+                        if listing_data.reason != "dec_reason_club_listed" {
+                            player.decision_history.add(
+                                date,
+                                movement.to_string(),
+                                listing_data.reason.clone(),
+                                listing_data.decided_by.clone(),
+                            );
+                        }
+                        // A CLUB-decision transfer listing for a player who
+                        // never asked out is the "you're not in my plans"
+                        // conversation — say it to his face instead of
+                        // letting him find out from the transfer page.
+                        // Player-initiated listings (his own request, his
+                        // own hardened unhappiness) need no telling.
+                        let player_initiated = listing_data.reason == "dec_reason_player_requested"
+                            || listing_data.reason == "dec_reason_player_unhappy";
+                        if status_type == PlayerStatusType::Lst
+                            && !player_initiated
+                            && !is_under16_release
+                        {
+                            let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
+                            player.happiness.add_event_with_cooldown(
+                                HappinessEventType::ToldNotInPlans,
+                                magnitude,
+                                180,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Upgrade stale loan listings to permanent listings. In-place: same row,
+    /// same `listed_date` — only the type, origin and asking price change, so
+    /// the unsold-exit valve's clock keeps the time already served on the
+    /// loan list.
+    fn upgrade_stale_loan_listings(
+        country: &mut Country,
+        date: NaiveDate,
+        summary: &mut TransferActivitySummary,
+        listings_to_upgrade: Vec<(u32, CurrencyValue)>,
+    ) {
+        // Upgrade stale loan listings to permanent listings (see the
+        // collection above). In-place: same row, same `listed_date` — only
+        // the type, origin and asking price change, so the unsold-exit
+        // valve's clock keeps the time already served on the loan list.
+        for (player_id, asking_price) in listings_to_upgrade {
+            let Some(listing) = country.transfer_market.listings.iter_mut().find(|l| {
+                l.player_id == player_id
+                    && l.listing_type == TransferListingType::Loan
+                    && l.status == TransferListingStatus::Available
+            }) else {
+                continue;
+            };
+            listing.listing_type = TransferListingType::Transfer;
+            listing.origin = TransferListingOrigin::SellerListed;
+            listing.asking_price = asking_price.clone();
+            listing.original_asking_price = asking_price;
+            summary.total_listings += 1;
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) =
+                        team.players.players.iter_mut().find(|p| p.id == player_id)
+                    {
+                        if !player.statuses.has(PlayerStatusType::Lst) {
+                            player.statuses.add(date, PlayerStatusType::Lst);
+                        }
+                        // No decision-history entry: the flag-setter (surplus
+                        // trim / salary fallback) already recorded the listing
+                        // decision when it stamped `is_transfer_listed`.
+                    }
+                }
+            }
+        }
+    }
+
+    /// The four states in which the question does not arise at all: he belongs
+    /// to somebody else, the manager pinned him, he arrived in this very
+    /// window, or he is already on the market.
+    fn already_settled(
+        player: &Player,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+        presence: MarketPresence,
+    ) -> Option<ListingDecision> {
+        // Loan players belong to another club — cannot be listed by the loan club
+        if player.is_on_loan() {
+            return Some(ListingDecision::Keep);
+        }
+
+        // Manager has pinned this player to the squad — never auto-list.
+        // The pin only protects contracted players; once the contract
+        // ends the player is a free agent and must be free to move.
+        if player.is_force_match_selection && player.contract.is_some() {
+            return Some(ListingDecision::Keep);
+        }
+
+        // Same-window protection: signed during this open window → can't be listed
+        if let (Some(transfer_date), Some((window_start, window_end))) =
+            (player.last_transfer_date, current_window)
+        {
+            if transfer_date >= window_start && transfer_date <= window_end {
+                return Some(ListingDecision::Keep);
+            }
+        }
+
+        // Already on the market — read the market rows, not the badges.
+        // `Lst` / `Loa` are claims about the market and this pass is what
+        // makes them true: the board audit stamps the badge the day it
+        // decides. Treating the badge as proof of a row stranded every
+        // board-listed main-squad player — badge, no row, nothing for a
+        // buyer, the seller push or the unsold-exit valve to read — while
+        // the reconcile stripped the badge again and the renewal manager
+        // saw a clean player. A free-transfer release is a decision
+        // already made.
+        if presence.for_sale || player.statuses.has(PlayerStatusType::Frt) {
+            return Some(ListingDecision::Keep);
+        }
+
+        None
+    }
+
+    /// He already has a row, or a plan protecting him from getting one.
+    fn market_row_verdict(
+        player: &Player,
+        date: NaiveDate,
+        presence: MarketPresence,
+        flagged_for_sale: bool,
+        labelled_not_needed: bool,
+    ) -> Option<ListingDecision> {
+        if let Some(loan_listed_since) = presence.loan_listed_since {
+            // On the loan market. The row upgrades in place to a permanent
+            // listing — the reserve branch's rule, on the same clock —
+            // when the player himself wants out, or when the club has also
+            // decided to sell and half a year has found no borrower.
+            // Otherwise the loan market keeps him.
+            let player_wants_out = player.statuses.has(PlayerStatusType::Req)
+                || player
+                    .statuses
+                    .held_for_days(PlayerStatusType::Unh, date)
+                    .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
+            let club_wants_sale = flagged_for_sale
+                || player.statuses.has(PlayerStatusType::Lst)
+                || labelled_not_needed;
+            let unsold_for_months =
+                (date - loan_listed_since).num_days() >= LOAN_UNSOLD_UPGRADE_DAYS;
+            if player_wants_out || (club_wants_sale && unsold_for_months) {
+                return Some(ListingDecision::UpgradeLoanToTransfer);
+            }
+            return Some(ListingDecision::Keep);
+        }
+
+        // Club signing plan: the club bought this player with intent and is
+        // still inside the evaluation window it committed to. Same helper
+        // the weekly rebalance / season trim / idle-days audit consult, so
+        // every automatic surplus mechanism honours one patience clock.
+        if player.signing_protection_active(date) {
+            return Some(ListingDecision::Keep);
+        }
+
+        None
+    }
+
+    /// What the evaluation pipeline and the player himself have already
+    /// settled: a standing loan-out candidacy, or a formal transfer request.
+    /// The request outranks any persisted club decision - the handler also
+    /// sets `contract.is_transfer_listed`, so reading the flag first used to
+    /// mislabel a player's own exit as a club one.
+    fn plan_and_request_verdict(player: &Player, club: &Club) -> Option<ListingDecision> {
+        // Check if evaluation pipeline already identified as loan candidate
+        let loan_candidate = club
+            .transfer_plan
+            .loan_out_candidates
+            .iter()
+            .find(|c| c.player_id == player.id);
+
+        if let Some(candidate) = loan_candidate {
+            // The board audit stamps `Loa` and writes the decision-history
+            // row when it adds the candidate; materialising that badge here
+            // must not add a second, vaguer entry.
+            if player.statuses.has(PlayerStatusType::Loa) {
+                return Some(ListingDecision::Loan {
+                    reason: "dec_reason_club_listed".to_string(),
+                });
+            }
+            let reason = match &candidate.reason {
+                LoanOutReason::NeedsGameTime => "dec_reason_needs_game_time",
+                LoanOutReason::BlockedByBetterPlayer => "dec_reason_blocked_by_better",
+                LoanOutReason::Surplus => "dec_reason_surplus_tactical",
+                LoanOutReason::FinancialRelief => "dec_reason_financial_relief",
+                LoanOutReason::LackOfPlayingTime => "dec_reason_lack_playing_time",
+                LoanOutReason::PostInjuryFitness => "dec_reason_post_injury_fitness",
+                LoanOutReason::DevelopmentPathway => "dec_reason_development_pathway",
+                // Stalled-prospect pathway reasons carry their own keys so
+                // UI diagnostics can tell "blocked by depth" from "needs
+                // first-team minutes" from "protecting resale value".
+                LoanOutReason::BlockedByDepth => "dec_reason_blocked_by_depth",
+                LoanOutReason::NeedsFirstTeamMinutes => "dec_reason_needs_first_team_minutes",
+                LoanOutReason::AssetValueProtection => "dec_reason_asset_value_protection",
+                LoanOutReason::UnsettledAbroad => "dec_reason_unsettled_abroad",
+            };
+            return Some(ListingDecision::Loan {
+                reason: reason.to_string(),
+            });
+        }
+
+        // Player-initiated departures outrank persisted club decisions: a
+        // player who formally requested out (or hardened into Unh) is
+        // listed under his own reason and exempted from the position-group
+        // minimums. The transfer-request handler also sets
+        // `contract.is_transfer_listed`, so checking the flag first used to
+        // mislabel these as "club listed".
+        if player.statuses.has(PlayerStatusType::Req) {
+            return Some(ListingDecision::Transfer {
+                reason: "dec_reason_player_requested".to_string(),
+            });
+        }
+
+        None
+    }
+
+    /// Unhappiness is not, on its own, a reason to sell - the formal `Unh`
+    /// status is also reached by playing-time frustration, and shipping such
+    /// a player out is the wrong response. Only a grievance the club has had
+    /// a full half-season to fix escalates; before then it routes by squad
+    /// value.
+    fn unhappiness_verdict(
+        player: &Player,
+        club: &Club,
+        date: NaiveDate,
+    ) -> Option<ListingDecision> {
+        // Unhappiness is not, on its own, a reason to sell. The formal
+        // `Unh` status is also reached by playing-time frustration — a
+        // benched but still-useful squad member — and shipping such a
+        // player out is the wrong response: the manager-talk and loan
+        // paths own him. We only treat the unhappiness as a sell signal
+        // once it has held for 6+ months (`UNHAPPY_LISTING_MIN_DAYS`)
+        // without resolving — a sustained grievance the club has had a
+        // full half-season to fix. The same threshold gates the player's
+        // own transfer request, so the two systems escalate together.
+        // Before then a playing-time complaint routes by squad value:
+        // useful seniors / rotation and not-yet-evaluated players are kept,
+        // a development-profile youngster is loaned for minutes, and only a
+        // genuinely surplus unhappy player is actually transfer-listed.
+        if player.statuses.has(PlayerStatusType::Unh) {
+            let unhappy_days = player
+                .statuses
+                .held_for_days(PlayerStatusType::Unh, date)
+                .unwrap_or(0);
+            if unhappy_days >= UNHAPPY_LISTING_MIN_DAYS {
+                return Some(ListingDecision::Transfer {
+                    reason: "dec_reason_player_unhappy".to_string(),
+                });
+            }
+            return Some(match SquadAssetProtection::classify(player, club, date) {
+                SquadAssetClass::CorePlayer
+                | SquadAssetClass::FirstTeamUseful
+                | SquadAssetClass::RotationUseful
+                | SquadAssetClass::UnknownNeedsEvaluation => ListingDecision::Keep,
+                // A grumbling prospect goes out for minutes — but the
+                // club's own first choice in that shirt is not a prospect
+                // whatever his birth year says, and unhappiness is not the
+                // club's cue to lend him away.
+                SquadAssetClass::ProspectDevelopment => {
+                    if LoanAssetGuard::parent_holds_for(club, player, date) {
+                        ListingDecision::Keep
+                    } else {
+                        ListingDecision::Loan {
+                            reason: "dec_reason_young_needs_practice".to_string(),
+                        }
+                    }
+                }
+                SquadAssetClass::TrueSurplus => ListingDecision::Transfer {
+                    reason: "dec_reason_player_unhappy".to_string(),
+                },
+            });
+        }
+
+        None
+    }
+
+    /// Decisions the club has already made and this pass turns into a market
+    /// row - held back while a just-appointed head coach reviews the squad,
+    /// because the new manager gets to disown the old regime's exits.
+    fn club_decision_verdict(
+        player: &Player,
+        club: &Club,
+        date: NaiveDate,
+        flagged_for_sale: bool,
+        labelled_not_needed: bool,
+        reading: ListingReading,
+    ) -> Option<ListingDecision> {
+        let avg = reading.avg;
+        let rep_level = reading.rep_level;
+        let parent_holds = reading.parent_holds;
+
+        // A just-appointed head coach reviews the squad before honouring
+        // the old regime's exit decisions — no NEW club-driven listings
+        // during the review window. The player-initiated paths above
+        // (formal request, long unhappiness) keep their course: the new
+        // manager can't make a player un-ask to leave.
+        if club
+            .transfer_plan
+            .manager_review_until
+            .map(|until| date < until)
+            .unwrap_or(false)
+        {
+            return Some(ListingDecision::Keep);
+        }
+
+        // Club decisions recorded on the player but not yet on the market:
+        // the contract flag (surplus trim, salary fallback, the board audit)
+        // or a bare badge the board audit stamped the day it decided.
+        // `dec_reason_club_listed` writes no history — the decider already
+        // did. Checked before the `NotNeeded` label: a badge is a concrete
+        // listing verdict, the label is what this pass turns into one when
+        // nobody else has.
+        if flagged_for_sale || player.statuses.has(PlayerStatusType::Lst) {
+            return Some(ListingDecision::Transfer {
+                reason: "dec_reason_club_listed".to_string(),
+            });
+        }
+        if player.statuses.has(PlayerStatusType::Loa) {
+            return Some(ListingDecision::Loan {
+                reason: "dec_reason_club_listed".to_string(),
+            });
+        }
+        if labelled_not_needed {
+            return Some(CountryResult::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                parent_holds,
+                "dec_reason_surplus_squad".to_string(),
+            ));
+        }
+
+        None
+    }
+
+    /// Every gate but this one measures a player against his squad-mates, and
+    /// none of them asks what the club expects of a starter. The buy side
+    /// asks exactly that when it briefs a shirt, so a giant could decide its
+    /// striker was below the standard it recruits at, buy better, and then
+    /// keep the man for years because he was never twenty-five points under
+    /// the squad mean.
+    fn below_club_level(
+        player: &Player,
+        club: &Club,
+        date: NaiveDate,
+        reading: ListingReading,
+    ) -> Option<ListingDecision> {
+        let ca = reading.ca_i as u8;
+        let avg = reading.avg;
+        let is_promising_youth = reading.is_promising_youth;
+        let rep_level = reading.rep_level;
+        let parent_holds = reading.parent_holds;
+
+        // Below the CLUB's level. Every gate from here down measures a
+        // player against his squad-mates — the squad average, a surplus
+        // position, his age — and none of them asked what this club
+        // expects of a starter. The buy side asks exactly that when it
+        // briefs a shirt, so a giant could decide its striker was below
+        // the standard it recruits at, buy better, and then keep the man
+        // for years because he was never twenty-five points under the
+        // squad mean. Same anchor the brief shops against; listable only
+        // once the club has somebody in the group who does clear its
+        // level (a squad that is weak everywhere has nothing to cycle
+        // him out for), once the season has produced a sample, and never
+        // below the group's depth floor.
+        if let Some(level) = CountryResult::club_level(club) {
+            let group = player.position().position_group();
+            if !is_promising_youth
+                && level.is_below_rotation_band(ca, group)
+                && !SquadEvidenceContext::current_season_sample(date, club).is_early_season()
+                && CountryResult::group_has_starter_at_level(club, group, &level)
+                && CountryResult::position_group_has_depth(club, player, date)
+            {
+                return Some(CountryResult::decide_listing_type(
+                    player,
+                    &rep_level,
+                    avg,
+                    date,
+                    parent_holds,
+                    "dec_reason_below_club_level".to_string(),
+                ));
+            }
+        }
+
+        None
+    }
+
+    /// The measurements that can list a player nobody decided anything about:
+    /// too far below the squad, surplus in his group, aging past the point
+    /// his club cycles, one of too many bodies, or a renewal that has failed.
+    fn numeric_listing_triggers(
+        player: &Player,
+        analysis: &SquadAnalysis,
+        club: &Club,
+        date: NaiveDate,
+        reading: ListingReading,
+    ) -> Option<ListingDecision> {
+        let age = reading.age;
+        let ca_i = reading.ca_i;
+        let avg = reading.avg;
+        let is_promising_youth = reading.is_promising_youth;
+        let rep_level = reading.rep_level;
+        let parent_holds = reading.parent_holds;
+        let affordability = reading.affordability;
+
+        // Wealth-aware quality gap threshold — shared with the buy-side
+        // squad-fit gate so selling and buying agree on what "too far
+        // below the squad" means.
+        let quality_gap_threshold: i16 = rep_level.surplus_quality_gap();
+
+        // Well below squad average
+        if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth
+        {
+            if !CountryResult::position_group_has_depth(club, player, date) {
+                return Some(ListingDecision::Keep);
+            }
+            return Some(CountryResult::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                parent_holds,
+                "dec_reason_well_below_avg".to_string(),
+            ));
+        }
+
+        // Surplus position and below average
+        let player_group = player.position().position_group();
+        for surplus_pos in &analysis.surplus_positions {
+            if surplus_pos.position_group() == player_group {
+                if ca_i < avg && !is_promising_youth {
+                    return Some(CountryResult::decide_listing_type(
+                        player,
+                        &rep_level,
+                        avg,
+                        date,
+                        parent_holds,
+                        "dec_reason_below_avg_surplus".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Aging players past their prime — only top clubs cycle aging
+        // squad-average players out. Smaller clubs keep them to the end of
+        // their careers: loyalty, shorter shopping lists, a 35-year-old
+        // stalwart at a regional club is a feature, not a problem.
+        if rep_level.cycles_aging_squad() {
+            let aging_threshold = ListingBars::aging(player.position().position_group());
+            if age >= aging_threshold && ca_i < avg + 5 {
+                return Some(ListingDecision::Transfer {
+                    reason: "dec_reason_aging_declining".to_string(),
+                });
+            }
+        }
+
+        // Below-average players in large squads — wealth-aware threshold
+        let squad_size = club
+            .teams
+            .teams
+            .first()
+            .map(|t| t.players.players.len())
+            .unwrap_or(0);
+        let max_comfortable_squad = match rep_level {
+            ReputationLevel::Elite => 45,
+            ReputationLevel::Continental => 40,
+            ReputationLevel::National => 32,
+            ReputationLevel::Regional => 26,
+            _ => 22,
+        };
+
+        if squad_size > max_comfortable_squad && ca_i < avg - 10 && !is_promising_youth {
+            return Some(CountryResult::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                parent_holds,
+                "dec_reason_squad_oversized".to_string(),
+            ));
+        }
+
+        // Contract stalemate. The renewal manager has already had its
+        // window to lock this player down; if it has tried and failed
+        // (rejections in the last 365 days) we treat that — not the
+        // bare expiry date — as the listing trigger. Pure expiry
+        // without failed renewal evidence is intentionally NOT a
+        // listing reason: that would conflict with the AI transfer-list
+        // prompt and pre-empt the renewal flow on players the club
+        // actually wants to keep.
+        let stalemate = ContractStalemate::assess(player, date, affordability);
+        if stalemate.rejections_12m > 0 && stalemate.permits_listing() {
+            return Some(ListingDecision::Transfer {
+                reason: "dec_reason_contract_stalemate".to_string(),
+            });
+        }
+
+        None
     }
 }
 

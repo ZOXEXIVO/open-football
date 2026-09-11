@@ -10,6 +10,7 @@ pub(in crate::country::result) use self::market::{FreeAgentLedger, FreeAgentWorl
 use self::pricing::{BuyerRoleFit, FreeAgentMarketCalculator, FreeAgentOfferPricing};
 use super::config::TransferConfig;
 use super::execution::{ArrivalThreatProfile, SquadReactionPass, TransferExecution};
+use crate::Club;
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
@@ -468,6 +469,17 @@ pub(super) struct FreeAgentSigning {
     pub fills_group: Option<PlayerFieldPositionGroup>,
 }
 
+/// Tier anchors for wage / role inference on the emergency path — the same
+/// scale the request-driven path prices against, so an emergency deal fits
+/// on the same market as the rest of the pipeline.
+#[derive(Clone, Copy)]
+struct EmergencyClubAnchors {
+    club_score: f32,
+    league_reputation: u16,
+    negotiator_skill: u8,
+    foreign_slots: ForeignSlotCount,
+}
+
 impl CountryResult {
     /// Handle expiring contracts and free agent signings.
     ///
@@ -765,64 +777,19 @@ impl CountryResult {
             if country_signed >= country_cap {
                 break;
             }
-            if club.teams.teams.is_empty() {
+            let Some((mut projected, per_club_cap, anchors)) = Self::emergency_club_anchors(
+                country,
+                club,
+                config,
+                &registration,
+                base_per_club_cap,
+            ) else {
                 continue;
-            }
-            // Reuse the same squad-cap guard the normal matcher uses
-            // — emergency fill cannot push past a club's max squad
-            // size. `ClubView::can_accept_player` covers that.
-            if !ClubView::can_accept_player(club) {
-                continue;
-            }
-
-            let needs = FirstTeamSquadNeeds::for_club(club);
-            if !needs.needs_emergency_fill() {
-                continue;
-            }
-            // Once the squad is at or above the configured threshold
-            // the normal scouting pipeline takes over.
-            if needs.main_team_size >= config.emergency_squad_size_threshold
-                && needs.group_shortfall() == 0
-            {
-                continue;
-            }
-
-            // Adaptive per-club cap: a club below 11 players gets a
-            // higher cap so it can become playable in this tick. Country
-            // cap still applies as a final ceiling so multiple unplayable
-            // clubs don't all drain the market.
-            let mut projected = EmergencyProjectedSquad::from_needs(&needs);
-            let mut per_club_cap = base_per_club_cap;
-            if projected.total < config.emergency_min_playable_size {
-                let gap = config
-                    .emergency_min_playable_size
-                    .saturating_sub(projected.total);
-                // Lift the cap up to the urgent floor (or the gap, if
-                // larger). Don't compound `base + gap` because the
-                // floor already encodes the playable-size target.
-                per_club_cap = per_club_cap
-                    .max(config.emergency_urgent_per_club_cap_floor)
-                    .max(gap);
-            }
-
-            // Tier anchors for wage / role inference — match the
-            // request-driven path so emergency deals fit on the same
-            // market scale as the rest of the pipeline (overall_score,
-            // the unit the tier anchor curves are calibrated for).
-            let main_team = club.teams.main().or_else(|| club.teams.teams.first());
-            let buyer_club_score = main_team
-                .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
-                .unwrap_or(0.0);
-            let buyer_league_reputation = main_team
-                .and_then(|t| t.league_id)
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-            let buyer_negotiator_skill = main_team
-                .and_then(|t| t.staffs.find_negotiator())
-                .map(|s| (s.staff_attributes.mental.man_management as u32 * 5).min(100) as u8)
-                .unwrap_or(50);
-            let buyer_foreign_slots = registration.count(club);
+            };
+            let buyer_club_score = anchors.club_score;
+            let buyer_league_reputation = anchors.league_reputation;
+            let buyer_negotiator_skill = anchors.negotiator_skill;
+            let buyer_foreign_slots = anchors.foreign_slots;
 
             let mut club_signed = 0usize;
             // Player ids that already rejected an emergency offer
@@ -910,90 +877,20 @@ impl CountryResult {
                     continue;
                 };
 
-                // Stage wage / role / terms — emergency offers are
-                // realistic short deals, priced through the same
-                // shared wage chain as the regular matcher and the
-                // staged depth flow, then run through the acceptance
-                // roll lifted by the emergency multiplier.
-                let pricing = FreeAgentOfferPricing::compute(
+                let Some(pricing) = Self::emergency_offer_accepted(
                     best,
-                    slot.group,
+                    slot,
+                    club,
                     buyer_club_score,
                     buyer_league_reputation,
                     buyer_negotiator_skill,
                     buyer_rep,
-                );
-
-                // Acceptance: same composition as the regular matcher
-                // (wage / role / prestige / quality_fit / pressure),
-                // multiplied by the emergency uplift so the short-deal
-                // pitch translates into a higher acceptance chance.
-                // Crucially the multiplier is applied on the probability
-                // — not by lowering the threshold — so an implausible
-                // offer still gets a low probability, just slightly less
-                // low.
-                let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
-                    best.career_pressure,
-                    best.age,
-                    best.ability,
-                );
-                let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
-                    buyer_club_score,
-                    slot.group,
-                    best.career_pressure,
-                );
-                let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
-                    buyer_club_score,
-                    slot.group,
-                    best.career_pressure,
-                );
-                let score = FreeAgentMarketCalculator::acceptance_score(
-                    FreeAgentMarketCalculator::wage_score(
-                        pricing.offer_wage,
-                        pricing.reservation_wage,
-                    ),
-                    FreeAgentMarketCalculator::role_score(pricing.role),
-                    FreeAgentMarketCalculator::prestige_score(
-                        buyer_rep,
-                        best.reference_reputation,
-                        rep_drop,
-                    ),
-                    FreeAgentMarketCalculator::quality_fit_score(best.ability, min_ca, max_ca),
-                    best.career_pressure,
-                );
-                let threshold =
-                    FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
-                let base_prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
-                let prob = (base_prob
-                    * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER)
-                    .clamp(0.0, 1.0);
-
-                if best.is_global_pool {
-                    // Global-pool offer: bump the player's `offered`
-                    // counter regardless of acceptance, so the 30-day
-                    // window stays consistent with normal matching.
-                    global_offered_ids.push(best.player_id);
-                }
-
-                let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
-                if acceptance_roll > prob {
-                    if best.is_global_pool {
-                        global_rejected_ids.push(best.player_id);
-                    }
-                    debug!(
-                        "Emergency offer rejected: club {} → player {} ({:?}, prob={:.2})",
-                        club.id, best.player_id, slot.group, prob
-                    );
-                    // Skip this candidate for the rest of the pass at
-                    // this club — they declined once and shouldn't be
-                    // re-asked this tick — and try another candidate
-                    // for the same slot. The country / per-club caps
-                    // still bound the loop so a stream of rejections
-                    // can't run forever; once the picker exhausts the
-                    // pool it returns None and the outer break fires.
-                    rejected_locally.insert(best.player_id);
+                    global_offered_ids,
+                    global_rejected_ids,
+                    &mut rejected_locally,
+                ) else {
                     continue;
-                }
+                };
 
                 signings.push(FreeAgentSigning {
                     player_id: best.player_id,
@@ -1197,53 +1094,14 @@ impl CountryResult {
         let buyer_region_prestige =
             ScoutingRegion::from_country(country.continent_id, &country.code).league_prestige();
 
-        // Long-tail candidates eligible for this tier, most desperate
-        // first. The soft tier additionally restricts to domestic /
-        // same-continent nationalities — its whole purpose is the local
-        // market outlet; a cross-continent punt is the hard tier's job.
-        let mut eligible: Vec<&FreeAgentCandidate> = candidates
-            .iter()
-            .filter(|c| c.is_global_pool)
-            .filter(|c| {
-                // The days-free floor shrinks with quality: a strong free
-                // body reaches the opportunistic outlet in weeks, not
-                // months — clubs don't wait a quarter to notice a CA-140
-                // player sitting on the market.
-                c.career_pressure >= tier.min_pressure
-                    || c.days_free
-                        >= FreeAgentMarketCalculator::quality_scaled_min_days(
-                            tier.min_days_free,
-                            c.ability,
-                        )
-            })
-            .filter(|c| {
-                !tier.locality_restricted
-                    || c.nationality_country_code
-                        .eq_ignore_ascii_case(buyer_country_code)
-                    || c.nationality_continent_id == buyer_continent_id
-            })
-            .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
-            .filter(|c| !staged_ids.contains(&c.player_id))
-            .collect();
-        // Pressure-led, quality-spotlit ordering — see
-        // `clearing_queue_score` for why raw pressure alone starves
-        // good players behind the per-day cap.
-        eligible.sort_by(|a, b| {
-            let score_a = FreeAgentMarketCalculator::clearing_queue_score(
-                a.career_pressure,
-                a.ability,
-                a.days_free,
-            );
-            let score_b = FreeAgentMarketCalculator::clearing_queue_score(
-                b.career_pressure,
-                b.ability,
-                b.days_free,
-            );
-            score_b
-                .partial_cmp(&score_a)
-                .unwrap_or(Ordering::Equal)
-                .then_with(|| b.days_free.cmp(&a.days_free))
-        });
+        let eligible = Self::clearing_queue(
+            candidates,
+            &tier,
+            signings,
+            staged_ids,
+            buyer_country_code,
+            buyer_continent_id,
+        );
 
         let mut cleared = 0usize;
         for candidate in eligible {
@@ -1266,56 +1124,16 @@ impl CountryResult {
                 continue;
             }
 
-            // A year-plus on the market unlocks the widest allowance,
-            // independent of which tier is running.
-            let last_chance = candidate.days_free >= 365;
-
-            // Country-level realism gates, widened for LastChance.
-            let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
-                candidate.career_pressure,
-                candidate.age,
-                candidate.ability,
-            ) + if last_chance { 600 } else { 0 };
-            if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32
-            {
-                recorder.record(
-                    candidate.player_id,
-                    FreeAgentBlockReason::CountryReputationGap,
-                );
-                continue;
-            }
-            let cross_floor = if last_chance { 0.75 } else { 0.85 };
-            if FreeAgentMarketCalculator::cross_continent_blocked(
-                candidate.nationality_continent_id == buyer_continent_id,
-                candidate.nationality_region.league_prestige(),
+            let Some(rep_drop) = Self::clearing_realism_gates(
+                candidate,
+                buyer_country_reputation,
+                buyer_continent_id,
                 buyer_region_prestige,
-                candidate.career_pressure,
-                cross_floor,
-                candidate.reference_reputation,
-                visibility.import_capacity(),
-            ) {
-                recorder.record(
-                    candidate.player_id,
-                    FreeAgentBlockReason::CrossContinentPressureTooLow,
-                );
+                visibility,
+                recorder,
+            ) else {
                 continue;
-            }
-            let region_drop = FreeAgentMarketCalculator::region_drop_allowed(
-                candidate.career_pressure,
-                candidate.reference_reputation,
-            ) + if last_chance { 0.10 } else { 0.0 };
-            if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop
-            {
-                recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
-                continue;
-            }
-            // The clearing tiers are the backstop, not a bypass: a market
-            // that has never seen anyone like him does not sign him just
-            // because his contract ran out somewhere else.
-            if !visibility.is_visible(candidate) {
-                recorder.record(candidate.player_id, FreeAgentBlockReason::MarketUnfamiliar);
-                continue;
-            }
+            };
 
             // How well each fitting club knows where he comes from —
             // resolved per candidate, read per club below.
@@ -1327,68 +1145,9 @@ impl CountryResult {
                 last_country_id: candidate.last_country_id,
             };
 
-            // Which buyer takes him. The soft tier keeps the lowest-tier
-            // first-fit — it IS the local outlet, and a local club taking a
-            // punt is exactly the first club with room. The hard tier picks
-            // among the clubs whose band fits by visibility-weighted
-            // sampling, so "the random team that urgently needs a player"
-            // stops being the mechanism: a fitting club that knows his
-            // market gets him ahead of one that does not.
-            let mut too_good_everywhere = true;
-            let mut fitting: Vec<(&MarketClearingBuyer, u8, u8)> = Vec::new();
-            // Clubs whose band fits but whose foreigner quota is full — the
-            // difference between "nobody wants him" and "nobody can
-            // register him", which is a different answer for the player.
-            let mut unregistrable_fits = 0usize;
-            for buyer in buyers {
-                let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
-                    buyer.club_score,
-                    candidate.position_group,
-                    candidate.career_pressure,
-                );
-                let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
-                    buyer.club_score,
-                    candidate.position_group,
-                    candidate.career_pressure,
-                );
-                if candidate.ability <= max_ca {
-                    too_good_everywhere = false;
-                }
-                if candidate.ability >= min_ca && candidate.ability <= max_ca {
-                    // A club with no registration slot left for a foreigner
-                    // is not a landing spot, however well he fits: signing
-                    // him produces an omitted registration, not a squad
-                    // member, and the surplus machinery lists him for it.
-                    if buyer
-                        .foreign_slots
-                        .would_block(candidate.nationality_country_id)
-                    {
-                        unregistrable_fits += 1;
-                        continue;
-                    }
-                    fitting.push((buyer, min_ca, max_ca));
-                    if tier.locality_restricted {
-                        break;
-                    }
-                }
-            }
-            if fitting.is_empty() && unregistrable_fits > 0 {
-                recorder.record(
-                    candidate.player_id,
-                    FreeAgentBlockReason::NoRegistrationSlot,
-                );
-            }
-            let chosen =
-                Self::sample_clearing_buyer(&fitting, candidate.position_group, &candidate_market);
-            let Some((buyer, min_ca, max_ca)) = chosen else {
-                recorder.record(
-                    candidate.player_id,
-                    if too_good_everywhere {
-                        FreeAgentBlockReason::AboveMaximumAbility
-                    } else {
-                        FreeAgentBlockReason::BelowMinimumAbility
-                    },
-                );
+            let Some((buyer, min_ca, max_ca)) =
+                Self::choose_clearing_buyer(candidate, buyers, &tier, &candidate_market, recorder)
+            else {
                 continue;
             };
 
@@ -1420,36 +1179,17 @@ impl CountryResult {
             let quality_fit =
                 FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
 
-            // Soft tier only: opportunistic squad-fit gate. A club takes
-            // a punt on a free body only when the overall fit — depth
-            // need, affordability, locality, quality, pressure,
-            // professionalism — clears the stage-scaled threshold. This
-            // is what makes the early domestic layer a *selective*
-            // outlet rather than an indiscriminate sweep.
-            if tier.opportunistic_gate {
-                let stage = MarketStage::from_days_free(candidate.days_free);
-                let locality = if candidate
-                    .nationality_country_code
-                    .eq_ignore_ascii_case(buyer_country_code)
-                {
-                    1.0
-                } else if candidate.nationality_continent_id == buyer_continent_id {
-                    0.6
-                } else {
-                    0.25
-                };
-                let fit = FreeAgentMarketCalculator::opportunistic_fit_score(
-                    buyer.position_depth_need(candidate.position_group),
-                    wage_fit,
-                    locality,
-                    quality_fit,
-                    candidate.career_pressure,
-                    candidate.professionalism_norm,
-                );
-                if fit < FreeAgentMarketCalculator::opportunistic_fit_threshold(stage) {
-                    recorder.record(candidate.player_id, FreeAgentBlockReason::NoMatchingRequest);
-                    continue;
-                }
+            if Self::opportunistic_gate_blocks(
+                &tier,
+                candidate,
+                buyer,
+                buyer_country_code,
+                buyer_continent_id,
+                wage_fit,
+                quality_fit,
+                recorder,
+            ) {
+                continue;
             }
 
             let score = FreeAgentMarketCalculator::acceptance_score(
@@ -1507,6 +1247,448 @@ impl CountryResult {
                 candidate.days_free
             );
         }
+    }
+
+    /// Long-tail candidates eligible for this tier, most desperate first. The
+    /// soft tier additionally restricts to domestic / same-continent
+    /// nationalities — its whole purpose is the local market outlet; a
+    /// cross-continent punt is the hard tier's job.
+    fn clearing_queue<'c>(
+        candidates: &'c [FreeAgentCandidate],
+        tier: &MarketClearingTier,
+        signings: &[FreeAgentSigning],
+        staged_ids: &HashSet<u32>,
+        buyer_country_code: &str,
+        buyer_continent_id: u32,
+    ) -> Vec<&'c FreeAgentCandidate> {
+        // Long-tail candidates eligible for this tier, most desperate
+        // first. The soft tier additionally restricts to domestic /
+        // same-continent nationalities — its whole purpose is the local
+        // market outlet; a cross-continent punt is the hard tier's job.
+        let mut eligible: Vec<&FreeAgentCandidate> = candidates
+            .iter()
+            .filter(|c| c.is_global_pool)
+            .filter(|c| {
+                // The days-free floor shrinks with quality: a strong free
+                // body reaches the opportunistic outlet in weeks, not
+                // months — clubs don't wait a quarter to notice a CA-140
+                // player sitting on the market.
+                c.career_pressure >= tier.min_pressure
+                    || c.days_free
+                        >= FreeAgentMarketCalculator::quality_scaled_min_days(
+                            tier.min_days_free,
+                            c.ability,
+                        )
+            })
+            .filter(|c| {
+                !tier.locality_restricted
+                    || c.nationality_country_code
+                        .eq_ignore_ascii_case(buyer_country_code)
+                    || c.nationality_continent_id == buyer_continent_id
+            })
+            .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
+            .filter(|c| !staged_ids.contains(&c.player_id))
+            .collect();
+        // Pressure-led, quality-spotlit ordering — see
+        // `clearing_queue_score` for why raw pressure alone starves
+        // good players behind the per-day cap.
+        eligible.sort_by(|a, b| {
+            let score_a = FreeAgentMarketCalculator::clearing_queue_score(
+                a.career_pressure,
+                a.ability,
+                a.days_free,
+            );
+            let score_b = FreeAgentMarketCalculator::clearing_queue_score(
+                b.career_pressure,
+                b.ability,
+                b.days_free,
+            );
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| b.days_free.cmp(&a.days_free))
+        });
+
+        eligible
+    }
+
+    /// The country-level realism gates, widened for a player a year-plus on
+    /// the market. Returns the reputation drop this candidate has earned the
+    /// right to — the same number the acceptance score reads later — or
+    /// nothing at all when one of the gates says he cannot land here.
+    fn clearing_realism_gates(
+        candidate: &FreeAgentCandidate,
+        buyer_country_reputation: u16,
+        buyer_continent_id: u32,
+        buyer_region_prestige: f32,
+        visibility: &FreeAgentMarketVisibility,
+        recorder: &mut BlockReasonRecorder,
+    ) -> Option<i32> {
+        // A year-plus on the market unlocks the widest allowance,
+        // independent of which tier is running.
+        let last_chance = candidate.days_free >= 365;
+
+        // Country-level realism gates, widened for LastChance.
+        let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
+            candidate.career_pressure,
+            candidate.age,
+            candidate.ability,
+        ) + if last_chance { 600 } else { 0 };
+        if (buyer_country_reputation as i32 + rep_drop) < candidate.reference_reputation as i32 {
+            recorder.record(
+                candidate.player_id,
+                FreeAgentBlockReason::CountryReputationGap,
+            );
+            return None;
+        }
+        let cross_floor = if last_chance { 0.75 } else { 0.85 };
+        if FreeAgentMarketCalculator::cross_continent_blocked(
+            candidate.nationality_continent_id == buyer_continent_id,
+            candidate.nationality_region.league_prestige(),
+            buyer_region_prestige,
+            candidate.career_pressure,
+            cross_floor,
+            candidate.reference_reputation,
+            visibility.import_capacity(),
+        ) {
+            recorder.record(
+                candidate.player_id,
+                FreeAgentBlockReason::CrossContinentPressureTooLow,
+            );
+            return None;
+        }
+        let region_drop = FreeAgentMarketCalculator::region_drop_allowed(
+            candidate.career_pressure,
+            candidate.reference_reputation,
+        ) + if last_chance { 0.10 } else { 0.0 };
+        if candidate.nationality_region.league_prestige() > buyer_region_prestige + region_drop {
+            recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
+            return None;
+        }
+        // The clearing tiers are the backstop, not a bypass: a market
+        // that has never seen anyone like him does not sign him just
+        // because his contract ran out somewhere else.
+        if !visibility.is_visible(candidate) {
+            recorder.record(candidate.player_id, FreeAgentBlockReason::MarketUnfamiliar);
+            return None;
+        }
+
+        Some(rep_drop)
+    }
+
+    /// Which buyer takes him. The soft tier keeps the lowest-tier first-fit —
+    /// it IS the local outlet, and a local club taking a punt is exactly the
+    /// first club with room. The hard tier picks among the clubs whose band
+    /// fits by visibility-weighted sampling, so "the random team that urgently
+    /// needs a player" stops being the mechanism: a fitting club that knows his
+    /// market gets him ahead of one that does not.
+    fn choose_clearing_buyer<'b>(
+        candidate: &FreeAgentCandidate,
+        buyers: &'b [MarketClearingBuyer],
+        tier: &MarketClearingTier,
+        candidate_market: &ClearingMarketKnowledge<'_>,
+        recorder: &mut BlockReasonRecorder,
+    ) -> Option<(&'b MarketClearingBuyer, u8, u8)> {
+        // Which buyer takes him. The soft tier keeps the lowest-tier
+        // first-fit — it IS the local outlet, and a local club taking a
+        // punt is exactly the first club with room. The hard tier picks
+        // among the clubs whose band fits by visibility-weighted
+        // sampling, so "the random team that urgently needs a player"
+        // stops being the mechanism: a fitting club that knows his
+        // market gets him ahead of one that does not.
+        let mut too_good_everywhere = true;
+        let mut fitting: Vec<(&MarketClearingBuyer, u8, u8)> = Vec::new();
+        // Clubs whose band fits but whose foreigner quota is full — the
+        // difference between "nobody wants him" and "nobody can
+        // register him", which is a different answer for the player.
+        let mut unregistrable_fits = 0usize;
+        for buyer in buyers {
+            let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
+                buyer.club_score,
+                candidate.position_group,
+                candidate.career_pressure,
+            );
+            let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
+                buyer.club_score,
+                candidate.position_group,
+                candidate.career_pressure,
+            );
+            if candidate.ability <= max_ca {
+                too_good_everywhere = false;
+            }
+            if candidate.ability >= min_ca && candidate.ability <= max_ca {
+                // A club with no registration slot left for a foreigner
+                // is not a landing spot, however well he fits: signing
+                // him produces an omitted registration, not a squad
+                // member, and the surplus machinery lists him for it.
+                if buyer
+                    .foreign_slots
+                    .would_block(candidate.nationality_country_id)
+                {
+                    unregistrable_fits += 1;
+                    continue;
+                }
+                fitting.push((buyer, min_ca, max_ca));
+                if tier.locality_restricted {
+                    break;
+                }
+            }
+        }
+        if fitting.is_empty() && unregistrable_fits > 0 {
+            recorder.record(
+                candidate.player_id,
+                FreeAgentBlockReason::NoRegistrationSlot,
+            );
+        }
+        let chosen =
+            Self::sample_clearing_buyer(&fitting, candidate.position_group, &candidate_market);
+        let Some((buyer, min_ca, max_ca)) = chosen else {
+            recorder.record(
+                candidate.player_id,
+                if too_good_everywhere {
+                    FreeAgentBlockReason::AboveMaximumAbility
+                } else {
+                    FreeAgentBlockReason::BelowMinimumAbility
+                },
+            );
+            return None;
+        };
+
+        Some((buyer, min_ca, max_ca))
+    }
+
+    /// Soft tier only: the opportunistic squad-fit gate. A club takes a punt
+    /// on a free body only when the overall fit — depth need, affordability,
+    /// locality, quality, pressure, professionalism — clears the stage-scaled
+    /// threshold. This is what makes the early domestic layer a *selective*
+    /// outlet rather than an indiscriminate sweep.
+    #[allow(clippy::too_many_arguments)]
+    fn opportunistic_gate_blocks(
+        tier: &MarketClearingTier,
+        candidate: &FreeAgentCandidate,
+        buyer: &MarketClearingBuyer,
+        buyer_country_code: &str,
+        buyer_continent_id: u32,
+        wage_fit: f32,
+        quality_fit: f32,
+        recorder: &mut BlockReasonRecorder,
+    ) -> bool {
+        // Soft tier only: opportunistic squad-fit gate. A club takes
+        // a punt on a free body only when the overall fit — depth
+        // need, affordability, locality, quality, pressure,
+        // professionalism — clears the stage-scaled threshold. This
+        // is what makes the early domestic layer a *selective*
+        // outlet rather than an indiscriminate sweep.
+        if tier.opportunistic_gate {
+            let stage = MarketStage::from_days_free(candidate.days_free);
+            let locality = if candidate
+                .nationality_country_code
+                .eq_ignore_ascii_case(buyer_country_code)
+            {
+                1.0
+            } else if candidate.nationality_continent_id == buyer_continent_id {
+                0.6
+            } else {
+                0.25
+            };
+            let fit = FreeAgentMarketCalculator::opportunistic_fit_score(
+                buyer.position_depth_need(candidate.position_group),
+                wage_fit,
+                locality,
+                quality_fit,
+                candidate.career_pressure,
+                candidate.professionalism_norm,
+            );
+            if fit < FreeAgentMarketCalculator::opportunistic_fit_threshold(stage) {
+                recorder.record(candidate.player_id, FreeAgentBlockReason::NoMatchingRequest);
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Is this club in emergency territory at all, and if so, what does the
+    /// market look like from its side? `None` means the ordinary scouting
+    /// pipeline has it covered — the squad is full enough, the club cannot
+    /// accept anybody, or it has no first team to fill.
+    fn emergency_club_anchors(
+        country: &Country,
+        club: &Club,
+        config: &TransferConfig,
+        registration: &SquadRegistrationLimits,
+        base_per_club_cap: usize,
+    ) -> Option<(EmergencyProjectedSquad, usize, EmergencyClubAnchors)> {
+        if club.teams.teams.is_empty() {
+            return None;
+        }
+        // Reuse the same squad-cap guard the normal matcher uses
+        // — emergency fill cannot push past a club's max squad
+        // size. `ClubView::can_accept_player` covers that.
+        if !ClubView::can_accept_player(club) {
+            return None;
+        }
+
+        let needs = FirstTeamSquadNeeds::for_club(club);
+        if !needs.needs_emergency_fill() {
+            return None;
+        }
+        // Once the squad is at or above the configured threshold
+        // the normal scouting pipeline takes over.
+        if needs.main_team_size >= config.emergency_squad_size_threshold
+            && needs.group_shortfall() == 0
+        {
+            return None;
+        }
+
+        // Adaptive per-club cap: a club below 11 players gets a
+        // higher cap so it can become playable in this tick. Country
+        // cap still applies as a final ceiling so multiple unplayable
+        // clubs don't all drain the market.
+        let projected = EmergencyProjectedSquad::from_needs(&needs);
+        let mut per_club_cap = base_per_club_cap;
+        if projected.total < config.emergency_min_playable_size {
+            let gap = config
+                .emergency_min_playable_size
+                .saturating_sub(projected.total);
+            // Lift the cap up to the urgent floor (or the gap, if
+            // larger). Don't compound `base + gap` because the
+            // floor already encodes the playable-size target.
+            per_club_cap = per_club_cap
+                .max(config.emergency_urgent_per_club_cap_floor)
+                .max(gap);
+        }
+
+        // Tier anchors for wage / role inference — match the
+        // request-driven path so emergency deals fit on the same
+        // market scale as the rest of the pipeline (overall_score,
+        // the unit the tier anchor curves are calibrated for).
+        let main_team = club.teams.main().or_else(|| club.teams.teams.first());
+        let buyer_club_score = main_team
+            .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
+            .unwrap_or(0.0);
+        let buyer_league_reputation = main_team
+            .and_then(|t| t.league_id)
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        let buyer_negotiator_skill = main_team
+            .and_then(|t| t.staffs.find_negotiator())
+            .map(|s| (s.staff_attributes.mental.man_management as u32 * 5).min(100) as u8)
+            .unwrap_or(50);
+        let buyer_foreign_slots = registration.count(club);
+
+        Some((
+            projected,
+            per_club_cap,
+            EmergencyClubAnchors {
+                club_score: buyer_club_score,
+                league_reputation: buyer_league_reputation,
+                negotiator_skill: buyer_negotiator_skill,
+                foreign_slots: buyer_foreign_slots,
+            },
+        ))
+    }
+
+    /// Price the deal and put it to the player. Emergency offers are realistic
+    /// short deals, priced through the same shared wage chain as the regular
+    /// matcher, and the emergency uplift is applied to the PROBABILITY rather
+    /// than by lowering the threshold — so an implausible offer still gets a
+    /// low chance, just slightly less low.
+    #[allow(clippy::too_many_arguments)]
+    fn emergency_offer_accepted(
+        best: &FreeAgentCandidate,
+        slot: EmergencyGroupSlot,
+        club: &Club,
+        buyer_club_score: f32,
+        buyer_league_reputation: u16,
+        buyer_negotiator_skill: u8,
+        buyer_rep: u16,
+        global_offered_ids: &mut Vec<u32>,
+        global_rejected_ids: &mut Vec<u32>,
+        rejected_locally: &mut HashSet<u32>,
+    ) -> Option<FreeAgentOfferPricing> {
+        // Stage wage / role / terms — emergency offers are
+        // realistic short deals, priced through the same
+        // shared wage chain as the regular matcher and the
+        // staged depth flow, then run through the acceptance
+        // roll lifted by the emergency multiplier.
+        let pricing = FreeAgentOfferPricing::compute(
+            best,
+            slot.group,
+            buyer_club_score,
+            buyer_league_reputation,
+            buyer_negotiator_skill,
+            buyer_rep,
+        );
+
+        // Acceptance: same composition as the regular matcher
+        // (wage / role / prestige / quality_fit / pressure),
+        // multiplied by the emergency uplift so the short-deal
+        // pitch translates into a higher acceptance chance.
+        // Crucially the multiplier is applied on the probability
+        // — not by lowering the threshold — so an implausible
+        // offer still gets a low probability, just slightly less
+        // low.
+        let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
+            best.career_pressure,
+            best.age,
+            best.ability,
+        );
+        let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
+            buyer_club_score,
+            slot.group,
+            best.career_pressure,
+        );
+        let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
+            buyer_club_score,
+            slot.group,
+            best.career_pressure,
+        );
+        let score = FreeAgentMarketCalculator::acceptance_score(
+            FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage),
+            FreeAgentMarketCalculator::role_score(pricing.role),
+            FreeAgentMarketCalculator::prestige_score(
+                buyer_rep,
+                best.reference_reputation,
+                rep_drop,
+            ),
+            FreeAgentMarketCalculator::quality_fit_score(best.ability, min_ca, max_ca),
+            best.career_pressure,
+        );
+        let threshold = FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
+        let base_prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
+        let prob = (base_prob * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER)
+            .clamp(0.0, 1.0);
+
+        if best.is_global_pool {
+            // Global-pool offer: bump the player's `offered`
+            // counter regardless of acceptance, so the 30-day
+            // window stays consistent with normal matching.
+            global_offered_ids.push(best.player_id);
+        }
+
+        let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
+        if acceptance_roll > prob {
+            if best.is_global_pool {
+                global_rejected_ids.push(best.player_id);
+            }
+            debug!(
+                "Emergency offer rejected: club {} → player {} ({:?}, prob={:.2})",
+                club.id, best.player_id, slot.group, prob
+            );
+            // Skip this candidate for the rest of the pass at
+            // this club — they declined once and shouldn't be
+            // re-asked this tick — and try another candidate
+            // for the same slot. The country / per-club caps
+            // still bound the loop so a stream of rejections
+            // can't run forever; once the picker exhausts the
+            // pool it returns None and the outer break fires.
+            rejected_locally.insert(best.player_id);
+            return None;
+        }
+
+        Some(pricing)
     }
 }
 

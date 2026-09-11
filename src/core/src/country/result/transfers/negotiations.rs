@@ -11,13 +11,14 @@ use crate::club::player::events::transfer_social::{
 };
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::country::result::CountryResult;
+use crate::transfers::Appraisal;
 use crate::transfers::MarketMap;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferListingType;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::deal::auction::AuctionState;
+use crate::transfers::deal::auction::{AuctionState, DeadlineWindow};
 use crate::transfers::deal::negotiation::{
     NegotiationPhase, NegotiationRejectionReason, TransferNegotiation,
 };
@@ -182,6 +183,26 @@ impl PoolSigningTerms {
             role,
         })
     }
+}
+
+/// What the selling club will take, and how the fee on the table compares.
+/// Read once so the acceptance roll and the counter-offer below it agree.
+struct SellerPosition {
+    /// Fee ÷ asking price.
+    ratio: f64,
+    /// The multiple of asking he would actually sign at.
+    reservation: f64,
+    /// He never ACCEPTS below this, whatever the roll says.
+    below_floor: bool,
+    importance: f32,
+    /// What the fee does to the seller's year — the windfall model's read.
+    windfall: SellerWindfall,
+    /// The absolute floor itself, for the counter-offer.
+    floor: Option<SellerFloorVerdict>,
+    /// Deadline pressure on the seller, 0..1.
+    urgency: f64,
+    /// Peeked, not reserved — the counter-offer reads it.
+    buyer_transfer_budget: Option<f64>,
 }
 
 impl CountryResult {
@@ -718,46 +739,8 @@ impl CountryResult {
         date: NaiveDate,
         outcomes: &mut NegotiationOutcomes,
     ) {
-        // Selling club refuses to negotiate for recently signed players —
-        // they bought this player with a plan and won't sell immediately.
-        // Check domestic players only (foreign players aren't in this country).
-        if neg_data.selling_country_id.is_none() {
-            let window_mgr = TransferWindowManager::for_country(country, date);
-            let current_window = window_mgr.current_window_dates(country.id, date);
-            // Development-pathway bypass: the owner club itself listed
-            // this same-window signing for a development loan, so loan
-            // approaches are welcome. Permanent bids for the fresh
-            // signing stay blocked — the protection is only relaxed for
-            // the explicit pathway the owner opened.
-            let development_loan_listed = neg_data.is_loan
-                && country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == neg_data.selling_club_id)
-                    .map(|c| {
-                        c.transfer_plan.loan_out_candidates.iter().any(|cand| {
-                            cand.player_id == neg_data.player_id
-                                && cand.reason == LoanOutReason::DevelopmentPathway
-                        })
-                    })
-                    .unwrap_or(false);
-            if let Some(player) = CountryRoster::find(country, neg_data.player_id) {
-                if !development_loan_listed && player.is_transfer_protected(date, current_window) {
-                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
-                    {
-                        negotiation
-                            .reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
-                    }
-                    Self::reopen_listing_for_player(country, neg_data.player_id);
-                    PipelineProcessor::on_negotiation_resolved(
-                        country,
-                        neg_data.buying_club_id,
-                        neg_data.player_id,
-                        false,
-                    );
-                    return;
-                }
-            }
+        if Self::protects_fresh_signing(country, neg_id, neg_data, date) {
+            return;
         }
 
         // Pull the shared plausibility verdict here — drives the seller
@@ -885,175 +868,26 @@ impl CountryResult {
             country.transfer_market.story.agent_led_approaches += 1;
         }
 
-        if TransferTrace::is(neg_data.player_id) {
-            // Seller-side economics, the half of the funnel that leaves no
-            // trace anywhere else: what the club thinks he is, what the fee
-            // is worth to it, and how close it is to its wage ceiling.
-            let seller_line = country
-                .clubs
-                .iter()
-                .find(|c| c.id == neg_data.selling_club_id)
-                .map(|club| {
-                    let asset = CountryRoster::find(country, neg_data.player_id)
-                        .map(|p| SquadAssetProtection::classify(p, club, date))
-                        .map(|c| c.label())
-                        .unwrap_or("unknown");
-                    let income = club.finance.estimated_annual_income(date);
-                    let wages: i64 = club
-                        .teams
-                        .iter()
-                        .map(|t| t.get_annual_salary() as i64)
-                        .sum();
-                    format!(
-                        "club={} asset={asset} income={income} wages={wages} \
-                         fee/income={:.2}",
-                        club.name,
-                        if income > 0 {
-                            neg_data.offer_amount / income as f64
-                        } else {
-                            0.0
-                        },
-                    )
-                })
-                .unwrap_or_else(|| {
-                    let (income, wages, budget) =
-                        neg_data.foreign_seller_finances.unwrap_or((0, 0, 0));
-                    format!(
-                        "club={} (foreign) income={income} wages={wages} wage_budget={budget} \
-                         fee/income={:.2}",
-                        neg_data.selling_club_name,
-                        if income > 0 {
-                            neg_data.offer_amount / income as f64
-                        } else {
-                            0.0
-                        },
-                    )
-                });
-            TransferTrace::line(neg_data.player_id, "seller", seller_line);
-            TransferTrace::line(
-                neg_data.player_id,
-                "approach",
-                format!(
-                    "buyer={} seller={} fee={:.0} asking={:.0} ratio={:.2} \
-                     seller_delta={:.1} importance_give_back={:.1} windfall={:.2} \
-                     wage_pressure={:.2} pull={:.2} stage_gain={}",
-                    neg_data.buying_club_id,
-                    neg_data.selling_club_id,
-                    neg_data.offer_amount,
-                    neg_data.asking_price,
-                    ratio,
-                    seller_delta,
-                    importance_penalty * windfall.ratio,
-                    windfall.ratio,
-                    windfall.wage_pressure,
-                    neg_data.player_stage_inclination,
-                    stage_gain,
-                ),
-            );
-        }
+        Self::trace_approach(
+            country,
+            neg_data,
+            date,
+            ratio,
+            seller_delta,
+            importance_penalty,
+            &windfall,
+            stage_gain,
+        );
 
-        if ratio >= 1.15 {
-            chance += 30.0;
-        } else if ratio >= 1.0 {
-            chance += 22.0;
-        } else if ratio >= 0.85 {
-            chance += 8.0;
-        } else if ratio < 0.65 {
-            chance -= 22.0;
-        }
-
-        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-        if rep_diff > 0.2 {
-            chance += 15.0;
-        } else if rep_diff < -0.2 {
-            chance -= 10.0;
-        }
-
-        // Competition: when several buyers are bidding for the same player
-        // the seller has leverage and is more inclined to engage. What
-        // competition mostly moves, though, is the FEE, not whether the
-        // seller picks up the phone — that half lives in
-        // [`AuctionState::floor`], read by the fee resolver below. Here it
-        // is only the engagement lift, saturating rather than compounding.
-        let auction = Self::auction_state(country, neg_id, neg_data.player_id);
-        chance += auction.seller_leverage();
-
-        // Rivalry friction: seller reluctant to strengthen a rival. Softened
-        // when the buyer is clearly bigger (pragmatic payday) or when the
-        // bid is far above asking (can't turn down that kind of money).
-        if neg_data.selling_country_id.is_none()
-            && Self::seller_views_buyer_as_rival(
-                country,
-                neg_data.selling_club_id,
-                neg_data.buying_club_id,
-            )
-        {
-            let mut rival_penalty: f32 = 35.0;
-            if rep_diff > 0.25 {
-                rival_penalty -= 12.0;
-            }
-            // …and so is a buyer whose money its own revenue cannot
-            // explain. "Clearly bigger" is not only reputation: a club
-            // sells to money it would not sell to a rival for, which is
-            // the whole reason a mid-table side lets a starter go to the
-            // Gulf and not to the team above it (L5).
-            //
-            // Continuous in the ratio, not a step at the state-backed bar:
-            // a 0.49 benefactor and a 0.51 one are the same club, and a
-            // cliff there is exactly the kind of threshold the whole model
-            // exists to avoid.
-            let benefactor = Self::buyer_benefactor(country, neg_data.buying_club_id);
-            rival_penalty -= 12.0 * (benefactor / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0);
-            if neg_data.asking_price > 0.0 && neg_data.offer_amount >= neg_data.asking_price * 1.5 {
-                rival_penalty -= 15.0;
-            }
-            chance -= rival_penalty.max(5.0);
-        }
+        chance = Self::bid_and_rivalry_chance(country, neg_id, neg_data, ratio, chance);
 
         chance = chance.clamp(2.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
 
         if roll < chance {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.advance_to_club_negotiation(date);
-            }
-            // Interest is now real — fire the structured concrete-interest
-            // signal so the player owner can pick the right reaction
-            // (flattered / focused / unsettled / loyal) and attach the
-            // interested club, sporting fit, evidence and follow-up.
-            // Foreign players get the same beat via the Phase-C drain.
-            Self::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::ConcreteInterest,
-                TransferInterestSource::ConfirmedApproach,
-                false,
-            );
+            Self::open_talks(country, neg_id, neg_data, date, outcomes);
         } else {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation
-                    .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-            }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            // The target feels the rejection if it was a real chance.
-            // Routed through the structured interest funnel so the
-            // headline carries who rejected what and the player's reaction
-            // (frustration / leverage / loyalty) lands with context.
-            Self::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::BidRejected,
-                TransferInterestSource::RejectedBid,
-                false,
-            );
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
+            Self::refuse_talks(country, neg_id, neg_data, outcomes);
         }
     }
 
@@ -1089,155 +923,16 @@ impl CountryResult {
             return;
         }
 
-        // Absolute seller fee floor. The seller never ACCEPTS a bid below it
-        // — but a below-floor bid mid-rounds is not an instant walk-away
-        // either: the escalation path below steers the buyer's target up to
-        // the floor, and only the FINAL round terminally rejects a bid that
-        // still falls short. A triggered release clause above already
-        // short-circuited, so a forced sale is never blocked.
-        let floor = SellerFeeFloor::for_permanent_domestic(country, neg_data, date);
-        let below_floor = floor
-            .as_ref()
-            .map(|f| neg_data.offer_amount < f.min_fee)
-            .unwrap_or(false);
-
-        // Peeked (not reserved) buyer transfer budget, so an escalation the
-        // buyer could never fund fails fast here instead of collapsing at
-        // the medical after weeks of sim time and a held shortlist slot.
-        let buyer_transfer_budget: Option<f64> = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.buying_club_id)
-            .and_then(|c| {
-                c.finance
-                    .transfer_budget
-                    .as_ref()
-                    .map(|b| b.amount.max(0.0))
-            });
-
-        let ratio = if neg_data.asking_price > 0.0 {
-            neg_data.offer_amount / neg_data.asking_price
-        } else {
-            1.0
-        };
-        let mut seller_reservation = if neg_data.player_is_available {
-            0.82
-        } else {
-            1.08
-        };
-
-        // For domestic transfers, check player importance. Important players
-        // require a real premium; depth players and listed players can move
-        // closer to asking.
-        let importance = if neg_data.selling_country_id.is_none() {
-            Self::calculate_player_importance(country, neg_data.player_id, neg_data.selling_club_id)
-        } else {
-            // Foreign: use the seller-side importance captured at creation
-            // (the seller's roster lives abroad and can't be read here), so a
-            // key foreign player commands the same premium a domestic one
-            // would — not a flat mid-range constant that made foreign deals
-            // systematically easier and cheaper to force through.
-            neg_data.foreign_seller_importance.unwrap_or(0.55)
-        };
-        seller_reservation += (importance as f64) * 0.28;
-
-        if let Some(selling_club) = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.selling_club_id)
-        {
-            if selling_club.finance.balance.balance < 0 {
-                seller_reservation -= 0.12;
-            }
-        }
-
-        // A long-unsold genuine listing erodes the seller's stance on the
-        // same clock as `SellerFeeFloor::erode_for_listing_age`: with every
-        // unsold month the club wants the wage off the books more than it
-        // wants a premium, so its acceptance band walks down toward the
-        // (itself eroding) absolute fee floor instead of holding a price
-        // the market has already refused for half a season.
-        if !neg_data.is_loan {
-            if let Some(days_listed) = Self::seller_listing_age_days(country, neg_data, date) {
-                let t = (days_listed as f64 / SellerFeeFloor::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
-                seller_reservation -= t * 0.20;
-            }
-        }
-
-        let urgency = Self::deadline_urgency_for(country, date) as f64;
-        if urgency > 0.0 && importance < 0.75 {
-            seller_reservation -= urgency * 0.10;
-        }
-
-        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-        if rep_diff > 0.15 {
-            // A clearly bigger suitor erodes the seller's leverage — the
-            // wider the reputation gap, the less a small club can hold a
-            // coveted player. This was previously cut off entirely for key
-            // men (importance >= 0.85), which left a small club's star
-            // unsellable to any giant; now the discount is softened at high
-            // importance, not removed, so the standout-at-a-minnow → giant
-            // move can actually clear the reservation.
-            let gap = ((rep_diff - 0.15) * 0.20).min(0.11) as f64;
-            let softener = if importance < 0.85 { 1.0 } else { 0.5 };
-            seller_reservation -= (0.04 + gap) * softener;
-        }
-
-        if neg_data.selling_country_id.is_none()
-            && Self::seller_views_buyer_as_rival(
-                country,
-                neg_data.selling_club_id,
-                neg_data.buying_club_id,
-            )
-        {
-            seller_reservation += 0.18;
-        }
-
-        // A seller who stays at the table softens across rounds — real
-        // negotiations converge from BOTH sides, not just the buyer bidding
-        // up. Only the premium ABOVE asking concedes (never below 1.0, so the
-        // absolute floor is still owned by `SellerFeeFloor`), and an already
-        // available player (reservation <= 1.0) is untouched. Without this the
-        // buyer's escalation could never meet a coveted player's static
-        // premium and every such deal timed out in the sub-acceptance band.
-        if round > 1 && seller_reservation > 1.0 {
-            let concession = 0.05 * (round.saturating_sub(1) as f64);
-            seller_reservation = (seller_reservation - concession).max(1.0);
-        }
-
-        // What the fee does to the seller's year. A club holds out for a
-        // premium over asking because it does not need the money; one being
-        // offered a large fraction of its annual revenue does. The second
-        // term is the wage ceiling: a solvent club already at its wage
-        // budget banks the fee AND frees the shirt, so it holds out less
-        // for its highest earners. Neither eases the absolute
-        // `SellerFeeFloor` — that still refuses the acceptance below, and
-        // the clamp keeps the reservation in the same band it always had.
-        let windfall = Self::seller_windfall(country, neg_data, date);
-        seller_reservation -= windfall.reservation_ease();
-        // …and what the seller's own books say. A club that must shed
-        // wages holds out for no premium at all; the absolute floor below
-        // still stops a fire sale from becoming a giveaway.
-        seller_reservation -= Self::seller_fire_sale_pressure(country, neg_data) as f64
-            * Self::FIRE_SALE_RESERVATION_EASE;
-
-        // Can the seller replace him with the money? A fee is only worth
-        // taking if it buys a successor, and a club with nobody on its own
-        // board to spend it on holds out — harder the later in the window it
-        // gets, because a sale it cannot reinvest is a hole it carries all
-        // season. This is also one of the two things that bound the drain:
-        // without it, a buyer whose marginal dollar is worth a third of the
-        // seller's could strip an exporting league bare.
-        //
-        // Foreign sellers live in another country's borrow and their board
-        // cannot be read from here, so the term is simply absent for them —
-        // it never invents a premium it cannot justify.
-        //
-        // Absent too for a player the club has ALREADY decided to move on:
-        // listed, asking to leave, not needed, or quietly marketed on its own
-        // ledger. Holding out for a successor is what a club does when it is
-        // asked for a man it wants to keep; a decision to sell is a decision
-        // that the hole is acceptable. The first census applied the term to
+        let SellerPosition {
+            ratio,
+            reservation: mut seller_reservation,
+            below_floor,
+            importance,
+            windfall,
+            floor,
+            urgency,
+            buyer_transfer_budget,
+        } = Self::seller_position(country, neg_data, round, date);
         // every domestic sale and priced ordinary business out of reach.
         if neg_data.selling_country_id.is_none() && !neg_data.is_loan {
             let marketed = country
@@ -1315,241 +1010,25 @@ impl CountryResult {
         // A below-floor bid can never be accepted, whatever the roll — the
         // floor guards the outcome while the rounds guard the process.
         if !below_floor && roll < chance {
-            // Story counters: the beats that tell a live market from a
-            // procurement queue. Diagnostics only — a layer whose counter
-            // stays at zero has not landed, whatever the move totals say.
-            if !neg_data.is_loan {
-                let marketed = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == neg_data.selling_club_id)
-                    .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
-                    .unwrap_or(false);
-                let story = &mut country.transfer_market.story;
-                if auction.is_contested() {
-                    story.contested_agreements += 1;
-                }
-                if deadline.is_deadline_week() {
-                    story.deadline_agreements += 1;
-                }
-                if marketed {
-                    story.sell_list_conversions += 1;
-                }
-            }
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.advance_to_personal_terms(date);
-            }
-            // Fee agreed — the single biggest formerly-silent beat: the
-            // clubs have shaken hands and personal terms open. The `Bid`
-            // badge makes the accepted bid visible AND lets match
-            // selection start protecting a near-sold asset.
-            Self::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::NegotiationsOpened,
-                TransferInterestSource::ClubBriefing,
-                false,
+            Self::seller_accepts(
+                country, neg_data, neg_id, date, &auction, &deadline, outcomes,
             );
-            Self::set_saga_status(country, neg_data, PlayerStatusType::Bid, date);
         } else if round < 3 {
-            // Buyer escalation closes 45% of the remaining gap per round at
-            // the start of the window, up to ~70% in the final panic days.
-            // The previous offer is archived to `counter_offers` so the
-            // negotiation history is auditable (who bid what, when).
-            // Escalate toward the price the seller will actually accept
-            // (asking × his reservation), not merely the asking price.
-            // A key man not pushing to leave commands a premium ABOVE
-            // asking; aiming only at asking left every such deal short
-            // of the reservation band, so it timed out. Clamped to
-            // [1.0, 1.55]×asking: never below asking (so the working
-            // available-player path is unchanged — its reservation is
-            // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
-            // the seller's reservation itself clamps to, so the buyer can
-            // actually reach a coveted player's premium instead of topping
-            // out below it. The target is additionally lifted to the
-            // seller's absolute fee floor, so a lowball opening converges
-            // toward a closable number instead of orbiting below it.
-            // The asking price is only a valid escalation anchor when the
-            // bound listing sells the same kind of deal. `start_negotiation`
-            // binds to the first open listing for the player regardless of
-            // type, so a LOAN bid on a transfer-listed player used to
-            // escalate toward the full PERMANENT ask — loan fees converging
-            // on half the player's market value (the loan-fee-anchor bug
-            // reborn one phase later). A mismatched listing falls back to
-            // the modest own-offer escalation path instead.
-            let listing_matches_deal_type = country
-                .transfer_market
-                .negotiations
-                .get(&neg_id)
-                .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
-                .map(|l| {
-                    if neg_data.is_loan {
-                        l.listing_type == TransferListingType::Loan
-                    } else {
-                        l.listing_type != TransferListingType::Loan
-                    }
-                })
-                .unwrap_or(true);
-
-            let mut buyer_walks = false;
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                let reservation_mult = seller_reservation.clamp(1.0, 1.55);
-                let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
-                    neg_data.asking_price * reservation_mult
-                } else {
-                    negotiation.current_offer.base_fee.amount * 1.15
-                };
-                if let Some(f) = &floor {
-                    target = target.max(f.min_fee);
-                }
-                // What the buyer would have reached for before any of the
-                // market layers existed: the seller's reservation, inside
-                // its budget. This is the calibrated baseline reach and the
-                // floor of everything below.
-                let legacy_target = target;
-
-                // ── The auction ─────────────────────────────────────
-                //
-                // Somebody else is already in front. A buyer that wants him
-                // has to clear the leading bid by a real margin or it is
-                // simply not in the conversation — and the one whose own
-                // valuation runs out first stops raising and drops away.
-                // This is what turns rivalry into money; the seller-side
-                // engagement lift alone never moved a fee.
-                if auction.is_contested() {
-                    target = target.max(auction.floor());
-                }
-
-                // ── The deadline ────────────────────────────────────
-                //
-                // A club whose season plan still has a hole in it pays over
-                // the odds in the last days. Cover does not: there is
-                // always another body, and the loan market is open.
-                let tier = negotiation.brief_tier.unwrap_or(BriefTier::B);
-                let premium = deadline.premium_for(tier, true);
-                if premium > 0.0 && neg_data.asking_price > 0.0 {
-                    target += neg_data.asking_price * premium;
-                }
-
-                // ── The buyer's own number ──────────────────────────
-                //
-                // Everything above says what it would TAKE to win him.
-                // This says what he is worth to this buyer. A club walks
-                // away from a bidding war at its own ceiling, which is why
-                // two clubs chasing one player do not converge on the same
-                // fee — the richer one, whose marginal dollar is worth less,
-                // simply has further to go.
-                //
-                // The ceiling caps only the EXTENSION above the legacy
-                // reach — the auction floor and the deadline premium —
-                // never the reach itself. Three censuses showed why: with
-                // this market's fees an order of magnitude below its wages,
-                // the deal value nets wages off a small sporting benefit and
-                // comes out under the seller's price for exactly the deals
-                // real clubs do (a strong-league side buying an elite club's
-                // surplus, a mid-rich elite side buying a modest upgrade),
-                // and those cells fell 40 % below HEAD. Until the fee scale
-                // is reconciled the ceiling is not a trustworthy walk-away
-                // price below the calibrated baseline, so it does not act
-                // there. Where it does act — who keeps raising once a
-                // bidding war has pushed the price past the ask — is the
-                // half of the story it was built for.
-                if let Some(ceiling) = negotiation.buyer_ceiling_fee {
-                    target = target.min(ceiling.max(legacy_target));
-                }
-
-                let escalation = 0.45 + urgency * 0.25;
-                let current_amount = negotiation.current_offer.base_fee.amount;
-                let mut new_amount = FormattingUtils::round_fee(
-                    current_amount + (target - current_amount).max(0.0) * escalation,
-                );
-                // Cap the escalated headline at what the buyer can actually
-                // fund up front (installment tranches settle later from the
-                // balance, so they extend the affordable headline). When the
-                // BUDGET is what stops the bid improving, the buyer walks
-                // now — the same refusal `reserve_transfer_budget` would
-                // deliver at the medical, minus the wasted weeks. A bid that
-                // already meets the target simply re-enters the next round
-                // unchanged (the seller may yet say yes), as before.
-                let mut budget_blocked = false;
-                if let Some(available) = buyer_transfer_budget {
-                    let deferred = new_amount
-                        - TransferExecution::upfront_after_installments(
-                            new_amount,
-                            neg_data.selling_country_id.is_some(),
-                            &negotiation.current_offer.clauses,
-                        );
-                    let max_affordable = FormattingUtils::round_fee(available + deferred.max(0.0));
-                    if max_affordable < new_amount {
-                        new_amount = max_affordable;
-                        budget_blocked = true;
-                    }
-                }
-                if budget_blocked && new_amount <= current_amount {
-                    buyer_walks = true;
-                } else {
-                    let mut escalated = negotiation.current_offer.clone();
-                    escalated.base_fee.amount = new_amount.max(current_amount);
-                    escalated.offered_date = date;
-                    negotiation.counter_offer(escalated);
-                    negotiation.advance_club_negotiation_round(date);
-                }
-            }
-            if buyer_walks {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
-                }
-                Self::reopen_listing_for_player(country, neg_data.player_id);
-                // The suitor priced himself out and walked — the rumour
-                // the player had been hearing goes quiet.
-                Self::notify_player_stage(
-                    country,
-                    outcomes,
-                    neg_data,
-                    TransferInterestStage::InterestCooled,
-                    TransferInterestSource::ClubBriefing,
-                    false,
-                );
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-            }
-        } else {
-            // Final round: a bid still under the seller's absolute floor is
-            // rejected with the floor's own reason (PlayerTooImportant for a
-            // core man), everything else as a plain price failure.
-            let reason = floor
-                .as_ref()
-                .filter(|f| neg_data.offer_amount < f.min_fee)
-                .map(|f| f.reason.clone())
-                .unwrap_or(NegotiationRejectionReason::AskingPriceTooHigh);
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(reason);
-            }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            // Final-round rejection — the buying club really did pursue
-            // and the selling club still said no. Routed through the
-            // structured interest funnel so the headline can name the
-            // interested club and surface the player's reaction
-            // (frustrated / contract-leverage / loyal).
-            Self::notify_player_stage(
+            Self::buyer_counters(
                 country,
-                outcomes,
                 neg_data,
-                TransferInterestStage::BidRejected,
-                TransferInterestSource::RejectedBid,
-                true,
+                neg_id,
+                date,
+                seller_reservation,
+                floor.as_ref(),
+                &auction,
+                &deadline,
+                urgency,
+                buyer_transfer_budget,
+                outcomes,
             );
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
+        } else {
+            Self::seller_rejects(country, neg_data, neg_id, floor.as_ref(), outcomes);
         }
     }
 
@@ -1584,57 +1063,8 @@ impl CountryResult {
         let cfg = AppraisalConfig::default();
         let is_foreign = neg_data.selling_country_id.is_some();
 
-        // ── The two inputs ──────────────────────────────────────
-        //
-        // The stance is FROZEN for the life of the personal-terms phase,
-        // on both paths: built once, on the first round, and staged on the
-        // negotiation the way a cross-border deal's has always been.
-        //
-        // Rebuilding it live at every round was the "raise to the
-        // reservation ⇒ deterministic yes" guarantee's one hole. A
-        // matchday between rounds moves `starter_ratio`, an `Unh` can
-        // clear (−0.35), resignation moves — and because the buyer raises
-        // to exactly `1.02 × reservation`, a drift of more than
-        // `w_m · ln(1.02)` ≈ 0.01 turned a paid-for yes into a terminal
-        // refusal. Foreign deals were already immune.
-        //
-        // `deadline_urgency` stays live: it sits on the OFFER, it is the
-        // buyer's clock rather than the player's situation, and it only
-        // ever pushes up.
-        //
-        // The staged plausibility inputs are the expensive part and both
-        // halves want them — importance for the stance, the sporting drop
-        // for the offer — so they are built once, together.
-        let mut stance = neg_data.staged_stance;
-        let mut sporting_drop = neg_data.staged_sporting_drop;
-        if stance.is_none() && !is_foreign {
-            if let Some((built, drop)) = Self::stance_for(country, neg_data, date) {
-                stance = Some(built);
-                sporting_drop = Some(drop);
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.staged_stance = Some(built);
-                    negotiation.staged_sporting_drop = Some(drop);
-                }
-            }
-        }
-        // A global-pool free agent has no club, no depth chart and no
-        // country to be read from — and he is exactly the man for whom the
-        // decision genuinely IS the money against a fair anchor plus the
-        // shirt on offer. Everything else stays at its no-view default.
-        let stance = stance.unwrap_or_else(|| {
-            let offered = neg_data.offered_annual_wage.unwrap_or(0) as f64;
-            let fair = neg_data
-                .staged_reservation_wage
-                .map(|w| w as f64)
-                .filter(|w| *w > 0.0)
-                .unwrap_or(offered);
-            PlayerStance::from_terms(
-                neg_data.player_age,
-                neg_data.player_ambition,
-                offered.max(fair),
-                fair,
-            )
-        });
+        let (stance, sporting_drop) =
+            Self::frozen_stance(country, neg_id, neg_data, date, is_foreign);
 
         // The buyer's opening figure, stamped on the negotiation now if
         // nothing staged one — see [`Self::ensure_opening_salary`].
@@ -1660,73 +1090,9 @@ impl CountryResult {
         );
         let appraisal = PlayerOfferAppraisal::appraise(&stance, &offer, disposition, &cfg);
 
-        if TransferTrace::is(neg_data.player_id) {
-            TransferTrace::line(
-                neg_data.player_id,
-                "terms",
-                format!(
-                    "round={round} buyer={} age={} ambition={:.2} offered={:.0} anchor={:.0} \
-                     {}{} -> {}",
-                    neg_data.buying_club_id,
-                    neg_data.player_age,
-                    neg_data.player_ambition,
-                    offer.offered_wage,
-                    PlayerOfferAppraisal::anchor(&stance),
-                    // What the retired hard floor would have said. Kept as
-                    // a diagnostic, not a gate: the whole point of the
-                    // appraisal is that the same refusal now has a price.
-                    // Only cross-border deals ever set it — printing it on
-                    // a domestic one is a constant `false`.
-                    if is_foreign {
-                        format!("legacy_floor={} ", neg_data.foreign_terms_floor_blocked)
-                    } else {
-                        String::new()
-                    },
-                    appraisal.explain(),
-                    if appraisal.accepts() { "AGREED" } else { "no" },
-                ),
-            );
-        }
+        Self::trace_terms(neg_data, round, is_foreign, &stance, &offer, &appraisal);
 
-        if appraisal.accepts() {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                // One number, both slots. The wage he said yes to IS the
-                // wage the contract installs — the package's figure and
-                // the staged offer are written together by
-                // `open_salary_at` / `raise_offered_salary`, and a path
-                // that ever set only one of them would install a salary
-                // nobody agreed.
-                debug_assert!(
-                    negotiation
-                        .current_offer
-                        .personal_terms
-                        .as_ref()
-                        .and_then(|t| t.annual_wage)
-                        .map(|w| Some(w) == negotiation.offered_salary)
-                        .unwrap_or(true),
-                    "agreed wage diverged from the staged offer"
-                );
-                negotiation.advance_to_medical(date);
-                negotiation.terms_refusal_cause = None;
-                negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
-            }
-            // Personal terms agreed — the player has said yes and only
-            // the medical stands between him and the move. `Trn`
-            // replaces `Bid`: match selection now treats him as a
-            // near-sold asset (protected in routine games).
-            Self::set_saga_status(country, neg_data, PlayerStatusType::Trn, date);
-            // …and the saga says so. Every other rung of this ladder
-            // files a beat; without this one the feed followed a move
-            // from the first scout report to the fee agreement and then
-            // went silent on the day it was actually agreed.
-            Self::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::TermsAgreed,
-                TransferInterestSource::ClubBriefing,
-                false,
-            );
+        if Self::agree_personal_terms(country, neg_id, neg_data, date, &appraisal, outcomes) {
             return;
         }
 
@@ -1737,7 +1103,6 @@ impl CountryResult {
         // decides the deal now is whether this buyer's wage power reaches
         // his number — level wage stretched, room under the board's
         // mandate, or a slice of an owner's yearly subsidy (L4).
-        const MAX_WAGE_ROUNDS: u8 = 2;
         // Could this buyer have paid his number at all? The answer is the
         // refusal's cause when it is no — a man who would sign for more
         // than the club can hold refused on the WAGE, however the axes
@@ -1755,33 +1120,8 @@ impl CountryResult {
                 .as_ref()
                 .map(|p| !p.can_reach(appraisal.reservation_wage as f64))
                 .unwrap_or(false);
-        if round < MAX_WAGE_ROUNDS {
-            if let Some(power) = power {
-                let reservation = appraisal.reservation_wage as f64;
-                let target = (reservation * 1.02).min(power.ceiling);
-                if power.can_reach(reservation) && target > offer.offered_wage {
-                    // Close 60 % of the gap, as before — except on the
-                    // last round, which closes it, so a deal the buyer
-                    // can genuinely afford is not lost to arithmetic.
-                    let close = if round + 1 >= MAX_WAGE_ROUNDS {
-                        1.0
-                    } else {
-                        0.6
-                    };
-                    let improved =
-                        (offer.offered_wage + (target - offer.offered_wage) * close).round() as u32;
-                    if improved as f64 > offer.offered_wage {
-                        if let Some(negotiation) =
-                            country.transfer_market.negotiations.get_mut(&neg_id)
-                        {
-                            negotiation.raise_offered_salary(improved);
-                            negotiation.advance_personal_terms_round(date);
-                            negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
-                        }
-                        return;
-                    }
-                }
-            }
+        if Self::raise_to_reservation(country, neg_id, round, date, &offer, &appraisal, power) {
+            return;
         }
 
         Self::reject_personal_terms(
@@ -2155,99 +1495,15 @@ impl CountryResult {
         // country's clubs), so a Russia ↔ Ukraine bid that survived the
         // earlier scouting/shortlist filters can still arrive here. Refuse
         // it before the medical roll so a stale negotiation, restored save,
-        // or alternate creation path can't complete a closed route.
-        if is_foreign
-            && TransferRoutePolicy::is_blocked(&neg_data.selling_country_code, &country.code, date)
-        {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::CountryPairRouteBlocked);
-            }
-            // An agreed move refused at the registration desk — the
-            // player had said yes; the collapse is a real story beat.
-            Self::notify_player_stage(
-                country,
-                outcomes,
-                neg_data,
-                TransferInterestStage::MoveCollapsed,
-                TransferInterestSource::ClubBriefing,
-                false,
-            );
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
-            return;
-        }
-
-        // Verify the player is still at the selling club (domestic) or not
-        // already claimed by another deferred transfer (foreign)
-        if is_foreign {
-            // Reject if another negotiation for this player is already deferred
-            if outcomes
-                .deferred
-                .iter()
-                .any(|d| d.player_id == neg_data.player_id)
-            {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-                return;
-            }
-        } else if is_pool_free_agent {
-            // Pool membership can't be verified from country scope —
-            // first-come-first-served dedup happens at execution time
-            // in `execute_global_free_agent_signing`. Only guard
-            // against a second pool signing staged this same tick.
-            if outcomes
-                .free_agent_signings
-                .iter()
-                .any(|s| s.player_id == neg_data.player_id)
-            {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-                return;
-            }
-        } else {
-            let player_at_selling_club = country
-                .clubs
-                .iter()
-                .find(|c| c.id == neg_data.selling_club_id)
-                .map(|c| c.teams.contains_player(neg_data.player_id))
-                .unwrap_or(false);
-
-            if !player_at_selling_club {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                Self::reopen_listing_for_player(country, neg_data.player_id);
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-                return;
-            }
-        }
-
+        Self::stage_medical(
+            country,
+            neg_data,
+            neg_id,
+            date,
+            is_foreign,
+            is_pool_free_agent,
+            outcomes,
+        );
         let is_injured = if is_foreign {
             false
         } else {
@@ -2259,334 +1515,19 @@ impl CountryResult {
         let roll = FloatUtils::random(0.0, 100.0);
 
         if roll >= fail_chance {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.accept();
-            }
-
-            // Pool free agent: completion runs in Phase C through
-            // `execute_global_free_agent_signing`, which removes the
-            // player from `data.free_agents` and writes the "Free
-            // Agent" history row itself — writing one here as well
-            // would duplicate it (or leave a phantom row when another
-            // country claimed the player first).
-            if is_pool_free_agent {
-                let reason = country
-                    .transfer_market
-                    .negotiations
-                    .get(&neg_id)
-                    .map(|n| n.reason.clone())
-                    .unwrap_or_default();
-                outcomes.free_agent_signings.push(GlobalFreeAgentSigning {
-                    player_id: neg_data.player_id,
-                    player_name: neg_data.player_name.clone(),
-                    buying_country_id: country_id,
-                    buying_club_id: neg_data.buying_club_id,
-                    reason,
-                    terms: PoolSigningTerms::from_personal(
-                        neg_data.personal_terms.as_ref(),
-                        neg_data.offered_annual_wage,
-                    ),
-                });
-                country
-                    .transfer_market
-                    .complete_listings_for_player(neg_data.player_id);
-                // Snapshot losing bidders BEFORE the cancel flips them to
-                // Rejected — each must release its plan's negotiation
-                // slot, or the loser sits frozen at its concurrency cap
-                // for the rest of the window.
-                let losing_bidders: Vec<u32> = country
-                    .transfer_market
-                    .negotiations
-                    .values()
-                    .filter(|n| {
-                        n.player_id == neg_data.player_id
-                            && n.id != neg_id
-                            && matches!(
-                                n.status,
-                                NegotiationStatus::Pending | NegotiationStatus::Countered
-                            )
-                    })
-                    .map(|n| n.buying_club_id)
-                    .collect();
-                country
-                    .transfer_market
-                    .cancel_negotiations_for_player(neg_data.player_id, neg_id);
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    true,
-                );
-                for loser in losing_bidders {
-                    PipelineProcessor::on_negotiation_resolved(
-                        country,
-                        loser,
-                        neg_data.player_id,
-                        false,
-                    );
-                }
-                PipelineProcessor::clear_player_interest(country, neg_data.player_id);
-                return;
-            }
-
-            // Registration must land inside the window. Negotiations
-            // legally survive the close (deals agreed near the deadline
-            // finish their paperwork), but a PERMANENT move whose medical
-            // resolves after deadline day cannot be registered — it
-            // collapses here exactly like a failed medical, instead of
-            // registering weeks past the deadline. Loans and free
-            // transfers (out-of-contract players) keep their
-            // window-independent paths.
-            if !neg_data.is_loan && !country.transfer_market.transfer_window_open {
-                let signs_free_agent = country
-                    .transfer_market
-                    .negotiations
-                    .get(&neg_id)
-                    .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
-                    .map(|l| l.listing_type == TransferListingType::EndOfContract)
-                    .unwrap_or(false);
-                if !signs_free_agent {
-                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
-                    {
-                        negotiation.reject_with_reason(NegotiationRejectionReason::WindowClosed);
-                    }
-                    Self::reopen_listing_for_player(country, neg_data.player_id);
-                    // A fully-agreed deal died at the deadline — the
-                    // classic deadline-day heartbreak beat.
-                    Self::notify_player_stage(
-                        country,
-                        outcomes,
-                        neg_data,
-                        TransferInterestStage::MoveCollapsed,
-                        TransferInterestSource::ClubBriefing,
-                        false,
-                    );
-                    Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
-                    PipelineProcessor::on_negotiation_resolved(
-                        country,
-                        neg_data.buying_club_id,
-                        neg_data.player_id,
-                        false,
-                    );
-                    return;
-                }
-            }
-
-            // Reserve the agreed fee against the buyer's transfer budget the
-            // moment the deal closes, so two deals agreed in the same window
-            // can't both bank on the same money and one then silently
-            // collapse when its deferred execution finds the budget already
-            // spent. If the budget can't cover it the club genuinely can't
-            // fund the move — refuse it cleanly here rather than agree a deal
-            // that would evaporate at execution (the old silent drop: market
-            // history written then retracted, interest cleared, player never
-            // moved). The reservation is released at execution-start, where
-            // the real purchase accounting runs. Loans (lighter accounting)
-            // and pool free agents (already returned above) are exempt.
-            //
-            // Reserve only the UPFRONT cash the buyer commits now: installment
-            // tranches are paid over time from the balance by the settlement
-            // walk, and execution itself already gates on the upfront portion,
-            // so reserving the full headline here blocked structured deals the
-            // club could genuinely fund — installments couldn't stretch a tight
-            // budget at all. Cross-country deals settle upfront, so their
-            // upfront IS the full fee.
-            if !neg_data.is_loan {
-                let upfront = country
-                    .transfer_market
-                    .negotiations
-                    .get(&neg_id)
-                    .map(|n| {
-                        TransferExecution::upfront_after_installments(
-                            neg_data.offer_amount,
-                            neg_data.selling_country_id.is_some(),
-                            &n.current_offer.clauses,
-                        )
-                    })
-                    .unwrap_or(neg_data.offer_amount);
-                let reserved = country
-                    .clubs
-                    .iter_mut()
-                    .find(|c| c.id == neg_data.buying_club_id)
-                    .map(|c| {
-                        let ok = c.finance.reserve_transfer_budget(upfront);
-                        // Mirror the finance reservation on the plan's own
-                        // ledger so `available_budget()` reflects committed
-                        // deals — these fields were dead (always zero), so
-                        // staff-recommendation allocations and broadcast
-                        // affordability reads saw the full window pot all
-                        // window long.
-                        if ok {
-                            c.transfer_plan.reserved += upfront;
-                        }
-                        ok
-                    })
-                    .unwrap_or(true);
-                if !reserved {
-                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
-                    {
-                        negotiation
-                            .reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
-                    }
-                    Self::reopen_listing_for_player(country, neg_data.player_id);
-                    // The buyer's money wasn't there at the finish line —
-                    // an agreed move collapsing on funds.
-                    Self::notify_player_stage(
-                        country,
-                        outcomes,
-                        neg_data,
-                        TransferInterestStage::MoveCollapsed,
-                        TransferInterestSource::ClubBriefing,
-                        false,
-                    );
-                    Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
-                    PipelineProcessor::on_negotiation_resolved(
-                        country,
-                        neg_data.buying_club_id,
-                        neg_data.player_id,
-                        false,
-                    );
-                    return;
-                }
-            }
-
-            // Resolve names: domestic from country, foreign from cached names
-            let player_name = if is_foreign {
-                neg_data.player_name.clone()
-            } else {
-                CountryRoster::find(country, neg_data.player_id)
-                    .map(|p| p.full_name.to_string())
-                    .unwrap_or_default()
-            };
-            let from_team_name = if is_foreign {
-                neg_data.selling_club_name.clone()
-            } else {
-                country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == neg_data.selling_club_id)
-                    .map(|c| c.name.clone())
-                    .unwrap_or_default()
-            };
-            let to_team_name = country
-                .clubs
-                .iter()
-                .find(|c| c.id == neg_data.buying_club_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
-
-            // Snapshot losing bidders BEFORE `complete_transfer` flips
-            // their negotiations to Rejected — each must release its
-            // plan's negotiation slot (and advance its shortlist), or the
-            // loser sits frozen at its concurrency cap for the rest of
-            // the window.
-            let losing_bidders: Vec<u32> = country
-                .transfer_market
-                .negotiations
-                .values()
-                .filter(|n| {
-                    n.player_id == neg_data.player_id
-                        && n.id != neg_id
-                        && matches!(
-                            n.status,
-                            NegotiationStatus::Pending | NegotiationStatus::Countered
-                        )
-                })
-                .map(|n| n.buying_club_id)
-                .collect();
-
-            // What the owner's cheque WOULD cover, read while the row
-            // still exists — the tier and the opening wage live on the
-            // negotiation `complete_transfer` is about to retire. It is
-            // only drawn if the completion actually happens.
-            let envelope_draw = Self::owner_envelope_draw(country, neg_id);
-
-            if let Some(completed) = country.transfer_market.complete_transfer(
+            Self::medical_passed(
+                country,
+                country_id,
+                neg_data,
                 neg_id,
                 date,
-                player_name,
-                from_team_name,
-                to_team_name,
-            ) {
-                Self::consume_owner_envelope(country, neg_data.buying_club_id, envelope_draw);
-                summary.completed_transfers += 1;
-                summary.total_fees_exchanged += completed.fee.amount;
-
-                // All execution is deferred to SimulatorData level
-                let selling_country_id = neg_data.selling_country_id.unwrap_or(country_id);
-                // Reconcile the staged annual wage with the structured
-                // personal-terms package: the package's wage is the
-                // authoritative one if present (negotiated explicitly),
-                // otherwise we fall back to the loose `offered_salary`.
-                let agreed_annual_wage = neg_data
-                    .personal_terms
-                    .as_ref()
-                    .and_then(|t| t.annual_wage)
-                    .or(neg_data.offered_annual_wage);
-                let offer_clauses = country
-                    .transfer_market
-                    .negotiations
-                    .get(&neg_id)
-                    .map(|n| n.current_offer.clauses.clone())
-                    .unwrap_or_default();
-                outcomes.deferred.push(DeferredTransfer {
-                    player_id: neg_data.player_id,
-                    selling_country_id,
-                    selling_club_id: neg_data.selling_club_id,
-                    buying_country_id: country_id,
-                    buying_club_id: neg_data.buying_club_id,
-                    fee: neg_data.offer_amount,
-                    is_loan: neg_data.is_loan,
-                    has_option_to_buy: neg_data.has_option_to_buy,
-                    agreed_annual_wage,
-                    buying_league_reputation: neg_data.buying_league_reputation,
-                    sell_on_percentage: neg_data.sell_on_percentage,
-                    loan_future_fee: neg_data.loan_future_fee,
-                    personal_terms: neg_data.personal_terms.clone(),
-                    offer_clauses,
-                });
-
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    true,
-                );
-                for loser in losing_bidders {
-                    PipelineProcessor::on_negotiation_resolved(
-                        country,
-                        loser,
-                        neg_data.player_id,
-                        false,
-                    );
-                }
-                PipelineProcessor::clear_player_interest(country, neg_data.player_id);
-            }
-        } else {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
-            }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            // Late-stage collapse — both clubs and the player had agreed
-            // and only the medical stood in the way. Routed through the
-            // structured signal so the rendered event can name the
-            // interested club and the player's reaction (excited /
-            // frustrated / contract-leverage).
-            Self::notify_player_stage(
-                country,
+                summary,
+                is_foreign,
+                is_pool_free_agent,
                 outcomes,
-                neg_data,
-                TransferInterestStage::MoveCollapsed,
-                TransferInterestSource::ConfirmedApproach,
-                false,
             );
-            Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
-                neg_data.player_id,
-                false,
-            );
+        } else {
+            Self::medical_failed(country, neg_data, neg_id, outcomes);
         }
     }
 
@@ -2783,6 +1724,1432 @@ impl CountryResult {
         } else {
             1.0 - (days_left as f32 - 1.0) / 13.0
         }
+    }
+
+    /// Where the seller stands: his floor, his reservation multiple, and what
+    /// the fee on the table is as a fraction of what he asked.
+    fn seller_position(
+        country: &Country,
+        neg_data: &NegotiationData,
+        round: u8,
+        date: NaiveDate,
+    ) -> SellerPosition {
+        // Absolute seller fee floor. The seller never ACCEPTS a bid below it
+        // — but a below-floor bid mid-rounds is not an instant walk-away
+        // either: the escalation path below steers the buyer's target up to
+        // the floor, and only the FINAL round terminally rejects a bid that
+        // still falls short. A triggered release clause above already
+        // short-circuited, so a forced sale is never blocked.
+        let floor = SellerFeeFloor::for_permanent_domestic(country, neg_data, date);
+        let below_floor = floor
+            .as_ref()
+            .map(|f| neg_data.offer_amount < f.min_fee)
+            .unwrap_or(false);
+
+        // Peeked (not reserved) buyer transfer budget, so an escalation the
+        // buyer could never fund fails fast here instead of collapsing at
+        // the medical after weeks of sim time and a held shortlist slot.
+        let buyer_transfer_budget: Option<f64> = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)
+            .and_then(|c| {
+                c.finance
+                    .transfer_budget
+                    .as_ref()
+                    .map(|b| b.amount.max(0.0))
+            });
+
+        let ratio = if neg_data.asking_price > 0.0 {
+            neg_data.offer_amount / neg_data.asking_price
+        } else {
+            1.0
+        };
+        let mut seller_reservation = if neg_data.player_is_available {
+            0.82
+        } else {
+            1.08
+        };
+
+        // For domestic transfers, check player importance. Important players
+        // require a real premium; depth players and listed players can move
+        // closer to asking.
+        let importance = if neg_data.selling_country_id.is_none() {
+            CountryResult::calculate_player_importance(
+                country,
+                neg_data.player_id,
+                neg_data.selling_club_id,
+            )
+        } else {
+            // Foreign: use the seller-side importance captured at creation
+            // (the seller's roster lives abroad and can't be read here), so a
+            // key foreign player commands the same premium a domestic one
+            // would — not a flat mid-range constant that made foreign deals
+            // systematically easier and cheaper to force through.
+            neg_data.foreign_seller_importance.unwrap_or(0.55)
+        };
+        seller_reservation += (importance as f64) * 0.28;
+
+        if let Some(selling_club) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        {
+            if selling_club.finance.balance.balance < 0 {
+                seller_reservation -= 0.12;
+            }
+        }
+
+        // A long-unsold genuine listing erodes the seller's stance on the
+        // same clock as `SellerFeeFloor::erode_for_listing_age`: with every
+        // unsold month the club wants the wage off the books more than it
+        // wants a premium, so its acceptance band walks down toward the
+        // (itself eroding) absolute fee floor instead of holding a price
+        // the market has already refused for half a season.
+        if !neg_data.is_loan {
+            if let Some(days_listed) =
+                CountryResult::seller_listing_age_days(country, neg_data, date)
+            {
+                let t = (days_listed as f64 / SellerFeeFloor::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
+                seller_reservation -= t * 0.20;
+            }
+        }
+
+        let urgency = CountryResult::deadline_urgency_for(country, date) as f64;
+        if urgency > 0.0 && importance < 0.75 {
+            seller_reservation -= urgency * 0.10;
+        }
+
+        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
+        if rep_diff > 0.15 {
+            // A clearly bigger suitor erodes the seller's leverage — the
+            // wider the reputation gap, the less a small club can hold a
+            // coveted player. This was previously cut off entirely for key
+            // men (importance >= 0.85), which left a small club's star
+            // unsellable to any giant; now the discount is softened at high
+            // importance, not removed, so the standout-at-a-minnow → giant
+            // move can actually clear the reservation.
+            let gap = ((rep_diff - 0.15) * 0.20).min(0.11) as f64;
+            let softener = if importance < 0.85 { 1.0 } else { 0.5 };
+            seller_reservation -= (0.04 + gap) * softener;
+        }
+
+        if neg_data.selling_country_id.is_none()
+            && CountryResult::seller_views_buyer_as_rival(
+                country,
+                neg_data.selling_club_id,
+                neg_data.buying_club_id,
+            )
+        {
+            seller_reservation += 0.18;
+        }
+
+        // A seller who stays at the table softens across rounds — real
+        // negotiations converge from BOTH sides, not just the buyer bidding
+        // up. Only the premium ABOVE asking concedes (never below 1.0, so the
+        // absolute floor is still owned by `SellerFeeFloor`), and an already
+        // available player (reservation <= 1.0) is untouched. Without this the
+        // buyer's escalation could never meet a coveted player's static
+        // premium and every such deal timed out in the sub-acceptance band.
+        if round > 1 && seller_reservation > 1.0 {
+            let concession = 0.05 * (round.saturating_sub(1) as f64);
+            seller_reservation = (seller_reservation - concession).max(1.0);
+        }
+
+        // What the fee does to the seller's year. A club holds out for a
+        // premium over asking because it does not need the money; one being
+        // offered a large fraction of its annual revenue does. The second
+        // term is the wage ceiling: a solvent club already at its wage
+        // budget banks the fee AND frees the shirt, so it holds out less
+        // for its highest earners. Neither eases the absolute
+        // `SellerFeeFloor` — that still refuses the acceptance below, and
+        // the clamp keeps the reservation in the same band it always had.
+        let windfall = CountryResult::seller_windfall(country, neg_data, date);
+        seller_reservation -= windfall.reservation_ease();
+        // …and what the seller's own books say. A club that must shed
+        // wages holds out for no premium at all; the absolute floor below
+        // still stops a fire sale from becoming a giveaway.
+        seller_reservation -= CountryResult::seller_fire_sale_pressure(country, neg_data) as f64
+            * CountryResult::FIRE_SALE_RESERVATION_EASE;
+
+        // Can the seller replace him with the money? A fee is only worth
+        // taking if it buys a successor, and a club with nobody on its own
+        // board to spend it on holds out — harder the later in the window it
+        // gets, because a sale it cannot reinvest is a hole it carries all
+        // season. This is also one of the two things that bound the drain:
+        // without it, a buyer whose marginal dollar is worth a third of the
+        // seller's could strip an exporting league bare.
+        //
+        // Foreign sellers live in another country's borrow and their board
+        // cannot be read from here, so the term is simply absent for them —
+        // it never invents a premium it cannot justify.
+        //
+        // Absent too for a player the club has ALREADY decided to move on:
+        // listed, asking to leave, not needed, or quietly marketed on its own
+        // ledger. Holding out for a successor is what a club does when it is
+        // asked for a man it wants to keep; a decision to sell is a decision
+        // that the hole is acceptable. The first census applied the term to
+
+        SellerPosition {
+            ratio,
+            reservation: seller_reservation,
+            below_floor,
+            importance,
+            windfall,
+            floor,
+            urgency,
+            buyer_transfer_budget,
+        }
+    }
+
+    /// He said yes. Stamp the agreement, move the negotiation on, and file
+    /// the story beats that tell a live market from a procurement queue.
+    fn seller_accepts(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        auction: &AuctionState,
+        deadline: &DeadlineWindow,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        // Story counters: the beats that tell a live market from a
+        // procurement queue. Diagnostics only — a layer whose counter
+        // stays at zero has not landed, whatever the move totals say.
+        if !neg_data.is_loan {
+            let marketed = country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
+                .unwrap_or(false);
+            let story = &mut country.transfer_market.story;
+            if auction.is_contested() {
+                story.contested_agreements += 1;
+            }
+            if deadline.is_deadline_week() {
+                story.deadline_agreements += 1;
+            }
+            if marketed {
+                story.sell_list_conversions += 1;
+            }
+        }
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.advance_to_personal_terms(date);
+        }
+        // Fee agreed — the single biggest formerly-silent beat: the
+        // clubs have shaken hands and personal terms open. The `Bid`
+        // badge makes the accepted bid visible AND lets match
+        // selection start protecting a near-sold asset.
+        CountryResult::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::NegotiationsOpened,
+            TransferInterestSource::ClubBriefing,
+            false,
+        );
+        CountryResult::set_saga_status(country, neg_data, PlayerStatusType::Bid, date);
+    }
+
+    /// He said no, but there are rounds left. The buyer closes 45% of the
+    /// remaining gap per round at the start of the window, up to ~70% in the
+    /// final panic days, and the previous offer is archived so the history
+    /// says who bid what, when.
+    fn buyer_counters(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        seller_reservation: f64,
+        floor: Option<&SellerFloorVerdict>,
+        auction: &AuctionState,
+        deadline: &DeadlineWindow,
+        urgency: f64,
+        buyer_transfer_budget: Option<f64>,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        // Buyer escalation closes 45% of the remaining gap per round at
+        // the start of the window, up to ~70% in the final panic days.
+        // The previous offer is archived to `counter_offers` so the
+        // negotiation history is auditable (who bid what, when).
+        // Escalate toward the price the seller will actually accept
+        // (asking × his reservation), not merely the asking price.
+        // A key man not pushing to leave commands a premium ABOVE
+        // asking; aiming only at asking left every such deal short
+        // of the reservation band, so it timed out. Clamped to
+        // [1.0, 1.55]×asking: never below asking (so the working
+        // available-player path is unchanged — its reservation is
+        // <= 1.0 and clamps to 1.0), and up to the same 1.55 ceiling
+        // the seller's reservation itself clamps to, so the buyer can
+        // actually reach a coveted player's premium instead of topping
+        // out below it. The target is additionally lifted to the
+        // seller's absolute fee floor, so a lowball opening converges
+        // toward a closable number instead of orbiting below it.
+        // The asking price is only a valid escalation anchor when the
+        // bound listing sells the same kind of deal. `start_negotiation`
+        // binds to the first open listing for the player regardless of
+        // type, so a LOAN bid on a transfer-listed player used to
+        // escalate toward the full PERMANENT ask — loan fees converging
+        // on half the player's market value (the loan-fee-anchor bug
+        // reborn one phase later). A mismatched listing falls back to
+        // the modest own-offer escalation path instead.
+        let listing_matches_deal_type = country
+            .transfer_market
+            .negotiations
+            .get(&neg_id)
+            .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
+            .map(|l| {
+                if neg_data.is_loan {
+                    l.listing_type == TransferListingType::Loan
+                } else {
+                    l.listing_type != TransferListingType::Loan
+                }
+            })
+            .unwrap_or(true);
+
+        let mut buyer_walks = false;
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            let reservation_mult = seller_reservation.clamp(1.0, 1.55);
+            let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
+                neg_data.asking_price * reservation_mult
+            } else {
+                negotiation.current_offer.base_fee.amount * 1.15
+            };
+            if let Some(f) = &floor {
+                target = target.max(f.min_fee);
+            }
+            // What the buyer would have reached for before any of the
+            // market layers existed: the seller's reservation, inside
+            // its budget. This is the calibrated baseline reach and the
+            // floor of everything below.
+            let legacy_target = target;
+
+            // ── The auction ─────────────────────────────────────
+            //
+            // Somebody else is already in front. A buyer that wants him
+            // has to clear the leading bid by a real margin or it is
+            // simply not in the conversation — and the one whose own
+            // valuation runs out first stops raising and drops away.
+            // This is what turns rivalry into money; the seller-side
+            // engagement lift alone never moved a fee.
+            if auction.is_contested() {
+                target = target.max(auction.floor());
+            }
+
+            // ── The deadline ────────────────────────────────────
+            //
+            // A club whose season plan still has a hole in it pays over
+            // the odds in the last days. Cover does not: there is
+            // always another body, and the loan market is open.
+            let tier = negotiation.brief_tier.unwrap_or(BriefTier::B);
+            let premium = deadline.premium_for(tier, true);
+            if premium > 0.0 && neg_data.asking_price > 0.0 {
+                target += neg_data.asking_price * premium;
+            }
+
+            // ── The buyer's own number ──────────────────────────
+            //
+            // Everything above says what it would TAKE to win him.
+            // This says what he is worth to this buyer. A club walks
+            // away from a bidding war at its own ceiling, which is why
+            // two clubs chasing one player do not converge on the same
+            // fee — the richer one, whose marginal dollar is worth less,
+            // simply has further to go.
+            //
+            // The ceiling caps only the EXTENSION above the legacy
+            // reach — the auction floor and the deadline premium —
+            // never the reach itself. Three censuses showed why: with
+            // this market's fees an order of magnitude below its wages,
+            // the deal value nets wages off a small sporting benefit and
+            // comes out under the seller's price for exactly the deals
+            // real clubs do (a strong-league side buying an elite club's
+            // surplus, a mid-rich elite side buying a modest upgrade),
+            // and those cells fell 40 % below HEAD. Until the fee scale
+            // is reconciled the ceiling is not a trustworthy walk-away
+            // price below the calibrated baseline, so it does not act
+            // there. Where it does act — who keeps raising once a
+            // bidding war has pushed the price past the ask — is the
+            // half of the story it was built for.
+            if let Some(ceiling) = negotiation.buyer_ceiling_fee {
+                target = target.min(ceiling.max(legacy_target));
+            }
+
+            let escalation = 0.45 + urgency * 0.25;
+            let current_amount = negotiation.current_offer.base_fee.amount;
+            let mut new_amount = FormattingUtils::round_fee(
+                current_amount + (target - current_amount).max(0.0) * escalation,
+            );
+            // Cap the escalated headline at what the buyer can actually
+            // fund up front (installment tranches settle later from the
+            // balance, so they extend the affordable headline). When the
+            // BUDGET is what stops the bid improving, the buyer walks
+            // now — the same refusal `reserve_transfer_budget` would
+            // deliver at the medical, minus the wasted weeks. A bid that
+            // already meets the target simply re-enters the next round
+            // unchanged (the seller may yet say yes), as before.
+            let mut budget_blocked = false;
+            if let Some(available) = buyer_transfer_budget {
+                let deferred = new_amount
+                    - TransferExecution::upfront_after_installments(
+                        new_amount,
+                        neg_data.selling_country_id.is_some(),
+                        &negotiation.current_offer.clauses,
+                    );
+                let max_affordable = FormattingUtils::round_fee(available + deferred.max(0.0));
+                if max_affordable < new_amount {
+                    new_amount = max_affordable;
+                    budget_blocked = true;
+                }
+            }
+            if budget_blocked && new_amount <= current_amount {
+                buyer_walks = true;
+            } else {
+                let mut escalated = negotiation.current_offer.clone();
+                escalated.base_fee.amount = new_amount.max(current_amount);
+                escalated.offered_date = date;
+                negotiation.counter_offer(escalated);
+                negotiation.advance_club_negotiation_round(date);
+            }
+        }
+        if buyer_walks {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+            }
+            CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+            // The suitor priced himself out and walked — the rumour
+            // the player had been hearing goes quiet.
+            CountryResult::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::InterestCooled,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+        }
+    }
+
+    /// He said no. Record the rejection, remember the interest it proves,
+    /// and let the buyer's shortlist move on.
+    fn seller_rejects(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        floor: Option<&SellerFloorVerdict>,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        // Final round: a bid still under the seller's absolute floor is
+        // rejected with the floor's own reason (PlayerTooImportant for a
+        // core man), everything else as a plain price failure.
+        let reason = floor
+            .as_ref()
+            .filter(|f| neg_data.offer_amount < f.min_fee)
+            .map(|f| f.reason.clone())
+            .unwrap_or(NegotiationRejectionReason::AskingPriceTooHigh);
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(reason);
+        }
+        CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+        // Final-round rejection — the buying club really did pursue
+        // and the selling club still said no. Routed through the
+        // structured interest funnel so the headline can name the
+        // interested club and surface the player's reaction
+        // (frustrated / contract-leverage / loyal).
+        CountryResult::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::BidRejected,
+            TransferInterestSource::RejectedBid,
+            true,
+        );
+        PipelineProcessor::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
+    }
+
+    /// Everything the medical needs settled before the roll: the foreign
+    /// arrival's paperwork, the pool free agent's provenance, and the
+    /// saga beats a medical booking is owed.
+    fn stage_medical(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        is_foreign: bool,
+        is_pool_free_agent: bool,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        // or alternate creation path can't complete a closed route.
+        if is_foreign
+            && TransferRoutePolicy::is_blocked(&neg_data.selling_country_code, &country.code, date)
+        {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.reject_with_reason(NegotiationRejectionReason::CountryPairRouteBlocked);
+            }
+            // An agreed move refused at the registration desk — the
+            // player had said yes; the collapse is a real story beat.
+            CountryResult::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::MoveCollapsed,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return;
+        }
+
+        // Verify the player is still at the selling club (domestic) or not
+        // already claimed by another deferred transfer (foreign)
+        if is_foreign {
+            // Reject if another negotiation for this player is already deferred
+            if outcomes
+                .deferred
+                .iter()
+                .any(|d| d.player_id == neg_data.player_id)
+            {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                }
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        } else if is_pool_free_agent {
+            // Pool membership can't be verified from country scope —
+            // first-come-first-served dedup happens at execution time
+            // in `execute_global_free_agent_signing`. Only guard
+            // against a second pool signing staged this same tick.
+            if outcomes
+                .free_agent_signings
+                .iter()
+                .any(|s| s.player_id == neg_data.player_id)
+            {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                }
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        } else {
+            let player_at_selling_club = country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|c| c.teams.contains_player(neg_data.player_id))
+                .unwrap_or(false);
+
+            if !player_at_selling_club {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation
+                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                }
+                CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        }
+    }
+
+    /// He passed it. Execute the move, install the contract, and file every
+    /// beat the arrival is owed.
+    fn medical_passed(
+        country: &mut Country,
+        country_id: u32,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        summary: &mut TransferActivitySummary,
+        is_foreign: bool,
+        is_pool_free_agent: bool,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.accept();
+        }
+
+        if Self::settle_pool_free_agent(
+            country,
+            country_id,
+            neg_data,
+            neg_id,
+            is_pool_free_agent,
+            outcomes,
+        ) {
+            return;
+        }
+
+        // Registration must land inside the window. Negotiations
+        // legally survive the close (deals agreed near the deadline
+        // finish their paperwork), but a PERMANENT move whose medical
+        // resolves after deadline day cannot be registered — it
+        // collapses here exactly like a failed medical, instead of
+        // registering weeks past the deadline. Loans and free
+        // transfers (out-of-contract players) keep their
+        // window-independent paths.
+        if !neg_data.is_loan && !country.transfer_market.transfer_window_open {
+            let signs_free_agent = country
+                .transfer_market
+                .negotiations
+                .get(&neg_id)
+                .and_then(|n| country.transfer_market.listings.get(n.listing_id as usize))
+                .map(|l| l.listing_type == TransferListingType::EndOfContract)
+                .unwrap_or(false);
+            if !signs_free_agent {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(NegotiationRejectionReason::WindowClosed);
+                }
+                CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+                // A fully-agreed deal died at the deadline — the
+                // classic deadline-day heartbreak beat.
+                CountryResult::notify_player_stage(
+                    country,
+                    outcomes,
+                    neg_data,
+                    TransferInterestStage::MoveCollapsed,
+                    TransferInterestSource::ClubBriefing,
+                    false,
+                );
+                CountryResult::clear_saga_statuses(country, neg_id, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        }
+
+        // Reserve the agreed fee against the buyer's transfer budget the
+        // moment the deal closes, so two deals agreed in the same window
+        // can't both bank on the same money and one then silently
+        // collapse when its deferred execution finds the budget already
+        // spent. If the budget can't cover it the club genuinely can't
+        // fund the move — refuse it cleanly here rather than agree a deal
+        // that would evaporate at execution (the old silent drop: market
+        // history written then retracted, interest cleared, player never
+        // moved). The reservation is released at execution-start, where
+        // the real purchase accounting runs. Loans (lighter accounting)
+        // and pool free agents (already returned above) are exempt.
+        //
+        // Reserve only the UPFRONT cash the buyer commits now: installment
+        // tranches are paid over time from the balance by the settlement
+        // walk, and execution itself already gates on the upfront portion,
+        // so reserving the full headline here blocked structured deals the
+        // club could genuinely fund — installments couldn't stretch a tight
+        // budget at all. Cross-country deals settle upfront, so their
+        // upfront IS the full fee.
+        if !neg_data.is_loan {
+            let upfront = country
+                .transfer_market
+                .negotiations
+                .get(&neg_id)
+                .map(|n| {
+                    TransferExecution::upfront_after_installments(
+                        neg_data.offer_amount,
+                        neg_data.selling_country_id.is_some(),
+                        &n.current_offer.clauses,
+                    )
+                })
+                .unwrap_or(neg_data.offer_amount);
+            let reserved = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == neg_data.buying_club_id)
+                .map(|c| {
+                    let ok = c.finance.reserve_transfer_budget(upfront);
+                    // Mirror the finance reservation on the plan's own
+                    // ledger so `available_budget()` reflects committed
+                    // deals — these fields were dead (always zero), so
+                    // staff-recommendation allocations and broadcast
+                    // affordability reads saw the full window pot all
+                    // window long.
+                    if ok {
+                        c.transfer_plan.reserved += upfront;
+                    }
+                    ok
+                })
+                .unwrap_or(true);
+            if !reserved {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+                }
+                CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+                // The buyer's money wasn't there at the finish line —
+                // an agreed move collapsing on funds.
+                CountryResult::notify_player_stage(
+                    country,
+                    outcomes,
+                    neg_data,
+                    TransferInterestStage::MoveCollapsed,
+                    TransferInterestSource::ClubBriefing,
+                    false,
+                );
+                CountryResult::clear_saga_statuses(country, neg_id, neg_data.player_id);
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return;
+            }
+        }
+
+        Self::announce_arrival(
+            country, country_id, neg_data, neg_id, date, summary, is_foreign, outcomes,
+        );
+    }
+
+    /// He failed it. The deal dies here, and the interest it proved is
+    /// remembered so the buyer does not simply re-open it tomorrow.
+    fn medical_failed(
+        country: &mut Country,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
+        }
+        CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+        // Late-stage collapse — both clubs and the player had agreed
+        // and only the medical stood in the way. Routed through the
+        // structured signal so the rendered event can name the
+        // interested club and the player's reaction (excited /
+        // frustrated / contract-leverage).
+        CountryResult::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::MoveCollapsed,
+            TransferInterestSource::ConfirmedApproach,
+            false,
+        );
+        CountryResult::clear_saga_statuses(country, neg_id, neg_data.player_id);
+        PipelineProcessor::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
+    }
+
+    /// A pool free agent's completion runs in Phase C, so all that happens
+    /// here is releasing the rival bids and the listings he leaves behind.
+    /// Returns whether he was one — the ordinary move must not also run.
+    fn settle_pool_free_agent(
+        country: &mut Country,
+        country_id: u32,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        is_pool_free_agent: bool,
+        outcomes: &mut NegotiationOutcomes,
+    ) -> bool {
+        // Pool free agent: completion runs in Phase C through
+        // `execute_global_free_agent_signing`, which removes the
+        // player from `data.free_agents` and writes the "Free
+        // Agent" history row itself — writing one here as well
+        // would duplicate it (or leave a phantom row when another
+        // country claimed the player first).
+        if is_pool_free_agent {
+            let reason = country
+                .transfer_market
+                .negotiations
+                .get(&neg_id)
+                .map(|n| n.reason.clone())
+                .unwrap_or_default();
+            outcomes.free_agent_signings.push(GlobalFreeAgentSigning {
+                player_id: neg_data.player_id,
+                player_name: neg_data.player_name.clone(),
+                buying_country_id: country_id,
+                buying_club_id: neg_data.buying_club_id,
+                reason,
+                terms: PoolSigningTerms::from_personal(
+                    neg_data.personal_terms.as_ref(),
+                    neg_data.offered_annual_wage,
+                ),
+            });
+            country
+                .transfer_market
+                .complete_listings_for_player(neg_data.player_id);
+            // Snapshot losing bidders BEFORE the cancel flips them to
+            // Rejected — each must release its plan's negotiation
+            // slot, or the loser sits frozen at its concurrency cap
+            // for the rest of the window.
+            let losing_bidders: Vec<u32> = country
+                .transfer_market
+                .negotiations
+                .values()
+                .filter(|n| {
+                    n.player_id == neg_data.player_id
+                        && n.id != neg_id
+                        && matches!(
+                            n.status,
+                            NegotiationStatus::Pending | NegotiationStatus::Countered
+                        )
+                })
+                .map(|n| n.buying_club_id)
+                .collect();
+            country
+                .transfer_market
+                .cancel_negotiations_for_player(neg_data.player_id, neg_id);
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                true,
+            );
+            for loser in losing_bidders {
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    loser,
+                    neg_data.player_id,
+                    false,
+                );
+            }
+            PipelineProcessor::clear_player_interest(country, neg_data.player_id);
+            return true;
+        }
+
+        false
+    }
+
+    /// The beats an arrival is owed: the names that go on the record, the
+    /// bidders who lost him, and the owner's cheque — all read while the
+    /// negotiation row `complete_transfer` is about to retire still exists.
+    fn announce_arrival(
+        country: &mut Country,
+        country_id: u32,
+        neg_data: &NegotiationData,
+        neg_id: u32,
+        date: NaiveDate,
+        summary: &mut TransferActivitySummary,
+        is_foreign: bool,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        // Resolve names: domestic from country, foreign from cached names
+        let player_name = if is_foreign {
+            neg_data.player_name.clone()
+        } else {
+            CountryRoster::find(country, neg_data.player_id)
+                .map(|p| p.full_name.to_string())
+                .unwrap_or_default()
+        };
+        let from_team_name = if is_foreign {
+            neg_data.selling_club_name.clone()
+        } else {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default()
+        };
+        let to_team_name = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        // Snapshot losing bidders BEFORE `complete_transfer` flips
+        // their negotiations to Rejected — each must release its
+        // plan's negotiation slot (and advance its shortlist), or the
+        // loser sits frozen at its concurrency cap for the rest of
+        // the window.
+        let losing_bidders: Vec<u32> = country
+            .transfer_market
+            .negotiations
+            .values()
+            .filter(|n| {
+                n.player_id == neg_data.player_id
+                    && n.id != neg_id
+                    && matches!(
+                        n.status,
+                        NegotiationStatus::Pending | NegotiationStatus::Countered
+                    )
+            })
+            .map(|n| n.buying_club_id)
+            .collect();
+
+        // What the owner's cheque WOULD cover, read while the row
+        // still exists — the tier and the opening wage live on the
+        // negotiation `complete_transfer` is about to retire. It is
+        // only drawn if the completion actually happens.
+        let envelope_draw = CountryResult::owner_envelope_draw(country, neg_id);
+
+        if let Some(completed) = country.transfer_market.complete_transfer(
+            neg_id,
+            date,
+            player_name,
+            from_team_name,
+            to_team_name,
+        ) {
+            CountryResult::consume_owner_envelope(country, neg_data.buying_club_id, envelope_draw);
+            summary.completed_transfers += 1;
+            summary.total_fees_exchanged += completed.fee.amount;
+
+            // All execution is deferred to SimulatorData level
+            let selling_country_id = neg_data.selling_country_id.unwrap_or(country_id);
+            // Reconcile the staged annual wage with the structured
+            // personal-terms package: the package's wage is the
+            // authoritative one if present (negotiated explicitly),
+            // otherwise we fall back to the loose `offered_salary`.
+            let agreed_annual_wage = neg_data
+                .personal_terms
+                .as_ref()
+                .and_then(|t| t.annual_wage)
+                .or(neg_data.offered_annual_wage);
+            let offer_clauses = country
+                .transfer_market
+                .negotiations
+                .get(&neg_id)
+                .map(|n| n.current_offer.clauses.clone())
+                .unwrap_or_default();
+            outcomes.deferred.push(DeferredTransfer {
+                player_id: neg_data.player_id,
+                selling_country_id,
+                selling_club_id: neg_data.selling_club_id,
+                buying_country_id: country_id,
+                buying_club_id: neg_data.buying_club_id,
+                fee: neg_data.offer_amount,
+                is_loan: neg_data.is_loan,
+                has_option_to_buy: neg_data.has_option_to_buy,
+                agreed_annual_wage,
+                buying_league_reputation: neg_data.buying_league_reputation,
+                sell_on_percentage: neg_data.sell_on_percentage,
+                loan_future_fee: neg_data.loan_future_fee,
+                personal_terms: neg_data.personal_terms.clone(),
+                offer_clauses,
+            });
+
+            PipelineProcessor::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                true,
+            );
+            for loser in losing_bidders {
+                PipelineProcessor::on_negotiation_resolved(
+                    country,
+                    loser,
+                    neg_data.player_id,
+                    false,
+                );
+            }
+            PipelineProcessor::clear_player_interest(country, neg_data.player_id);
+        }
+    }
+
+    /// A club that bought this player with a plan will not sell him back out
+    /// of the same window — unless it opened the development-loan pathway
+    /// itself, in which case loan approaches (only) are welcome.
+    fn protects_fresh_signing(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> bool {
+        // Selling club refuses to negotiate for recently signed players —
+        // they bought this player with a plan and won't sell immediately.
+        // Check domestic players only (foreign players aren't in this country).
+        if neg_data.selling_country_id.is_none() {
+            let window_mgr = TransferWindowManager::for_country(country, date);
+            let current_window = window_mgr.current_window_dates(country.id, date);
+            // Development-pathway bypass: the owner club itself listed
+            // this same-window signing for a development loan, so loan
+            // approaches are welcome. Permanent bids for the fresh
+            // signing stay blocked — the protection is only relaxed for
+            // the explicit pathway the owner opened.
+            let development_loan_listed = neg_data.is_loan
+                && country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == neg_data.selling_club_id)
+                    .map(|c| {
+                        c.transfer_plan.loan_out_candidates.iter().any(|cand| {
+                            cand.player_id == neg_data.player_id
+                                && cand.reason == LoanOutReason::DevelopmentPathway
+                        })
+                    })
+                    .unwrap_or(false);
+            if let Some(player) = CountryRoster::find(country, neg_data.player_id) {
+                if !development_loan_listed && player.is_transfer_protected(date, current_window) {
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
+                    {
+                        negotiation
+                            .reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
+                    }
+                    CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        neg_data.buying_club_id,
+                        neg_data.player_id,
+                        false,
+                    );
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Seller-side economics, the half of the funnel that leaves no trace
+    /// anywhere else.
+    fn trace_approach(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+        ratio: f64,
+        seller_delta: f32,
+        importance_penalty: f32,
+        windfall: &SellerWindfall,
+        stage_gain: u16,
+    ) {
+        if TransferTrace::is(neg_data.player_id) {
+            // Seller-side economics, the half of the funnel that leaves no
+            // trace anywhere else: what the club thinks he is, what the fee
+            // is worth to it, and how close it is to its wage ceiling.
+            let seller_line = country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|club| {
+                    let asset = CountryRoster::find(country, neg_data.player_id)
+                        .map(|p| SquadAssetProtection::classify(p, club, date))
+                        .map(|c| c.label())
+                        .unwrap_or("unknown");
+                    let income = club.finance.estimated_annual_income(date);
+                    let wages: i64 = club
+                        .teams
+                        .iter()
+                        .map(|t| t.get_annual_salary() as i64)
+                        .sum();
+                    format!(
+                        "club={} asset={asset} income={income} wages={wages} \
+                         fee/income={:.2}",
+                        club.name,
+                        if income > 0 {
+                            neg_data.offer_amount / income as f64
+                        } else {
+                            0.0
+                        },
+                    )
+                })
+                .unwrap_or_else(|| {
+                    let (income, wages, budget) =
+                        neg_data.foreign_seller_finances.unwrap_or((0, 0, 0));
+                    format!(
+                        "club={} (foreign) income={income} wages={wages} wage_budget={budget} \
+                         fee/income={:.2}",
+                        neg_data.selling_club_name,
+                        if income > 0 {
+                            neg_data.offer_amount / income as f64
+                        } else {
+                            0.0
+                        },
+                    )
+                });
+            TransferTrace::line(neg_data.player_id, "seller", seller_line);
+            TransferTrace::line(
+                neg_data.player_id,
+                "approach",
+                format!(
+                    "buyer={} seller={} fee={:.0} asking={:.0} ratio={:.2} \
+                     seller_delta={:.1} importance_give_back={:.1} windfall={:.2} \
+                     wage_pressure={:.2} pull={:.2} stage_gain={}",
+                    neg_data.buying_club_id,
+                    neg_data.selling_club_id,
+                    neg_data.offer_amount,
+                    neg_data.asking_price,
+                    ratio,
+                    seller_delta,
+                    importance_penalty * windfall.ratio,
+                    windfall.ratio,
+                    windfall.wage_pressure,
+                    neg_data.player_stage_inclination,
+                    stage_gain,
+                ),
+            );
+        }
+    }
+
+    /// What the number on the table and the identity of the buyer do to the
+    /// seller's willingness to talk: the bid against the ask, the two clubs'
+    /// standing, who else is bidding, and whether the buyer is a rival.
+    fn bid_and_rivalry_chance(
+        country: &Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        ratio: f64,
+        mut chance: f32,
+    ) -> f32 {
+        if ratio >= 1.15 {
+            chance += 30.0;
+        } else if ratio >= 1.0 {
+            chance += 22.0;
+        } else if ratio >= 0.85 {
+            chance += 8.0;
+        } else if ratio < 0.65 {
+            chance -= 22.0;
+        }
+
+        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
+        if rep_diff > 0.2 {
+            chance += 15.0;
+        } else if rep_diff < -0.2 {
+            chance -= 10.0;
+        }
+
+        // Competition: when several buyers are bidding for the same player
+        // the seller has leverage and is more inclined to engage. What
+        // competition mostly moves, though, is the FEE, not whether the
+        // seller picks up the phone — that half lives in
+        // [`AuctionState::floor`], read by the fee resolver below. Here it
+        // is only the engagement lift, saturating rather than compounding.
+        let auction = CountryResult::auction_state(country, neg_id, neg_data.player_id);
+        chance += auction.seller_leverage();
+
+        // Rivalry friction: seller reluctant to strengthen a rival. Softened
+        // when the buyer is clearly bigger (pragmatic payday) or when the
+        // bid is far above asking (can't turn down that kind of money).
+        if neg_data.selling_country_id.is_none()
+            && CountryResult::seller_views_buyer_as_rival(
+                country,
+                neg_data.selling_club_id,
+                neg_data.buying_club_id,
+            )
+        {
+            let mut rival_penalty: f32 = 35.0;
+            if rep_diff > 0.25 {
+                rival_penalty -= 12.0;
+            }
+            // …and so is a buyer whose money its own revenue cannot
+            // explain. "Clearly bigger" is not only reputation: a club
+            // sells to money it would not sell to a rival for, which is
+            // the whole reason a mid-table side lets a starter go to the
+            // Gulf and not to the team above it (L5).
+            //
+            // Continuous in the ratio, not a step at the state-backed bar:
+            // a 0.49 benefactor and a 0.51 one are the same club, and a
+            // cliff there is exactly the kind of threshold the whole model
+            // exists to avoid.
+            let benefactor = CountryResult::buyer_benefactor(country, neg_data.buying_club_id);
+            rival_penalty -= 12.0 * (benefactor / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0);
+            if neg_data.asking_price > 0.0 && neg_data.offer_amount >= neg_data.asking_price * 1.5 {
+                rival_penalty -= 15.0;
+            }
+            chance -= rival_penalty.max(5.0);
+        }
+
+        chance
+    }
+
+    /// The seller picked up the phone. Interest is now real, so the
+    /// concrete-interest signal fires and the player owner picks his reaction.
+    fn open_talks(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.advance_to_club_negotiation(date);
+        }
+        // Interest is now real — fire the structured concrete-interest
+        // signal so the player owner can pick the right reaction
+        // (flattered / focused / unsettled / loyal) and attach the
+        // interested club, sporting fit, evidence and follow-up.
+        // Foreign players get the same beat via the Phase-C drain.
+        CountryResult::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::ConcreteInterest,
+            TransferInterestSource::ConfirmedApproach,
+            false,
+        );
+    }
+
+    /// The seller would not even open talks. The target feels it, routed
+    /// through the structured interest funnel so the headline carries who
+    /// rejected what and the reaction lands with context.
+    fn refuse_talks(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        outcomes: &mut NegotiationOutcomes,
+    ) {
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+        }
+        CountryResult::reopen_listing_for_player(country, neg_data.player_id);
+        // The target feels the rejection if it was a real chance.
+        // Routed through the structured interest funnel so the
+        // headline carries who rejected what and the player's reaction
+        // (frustration / leverage / loyalty) lands with context.
+        CountryResult::notify_player_stage(
+            country,
+            outcomes,
+            neg_data,
+            TransferInterestStage::BidRejected,
+            TransferInterestSource::RejectedBid,
+            false,
+        );
+        PipelineProcessor::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
+    }
+
+    /// The stance is FROZEN for the life of the personal-terms phase, on both
+    /// paths: built once, on the first round, and staged on the negotiation
+    /// the way a cross-border deal's has always been.
+    ///
+    /// Rebuilding it live at every round was the "raise to the reservation ⇒
+    /// deterministic yes" guarantee's one hole. A matchday between rounds
+    /// moves `starter_ratio`, an `Unh` can clear (−0.35), resignation moves —
+    /// and because the buyer raises to exactly `1.02 × reservation`, a drift
+    /// of more than `w_m · ln(1.02)` ≈ 0.01 turned a paid-for yes into a
+    /// terminal refusal. Foreign deals were already immune.
+    fn frozen_stance(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+        is_foreign: bool,
+    ) -> (PlayerStance, Option<f32>) {
+        // ── The two inputs ──────────────────────────────────────
+        //
+        // The stance is FROZEN for the life of the personal-terms phase,
+        // on both paths: built once, on the first round, and staged on the
+        // negotiation the way a cross-border deal's has always been.
+        //
+        // Rebuilding it live at every round was the "raise to the
+        // reservation ⇒ deterministic yes" guarantee's one hole. A
+        // matchday between rounds moves `starter_ratio`, an `Unh` can
+        // clear (−0.35), resignation moves — and because the buyer raises
+        // to exactly `1.02 × reservation`, a drift of more than
+        // `w_m · ln(1.02)` ≈ 0.01 turned a paid-for yes into a terminal
+        // refusal. Foreign deals were already immune.
+        //
+        // `deadline_urgency` stays live: it sits on the OFFER, it is the
+        // buyer's clock rather than the player's situation, and it only
+        // ever pushes up.
+        //
+        // The staged plausibility inputs are the expensive part and both
+        // halves want them — importance for the stance, the sporting drop
+        // for the offer — so they are built once, together.
+        let mut stance = neg_data.staged_stance;
+        let mut sporting_drop = neg_data.staged_sporting_drop;
+        if stance.is_none() && !is_foreign {
+            if let Some((built, drop)) = CountryResult::stance_for(country, neg_data, date) {
+                stance = Some(built);
+                sporting_drop = Some(drop);
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.staged_stance = Some(built);
+                    negotiation.staged_sporting_drop = Some(drop);
+                }
+            }
+        }
+        // A global-pool free agent has no club, no depth chart and no
+        // country to be read from — and he is exactly the man for whom the
+        // decision genuinely IS the money against a fair anchor plus the
+        // shirt on offer. Everything else stays at its no-view default.
+        let stance = stance.unwrap_or_else(|| {
+            let offered = neg_data.offered_annual_wage.unwrap_or(0) as f64;
+            let fair = neg_data
+                .staged_reservation_wage
+                .map(|w| w as f64)
+                .filter(|w| *w > 0.0)
+                .unwrap_or(offered);
+            PlayerStance::from_terms(
+                neg_data.player_age,
+                neg_data.player_ambition,
+                offered.max(fair),
+                fair,
+            )
+        });
+
+        (stance, sporting_drop)
+    }
+
+    /// What he was offered, what he anchors on, and what he made of it.
+    fn trace_terms(
+        neg_data: &NegotiationData,
+        round: u8,
+        is_foreign: bool,
+        stance: &PlayerStance,
+        offer: &OfferView,
+        appraisal: &Appraisal,
+    ) {
+        if TransferTrace::is(neg_data.player_id) {
+            TransferTrace::line(
+                neg_data.player_id,
+                "terms",
+                format!(
+                    "round={round} buyer={} age={} ambition={:.2} offered={:.0} anchor={:.0} \
+                     {}{} -> {}",
+                    neg_data.buying_club_id,
+                    neg_data.player_age,
+                    neg_data.player_ambition,
+                    offer.offered_wage,
+                    PlayerOfferAppraisal::anchor(&stance),
+                    // What the retired hard floor would have said. Kept as
+                    // a diagnostic, not a gate: the whole point of the
+                    // appraisal is that the same refusal now has a price.
+                    // Only cross-border deals ever set it — printing it on
+                    // a domestic one is a constant `false`.
+                    if is_foreign {
+                        format!("legacy_floor={} ", neg_data.foreign_terms_floor_blocked)
+                    } else {
+                        String::new()
+                    },
+                    appraisal.explain(),
+                    if appraisal.accepts() { "AGREED" } else { "no" },
+                ),
+            );
+        }
+    }
+
+    /// He said yes. Only the medical stands between him and the move, so
+    /// `Trn` replaces `Bid` and the saga files the beat the day it happened.
+    /// Returns whether the terms were agreed.
+    fn agree_personal_terms(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+        appraisal: &Appraisal,
+        outcomes: &mut NegotiationOutcomes,
+    ) -> bool {
+        if appraisal.accepts() {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                // One number, both slots. The wage he said yes to IS the
+                // wage the contract installs — the package's figure and
+                // the staged offer are written together by
+                // `open_salary_at` / `raise_offered_salary`, and a path
+                // that ever set only one of them would install a salary
+                // nobody agreed.
+                debug_assert!(
+                    negotiation
+                        .current_offer
+                        .personal_terms
+                        .as_ref()
+                        .and_then(|t| t.annual_wage)
+                        .map(|w| Some(w) == negotiation.offered_salary)
+                        .unwrap_or(true),
+                    "agreed wage diverged from the staged offer"
+                );
+                negotiation.advance_to_medical(date);
+                negotiation.terms_refusal_cause = None;
+                negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
+            }
+            // Personal terms agreed — the player has said yes and only
+            // the medical stands between him and the move. `Trn`
+            // replaces `Bid`: match selection now treats him as a
+            // near-sold asset (protected in routine games).
+            CountryResult::set_saga_status(country, neg_data, PlayerStatusType::Trn, date);
+            // …and the saga says so. Every other rung of this ladder
+            // files a beat; without this one the feed followed a move
+            // from the first scout report to the fee agreement and then
+            // went silent on the day it was actually agreed.
+            CountryResult::notify_player_stage(
+                country,
+                outcomes,
+                neg_data,
+                TransferInterestStage::TermsAgreed,
+                TransferInterestSource::ClubBriefing,
+                false,
+            );
+            return true;
+        }
+
+        false
+    }
+
+    /// Not a second roll: the disposition is already drawn, so raising the
+    /// offer to the reservation is a *deterministic* yes. Returns whether the
+    /// buyer put a better number on the table and the round should stand.
+    fn raise_to_reservation(
+        country: &mut Country,
+        neg_id: u32,
+        round: u8,
+        date: NaiveDate,
+        offer: &OfferView,
+        appraisal: &Appraisal,
+        power: Option<WagePower>,
+    ) -> bool {
+        const MAX_WAGE_ROUNDS: u8 = 2;
+        if round < MAX_WAGE_ROUNDS {
+            if let Some(power) = power {
+                let reservation = appraisal.reservation_wage as f64;
+                let target = (reservation * 1.02).min(power.ceiling);
+                if power.can_reach(reservation) && target > offer.offered_wage {
+                    // Close 60 % of the gap, as before — except on the
+                    // last round, which closes it, so a deal the buyer
+                    // can genuinely afford is not lost to arithmetic.
+                    let close = if round + 1 >= MAX_WAGE_ROUNDS {
+                        1.0
+                    } else {
+                        0.6
+                    };
+                    let improved =
+                        (offer.offered_wage + (target - offer.offered_wage) * close).round() as u32;
+                    if improved as f64 > offer.offered_wage {
+                        if let Some(negotiation) =
+                            country.transfer_market.negotiations.get_mut(&neg_id)
+                        {
+                            negotiation.raise_offered_salary(improved);
+                            negotiation.advance_personal_terms_round(date);
+                            negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
 

@@ -591,227 +591,9 @@ impl Player {
             .map(|d| d >= 0 && d < 21)
             .unwrap_or(false);
 
-        // Career-desire moods: emit (or refresh) the WantsReturnHome /
-        // WantsEuropeanCompetition / WantsCopaLibertadores ambient mood
-        // events before deciding whether to escalate to Req. The
-        // helpers themselves are cooldowned so they don't spam.
-        if !recently_transferred {
-            // Adaptation score uses the squad social view from the
-            // weekly pre-tick — same source the desire context already
-            // reads. No formation here (we don't carry it through the
-            // weekly tick); the formation arm of `adaptation_score`
-            // contributes ±10 at most so the missing input only damps
-            // the signal.
-            let squad_ctx = AdaptationSquadContext {
-                same_language_teammates: self
-                    .squad_social_view
-                    .as_ref()
-                    .map(|v| v.same_language_teammates)
-                    .unwrap_or(0),
-                same_nationality_teammates: self
-                    .squad_social_view
-                    .as_ref()
-                    .map(|v| v.same_nationality_teammates)
-                    .unwrap_or(0),
-                mentor_quality: None,
-                squad_chemistry: 50.0,
-                manager_relation_level: 0.0,
-                is_loan: self.is_on_loan(),
-                is_favorite_club: ctx.destination_is_favourite,
-            };
-            let adaptation_score = self.adaptation_score(
-                now,
-                &ctx.country_code,
-                ctx.club_reputation,
-                None,
-                &squad_ctx,
-            );
-            let signals = AdaptationFailureSignals {
-                player_nationality_continent_id: ctx.player_nationality_continent_id,
-                club_continent_id: ctx.club_continent_id,
-                club_in_home_country: ctx.club_in_home_country,
-                destination_is_favourite: ctx.destination_is_favourite,
-                same_language_or_nationality_teammates: ctx.same_language_or_nationality_teammates,
-                adaptation_score,
-                club_fit: self.happiness.factors.club_fit,
-            };
-            self.process_chronic_adaptation_failure(now, &ctx.country_code, &signals);
-            self.detect_career_desire_priority(now, ctx);
-            // Post-relegation exodus — independent of the continental
-            // priority resolution; keyed off the `Relegated` team event
-            // already sitting on the player, so no league plumbing.
-            self.detect_relegation_escape_desire(now, ctx);
-            // Item 8: broader life-simulation moods. Each detector is
-            // cooldowned and gated — they fire ambient mood events
-            // separately from the transfer-request escalation path.
-            self.detect_life_simulation_desires(now, ctx, adaptation_score);
-        }
+        self.tick_career_desire_moods(now, ctx, recently_transferred);
 
-        // Re-evaluate every reason every tick. A reason in the set
-        // *now* is unresolved; a reason that's silent has gone away.
-        // Req only clears when no reasons remain.
-        let mut active_reasons: Vec<TransferRequestReason> = Vec::new();
-
-        if self.behaviour.is_poor() {
-            active_reasons.push(TransferRequestReason::PoorBehaviour);
-        }
-
-        // Generic unhappiness only escalates to a formal request once the
-        // mood has held for ~6 months — long enough for the manager-talk /
-        // loan paths to have tried and failed to resolve it. A fresher
-        // grievance keeps the player unsettled but not yet asking out.
-        let has_unh_long = self
-            .statuses
-            .held_for_days(PlayerStatusType::Unh, now)
-            .is_some_and(|d| d >= UNHAPPY_LISTING_MIN_DAYS);
-        if has_unh_long {
-            active_reasons.push(TransferRequestReason::LongUnhappiness);
-        }
-
-        // A genuine ambition mismatch (wrong-size club / relegation slide)
-        // is a distinct, faster grievance — a fortnight of unhappiness on
-        // top of a clearly-too-small club is enough to want a move.
-        if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
-            let has_unh_short = self
-                .statuses
-                .held_for_days(PlayerStatusType::Unh, now)
-                .is_some_and(|d| d > 14);
-            if has_unh_short {
-                active_reasons.push(TransferRequestReason::AmbitionMismatch);
-            }
-        }
-
-        // Outgrown club: an ambitious player at a club well beneath his
-        // stature wants to step UP even while otherwise settled — healthy
-        // career ambition, not a grievance. Unlike `AmbitionMismatch` it
-        // needs no spell of `Unh`; the structural prestige deficit alone
-        // drives it. Gated hard so only players who have genuinely outgrown
-        // their club agitate — a deep ambition-fit deficit, real personal
-        // ambition, still young enough to climb, and settled at the club
-        // for a full year (a recent signing gets his look first). This is
-        // the missing "good player at a small club finally moves up"
-        // signal; without it the market only ever recirculated unhappy or
-        // surplus players, so established players never moved.
-        if !recently_transferred
-            && self.happiness.factors.ambition_fit <= -10.0
-            && self.attributes.ambition >= 15.0
-            && age <= 28
-            && self
-                .days_since_transfer(now)
-                .map(|d| d >= 365)
-                .unwrap_or(true)
-        {
-            active_reasons.push(TransferRequestReason::OutgrownClub);
-        }
-
-        // Wants a bigger stage. One score — see [`BigStagePull`] — drives
-        // three tiers of consequence: a silent inclination the market reads
-        // when a bid arrives, a visible mood, and finally a formal request.
-        //
-        // Escalation to a request deliberately does NOT require a spell of
-        // `Unh`. It requires that the itch has PERSISTED across a season,
-        // or that a concrete move was DENIED (a bid the club turned down, a
-        // window that came and went). Requiring unhappiness inverted the
-        // truth: the players who most want a bigger league are usually the
-        // ones doing best where they are, and a star at a locally-big club
-        // reads as perfectly content to the ambition-fit model.
-        let stage_pull = if recently_transferred {
-            None
-        } else {
-            let pull = BigStagePull::assess(
-                self,
-                now,
-                &BigStagePullContext {
-                    league_reputation: ctx.league_reputation,
-                    continentally_isolated: ctx.country_uefa_suspended,
-                    squad_tier: ctx.squad_team_type.unwrap_or(TeamType::Main),
-                    at_favourite_club: ctx.destination_is_favourite,
-                },
-            );
-            if pull.shows_mood() {
-                self.emit_wants_stronger_league_mood(ctx);
-            }
-            Some(pull)
-        };
-        if let Some(pull) = stage_pull {
-            if pull.would_request() && self.stage_ambition_has_been_denied_or_endured(now) {
-                active_reasons.push(TransferRequestReason::WantsStrongerLeague);
-            }
-        }
-        self.big_stage_inclination = stage_pull.map(|p| p.score).unwrap_or(0.0);
-
-        // New challenge: long service at ONE club breeds a desire for a fresh
-        // test, independent of whether he has outgrown it. This is the "many
-        // years at one club" case — a settled star at a big club who has won
-        // it all and wants a new league — which the prestige-based
-        // OutgrownClub signal (a too-small club + youth) misses. The tenure
-        // restlessness has already dented his morale via `ambition_fit`; this
-        // turns a long-festering itch into an actual request. Gated tightly —
-        // genuine ambition, below-average loyalty, a prime mobile age and a
-        // long stay — so a true one-club legend or a content servant stays
-        // put rather than every veteran walking out.
-        if !recently_transferred {
-            let years_at_club = self.years_at_club(now);
-            let restless_for_a_new_challenge = years_at_club >= 8.0
-                && self.attributes.ambition >= 16.0
-                && self.attributes.loyalty < 12.0
-                && (25..=30).contains(&age);
-            if restless_for_a_new_challenge {
-                active_reasons.push(TransferRequestReason::NewChallenge);
-            }
-        }
-
-        if let Some(first_request) = self.happiness.last_salary_negotiation {
-            let days = (now - first_request).num_days();
-            if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
-                active_reasons.push(TransferRequestReason::SalaryUnresolved);
-            }
-        }
-
-        if !recently_transferred && self.return_home_request_pressure(now, ctx) {
-            // The 21-year-old asks to go home FOR A SEASON; the
-            // 29-year-old asks to leave. Same homesickness, two different
-            // asks, and the simulator only ever knew how to make the
-            // second — which is why a stuck foreign prospect's route out
-            // was a transfer request that then *suppressed* his loan
-            // request (`process_playing_time_complaints` skips a `Req`
-            // holder), and the most common loan in world football could
-            // not happen.
-            //
-            // Continuous in runway, so there is no birthday at which the
-            // ask changes shape.
-            if self.home_loan_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
-                self.pursue_loan_home(now);
-            } else {
-                active_reasons.push(TransferRequestReason::ReturnHome);
-            }
-        }
-
-        if !recently_transferred && self.european_request_pressure(now) {
-            active_reasons.push(TransferRequestReason::EuropeanAmbition);
-        }
-        if !recently_transferred && self.libertadores_request_pressure(now) {
-            active_reasons.push(TransferRequestReason::CopaLibertadoresAmbition);
-        }
-        if !recently_transferred && self.relegation_escape_pressure(now) {
-            active_reasons.push(TransferRequestReason::RelegationEscape);
-        }
-
-        // Wants first-team football: seasons have gone by without a
-        // shirt and the player would now rather drop a level than keep
-        // watching. Every other reason above points him upward — this is
-        // the only one that points down, and it is the only route by
-        // which a perennial backup at a giant can ever become available.
-        if !recently_transferred && self.first_team_football_pressure(now, ctx, age) {
-            active_reasons.push(TransferRequestReason::WantsFirstTeamFootball);
-        }
-
-        // Honeymoon overrides everything except poor behaviour. A
-        // newly-signed player won't formally request a transfer in the
-        // first 21 days unless their character has actually broken.
-        if recently_transferred {
-            active_reasons.retain(|r| matches!(r, TransferRequestReason::PoorBehaviour));
-        }
+        let active_reasons = self.active_transfer_reasons(now, ctx, age, recently_transferred);
 
         let wants_transfer = !active_reasons.is_empty();
 
@@ -1634,6 +1416,252 @@ impl Player {
             })
             .count();
         mood_count >= 2 && self.stage_ambition_has_been_denied_or_endured(now)
+    }
+
+    /// Career-desire moods: emit (or refresh) the WantsReturnHome /
+    /// WantsEuropeanCompetition / WantsCopaLibertadores ambient mood events
+    /// before anything decides whether to escalate to `Req`. The helpers
+    /// themselves are cooldowned so they do not spam.
+    fn tick_career_desire_moods(
+        &mut self,
+        now: NaiveDate,
+        ctx: &TransferDesireContext,
+        recently_transferred: bool,
+    ) {
+        // Career-desire moods: emit (or refresh) the WantsReturnHome /
+        // WantsEuropeanCompetition / WantsCopaLibertadores ambient mood
+        // events before deciding whether to escalate to Req. The
+        // helpers themselves are cooldowned so they don't spam.
+        if !recently_transferred {
+            // Adaptation score uses the squad social view from the
+            // weekly pre-tick — same source the desire context already
+            // reads. No formation here (we don't carry it through the
+            // weekly tick); the formation arm of `adaptation_score`
+            // contributes ±10 at most so the missing input only damps
+            // the signal.
+            let squad_ctx = AdaptationSquadContext {
+                same_language_teammates: self
+                    .squad_social_view
+                    .as_ref()
+                    .map(|v| v.same_language_teammates)
+                    .unwrap_or(0),
+                same_nationality_teammates: self
+                    .squad_social_view
+                    .as_ref()
+                    .map(|v| v.same_nationality_teammates)
+                    .unwrap_or(0),
+                mentor_quality: None,
+                squad_chemistry: 50.0,
+                manager_relation_level: 0.0,
+                is_loan: self.is_on_loan(),
+                is_favorite_club: ctx.destination_is_favourite,
+            };
+            let adaptation_score = self.adaptation_score(
+                now,
+                &ctx.country_code,
+                ctx.club_reputation,
+                None,
+                &squad_ctx,
+            );
+            let signals = AdaptationFailureSignals {
+                player_nationality_continent_id: ctx.player_nationality_continent_id,
+                club_continent_id: ctx.club_continent_id,
+                club_in_home_country: ctx.club_in_home_country,
+                destination_is_favourite: ctx.destination_is_favourite,
+                same_language_or_nationality_teammates: ctx.same_language_or_nationality_teammates,
+                adaptation_score,
+                club_fit: self.happiness.factors.club_fit,
+            };
+            self.process_chronic_adaptation_failure(now, &ctx.country_code, &signals);
+            self.detect_career_desire_priority(now, ctx);
+            // Post-relegation exodus — independent of the continental
+            // priority resolution; keyed off the `Relegated` team event
+            // already sitting on the player, so no league plumbing.
+            self.detect_relegation_escape_desire(now, ctx);
+            // Item 8: broader life-simulation moods. Each detector is
+            // cooldowned and gated — they fire ambient mood events
+            // separately from the transfer-request escalation path.
+            self.detect_life_simulation_desires(now, ctx, adaptation_score);
+        }
+    }
+
+    /// Re-evaluate every reason every tick. A reason in the set *now* is
+    /// unresolved; a reason that has gone silent has gone away — which is
+    /// what lets `Req` clear only when nothing is left.
+    fn active_transfer_reasons(
+        &mut self,
+        now: NaiveDate,
+        ctx: &TransferDesireContext,
+        age: u8,
+        recently_transferred: bool,
+    ) -> Vec<TransferRequestReason> {
+        // Re-evaluate every reason every tick. A reason in the set
+        // *now* is unresolved; a reason that's silent has gone away.
+        // Req only clears when no reasons remain.
+        let mut active_reasons: Vec<TransferRequestReason> = Vec::new();
+
+        if self.behaviour.is_poor() {
+            active_reasons.push(TransferRequestReason::PoorBehaviour);
+        }
+
+        // Generic unhappiness only escalates to a formal request once the
+        // mood has held for ~6 months — long enough for the manager-talk /
+        // loan paths to have tried and failed to resolve it. A fresher
+        // grievance keeps the player unsettled but not yet asking out.
+        let has_unh_long = self
+            .statuses
+            .held_for_days(PlayerStatusType::Unh, now)
+            .is_some_and(|d| d >= UNHAPPY_LISTING_MIN_DAYS);
+        if has_unh_long {
+            active_reasons.push(TransferRequestReason::LongUnhappiness);
+        }
+
+        // A genuine ambition mismatch (wrong-size club / relegation slide)
+        // is a distinct, faster grievance — a fortnight of unhappiness on
+        // top of a clearly-too-small club is enough to want a move.
+        if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
+            let has_unh_short = self
+                .statuses
+                .held_for_days(PlayerStatusType::Unh, now)
+                .is_some_and(|d| d > 14);
+            if has_unh_short {
+                active_reasons.push(TransferRequestReason::AmbitionMismatch);
+            }
+        }
+
+        // Outgrown club: an ambitious player at a club well beneath his
+        // stature wants to step UP even while otherwise settled — healthy
+        // career ambition, not a grievance. Unlike `AmbitionMismatch` it
+        // needs no spell of `Unh`; the structural prestige deficit alone
+        // drives it. Gated hard so only players who have genuinely outgrown
+        // their club agitate — a deep ambition-fit deficit, real personal
+        // ambition, still young enough to climb, and settled at the club
+        // for a full year (a recent signing gets his look first). This is
+        // the missing "good player at a small club finally moves up"
+        // signal; without it the market only ever recirculated unhappy or
+        // surplus players, so established players never moved.
+        if !recently_transferred
+            && self.happiness.factors.ambition_fit <= -10.0
+            && self.attributes.ambition >= 15.0
+            && age <= 28
+            && self
+                .days_since_transfer(now)
+                .map(|d| d >= 365)
+                .unwrap_or(true)
+        {
+            active_reasons.push(TransferRequestReason::OutgrownClub);
+        }
+
+        // Wants a bigger stage. One score — see [`BigStagePull`] — drives
+        // three tiers of consequence: a silent inclination the market reads
+        // when a bid arrives, a visible mood, and finally a formal request.
+        //
+        // Escalation to a request deliberately does NOT require a spell of
+        // `Unh`. It requires that the itch has PERSISTED across a season,
+        // or that a concrete move was DENIED (a bid the club turned down, a
+        // window that came and went). Requiring unhappiness inverted the
+        // truth: the players who most want a bigger league are usually the
+        // ones doing best where they are, and a star at a locally-big club
+        // reads as perfectly content to the ambition-fit model.
+        let stage_pull = if recently_transferred {
+            None
+        } else {
+            let pull = BigStagePull::assess(
+                self,
+                now,
+                &BigStagePullContext {
+                    league_reputation: ctx.league_reputation,
+                    continentally_isolated: ctx.country_uefa_suspended,
+                    squad_tier: ctx.squad_team_type.unwrap_or(TeamType::Main),
+                    at_favourite_club: ctx.destination_is_favourite,
+                },
+            );
+            if pull.shows_mood() {
+                self.emit_wants_stronger_league_mood(ctx);
+            }
+            Some(pull)
+        };
+        if let Some(pull) = stage_pull {
+            if pull.would_request() && self.stage_ambition_has_been_denied_or_endured(now) {
+                active_reasons.push(TransferRequestReason::WantsStrongerLeague);
+            }
+        }
+        self.big_stage_inclination = stage_pull.map(|p| p.score).unwrap_or(0.0);
+
+        // New challenge: long service at ONE club breeds a desire for a fresh
+        // test, independent of whether he has outgrown it. This is the "many
+        // years at one club" case — a settled star at a big club who has won
+        // it all and wants a new league — which the prestige-based
+        // OutgrownClub signal (a too-small club + youth) misses. The tenure
+        // restlessness has already dented his morale via `ambition_fit`; this
+        // turns a long-festering itch into an actual request. Gated tightly —
+        // genuine ambition, below-average loyalty, a prime mobile age and a
+        // long stay — so a true one-club legend or a content servant stays
+        // put rather than every veteran walking out.
+        if !recently_transferred {
+            let years_at_club = self.years_at_club(now);
+            let restless_for_a_new_challenge = years_at_club >= 8.0
+                && self.attributes.ambition >= 16.0
+                && self.attributes.loyalty < 12.0
+                && (25..=30).contains(&age);
+            if restless_for_a_new_challenge {
+                active_reasons.push(TransferRequestReason::NewChallenge);
+            }
+        }
+
+        if let Some(first_request) = self.happiness.last_salary_negotiation {
+            let days = (now - first_request).num_days();
+            if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
+                active_reasons.push(TransferRequestReason::SalaryUnresolved);
+            }
+        }
+
+        if !recently_transferred && self.return_home_request_pressure(now, ctx) {
+            // The 21-year-old asks to go home FOR A SEASON; the
+            // 29-year-old asks to leave. Same homesickness, two different
+            // asks, and the simulator only ever knew how to make the
+            // second — which is why a stuck foreign prospect's route out
+            // was a transfer request that then *suppressed* his loan
+            // request (`process_playing_time_complaints` skips a `Req`
+            // holder), and the most common loan in world football could
+            // not happen.
+            //
+            // Continuous in runway, so there is no birthday at which the
+            // ask changes shape.
+            if self.home_loan_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
+                self.pursue_loan_home(now);
+            } else {
+                active_reasons.push(TransferRequestReason::ReturnHome);
+            }
+        }
+
+        if !recently_transferred && self.european_request_pressure(now) {
+            active_reasons.push(TransferRequestReason::EuropeanAmbition);
+        }
+        if !recently_transferred && self.libertadores_request_pressure(now) {
+            active_reasons.push(TransferRequestReason::CopaLibertadoresAmbition);
+        }
+        if !recently_transferred && self.relegation_escape_pressure(now) {
+            active_reasons.push(TransferRequestReason::RelegationEscape);
+        }
+
+        // Wants first-team football: seasons have gone by without a
+        // shirt and the player would now rather drop a level than keep
+        // watching. Every other reason above points him upward — this is
+        // the only one that points down, and it is the only route by
+        // which a perennial backup at a giant can ever become available.
+        if !recently_transferred && self.first_team_football_pressure(now, ctx, age) {
+            active_reasons.push(TransferRequestReason::WantsFirstTeamFootball);
+        }
+
+        // Honeymoon overrides everything except poor behaviour. A
+        // newly-signed player won't formally request a transfer in the
+        // first 21 days unless their character has actually broken.
+        if recently_transferred {
+            active_reasons.retain(|r| matches!(r, TransferRequestReason::PoorBehaviour));
+        }
+
+        active_reasons
     }
 }
 

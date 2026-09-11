@@ -26,6 +26,7 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+use crate::Club;
 use crate::club::staff::StaffPosition;
 use crate::transfers::pipeline::TransferNeedPriority;
 use crate::transfers::pipeline::processor::PipelineProcessor;
@@ -89,6 +90,55 @@ struct PromotionPlan {
     lead_scout_staff_id: Option<u32>,
 }
 
+/// The room, once it has been assembled: who is voting, what the analyst
+/// brings, and the meeting record the votes are filed against.
+struct MeetingRoom<'a> {
+    voters: &'a [ScoutSnapshot],
+    data_analyst_skill: Option<u8>,
+}
+
+/// What one meeting decided, accumulated as the agenda is worked through.
+struct MeetingMinutes {
+    votes: Vec<ScoutVote>,
+    decisions: Vec<RecruitmentDecision>,
+    agenda_request_ids: Vec<u32>,
+    staff_events: Vec<(u32, StaffEventType)>,
+    rejections: Vec<(u32, i64)>,
+    promotions: Vec<PromotionPlan>,
+}
+
+/// What the room made of one name before the chair weighs it: the weighted
+/// consensus, whether the chief scout is behind it, and every vote cast.
+struct PlayerVoting {
+    consensus_score: f32,
+    chief_scout_support: bool,
+    player_votes: Vec<ScoutVote>,
+    total_weight: f32,
+}
+
+/// What the chair weighs once the room has spoken: the consensus, what the
+/// club would be paying, and what the scouts believe they are getting.
+struct MeetingCase<'a> {
+    consensus_score: f32,
+    budget_fit: f32,
+    risk_flag_count: u8,
+    board_risk_score: f32,
+    data_support: bool,
+    chief_scout_support: bool,
+    estimated_fee: f64,
+    assessed_ability: u8,
+    role_fit: f32,
+    request_id: Option<u32>,
+    monitorings: &'a [&'a ScoutPlayerMonitoring],
+}
+
+/// The vote after the chair has weighed it.
+struct Consensus {
+    score: f32,
+    data_support: bool,
+    board_risk_score: f32,
+}
+
 impl PipelineProcessor {
     /// Public entry point. Run weekly (Monday) inside an open transfer
     /// window. Walks every initialised club, builds an agenda from the
@@ -106,496 +156,211 @@ impl PipelineProcessor {
         let mut pending: Vec<PendingMeeting> = Vec::new();
 
         for club in &country.clubs {
-            let plan = &club.transfer_plan;
-            if !plan.initialized {
-                continue;
-            }
-            if club.teams.teams.is_empty() {
-                continue;
-            }
-            let team = &club.teams.teams[0];
-            let resolved = team.staffs.resolve_for_transfers();
-            if resolved.scouts.is_empty() && resolved.director_of_football.is_none() {
-                // No recruitment department to speak of — meeting is
-                // skipped and the manager continues to drive shortlists.
-                continue;
-            }
-
-            // Build scout snapshots — one per real scout/chief on the books.
-            let scout_snapshots: Vec<ScoutSnapshot> = resolved
-                .scouts
-                .iter()
-                .filter_map(|s| {
-                    let pos = s.contract.as_ref().map(|c| &c.position)?;
-                    if !matches!(pos, StaffPosition::Scout | StaffPosition::ChiefScout) {
-                        return None;
-                    }
-                    Some(ScoutSnapshot {
-                        staff_id: s.id,
-                        is_chief: matches!(pos, StaffPosition::ChiefScout),
-                        judging_ability: s.staff_attributes.knowledge.judging_player_ability,
-                        judging_potential: s.staff_attributes.knowledge.judging_player_potential,
-                        discipline: s.staff_attributes.mental.discipline,
-                        adaptability: s.staff_attributes.mental.adaptability,
-                        determination: s.staff_attributes.mental.determination,
-                        tactical_knowledge: s.staff_attributes.knowledge.tactical_knowledge,
-                    })
-                })
-                .collect();
-
-            // Data analyst — soft signal, NOT a vote. Drives data_support
-            // on each decision so the meeting can lean on objective
-            // numbers when scout judgement is split.
-            let data_analyst_skill: Option<u8> = team
-                .staffs
-                .find_by_position(StaffPosition::DataAnalyst)
-                .map(|s| s.staff_attributes.data_analysis.judging_player_data);
-
-            let chief_scout_id: Option<u32> = team
-                .staffs
-                .find_by_position(StaffPosition::ChiefScout)
-                .map(|s| s.id);
-            let head_of_recruitment_id: Option<u32> = team
-                .staffs
-                .find_by_position(StaffPosition::HeadOfRecruitment)
-                .map(|s| s.id);
-            let dof_id: Option<u32> = resolved.director_of_football.map(|s| s.id);
-            let manager_id: Option<u32> = team.staffs.manager().map(|s| s.id);
-
-            // The recruitment principals (DoF, head of recruitment,
-            // manager) speak at the meeting too. Monitoring rows from the
-            // breakout watch and the listed-star / bargain sweeps are
-            // keyed to the DoF — who resolves to the MANAGER at clubs
-            // without one — and restricting votes to Scout/ChiefScout
-            // contracts left those rows permanently voteless: consensus
-            // never crossed a threshold and the same names churned
-            // through the agenda every Monday forever.
-            let mut voter_snapshots = scout_snapshots.clone();
-            for id in [dof_id, head_of_recruitment_id, manager_id]
-                .into_iter()
-                .flatten()
-            {
-                if voter_snapshots.iter().any(|s| s.staff_id == id) {
-                    continue;
-                }
-                if let Some(s) = team.staffs.find(id) {
-                    voter_snapshots.push(ScoutSnapshot {
-                        staff_id: s.id,
-                        is_chief: false,
-                        judging_ability: s.staff_attributes.knowledge.judging_player_ability,
-                        judging_potential: s.staff_attributes.knowledge.judging_player_potential,
-                        discipline: s.staff_attributes.mental.discipline,
-                        adaptability: s.staff_attributes.mental.adaptability,
-                        determination: s.staff_attributes.mental.determination,
-                        tactical_knowledge: s.staff_attributes.knowledge.tactical_knowledge,
-                    });
-                }
-            }
-
-            // Meeting participants — id list for the record.
-            let mut participants: Vec<u32> = Vec::new();
-            for s in &scout_snapshots {
-                participants.push(s.staff_id);
-            }
-            for id in [chief_scout_id, head_of_recruitment_id, dof_id, manager_id]
-                .into_iter()
-                .flatten()
-            {
-                if !participants.contains(&id) {
-                    participants.push(id);
-                }
-            }
-            // Data analyst attended even though they don't vote.
-            if let Some(da) = team.staffs.find_by_position(StaffPosition::DataAnalyst) {
-                if !participants.contains(&da.id) {
-                    participants.push(da.id);
-                }
-            }
-
-            let meeting_id = club.transfer_plan.next_meeting_id;
-            let mut meeting = RecruitmentMeeting::new(meeting_id, date);
-            meeting.participants = participants.clone();
-
-            // Agenda: meeting-ready monitoring + high-confidence active
-            // monitoring + strong staff recommendations + shadow
-            // reports tied to active requests. Capped at 12 to keep
-            // weekly meetings tractable.
-            let mut agenda_player_ids: Vec<u32> = Vec::new();
-            for m in &plan.scout_monitoring {
-                if agenda_player_ids.len() >= 12 {
-                    break;
-                }
-                if m.is_ready_for_meeting() && !agenda_player_ids.contains(&m.player_id) {
-                    agenda_player_ids.push(m.player_id);
-                }
-            }
-            // Strong staff recommendations push their candidates onto the
-            // agenda even if no scout has logged enough observations yet.
-            for rec in &plan.staff_recommendations {
-                if rec.confidence >= 0.55
-                    && !agenda_player_ids.contains(&rec.player_id)
-                    && agenda_player_ids.len() < 12
-                {
-                    agenda_player_ids.push(rec.player_id);
-                }
-            }
-            // Shadow reports linked to currently-active requests get a turn.
-            for shadow in &plan.shadow_reports {
-                if agenda_player_ids.len() >= 12 {
-                    break;
-                }
-                let group = shadow.position_group;
-                let has_open_request = plan.transfer_requests.iter().any(|r| {
-                    r.position.position_group() == group
-                        && r.status != TransferRequestStatus::Fulfilled
-                        && r.status != TransferRequestStatus::Abandoned
-                });
-                if has_open_request && !agenda_player_ids.contains(&shadow.report.player_id) {
-                    agenda_player_ids.push(shadow.report.player_id);
-                }
-            }
-            if agenda_player_ids.is_empty() {
-                continue;
-            }
-
-            // Track which transfer requests came up in this meeting.
-            let mut agenda_request_ids: Vec<u32> = Vec::new();
-
-            let mut decisions: Vec<RecruitmentDecision> = Vec::new();
-            let mut votes: Vec<ScoutVote> = Vec::new();
-            let mut staff_events: Vec<(u32, StaffEventType)> = Vec::new();
-            let mut rejections: Vec<(u32, i64)> = Vec::new();
-            let mut promotions: Vec<PromotionPlan> = Vec::new();
-
-            // Per-meeting attendance event for every participant.
-            for staff_id in &participants {
-                staff_events.push((*staff_id, StaffEventType::RecruitmentMeeting));
-            }
-
-            for player_id in &agenda_player_ids {
-                let monitorings: Vec<&ScoutPlayerMonitoring> = plan
-                    .scout_monitoring
-                    .iter()
-                    .filter(|m| m.player_id == *player_id && m.is_active_interest())
-                    .collect();
-
-                // The transfer request the meeting will tie this decision to,
-                // if any. Pick the first active request in the player's
-                // position group (we already restrict by group when assigning
-                // scouts, so this is essentially an alignment check).
-                // The stamped linkage must still point at a LIVE request —
-                // a need fulfilled by another signing (or vetoed) while the
-                // monitoring ran would otherwise get this player promoted
-                // onto its shortlist and pursued for an already-filled hole.
-                let request_id = monitorings
-                    .iter()
-                    .filter_map(|m| m.transfer_request_id)
-                    .find(|id| {
-                        plan.transfer_requests.iter().any(|r| {
-                            r.id == *id
-                                && r.status != TransferRequestStatus::Fulfilled
-                                && r.status != TransferRequestStatus::Abandoned
-                        })
-                    })
-                    .or_else(|| {
-                        // Shadow / staff-recommendation paths: align via the
-                        // assignment that surfaced the monitoring. Prefer the
-                        // request that commissioned that assignment; only if
-                        // it has since closed, scan for another open request
-                        // in the group whose age band overlaps the one the
-                        // player was observed under — group alone would let
-                        // a veteran watched for QualityUpgrade land on a
-                        // DevelopmentSigning shortlist.
-                        let origin = monitorings.first().and_then(|m| {
-                            plan.scouting_assignments
-                                .iter()
-                                .find(|a| Some(a.id) == m.origin_assignment_id)
-                        });
-                        if let Some(origin) = origin {
-                            let commissioned = plan.transfer_requests.iter().find(|r| {
-                                r.id == origin.transfer_request_id
-                                    && r.status != TransferRequestStatus::Fulfilled
-                                    && r.status != TransferRequestStatus::Abandoned
-                            });
-                            commissioned
-                                .or_else(|| {
-                                    plan.transfer_requests.iter().find(|r| {
-                                        r.position.position_group()
-                                            == origin.target_position.position_group()
-                                            && r.status != TransferRequestStatus::Fulfilled
-                                            && r.status != TransferRequestStatus::Abandoned
-                                            && r.preferred_age_min <= origin.preferred_age_max
-                                            && origin.preferred_age_min <= r.preferred_age_max
-                                    })
-                                })
-                                .map(|r| r.id)
-                        } else {
-                            None
-                        }
-                    });
-                if let Some(id) = request_id {
-                    if !agenda_request_ids.contains(&id) {
-                        agenda_request_ids.push(id);
-                    }
-                }
-
-                // Aggregate role-fit, fee, etc from the strongest
-                // monitoring so the dossier reflects the best-informed
-                // scout's read.
-                let strongest = monitorings.iter().max_by(|a, b| {
-                    a.confidence
-                        .partial_cmp(&b.confidence)
-                        .unwrap_or(Ordering::Equal)
-                });
-                let estimated_fee = strongest
-                    .map(|m| m.estimated_value)
-                    .or_else(|| {
-                        plan.staff_recommendations
-                            .iter()
-                            .find(|r| r.player_id == *player_id)
-                            .map(|r| r.estimated_fee)
-                    })
-                    .or_else(|| {
-                        plan.shadow_reports
-                            .iter()
-                            .find(|s| s.report.player_id == *player_id)
-                            .map(|s| s.report.estimated_value)
-                    })
-                    .unwrap_or(0.0);
-
-                let assessed_ability = strongest
-                    .map(|m| m.current_assessed_ability)
-                    .or_else(|| {
-                        plan.staff_recommendations
-                            .iter()
-                            .find(|r| r.player_id == *player_id)
-                            .map(|r| r.assessed_ability)
-                    })
-                    .or_else(|| {
-                        plan.shadow_reports
-                            .iter()
-                            .find(|s| s.report.player_id == *player_id)
-                            .map(|s| s.report.assessed_ability)
-                    })
-                    .unwrap_or(0);
-
-                let role_fit = strongest.map(|m| m.role_fit).unwrap_or(1.0);
-                let risk_flag_count = strongest.map(|m| m.risk_flags.len() as u8).unwrap_or(0);
-
-                // Budget allocation for the linked request.
-                let allocated_budget = request_id
-                    .and_then(|id| plan.transfer_requests.iter().find(|r| r.id == id))
-                    .map(|r| r.budget_allocation.max(1.0))
-                    .unwrap_or(plan.total_budget.max(1.0));
-                let budget_fit = (estimated_fee / allocated_budget) as f32;
-
-                // Cast a vote for each scout monitoring this player.
-                let mut consensus_score: f32 = 0.0;
-                let mut chief_scout_support = false;
-                let mut player_votes: Vec<ScoutVote> = Vec::new();
-                let mut total_weight: f32 = 0.0;
-                for m in &monitorings {
-                    let scout = match voter_snapshots
-                        .iter()
-                        .find(|s| s.staff_id == m.scout_staff_id)
-                    {
-                        Some(s) => *s,
-                        None => continue,
-                    };
-                    let (choice, reason) =
-                        MeetingOutcome::vote_from_monitoring(m, &scout, budget_fit);
-                    let mut weight = choice.weight();
-                    // Confidence dampens the vote — a low-confidence
-                    // approval doesn't count for as much as a deeply
-                    // informed one.
-                    weight *= (m.confidence as f32).max(0.4);
-                    // Determination amplifies a touch.
-                    weight *= 1.0 + (scout.determination as f32 / 80.0).min(0.25);
-                    if scout.is_chief {
-                        weight *= 1.5;
-                        if matches!(
-                            choice,
-                            ScoutVoteChoice::Approve | ScoutVoteChoice::StrongApprove
-                        ) {
-                            chief_scout_support = true;
-                        }
-                    }
-                    let score = (weight as f32).clamp(-3.0, 3.0);
-                    consensus_score += score;
-                    total_weight += weight.abs();
-                    let vote = ScoutVote {
-                        scout_staff_id: scout.staff_id,
-                        player_id: *player_id,
-                        vote: choice,
-                        score,
-                        confidence: m.confidence,
-                        reason,
-                        date,
-                    };
-                    player_votes.push(vote);
-                    // Surface a small staff event for the casting scout.
-                    let event = match choice {
-                        ScoutVoteChoice::StrongApprove | ScoutVoteChoice::Approve => {
-                            StaffEventType::TargetRecommended
-                        }
-                        ScoutVoteChoice::Reject => StaffEventType::TargetRejected,
-                        _ => StaffEventType::RecruitmentMeeting,
-                    };
-                    staff_events.push((scout.staff_id, event));
-                }
-
-                // Penalise heavy split — if half the votes are positive
-                // and half negative, knock the consensus down.
-                if !player_votes.is_empty() {
-                    let pos: f32 = player_votes
-                        .iter()
-                        .filter(|v| v.score > 0.0)
-                        .map(|v| v.score)
-                        .sum();
-                    let neg: f32 = player_votes
-                        .iter()
-                        .filter(|v| v.score < 0.0)
-                        .map(|v| v.score.abs())
-                        .sum();
-                    if pos > 0.0 && neg > 0.0 {
-                        let split_penalty = pos.min(neg) * 0.6;
-                        consensus_score -= split_penalty;
-                    }
-                }
-
-                // Data analyst soft signal — a flat boost if the data
-                // shop's ability score is high and the player profile
-                // numerically supports it. Doesn't override scout votes
-                // but lifts close-call cases.
-                let mut data_support = false;
-                if let Some(da_skill) = data_analyst_skill {
-                    let skill_floor = 11; // ~mid-tier analytics shop
-                    if da_skill >= skill_floor && assessed_ability >= 100 {
-                        data_support = true;
-                        consensus_score += 0.4 + (da_skill as f32 - skill_floor as f32) * 0.05;
-                    }
-                }
-
-                // Board risk score — used by the dossier later. Higher
-                // means more friction at the board level.
-                let mut board_risk: f32 = 0.0;
-                board_risk += (risk_flag_count as f32) * 0.15;
-                if budget_fit > 1.2 {
-                    board_risk += (budget_fit - 1.2) * 0.6;
-                }
-                if !chief_scout_support {
-                    board_risk += 0.1;
-                }
-                if total_weight < 1.5 {
-                    // Thin discussion — board will be cautious.
-                    board_risk += 0.1;
-                }
-                let board_risk_score = board_risk.clamp(0.0, 1.5);
-
-                // Decision logic — driven by consensus and risk.
-                let active_request =
-                    request_id.and_then(|id| plan.transfer_requests.iter().find(|r| r.id == id));
-                let priority_critical = active_request
-                    .map(|r| matches!(r.priority, TransferNeedPriority::Critical))
-                    .unwrap_or(false);
-
-                let decision_type: RecruitmentDecisionType;
-                let reason_key: &'static str;
-                if consensus_score >= 1.8 && budget_fit <= 1.4 && risk_flag_count <= 2 {
-                    if priority_critical && chief_scout_support && consensus_score >= 2.5 {
-                        decision_type = RecruitmentDecisionType::StartNegotiation;
-                        reason_key = "meeting_reason_critical_need_strong_consensus";
-                    } else {
-                        decision_type = RecruitmentDecisionType::PromoteToShortlist;
-                        reason_key = "meeting_reason_consensus_signing";
-                    }
-                } else if consensus_score >= 1.0 && (budget_fit > 1.4 || risk_flag_count >= 3) {
-                    decision_type = RecruitmentDecisionType::AskBoardApproval;
-                    reason_key = "meeting_reason_elevated_risk_board";
-                } else if consensus_score <= -1.5 || budget_fit > 2.0 {
-                    decision_type = RecruitmentDecisionType::Reject;
-                    reason_key = "meeting_reason_votes_negative_or_budget";
-                } else {
-                    decision_type = RecruitmentDecisionType::KeepMonitoring;
-                    reason_key = "meeting_reason_split_or_insufficient_confidence";
-                }
-
-                // For Reject decisions, push onto the rejection blocklist
-                // for the standard window (so re-scouting doesn't re-flag).
-                if matches!(decision_type, RecruitmentDecisionType::Reject) {
-                    rejections.push((*player_id, 6));
-                }
-
-                // For shortlist promotions / board asks / direct
-                // negotiations, queue the candidate up for the
-                // pass-2 mutation.
-                if matches!(
-                    decision_type,
-                    RecruitmentDecisionType::PromoteToShortlist
-                        | RecruitmentDecisionType::AskBoardApproval
-                        | RecruitmentDecisionType::StartNegotiation
-                ) {
-                    if let Some(req_id) = request_id {
-                        let lead_scout = monitorings
-                            .iter()
-                            .max_by(|a, b| {
-                                a.confidence
-                                    .partial_cmp(&b.confidence)
-                                    .unwrap_or(Ordering::Equal)
-                            })
-                            .map(|m| m.scout_staff_id);
-                        promotions.push(PromotionPlan {
-                            player_id: *player_id,
-                            request_id: req_id,
-                            consensus_score,
-                            estimated_fee,
-                            assessed_ability,
-                            role_fit,
-                            risk_flag_count,
-                            chief_scout_support,
-                            lead_scout_staff_id: lead_scout,
-                        });
-                    }
-                }
-
-                let decision = RecruitmentDecision {
-                    player_id: *player_id,
-                    transfer_request_id: request_id,
-                    decision: decision_type,
-                    consensus_score,
-                    chief_scout_support,
-                    data_support,
-                    board_risk_score,
-                    budget_fit,
-                    reason_key,
-                };
-
-                debug!(
-                    "Recruitment meeting (club {}): player {} -> {:?} (consensus {:.2}, votes {})",
-                    club.id,
-                    *player_id,
-                    decision.decision,
-                    consensus_score,
-                    player_votes.len()
-                );
-
-                votes.extend(player_votes);
-                decisions.push(decision);
-            }
-
-            meeting.player_votes = votes;
-            meeting.decisions = decisions;
-            meeting.agenda_request_ids = agenda_request_ids;
-
-            pending.push(PendingMeeting {
-                club_id: club.id,
-                meeting,
-                staff_events,
-                rejections,
-                promotions,
-            });
+            Self::hold_meeting(club, date, &mut pending);
         }
 
+        Self::apply_meeting_outcomes(country, date, pending);
+    }
+
+    /// One club's weekly recruitment meeting: whose dossiers are ready, who
+    /// the room votes for, and what that promotes. Read-only — the country
+    /// is walked while deciding, so every decision is staged.
+    fn hold_meeting(club: &Club, date: NaiveDate, pending: &mut Vec<PendingMeeting>) {
+        let plan = &club.transfer_plan;
+        if !plan.initialized {
+            return;
+        }
+        if club.teams.teams.is_empty() {
+            return;
+        }
+        let team = &club.teams.teams[0];
+        let resolved = team.staffs.resolve_for_transfers();
+        if resolved.scouts.is_empty() && resolved.director_of_football.is_none() {
+            // No recruitment department to speak of — meeting is
+            // skipped and the manager continues to drive shortlists.
+            return;
+        }
+
+        // Build scout snapshots — one per real scout/chief on the books.
+        let scout_snapshots: Vec<ScoutSnapshot> = resolved
+            .scouts
+            .iter()
+            .filter_map(|s| {
+                let pos = s.contract.as_ref().map(|c| &c.position)?;
+                if !matches!(pos, StaffPosition::Scout | StaffPosition::ChiefScout) {
+                    return None;
+                }
+                Some(ScoutSnapshot {
+                    staff_id: s.id,
+                    is_chief: matches!(pos, StaffPosition::ChiefScout),
+                    judging_ability: s.staff_attributes.knowledge.judging_player_ability,
+                    judging_potential: s.staff_attributes.knowledge.judging_player_potential,
+                    discipline: s.staff_attributes.mental.discipline,
+                    adaptability: s.staff_attributes.mental.adaptability,
+                    determination: s.staff_attributes.mental.determination,
+                    tactical_knowledge: s.staff_attributes.knowledge.tactical_knowledge,
+                })
+            })
+            .collect();
+
+        // Data analyst — soft signal, NOT a vote. Drives data_support
+        // on each decision so the meeting can lean on objective
+        // numbers when scout judgement is split.
+        let data_analyst_skill: Option<u8> = team
+            .staffs
+            .find_by_position(StaffPosition::DataAnalyst)
+            .map(|s| s.staff_attributes.data_analysis.judging_player_data);
+
+        let chief_scout_id: Option<u32> = team
+            .staffs
+            .find_by_position(StaffPosition::ChiefScout)
+            .map(|s| s.id);
+        let head_of_recruitment_id: Option<u32> = team
+            .staffs
+            .find_by_position(StaffPosition::HeadOfRecruitment)
+            .map(|s| s.id);
+        let dof_id: Option<u32> = resolved.director_of_football.map(|s| s.id);
+        let manager_id: Option<u32> = team.staffs.manager().map(|s| s.id);
+
+        // The recruitment principals (DoF, head of recruitment,
+        // manager) speak at the meeting too. Monitoring rows from the
+        // breakout watch and the listed-star / bargain sweeps are
+        // keyed to the DoF — who resolves to the MANAGER at clubs
+        // without one — and restricting votes to Scout/ChiefScout
+        // contracts left those rows permanently voteless: consensus
+        // never crossed a threshold and the same names churned
+        // through the agenda every Monday forever.
+        let mut voter_snapshots = scout_snapshots.clone();
+        for id in [dof_id, head_of_recruitment_id, manager_id]
+            .into_iter()
+            .flatten()
+        {
+            if voter_snapshots.iter().any(|s| s.staff_id == id) {
+                continue;
+            }
+            if let Some(s) = team.staffs.find(id) {
+                voter_snapshots.push(ScoutSnapshot {
+                    staff_id: s.id,
+                    is_chief: false,
+                    judging_ability: s.staff_attributes.knowledge.judging_player_ability,
+                    judging_potential: s.staff_attributes.knowledge.judging_player_potential,
+                    discipline: s.staff_attributes.mental.discipline,
+                    adaptability: s.staff_attributes.mental.adaptability,
+                    determination: s.staff_attributes.mental.determination,
+                    tactical_knowledge: s.staff_attributes.knowledge.tactical_knowledge,
+                });
+            }
+        }
+
+        // Meeting participants — id list for the record.
+        let mut participants: Vec<u32> = Vec::new();
+        for s in &scout_snapshots {
+            participants.push(s.staff_id);
+        }
+        for id in [chief_scout_id, head_of_recruitment_id, dof_id, manager_id]
+            .into_iter()
+            .flatten()
+        {
+            if !participants.contains(&id) {
+                participants.push(id);
+            }
+        }
+        // Data analyst attended even though they don't vote.
+        if let Some(da) = team.staffs.find_by_position(StaffPosition::DataAnalyst) {
+            if !participants.contains(&da.id) {
+                participants.push(da.id);
+            }
+        }
+
+        let meeting_id = club.transfer_plan.next_meeting_id;
+        let mut meeting = RecruitmentMeeting::new(meeting_id, date);
+        meeting.participants = participants.clone();
+
+        // Agenda: meeting-ready monitoring + high-confidence active
+        // monitoring + strong staff recommendations + shadow
+        // reports tied to active requests. Capped at 12 to keep
+        // weekly meetings tractable.
+        let mut agenda_player_ids: Vec<u32> = Vec::new();
+        for m in &plan.scout_monitoring {
+            if agenda_player_ids.len() >= 12 {
+                break;
+            }
+            if m.is_ready_for_meeting() && !agenda_player_ids.contains(&m.player_id) {
+                agenda_player_ids.push(m.player_id);
+            }
+        }
+        // Strong staff recommendations push their candidates onto the
+        // agenda even if no scout has logged enough observations yet.
+        for rec in &plan.staff_recommendations {
+            if rec.confidence >= 0.55
+                && !agenda_player_ids.contains(&rec.player_id)
+                && agenda_player_ids.len() < 12
+            {
+                agenda_player_ids.push(rec.player_id);
+            }
+        }
+        // Shadow reports linked to currently-active requests get a turn.
+        for shadow in &plan.shadow_reports {
+            if agenda_player_ids.len() >= 12 {
+                break;
+            }
+            let group = shadow.position_group;
+            let has_open_request = plan.transfer_requests.iter().any(|r| {
+                r.position.position_group() == group
+                    && r.status != TransferRequestStatus::Fulfilled
+                    && r.status != TransferRequestStatus::Abandoned
+            });
+            if has_open_request && !agenda_player_ids.contains(&shadow.report.player_id) {
+                agenda_player_ids.push(shadow.report.player_id);
+            }
+        }
+        if agenda_player_ids.is_empty() {
+            return;
+        }
+
+        // Track which transfer requests came up in this meeting.
+        let room = MeetingRoom {
+            voters: &voter_snapshots,
+            data_analyst_skill,
+        };
+        let mut minutes = MeetingMinutes {
+            votes: Vec::new(),
+            decisions: Vec::new(),
+            agenda_request_ids: Vec::new(),
+            staff_events: Vec::new(),
+            rejections: Vec::new(),
+            promotions: Vec::new(),
+        };
+        let staff_events = &mut minutes.staff_events;
+
+        // Per-meeting attendance event for every participant.
+        for staff_id in &participants {
+            staff_events.push((*staff_id, StaffEventType::RecruitmentMeeting));
+        }
+
+        for player_id in &agenda_player_ids {
+            Self::table_player(club, date, player_id, &room, &mut minutes);
+        }
+
+        meeting.player_votes = minutes.votes;
+        meeting.decisions = minutes.decisions;
+        meeting.agenda_request_ids = minutes.agenda_request_ids;
+
+        pending.push(PendingMeeting {
+            club_id: club.id,
+            meeting,
+            staff_events: minutes.staff_events,
+            rejections: minutes.rejections,
+            promotions: minutes.promotions,
+        });
+    }
+
+    /// Pass 2 — write each club's decisions back into the country.
+    fn apply_meeting_outcomes(
+        country: &mut Country,
+        date: NaiveDate,
+        pending: Vec<PendingMeeting>,
+    ) {
         // Pass 2: write decisions back into the country.
         for p in pending {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == p.club_id) {
@@ -738,6 +503,444 @@ impl PipelineProcessor {
             data_support,
             matches_watched,
         }
+    }
+
+    /// One name on the agenda: the room's votes, the consensus they reach,
+    /// and what that decision promotes or rejects.
+    fn table_player(
+        club: &Club,
+        date: NaiveDate,
+        player_id: &u32,
+        room: &MeetingRoom<'_>,
+        minutes: &mut MeetingMinutes,
+    ) {
+        let plan = &club.transfer_plan;
+        let voter_snapshots = room.voters;
+        let data_analyst_skill = room.data_analyst_skill;
+        let agenda_request_ids = &mut minutes.agenda_request_ids;
+        let staff_events = &mut minutes.staff_events;
+        let rejections = &mut minutes.rejections;
+        let promotions = &mut minutes.promotions;
+        let votes = &mut minutes.votes;
+        let decisions = &mut minutes.decisions;
+        let monitorings: Vec<&ScoutPlayerMonitoring> = plan
+            .scout_monitoring
+            .iter()
+            .filter(|m| m.player_id == *player_id && m.is_active_interest())
+            .collect();
+
+        // The transfer request the meeting will tie this decision to,
+        // if any. Pick the first active request in the player's
+        // position group (we already restrict by group when assigning
+        // scouts, so this is essentially an alignment check).
+        // The stamped linkage must still point at a LIVE request —
+        // a need fulfilled by another signing (or vetoed) while the
+        // monitoring ran would otherwise get this player promoted
+        // onto its shortlist and pursued for an already-filled hole.
+        let request_id = monitorings
+            .iter()
+            .filter_map(|m| m.transfer_request_id)
+            .find(|id| {
+                plan.transfer_requests.iter().any(|r| {
+                    r.id == *id
+                        && r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                })
+            })
+            .or_else(|| {
+                // Shadow / staff-recommendation paths: align via the
+                // assignment that surfaced the monitoring. Prefer the
+                // request that commissioned that assignment; only if
+                // it has since closed, scan for another open request
+                // in the group whose age band overlaps the one the
+                // player was observed under — group alone would let
+                // a veteran watched for QualityUpgrade land on a
+                // DevelopmentSigning shortlist.
+                let origin = monitorings.first().and_then(|m| {
+                    plan.scouting_assignments
+                        .iter()
+                        .find(|a| Some(a.id) == m.origin_assignment_id)
+                });
+                if let Some(origin) = origin {
+                    let commissioned = plan.transfer_requests.iter().find(|r| {
+                        r.id == origin.transfer_request_id
+                            && r.status != TransferRequestStatus::Fulfilled
+                            && r.status != TransferRequestStatus::Abandoned
+                    });
+                    commissioned
+                        .or_else(|| {
+                            plan.transfer_requests.iter().find(|r| {
+                                r.position.position_group()
+                                    == origin.target_position.position_group()
+                                    && r.status != TransferRequestStatus::Fulfilled
+                                    && r.status != TransferRequestStatus::Abandoned
+                                    && r.preferred_age_min <= origin.preferred_age_max
+                                    && origin.preferred_age_min <= r.preferred_age_max
+                            })
+                        })
+                        .map(|r| r.id)
+                } else {
+                    None
+                }
+            });
+        if let Some(id) = request_id {
+            if !agenda_request_ids.contains(&id) {
+                agenda_request_ids.push(id);
+            }
+        }
+
+        // Aggregate role-fit, fee, etc from the strongest
+        // monitoring so the dossier reflects the best-informed
+        // scout's read.
+        let strongest = monitorings.iter().max_by(|a, b| {
+            a.confidence
+                .partial_cmp(&b.confidence)
+                .unwrap_or(Ordering::Equal)
+        });
+        let estimated_fee = strongest
+            .map(|m| m.estimated_value)
+            .or_else(|| {
+                plan.staff_recommendations
+                    .iter()
+                    .find(|r| r.player_id == *player_id)
+                    .map(|r| r.estimated_fee)
+            })
+            .or_else(|| {
+                plan.shadow_reports
+                    .iter()
+                    .find(|s| s.report.player_id == *player_id)
+                    .map(|s| s.report.estimated_value)
+            })
+            .unwrap_or(0.0);
+
+        let assessed_ability = strongest
+            .map(|m| m.current_assessed_ability)
+            .or_else(|| {
+                plan.staff_recommendations
+                    .iter()
+                    .find(|r| r.player_id == *player_id)
+                    .map(|r| r.assessed_ability)
+            })
+            .or_else(|| {
+                plan.shadow_reports
+                    .iter()
+                    .find(|s| s.report.player_id == *player_id)
+                    .map(|s| s.report.assessed_ability)
+            })
+            .unwrap_or(0);
+
+        let role_fit = strongest.map(|m| m.role_fit).unwrap_or(1.0);
+        let risk_flag_count = strongest.map(|m| m.risk_flags.len() as u8).unwrap_or(0);
+
+        // Budget allocation for the linked request.
+        let allocated_budget = request_id
+            .and_then(|id| plan.transfer_requests.iter().find(|r| r.id == id))
+            .map(|r| r.budget_allocation.max(1.0))
+            .unwrap_or(plan.total_budget.max(1.0));
+        let budget_fit = (estimated_fee / allocated_budget) as f32;
+
+        // Cast a vote for each scout monitoring this player.
+        let PlayerVoting {
+            consensus_score,
+            chief_scout_support,
+            player_votes,
+            total_weight,
+        } = Self::poll_the_room(
+            &monitorings,
+            voter_snapshots,
+            budget_fit,
+            *player_id,
+            date,
+            staff_events,
+        );
+        let consensus_score = consensus_score;
+
+        let Consensus {
+            score: consensus_score,
+            data_support,
+            board_risk_score,
+        } = Self::weigh_consensus(
+            consensus_score,
+            &player_votes,
+            data_analyst_skill,
+            assessed_ability,
+            risk_flag_count,
+            budget_fit,
+            chief_scout_support,
+            total_weight,
+        );
+
+        let decision = Self::chair_decides(
+            club,
+            *player_id,
+            &MeetingCase {
+                consensus_score,
+                budget_fit,
+                risk_flag_count,
+                board_risk_score,
+                data_support,
+                chief_scout_support,
+                estimated_fee,
+                assessed_ability,
+                role_fit,
+                request_id,
+                monitorings: &monitorings,
+            },
+            rejections,
+            promotions,
+        );
+
+        debug!(
+            "Recruitment meeting (club {}): player {} -> {:?} (consensus {:.2}, votes {})",
+            club.id,
+            *player_id,
+            decision.decision,
+            consensus_score,
+            player_votes.len()
+        );
+
+        votes.extend(player_votes);
+        decisions.push(decision);
+    }
+
+    /// The room's votes on one name, weighted by whose eye each belongs to.
+    fn poll_the_room(
+        monitorings: &[&ScoutPlayerMonitoring],
+        voter_snapshots: &[ScoutSnapshot],
+        budget_fit: f32,
+        player_id: u32,
+        date: NaiveDate,
+        staff_events: &mut Vec<(u32, StaffEventType)>,
+    ) -> PlayerVoting {
+        let mut consensus_score: f32 = 0.0;
+        let mut chief_scout_support = false;
+        let mut player_votes: Vec<ScoutVote> = Vec::new();
+        let mut total_weight: f32 = 0.0;
+        for m in monitorings {
+            let scout = match voter_snapshots
+                .iter()
+                .find(|s| s.staff_id == m.scout_staff_id)
+            {
+                Some(s) => *s,
+                None => continue,
+            };
+            let (choice, reason) = MeetingOutcome::vote_from_monitoring(m, &scout, budget_fit);
+            let mut weight = choice.weight();
+            // Confidence dampens the vote — a low-confidence
+            // approval doesn't count for as much as a deeply
+            // informed one.
+            weight *= (m.confidence as f32).max(0.4);
+            // Determination amplifies a touch.
+            weight *= 1.0 + (scout.determination as f32 / 80.0).min(0.25);
+            if scout.is_chief {
+                weight *= 1.5;
+                if matches!(
+                    choice,
+                    ScoutVoteChoice::Approve | ScoutVoteChoice::StrongApprove
+                ) {
+                    chief_scout_support = true;
+                }
+            }
+            let score = (weight as f32).clamp(-3.0, 3.0);
+            consensus_score += score;
+            total_weight += weight.abs();
+            let vote = ScoutVote {
+                scout_staff_id: scout.staff_id,
+                player_id,
+                vote: choice,
+                score,
+                confidence: m.confidence,
+                reason,
+                date,
+            };
+            player_votes.push(vote);
+            // Surface a small staff event for the casting scout.
+            let event = match choice {
+                ScoutVoteChoice::StrongApprove | ScoutVoteChoice::Approve => {
+                    StaffEventType::TargetRecommended
+                }
+                ScoutVoteChoice::Reject => StaffEventType::TargetRejected,
+                _ => StaffEventType::RecruitmentMeeting,
+            };
+            staff_events.push((scout.staff_id, event));
+        }
+
+        PlayerVoting {
+            consensus_score,
+            chief_scout_support,
+            player_votes,
+            total_weight,
+        }
+    }
+
+    /// What the chair makes of the raw vote before deciding: a heavy split
+    /// knocks the consensus down, the analyst adds a flat nudge when he has
+    /// one, and the risk score prices what the board is being asked for.
+    fn weigh_consensus(
+        mut consensus_score: f32,
+        player_votes: &[ScoutVote],
+        data_analyst_skill: Option<u8>,
+        assessed_ability: u8,
+        risk_flag_count: u8,
+        budget_fit: f32,
+        chief_scout_support: bool,
+        total_weight: f32,
+    ) -> Consensus {
+        // Penalise heavy split — if half the votes are positive
+        // and half negative, knock the consensus down.
+        if !player_votes.is_empty() {
+            let pos: f32 = player_votes
+                .iter()
+                .filter(|v| v.score > 0.0)
+                .map(|v| v.score)
+                .sum();
+            let neg: f32 = player_votes
+                .iter()
+                .filter(|v| v.score < 0.0)
+                .map(|v| v.score.abs())
+                .sum();
+            if pos > 0.0 && neg > 0.0 {
+                let split_penalty = pos.min(neg) * 0.6;
+                consensus_score -= split_penalty;
+            }
+        }
+
+        // Data analyst soft signal — a flat boost if the data
+        // shop's ability score is high and the player profile
+        // numerically supports it. Doesn't override scout votes
+        // but lifts close-call cases.
+        let mut data_support = false;
+        if let Some(da_skill) = data_analyst_skill {
+            let skill_floor = 11; // ~mid-tier analytics shop
+            if da_skill >= skill_floor && assessed_ability >= 100 {
+                data_support = true;
+                consensus_score += 0.4 + (da_skill as f32 - skill_floor as f32) * 0.05;
+            }
+        }
+
+        // Board risk score — used by the dossier later. Higher
+        // means more friction at the board level.
+        let mut board_risk: f32 = 0.0;
+        board_risk += (risk_flag_count as f32) * 0.15;
+        if budget_fit > 1.2 {
+            board_risk += (budget_fit - 1.2) * 0.6;
+        }
+        if !chief_scout_support {
+            board_risk += 0.1;
+        }
+        if total_weight < 1.5 {
+            // Thin discussion — board will be cautious.
+            board_risk += 0.1;
+        }
+        let board_risk_score = board_risk.clamp(0.0, 1.5);
+
+        Consensus {
+            score: consensus_score,
+            data_support,
+            board_risk_score,
+        }
+    }
+
+    /// The chair's call, driven by consensus and risk: reject him, watch him,
+    /// put him on the shortlist, or ask the board for the money.
+    fn chair_decides(
+        club: &Club,
+        player_id: u32,
+        case: &MeetingCase<'_>,
+        rejections: &mut Vec<(u32, i64)>,
+        promotions: &mut Vec<PromotionPlan>,
+    ) -> RecruitmentDecision {
+        let plan = &club.transfer_plan;
+        let consensus_score = case.consensus_score;
+        let budget_fit = case.budget_fit;
+        let risk_flag_count = case.risk_flag_count;
+        let board_risk_score = case.board_risk_score;
+        let data_support = case.data_support;
+        let chief_scout_support = case.chief_scout_support;
+        let estimated_fee = case.estimated_fee;
+        let assessed_ability = case.assessed_ability;
+        let role_fit = case.role_fit;
+        let request_id = case.request_id;
+        let monitorings = case.monitorings;
+        // Decision logic — driven by consensus and risk.
+        let active_request =
+            request_id.and_then(|id| plan.transfer_requests.iter().find(|r| r.id == id));
+        let priority_critical = active_request
+            .map(|r| matches!(r.priority, TransferNeedPriority::Critical))
+            .unwrap_or(false);
+
+        let decision_type: RecruitmentDecisionType;
+        let reason_key: &'static str;
+        if consensus_score >= 1.8 && budget_fit <= 1.4 && risk_flag_count <= 2 {
+            if priority_critical && chief_scout_support && consensus_score >= 2.5 {
+                decision_type = RecruitmentDecisionType::StartNegotiation;
+                reason_key = "meeting_reason_critical_need_strong_consensus";
+            } else {
+                decision_type = RecruitmentDecisionType::PromoteToShortlist;
+                reason_key = "meeting_reason_consensus_signing";
+            }
+        } else if consensus_score >= 1.0 && (budget_fit > 1.4 || risk_flag_count >= 3) {
+            decision_type = RecruitmentDecisionType::AskBoardApproval;
+            reason_key = "meeting_reason_elevated_risk_board";
+        } else if consensus_score <= -1.5 || budget_fit > 2.0 {
+            decision_type = RecruitmentDecisionType::Reject;
+            reason_key = "meeting_reason_votes_negative_or_budget";
+        } else {
+            decision_type = RecruitmentDecisionType::KeepMonitoring;
+            reason_key = "meeting_reason_split_or_insufficient_confidence";
+        }
+
+        // For Reject decisions, push onto the rejection blocklist
+        // for the standard window (so re-scouting doesn't re-flag).
+        if matches!(decision_type, RecruitmentDecisionType::Reject) {
+            rejections.push((player_id, 6));
+        }
+
+        // For shortlist promotions / board asks / direct
+        // negotiations, queue the candidate up for the
+        // pass-2 mutation.
+        if matches!(
+            decision_type,
+            RecruitmentDecisionType::PromoteToShortlist
+                | RecruitmentDecisionType::AskBoardApproval
+                | RecruitmentDecisionType::StartNegotiation
+        ) {
+            if let Some(req_id) = request_id {
+                let lead_scout = monitorings
+                    .iter()
+                    .max_by(|a, b| {
+                        a.confidence
+                            .partial_cmp(&b.confidence)
+                            .unwrap_or(Ordering::Equal)
+                    })
+                    .map(|m| m.scout_staff_id);
+                promotions.push(PromotionPlan {
+                    player_id,
+                    request_id: req_id,
+                    consensus_score,
+                    estimated_fee,
+                    assessed_ability,
+                    role_fit,
+                    risk_flag_count,
+                    chief_scout_support,
+                    lead_scout_staff_id: lead_scout,
+                });
+            }
+        }
+
+        let decision = RecruitmentDecision {
+            player_id,
+            transfer_request_id: request_id,
+            decision: decision_type,
+            consensus_score,
+            chief_scout_support,
+            data_support,
+            board_risk_score,
+            budget_fit,
+            reason_key,
+        };
+
+        decision
     }
 }
 

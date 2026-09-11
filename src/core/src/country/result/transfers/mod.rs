@@ -122,7 +122,6 @@ impl CountryResult {
         market_map: &MarketMap,
     ) -> DeferredTransferOps {
         let country_id = country.id;
-        let country_name = country.name.clone();
         let mut summary = TransferActivitySummary::new();
         let window_manager = TransferWindowManager::for_country(country, current_date);
         let window_open = window_manager.is_window_open(country_id, current_date);
@@ -159,304 +158,35 @@ impl CountryResult {
             Self::emit_window_close_limbo(country, current_date);
         }
 
-        // Resolve pending negotiations — club-to-club moves for the
-        // deferred execution queue, plus free-agent negotiation
-        // outcomes: pool signings whose medical just cleared (executed
-        // against `data.free_agents` in Phase C) and rejected-offer
-        // counters for pool players who declined personal terms.
-        let outcomes = PerformanceProfiler::stage_labelled(
-            "tm_resolve_negotiations",
-            3,
-            || country_name.clone(),
-            || Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary),
-        );
-        ops.deferred_transfers = outcomes.deferred;
-        ops.global_signings = outcomes.free_agent_signings;
-        ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
-        ops.player_signals = outcomes.player_signals;
-
-        // Expire stale negotiations. A dead saga must also surrender the
-        // player's Bid/Trn badges — a leaked `Trn` would quietly bench a
-        // domestic player forever (selection rests near-sold assets).
-        let expired = country.transfer_market.update(current_date);
-        for (buying_club_id, player_id) in expired {
-            PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
-            let saga_still_live = country.transfer_market.negotiations.values().any(|n| {
-                n.player_id == player_id
-                    && matches!(
-                        n.status,
-                        NegotiationStatus::Pending | NegotiationStatus::Countered
-                    )
-            });
-            if !saga_still_live {
-                if let Some(player) = CountryRoster::find_mut(country, player_id) {
-                    player.statuses.remove(PlayerStatusType::Bid);
-                    player.statuses.remove(PlayerStatusType::Trn);
-                }
-            }
-        }
-
-        // Settle any installment tranches that came due today and any
-        // performance / promotion add-ons whose triggers have just
-        // fired. The settler routes cash buyer → seller (or buyer →
-        // beneficiary for sell-on) so the deal's deferred cost
-        // actually lands on the books over time. Credits owed to
-        // foreign sellers can't be applied inside this country borrow —
-        // they ride up on `ops` and drain globally in Phase C.
-        ops.cross_country_clause_credits = PerformanceProfiler::stage_labelled(
-            "tm_clause_settle",
-            3,
-            || country_name.clone(),
-            || TransferClauseSettler::settle_due(country, current_date),
+        Self::settle_open_business(
+            country,
+            current_date,
+            market_map,
+            &config,
+            global_free_agents,
+            &mut summary,
+            &mut ops,
         );
 
-        // Free agents and contract expirations. Returns deferred
-        // signings sourced from the global pool (`data.free_agents`),
-        // which we execute after the country borrow ends — appended to
-        // the negotiation-driven pool signings collected above.
-        let pool_signings = PerformanceProfiler::stage_labelled(
-            "tm_handle_free_agents",
-            3,
-            || country_name.clone(),
-            || {
-                Self::handle_free_agents(
-                    country,
-                    current_date,
-                    &FreeAgentWorld {
-                        global_pool: global_free_agents,
-                        market_map,
-                        config: &config,
-                    },
-                    &mut FreeAgentLedger {
-                        summary: &mut summary,
-                        domestic_signed_ids: &mut ops.domestic_signed_ids,
-                        global_offered_ids: &mut ops.global_offered_ids,
-                        global_rejected_ids: &mut ops.global_rejected_ids,
-                        global_blocked: &mut ops.global_block_reasons,
-                    },
-                )
-            },
-        );
-        ops.global_signings.extend(pool_signings);
-
-        // Pre-contracts (Bosman): stage future free transfers for useful
-        // players in the final months of an expiring deal their club won't
-        // renew, so they move directly to a domestic rival on expiry
-        // instead of lingering in the open pool. Window-independent — a
-        // pre-contract is legal year-round inside the six-month window.
-        PerformanceProfiler::stage_labelled(
-            "tm_pre_contracts",
-            3,
-            || country_name.clone(),
-            || PreContractManager::stage(country, current_date, &config),
-        );
-
-        // ── Year-round: planning and knowledge ──────────────────────
-        //
-        // Everything from the squad review to the recruitment meeting used
-        // to sit inside the window gate, which is what made the pipeline a
-        // procurement department rather than a market: close the window and
-        // the recruitment department stopped existing, so a club walked into
-        // June with no plan, no watchlist and no dossiers, and spent the
-        // window discovering what it needed.
-        //
-        // These passes carry their own cadences (monthly planning, weekly
-        // scouting and meetings), so moving them out here does not multiply
-        // the work by the length of the year — it spreads the same work
-        // across it, which is the point. The passes that MOVE money or
-        // players stay inside the window below.
-        PerformanceProfiler::stage_labelled(
-            "tm_evaluate_squads",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::evaluate_squads(country, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_staff_recommendations",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::generate_staff_recommendations(country, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_process_staff_recs",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::process_staff_recommendations(country, current_date),
-        );
-        // The club's standing knowledge of the market: names within reach
-        // and within the brief's envelope for each shirt it means to fill.
-        // Weekly, all year — a scout does not stop watching football in
-        // October, and this is what makes the first day of the window start
-        // from a written agenda instead of a cold pool.
-        // Once a year, pre-season: the recruitment department reviews which
-        // markets it wants covered and hires the person who covers one it
-        // does not. The only channel by which a corridor the shipped data
-        // never named can appear in a save — see [`ScoutMarketDesk`].
-        PerformanceProfiler::stage_labelled(
-            "tm_scout_market_desk",
-            3,
-            || country_name.clone(),
-            || ScoutMarketDesk::run(country, market_map, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_refresh_watchlists",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::refresh_watchlists(country, world_pool, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_assign_scouts",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::assign_scouts(country, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_assign_match_scouts",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::assign_scouts_to_matches(country, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_match_scouting",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::process_match_scouting(country, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_process_scouting",
-            3,
-            || country_name.clone(),
-            || {
-                PipelineProcessor::process_scouting(
-                    country,
-                    &foreign_players,
-                    current_date,
-                    market_map,
-                )
-            },
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_recruitment_meetings",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::run_recruitment_meetings(country, current_date),
+        Self::run_year_round_passes(
+            country,
+            current_date,
+            world_pool,
+            &foreign_players,
+            market_map,
         );
 
         if window_open {
-            debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
-            PerformanceProfiler::stage_labelled(
-                "tm_list_players",
-                3,
-                || country_name.clone(),
-                || Self::list_players_from_pipeline(country, current_date, &mut summary),
-            );
-            // Market-circulation / diagnosis: record interest in (or a
-            // coherent block reason for) every available signed player,
-            // right after the recommendation sweep so this tick's interest
-            // is already visible.
-            PerformanceProfiler::stage_labelled(
-                "tm_circulate_available",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::circulate_available_players(country, current_date),
-            );
-            PerformanceProfiler::stage_labelled(
-                "tm_build_shortlists",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::build_shortlists(country, current_date),
-            );
-            PerformanceProfiler::stage_labelled(
-                "tm_board_approvals",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::evaluate_board_approvals(country, current_date),
-            );
-            PerformanceProfiler::stage_labelled(
-                "tm_initiate_negotiations",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::initiate_negotiations(country, current_date),
-            );
-            // Seller-side push runs BEFORE the borrower scan: a National+ parent
-            // evaluates the whole market and places each loan-listed development
-            // prospect at the best (highest-level) club where he'd still start,
-            // so it gets first crack at sending him UP rather than a constantly-
-            // scanning lower club snatching him first. The scan then fills
-            // everything the broadcast didn't place — the bulk of loan volume —
-            // so prospects are never starved of takers (no scan deferral).
-            PerformanceProfiler::stage_labelled(
-                "tm_broadcast_loans",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::broadcast_listed_loans(country, current_date),
-            );
-            // Stale permanent listings get the same push, permanent
-            // flavor: a player unsold past the grace weeks asks the club
-            // to find him a move and the scouts offer him around, the
-            // tier reach widening cumulatively downward until a buyer
-            // responds. Paired with the year-unsold free-exit valve
-            // below, no listing lingers for seasons.
-            PerformanceProfiler::stage_labelled(
-                "tm_broadcast_transfers",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::broadcast_listed_transfers(country, current_date),
-            );
-            PerformanceProfiler::stage_labelled(
-                "tm_scan_loan_market",
-                3,
-                || country_name.clone(),
-                || PipelineProcessor::scan_loan_market(country, current_date),
-            );
-            PerformanceProfiler::stage_labelled(
-                "tm_scan_foreign_loans",
-                3,
-                || country_name.clone(),
-                || {
-                    PipelineProcessor::scan_foreign_loan_market(
-                        country,
-                        &foreign_players,
-                        current_date,
-                        market_map,
-                    )
-                },
+            Self::run_window_passes(
+                country,
+                current_date,
+                &foreign_players,
+                market_map,
+                &mut summary,
             );
         }
 
-        // Escape valve for stranded listings: a player still unsold a full
-        // year after being transfer-listed forces a mutual termination and
-        // leaves on a free. Window-independent — tearing up a contract is
-        // legal year-round; the free-agent sweep collects him next tick.
-        PerformanceProfiler::stage_labelled(
-            "tm_release_unsold",
-            3,
-            || country_name.clone(),
-            || Self::release_unsold_listed_players(country, current_date),
-        );
-
-        PerformanceProfiler::stage_labelled(
-            "tm_shadow_reports",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::refresh_shadow_reports(country, current_date),
-        );
-        // Year-round breakout watch: discover high-form players on plausible
-        // buyers' books even with the window shut. Runs outside the window
-        // block (weekly cadence enforced inside) and only records scout
-        // monitoring — never a negotiation.
-        PerformanceProfiler::stage_labelled(
-            "tm_breakout_form",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date),
-        );
-        PerformanceProfiler::stage_labelled(
-            "tm_sync_wanted",
-            3,
-            || country_name.clone(),
-            || PipelineProcessor::sync_wanted_status(country),
-        );
+        Self::run_year_round_tail(country, current_date, &foreign_players);
 
         ops.completed_after = summary.completed_transfers;
         ops.pre_contract_signed = summary.signed_pre_contract;
@@ -646,6 +376,366 @@ impl CountryResult {
             };
             player.on_transfer_interest_signal(&sig);
         }
+    }
+
+    /// Business already on the books, settled before anything new is opened:
+    /// negotiations that resolved or expired, instalments and add-ons that
+    /// came due, free agents, and the pre-contracts a Bosman window allows.
+    #[allow(clippy::too_many_arguments)]
+    fn settle_open_business(
+        country: &mut Country,
+        current_date: NaiveDate,
+        market_map: &MarketMap,
+        config: &TransferConfig,
+        global_free_agents: &[GlobalFreeAgentSummary],
+        mut summary: &mut TransferActivitySummary,
+        ops: &mut DeferredTransferOps,
+    ) {
+        let country_name = country.name.clone();
+
+        // Resolve pending negotiations — club-to-club moves for the
+        // deferred execution queue, plus free-agent negotiation
+        // outcomes: pool signings whose medical just cleared (executed
+        // against `data.free_agents` in Phase C) and rejected-offer
+        // counters for pool players who declined personal terms.
+        let outcomes = PerformanceProfiler::stage_labelled(
+            "tm_resolve_negotiations",
+            3,
+            || country_name.clone(),
+            || Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary),
+        );
+        ops.deferred_transfers = outcomes.deferred;
+        ops.global_signings = outcomes.free_agent_signings;
+        ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
+        ops.player_signals = outcomes.player_signals;
+
+        // Expire stale negotiations. A dead saga must also surrender the
+        // player's Bid/Trn badges — a leaked `Trn` would quietly bench a
+        // domestic player forever (selection rests near-sold assets).
+        let expired = country.transfer_market.update(current_date);
+        for (buying_club_id, player_id) in expired {
+            PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
+            let saga_still_live = country.transfer_market.negotiations.values().any(|n| {
+                n.player_id == player_id
+                    && matches!(
+                        n.status,
+                        NegotiationStatus::Pending | NegotiationStatus::Countered
+                    )
+            });
+            if !saga_still_live {
+                if let Some(player) = CountryRoster::find_mut(country, player_id) {
+                    player.statuses.remove(PlayerStatusType::Bid);
+                    player.statuses.remove(PlayerStatusType::Trn);
+                }
+            }
+        }
+
+        // Settle any installment tranches that came due today and any
+        // performance / promotion add-ons whose triggers have just
+        // fired. The settler routes cash buyer → seller (or buyer →
+        // beneficiary for sell-on) so the deal's deferred cost
+        // actually lands on the books over time. Credits owed to
+        // foreign sellers can't be applied inside this country borrow —
+        // they ride up on `ops` and drain globally in Phase C.
+        ops.cross_country_clause_credits = PerformanceProfiler::stage_labelled(
+            "tm_clause_settle",
+            3,
+            || country_name.clone(),
+            || TransferClauseSettler::settle_due(country, current_date),
+        );
+
+        // Free agents and contract expirations. Returns deferred
+        // signings sourced from the global pool (`data.free_agents`),
+        // which we execute after the country borrow ends — appended to
+        // the negotiation-driven pool signings collected above.
+        let pool_signings = PerformanceProfiler::stage_labelled(
+            "tm_handle_free_agents",
+            3,
+            || country_name.clone(),
+            || {
+                Self::handle_free_agents(
+                    country,
+                    current_date,
+                    &FreeAgentWorld {
+                        global_pool: global_free_agents,
+                        market_map,
+                        config: &config,
+                    },
+                    &mut FreeAgentLedger {
+                        summary: &mut summary,
+                        domestic_signed_ids: &mut ops.domestic_signed_ids,
+                        global_offered_ids: &mut ops.global_offered_ids,
+                        global_rejected_ids: &mut ops.global_rejected_ids,
+                        global_blocked: &mut ops.global_block_reasons,
+                    },
+                )
+            },
+        );
+        ops.global_signings.extend(pool_signings);
+
+        // Pre-contracts (Bosman): stage future free transfers for useful
+        // players in the final months of an expiring deal their club won't
+        // renew, so they move directly to a domestic rival on expiry
+        // instead of lingering in the open pool. Window-independent — a
+        // pre-contract is legal year-round inside the six-month window.
+        PerformanceProfiler::stage_labelled(
+            "tm_pre_contracts",
+            3,
+            || country_name.clone(),
+            || PreContractManager::stage(country, current_date, &config),
+        );
+    }
+
+    /// Planning and knowledge, all year.
+    ///
+    /// Everything from the squad review to the recruitment meeting used to sit
+    /// inside the window gate, which is what made the pipeline a procurement
+    /// department rather than a market: close the window and the recruitment
+    /// department stopped existing, so a club walked into June with no plan,
+    /// no watchlist and no dossiers, and spent the window discovering what it
+    /// needed.
+    ///
+    /// These passes carry their own cadences (monthly planning, weekly
+    /// scouting and meetings), so running them out here does not multiply the
+    /// work by the length of the year — it spreads the same work across it,
+    /// which is the point.
+    fn run_year_round_passes(
+        country: &mut Country,
+        current_date: NaiveDate,
+        world_pool: &[PlayerSummary],
+        foreign_players: &[&PlayerSummary],
+        market_map: &MarketMap,
+    ) {
+        let country_name = country.name.clone();
+
+        // ── Year-round: planning and knowledge ──────────────────────
+        //
+        // Everything from the squad review to the recruitment meeting used
+        // to sit inside the window gate, which is what made the pipeline a
+        // procurement department rather than a market: close the window and
+        // the recruitment department stopped existing, so a club walked into
+        // June with no plan, no watchlist and no dossiers, and spent the
+        // window discovering what it needed.
+        //
+        // These passes carry their own cadences (monthly planning, weekly
+        // scouting and meetings), so moving them out here does not multiply
+        // the work by the length of the year — it spreads the same work
+        // across it, which is the point. The passes that MOVE money or
+        // players stay inside the window below.
+        PerformanceProfiler::stage_labelled(
+            "tm_evaluate_squads",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::evaluate_squads(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_staff_recommendations",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::generate_staff_recommendations(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_process_staff_recs",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::process_staff_recommendations(country, current_date),
+        );
+        // The club's standing knowledge of the market: names within reach
+        // and within the brief's envelope for each shirt it means to fill.
+        // Weekly, all year — a scout does not stop watching football in
+        // October, and this is what makes the first day of the window start
+        // from a written agenda instead of a cold pool.
+        // Once a year, pre-season: the recruitment department reviews which
+        // markets it wants covered and hires the person who covers one it
+        // does not. The only channel by which a corridor the shipped data
+        // never named can appear in a save — see [`ScoutMarketDesk`].
+        PerformanceProfiler::stage_labelled(
+            "tm_scout_market_desk",
+            3,
+            || country_name.clone(),
+            || ScoutMarketDesk::run(country, market_map, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_refresh_watchlists",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::refresh_watchlists(country, world_pool, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_assign_scouts",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::assign_scouts(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_assign_match_scouts",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::assign_scouts_to_matches(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_match_scouting",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::process_match_scouting(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_process_scouting",
+            3,
+            || country_name.clone(),
+            || {
+                PipelineProcessor::process_scouting(
+                    country,
+                    &foreign_players,
+                    current_date,
+                    market_map,
+                )
+            },
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_recruitment_meetings",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::run_recruitment_meetings(country, current_date),
+        );
+    }
+
+    /// The passes that move money or players. Listing, circulation,
+    /// shortlisting, board approval, then the three ways a club opens a
+    /// conversation: its own approach, the seller's push, and the loan scan.
+    fn run_window_passes(
+        country: &mut Country,
+        current_date: NaiveDate,
+        foreign_players: &[&PlayerSummary],
+        market_map: &MarketMap,
+        mut summary: &mut TransferActivitySummary,
+    ) {
+        let country_name = country.name.clone();
+
+        debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
+        PerformanceProfiler::stage_labelled(
+            "tm_list_players",
+            3,
+            || country_name.clone(),
+            || Self::list_players_from_pipeline(country, current_date, &mut summary),
+        );
+        // Market-circulation / diagnosis: record interest in (or a
+        // coherent block reason for) every available signed player,
+        // right after the recommendation sweep so this tick's interest
+        // is already visible.
+        PerformanceProfiler::stage_labelled(
+            "tm_circulate_available",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::circulate_available_players(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_build_shortlists",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::build_shortlists(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_board_approvals",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::evaluate_board_approvals(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_initiate_negotiations",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::initiate_negotiations(country, current_date),
+        );
+        // Seller-side push runs BEFORE the borrower scan: a National+ parent
+        // evaluates the whole market and places each loan-listed development
+        // prospect at the best (highest-level) club where he'd still start,
+        // so it gets first crack at sending him UP rather than a constantly-
+        // scanning lower club snatching him first. The scan then fills
+        // everything the broadcast didn't place — the bulk of loan volume —
+        // so prospects are never starved of takers (no scan deferral).
+        PerformanceProfiler::stage_labelled(
+            "tm_broadcast_loans",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::broadcast_listed_loans(country, current_date),
+        );
+        // Stale permanent listings get the same push, permanent
+        // flavor: a player unsold past the grace weeks asks the club
+        // to find him a move and the scouts offer him around, the
+        // tier reach widening cumulatively downward until a buyer
+        // responds. Paired with the year-unsold free-exit valve
+        // below, no listing lingers for seasons.
+        PerformanceProfiler::stage_labelled(
+            "tm_broadcast_transfers",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::broadcast_listed_transfers(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_scan_loan_market",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::scan_loan_market(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_scan_foreign_loans",
+            3,
+            || country_name.clone(),
+            || {
+                PipelineProcessor::scan_foreign_loan_market(
+                    country,
+                    &foreign_players,
+                    current_date,
+                    market_map,
+                )
+            },
+        );
+    }
+
+    /// The passes that run whatever the window says, after it: the stranded-
+    /// listing escape valve, the shadow reports, the breakout watch, and the
+    /// `Wnt` reconciliation.
+    fn run_year_round_tail(
+        country: &mut Country,
+        current_date: NaiveDate,
+        foreign_players: &[&PlayerSummary],
+    ) {
+        let country_name = country.name.clone();
+
+        // Escape valve for stranded listings: a player still unsold a full
+        // year after being transfer-listed forces a mutual termination and
+        // leaves on a free. Window-independent — tearing up a contract is
+        // legal year-round; the free-agent sweep collects him next tick.
+        PerformanceProfiler::stage_labelled(
+            "tm_release_unsold",
+            3,
+            || country_name.clone(),
+            || Self::release_unsold_listed_players(country, current_date),
+        );
+
+        PerformanceProfiler::stage_labelled(
+            "tm_shadow_reports",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::refresh_shadow_reports(country, current_date),
+        );
+        // Year-round breakout watch: discover high-form players on plausible
+        // buyers' books even with the window shut. Runs outside the window
+        // block (weekly cadence enforced inside) and only records scout
+        // monitoring — never a negotiation.
+        PerformanceProfiler::stage_labelled(
+            "tm_breakout_form",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_sync_wanted",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::sync_wanted_status(country),
+        );
     }
 }
 

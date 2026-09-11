@@ -43,7 +43,7 @@ use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
 use crate::transfers::scouting::exposure::MarketDiscoveryDiagnosis;
 use crate::transfers::value::PlayerValuationCalculator;
-use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
+use crate::{Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType};
 
 /// Minimum days on the market before the pass spends a buyer scan to
 /// diagnose a no-interest player. Fresher than this and the market simply
@@ -216,35 +216,7 @@ impl PipelineProcessor {
             return;
         }
 
-        // ── Which players is any club already concretely pursuing? ──
-        // Monitoring rows, shortlist candidates, staff recommendations,
-        // and live negotiations all count as "the market has shown
-        // interest recently".
-        let mut interested: HashSet<u32> = HashSet::new();
-        for club in &country.clubs {
-            let plan = &club.transfer_plan;
-            for m in &plan.scout_monitoring {
-                if m.is_active_interest() {
-                    interested.insert(m.player_id);
-                }
-            }
-            for s in &plan.shortlists {
-                for c in &s.candidates {
-                    interested.insert(c.player_id);
-                }
-            }
-            for r in &plan.staff_recommendations {
-                interested.insert(r.player_id);
-            }
-        }
-        for n in country.transfer_market.negotiations.values() {
-            if matches!(
-                n.status,
-                NegotiationStatus::Pending | NegotiationStatus::Countered
-            ) {
-                interested.insert(n.player_id);
-            }
-        }
+        let interested = Self::concretely_pursued(country);
 
         // ── Precompute buyer snapshots once, keyed by club id. ──
         let buyer_scans: HashMap<u32, BuyerScan> = country
@@ -302,119 +274,25 @@ impl PipelineProcessor {
                     }
                     scans_done += 1;
 
-                    // Build the player view once (shared across buyers).
-                    let group = player.position().position_group();
-                    let ability = Self::position_evaluation_ability(player);
-                    let player_age = player.age(date);
-                    let estimated_potential = ability
-                        + Self::estimate_growth_potential(
-                            player_age,
-                            player.skills.mental.determination,
-                            player.skills.mental.work_rate,
-                            player.skills.mental.composure,
-                            player.skills.mental.anticipation,
-                            ability,
-                        );
-                    let value = PlayerValuationCalculator::calculate_value_with_price_level(
+                    let view = Self::listed_target_view(
                         player,
+                        seller,
                         date,
                         price_level,
                         seller_league_rep,
                         seller_club_rep,
-                    )
-                    .amount;
-                    let contract_months = player
-                        .contract
-                        .as_ref()
-                        .map(|c| {
-                            ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64)
-                                as i16
-                        })
-                        .unwrap_or(0);
-                    let interest_30d = player
-                        .availability_market_state()
-                        .map(|s| s.recent_interest(date))
-                        .unwrap_or(0);
-                    let failed_scans = player
-                        .availability_market_state()
-                        .map(|s| s.failed_scans)
-                        .unwrap_or(0);
+                        &performance_lookup,
+                        days,
+                    );
 
-                    let breakout_score = performance_lookup
-                        .breakout_for_player(
-                            player,
-                            player.statistics.total_games(),
-                            player.statistics.average_rating_realistic(group),
-                            player_age,
-                            seller_league_rep,
-                        )
-                        .score;
-
-                    let view = ListedTargetView {
-                        ability,
-                        nationality_country_id: player.country_id,
-                        estimated_potential,
-                        age: player_age,
-                        estimated_value: value,
-                        position_group: group,
-                        is_listed: player.statuses.has(PlayerStatusType::Lst),
-                        is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-                        is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-                        breakout_score,
-                        world_reputation: player.player_attributes.world_reputation,
-                        current_reputation: player.player_attributes.current_reputation,
-                        ambition: player.attributes.ambition,
-                        parent_club_score: seller
-                            .teams
-                            .main()
-                            .map(|t| t.reputation.overall_score())
-                            .unwrap_or(0.0),
-                        parent_club_in_debt: seller.finance.balance.balance < 0,
-                        days_available: days,
-                        contract_months_remaining: contract_months,
-                        low_usage: player.statistics.total_games() < 8,
-                        recent_interest_count: interest_30d,
-                        failed_scans,
-                        last_block: player
-                            .availability_market_state()
-                            .and_then(|s| s.last_block.map(|(_, reason)| reason)),
-                    };
-
-                    // ── Scan plausible domestic buyers. ──
-                    let mut reasons: Vec<AvailabilityBlockReason> = Vec::new();
-                    let mut plausible = false;
-                    for buyer in country.clubs.iter() {
-                        if buyer.id == seller.id || seller.is_rival(buyer.id) {
-                            continue;
-                        }
-                        let Some(scan) = buyer_scans.get(&buyer.id) else {
-                            continue;
-                        };
-                        let bctx = scan.buyer_context(group, false);
-                        match ListedTargetScreen::evaluate(&view, &bctx) {
-                            ListedTargetVerdict::Reject(reason) => {
-                                reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));
-                            }
-                            ListedTargetVerdict::Accept(_) => {
-                                // Cheap gates pass — confirm the realism
-                                // (step-down / country-route) gates too.
-                                let inputs = TransferPlausibilityBuilder::from_clubs(
-                                    country, buyer, seller, player, value, false, true, date,
-                                );
-                                match TransferPlausibilityEvaluator::evaluate(&inputs) {
-                                    TransferPlausibilityVerdict::HardReject(pr) => {
-                                        reasons
-                                            .push(MarketDiscoveryDiagnosis::from_plausibility(pr));
-                                    }
-                                    TransferPlausibilityVerdict::Allow(_) => {
-                                        plausible = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    let (plausible, reasons) = Self::scan_domestic_buyers(
+                        country,
+                        seller,
+                        player,
+                        &view,
+                        &buyer_scans,
+                        date,
+                    );
 
                     if plausible {
                         actions.insert(pid, CirculationAction::Interest);
@@ -441,6 +319,195 @@ impl PipelineProcessor {
             return;
         }
 
+        Self::apply_circulation(country, date, &actions, to_clear);
+    }
+
+    /// Which players is any club already concretely pursuing? Monitoring rows,
+    /// shortlist candidates, staff recommendations and live negotiations all
+    /// count as "the market has shown interest recently".
+    fn concretely_pursued(country: &Country) -> HashSet<u32> {
+        // ── Which players is any club already concretely pursuing? ──
+        // Monitoring rows, shortlist candidates, staff recommendations,
+        // and live negotiations all count as "the market has shown
+        // interest recently".
+        let mut interested: HashSet<u32> = HashSet::new();
+        for club in &country.clubs {
+            let plan = &club.transfer_plan;
+            for m in &plan.scout_monitoring {
+                if m.is_active_interest() {
+                    interested.insert(m.player_id);
+                }
+            }
+            for s in &plan.shortlists {
+                for c in &s.candidates {
+                    interested.insert(c.player_id);
+                }
+            }
+            for r in &plan.staff_recommendations {
+                interested.insert(r.player_id);
+            }
+        }
+        for n in country.transfer_market.negotiations.values() {
+            if matches!(
+                n.status,
+                NegotiationStatus::Pending | NegotiationStatus::Countered
+            ) {
+                interested.insert(n.player_id);
+            }
+        }
+
+        interested
+    }
+
+    /// Build the player view once — every buyer below is shown the same one.
+    #[allow(clippy::too_many_arguments)]
+    fn listed_target_view(
+        player: &Player,
+        seller: &Club,
+        date: NaiveDate,
+        price_level: f32,
+        seller_league_rep: u16,
+        seller_club_rep: u16,
+        performance_lookup: &LeaguePerformanceLookup,
+        days: i64,
+    ) -> ListedTargetView {
+        // Build the player view once (shared across buyers).
+        let group = player.position().position_group();
+        let ability = Self::position_evaluation_ability(player);
+        let player_age = player.age(date);
+        let estimated_potential = ability
+            + Self::estimate_growth_potential(
+                player_age,
+                player.skills.mental.determination,
+                player.skills.mental.work_rate,
+                player.skills.mental.composure,
+                player.skills.mental.anticipation,
+                ability,
+            );
+        let value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            price_level,
+            seller_league_rep,
+            seller_club_rep,
+        )
+        .amount;
+        let contract_months = player
+            .contract
+            .as_ref()
+            .map(|c| ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64) as i16)
+            .unwrap_or(0);
+        let interest_30d = player
+            .availability_market_state()
+            .map(|s| s.recent_interest(date))
+            .unwrap_or(0);
+        let failed_scans = player
+            .availability_market_state()
+            .map(|s| s.failed_scans)
+            .unwrap_or(0);
+
+        let breakout_score = performance_lookup
+            .breakout_for_player(
+                player,
+                player.statistics.total_games(),
+                player.statistics.average_rating_realistic(group),
+                player_age,
+                seller_league_rep,
+            )
+            .score;
+
+        let view = ListedTargetView {
+            ability,
+            nationality_country_id: player.country_id,
+            estimated_potential,
+            age: player_age,
+            estimated_value: value,
+            position_group: group,
+            is_listed: player.statuses.has(PlayerStatusType::Lst),
+            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+            breakout_score,
+            world_reputation: player.player_attributes.world_reputation,
+            current_reputation: player.player_attributes.current_reputation,
+            ambition: player.attributes.ambition,
+            parent_club_score: seller
+                .teams
+                .main()
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.0),
+            parent_club_in_debt: seller.finance.balance.balance < 0,
+            days_available: days,
+            contract_months_remaining: contract_months,
+            low_usage: player.statistics.total_games() < 8,
+            recent_interest_count: interest_30d,
+            failed_scans,
+            last_block: player
+                .availability_market_state()
+                .and_then(|s| s.last_block.map(|(_, reason)| reason)),
+        };
+
+        view
+    }
+
+    /// Scan the plausible domestic buyers. One that clears both the cheap
+    /// gates and the realism gates is enough for the player to read as
+    /// circulating; everything the others refused on is the diagnosis.
+    fn scan_domestic_buyers(
+        country: &Country,
+        seller: &Club,
+        player: &Player,
+        view: &ListedTargetView,
+        buyer_scans: &HashMap<u32, BuyerScan>,
+        date: NaiveDate,
+    ) -> (bool, Vec<AvailabilityBlockReason>) {
+        let group = view.position_group;
+        let value = view.estimated_value;
+
+        // ── Scan plausible domestic buyers. ──
+        let mut reasons: Vec<AvailabilityBlockReason> = Vec::new();
+        let mut plausible = false;
+        for buyer in country.clubs.iter() {
+            if buyer.id == seller.id || seller.is_rival(buyer.id) {
+                continue;
+            }
+            let Some(scan) = buyer_scans.get(&buyer.id) else {
+                continue;
+            };
+            let bctx = scan.buyer_context(group, false);
+            match ListedTargetScreen::evaluate(&view, &bctx) {
+                ListedTargetVerdict::Reject(reason) => {
+                    reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));
+                }
+                ListedTargetVerdict::Accept(_) => {
+                    // Cheap gates pass — confirm the realism
+                    // (step-down / country-route) gates too.
+                    let inputs = TransferPlausibilityBuilder::from_clubs(
+                        country, buyer, seller, player, value, false, true, date,
+                    );
+                    match TransferPlausibilityEvaluator::evaluate(&inputs) {
+                        TransferPlausibilityVerdict::HardReject(pr) => {
+                            reasons.push(MarketDiscoveryDiagnosis::from_plausibility(pr));
+                        }
+                        TransferPlausibilityVerdict::Allow(_) => {
+                            plausible = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        (plausible, reasons)
+    }
+
+    /// Phase 2 — apply what the read pass decided.
+    fn apply_circulation(
+        country: &mut Country,
+        date: NaiveDate,
+        actions: &HashMap<u32, CirculationAction>,
+        to_clear: Vec<u32>,
+    ) {
         // ── Phase 2: apply (mutable). ──
         let clear_set: HashSet<u32> = to_clear.into_iter().collect();
         for club in &mut country.clubs {

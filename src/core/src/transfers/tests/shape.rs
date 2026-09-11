@@ -5,29 +5,35 @@
 //! person reads the file. Prose in `CLAUDE.md` states them; this asserts
 //! them, because a rule with no test is a preference.
 //!
-//! Scoped to `src/transfers` — the subsystem that has been brought to the
-//! rules. Widen the root as other subsystems are cleaned up.
+//! Scoped to the transfer system — `src/transfers` (the market's own model)
+//! and `src/country/result/transfers` (the per-country pass that drives it),
+//! both of which have been brought to the rules. Widen the roots as other
+//! subsystems are cleaned up.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Walks `src/transfers` and answers questions about the shape of its sources.
+/// Walks the transfer system and answers questions about the shape of its
+/// sources.
 struct ShapeScan;
 
 impl ShapeScan {
     /// This file names the forbidden shapes in prose; it is never an offender.
     const SELF: &'static str = "shape.rs";
 
+    /// Roots the scan covers, relative to the crate.
+    const ROOTS: [&'static str; 2] = ["src/transfers", "src/country/result/transfers"];
+
     fn sources() -> Vec<PathBuf> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("transfers");
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut out = Vec::new();
-        Self::walk(&root, &mut out);
+        for root in Self::ROOTS {
+            Self::walk(&crate_root.join(root), &mut out);
+        }
         assert!(
             !out.is_empty(),
-            "no sources found under src/transfers — the scanner's path is wrong, \
-             not the codebase"
+            "no sources found under the scan roots — the scanner's paths are \
+             wrong, not the codebase"
         );
         out
     }
@@ -68,7 +74,11 @@ impl ShapeScan {
             };
             let lines: Vec<&str> = src.lines().collect();
             for (index, line) in lines.iter().enumerate() {
-                let above = if index == 0 { "" } else { lines[index - 1].trim() };
+                let above = if index == 0 {
+                    ""
+                } else {
+                    lines[index - 1].trim()
+                };
                 if line.trim_start().starts_with("//") || !hit(line, above) {
                     continue;
                 }
@@ -166,7 +176,9 @@ impl ShapeScan {
 #[test]
 fn every_function_hangs_off_a_struct() {
     let offenders = ShapeScan::offenders(|line, above| {
-        ShapeScan::is_free_fn(line) && !above.starts_with("#[test]") && !above.starts_with("#[bench]")
+        ShapeScan::is_free_fn(line)
+            && !above.starts_with("#[test]")
+            && !above.starts_with("#[bench]")
     });
 
     assert!(

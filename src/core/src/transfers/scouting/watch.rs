@@ -211,6 +211,16 @@ impl InvestmentRelevance {
     }
 }
 
+/// What one buying club brings to a breakout read: how far its network sees,
+/// what its board will fund, and the realism context every candidate is
+/// measured against.
+struct BuyerRead<'a> {
+    scan: &'a BuyerScan,
+    relevance: &'a InvestmentRelevance,
+    reach: &'a HashSet<ScoutingRegion>,
+    plausibility: &'a BuyerPlausibilityContext,
+}
+
 impl PipelineProcessor {
     /// Per-pass cap on NEW monitors a single club opens at the FLOOR of the
     /// reputation ladder, so the watch builds a club's books gradually
@@ -326,6 +336,38 @@ impl PipelineProcessor {
             .max()
             .unwrap_or(0);
 
+        let mut candidates = Self::domestic_candidates(country, date, &performance_lookup);
+
+        Self::add_foreign_candidates(
+            country,
+            foreign_players,
+            best_league_reputation,
+            &mut candidates,
+        );
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        let actions = Self::evaluate_buyers(country, date, &candidates);
+        if actions.is_empty() {
+            return;
+        }
+
+        if actions.is_empty() {
+            return;
+        }
+
+        Self::file_finds(country, date, actions);
+    }
+
+    /// Collect discovery candidates at home, where the read comes
+    /// corroborated: scoring-chart standing, awards, availability signals.
+    fn domestic_candidates(
+        country: &Country,
+        date: NaiveDate,
+        performance_lookup: &LeaguePerformanceLookup,
+    ) -> Vec<BreakoutCandidate> {
         // ── Collect discovery candidates (immutable read). ──
         let mut candidates: Vec<BreakoutCandidate> = Vec::new();
         for club in &country.clubs {
@@ -376,7 +418,7 @@ impl PipelineProcessor {
                             parent_league_reputation,
                         )
                     };
-                    let skill_ability = Self::position_evaluation_ability(player);
+                    let skill_ability = PipelineProcessor::position_evaluation_ability(player);
 
                     // Standing: what a scout in the stands takes away
                     // rather than what the scoreline says. A youth-squad
@@ -425,7 +467,7 @@ impl PipelineProcessor {
                     // pair — build the summary directly instead of
                     // re-finding the player with a country-wide scan, and
                     // hand it the group snapshot so it doesn't re-sort.
-                    let summary = Self::build_player_summary_ranked(
+                    let summary = PipelineProcessor::build_player_summary_ranked(
                         country,
                         club,
                         player,
@@ -434,7 +476,7 @@ impl PipelineProcessor {
                     );
 
                     let estimated_potential = skill_ability
-                        + Self::estimate_growth_potential(
+                        + PipelineProcessor::estimate_growth_potential(
                             age,
                             player.skills.mental.determination,
                             player.skills.mental.work_rate,
@@ -485,6 +527,20 @@ impl PipelineProcessor {
             }
         }
 
+        candidates
+    }
+
+    /// Foreign candidates from the world snapshot, judged on what a scout
+    /// abroad can actually see. The summary carries his output and league
+    /// standing but not the per-country scoring charts, awards or
+    /// personality reads — so a foreigner clears the same bar on less
+    /// evidence, which makes his bar effectively higher, never lower.
+    fn add_foreign_candidates(
+        country: &Country,
+        foreign_players: &[&PlayerSummary],
+        best_league_reputation: u16,
+        candidates: &mut Vec<BreakoutCandidate>,
+    ) {
         // Foreign candidates from the world snapshot — judged on exactly
         // what a scout abroad can see. The summary carries his output,
         // rating and league standing but not the per-country scoring
@@ -536,7 +592,7 @@ impl PipelineProcessor {
             // most of these moves actually begin. It lowers the bar; it
             // never removes it, and only for a watcher who can genuinely
             // offer him a bigger stage.
-            let bar = Self::discovery_bar(
+            let bar = PipelineProcessor::discovery_bar(
                 s.seller_ctx.big_stage_inclination,
                 s.seller_ctx.league_reputation,
                 best_league_reputation,
@@ -569,7 +625,7 @@ impl PipelineProcessor {
                 continue;
             }
             let estimated_potential = s.skill_ability
-                + Self::estimate_growth_potential(
+                + PipelineProcessor::estimate_growth_potential(
                     s.age,
                     s.determination,
                     s.work_rate,
@@ -591,240 +647,28 @@ impl PipelineProcessor {
                 admitted_on_standing,
             });
         }
+    }
 
-        if candidates.is_empty() {
-            return;
-        }
-
-        // ── Per-buyer evaluation (immutable read). ──
+    /// Per-buyer evaluation — who, of the names the sweep turned up, is
+    /// worth this club's attention. Read-only: the clubs are walked while
+    /// deciding, so nothing is filed until the apply pass.
+    fn evaluate_buyers(
+        country: &Country,
+        date: NaiveDate,
+        candidates: &[BreakoutCandidate],
+    ) -> Vec<WatchAction> {
         let mut actions: Vec<WatchAction> = Vec::new();
+        // ── Per-buyer evaluation (immutable read). ──
+
         for club in &country.clubs {
-            if club.teams.teams.is_empty() {
-                continue;
-            }
-            let plan = &club.transfer_plan;
-            let club_overall_score = club
-                .teams
-                .main()
-                .or_else(|| club.teams.teams.first())
-                .map(|t| t.reputation.overall_score())
-                .unwrap_or(0.0);
-            // How many files this department carries at once, and how many
-            // it may open this week. Both widen with reputation: a global
-            // recruitment operation runs a far longer watch list than a club
-            // with one part-time scout, and holding every club to the same
-            // three-a-week ceiling was itself a wall — a giant could see a
-            // standout abroad and simply never have a slot to file him in.
-            if !plan.initialized
-                || plan.scout_monitoring.len()
-                    >= Self::breakout_watch_monitor_cap(club_overall_score)
-            {
-                continue;
-            }
-            let Some(scan) = BuyerScan::build(country, club, date) else {
-                continue;
-            };
-
-            let team = &club.teams.teams[0];
-            let resolved = team.staffs.resolve_for_transfers();
-            let recommender_id = resolved
-                .director_of_football
-                .map(|s| s.id)
-                .or_else(|| resolved.scouts.first().map(|s| s.id))
-                .unwrap_or(team.staffs.head_coach().id);
-            let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
-
-            // The club's scouting NETWORK — which regions of the world its
-            // watch actually covers. Always includes the home backyard, so
-            // domestic candidates pass by construction; reach beyond it
-            // widens continuously with reputation, the same curve the
-            // demand-driven scouting pass uses. This one gate is what
-            // keeps "form travels" meaning "as far as your scouts do".
-            let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-            let reach: HashSet<ScoutingRegion> =
-                Self::reputation_scout_regions(home_region, club_overall_score)
-                    .into_iter()
-                    .collect();
-
-            // Buyer-side relevance for a STANDING find — see
-            // [`InvestmentRelevance`]. Built once per buyer; the belief it
-            // ranks on is the club's own, so twenty rich clubs do not all
-            // file the same name in the same week.
-            let relevance = InvestmentRelevance::build(
-                club,
-                club_overall_score,
-                resolved.best_scout_judging_ability(),
-                club.finance
-                    .transfer_budget
-                    .as_ref()
-                    .map(|b| b.amount)
-                    .unwrap_or(plan.total_budget),
-            );
-
-            let mut scored: Vec<(&BreakoutCandidate, f32)> = candidates
-                .iter()
-                .filter_map(|c| {
-                    let s = &c.summary;
-                    // Identity gates — own player, rival, or one this club is
-                    // already tracking.
-                    if s.club_id == club.id || club.is_rival(s.club_id) {
-                        return None;
-                    }
-                    if !reach.contains(&s.region) {
-                        return None;
-                    }
-                    if !plan.monitorings_for_player(s.player_id).is_empty() {
-                        return None;
-                    }
-                    // Meeting rejections blocklist the player for 6 months.
-                    // The Rejected monitoring row fails is_active_interest,
-                    // so the dedup above misses him and the watch used to
-                    // re-seed a meeting-ready row the very next Monday —
-                    // an agenda churn loop the blocklist exists to stop.
-                    if plan.is_rejected(s.player_id, date) {
-                        return None;
-                    }
-                    // A standing find is a judgement about LEVEL, not a
-                    // headline, so it only becomes a file where the buyer
-                    // would actually be improved by him and where he fits
-                    // the club's asset window. Output finds skip this: a
-                    // man scoring freely is interesting to everyone above
-                    // him, which is exactly what makes him a breakout.
-                    if c.admitted_on_standing && !relevance.admits(s) {
-                        if TransferTrace::is(s.player_id) {
-                            TransferTrace::line(
-                                s.player_id,
-                                "buyer",
-                                format!(
-                                    "club={} ({}) REJECT not-top-{} or outside asset window \
-                                     (age {}, value {:.0})",
-                                    club.name, club.id, relevance.top_k, s.age, s.estimated_value,
-                                ),
-                            );
-                        }
-                        return None;
-                    }
-                    // Staged plausibility veto — importance / country route /
-                    // step-down realism. Unsolicited: we're scouting on form.
-                    if matches!(
-                        TransferPlausibilityBuilder::evaluate_summary(
-                            &buyer_plaus_ctx,
-                            s,
-                            false,
-                            true,
-                            date,
-                            None,
-                        ),
-                        Some(TransferPlausibilityVerdict::HardReject(_))
-                    ) {
-                        if TransferTrace::is(s.player_id) {
-                            TransferTrace::line(
-                                s.player_id,
-                                "buyer",
-                                format!(
-                                    "club={} ({}) REJECT staged plausibility hard-reject",
-                                    club.name, club.id,
-                                ),
-                            );
-                        }
-                        return None;
-                    }
-
-                    let view = ListedTargetView {
-                        ability: s.skill_ability,
-                        nationality_country_id: s.nationality_country_id,
-                        estimated_potential: c.estimated_potential,
-                        age: s.age,
-                        estimated_value: s.estimated_value,
-                        position_group: s.position_group,
-                        is_listed: s.is_listed,
-                        is_transfer_requested: s.seller_ctx.is_transfer_requested,
-                        is_unhappy: s.seller_ctx.is_unhappy,
-                        is_loan_listed: s.is_loan_listed,
-                        // The listed-target model ranks on "how strongly does
-                        // his form say take a look" — a standing read answers
-                        // the same question from the other side, so the
-                        // stronger of the two is the honest discovery signal
-                        // to rank him with.
-                        breakout_score: c.breakout_score.max(c.standing_score),
-                        world_reputation: s.world_reputation,
-                        current_reputation: s.current_reputation,
-                        ambition: c.ambition,
-                        parent_club_score: s.seller_ctx.club_reputation_score,
-                        parent_club_in_debt: s.seller_ctx.in_debt,
-                        days_available: c.days_available,
-                        contract_months_remaining: s.contract_months_remaining,
-                        low_usage: s.appearances < 8,
-                        recent_interest_count: c.recent_interest_count,
-                        failed_scans: c.failed_scans,
-                        last_block: None,
-                    };
-                    // Form-discovery mode: a not-yet-listed breakout is
-                    // admitted, but the affordability / tier / reputation /
-                    // squad-need gates are unchanged.
-                    let ctx = scan.buyer_context(s.position_group, true);
-                    match ListedTargetScreen::evaluate(&view, &ctx) {
-                        ListedTargetVerdict::Accept(score) => Some((c, score)),
-                        ListedTargetVerdict::Reject(_) => None,
-                    }
-                })
-                .collect();
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-
-            // Draw the names to file rather than taking the top rows. The
-            // acceptance score is built from the same public form data every
-            // club can see, so a straight top-N had every eligible buyer in the
-            // country open a file on the same two players in the same week —
-            // and re-file them the next week, since the ordering doesn't move
-            // while the form doesn't. The gates above are unchanged; this is
-            // only which of the players they already approved get watched.
-            let slate: Vec<(u32, f32)> = scored
-                .iter()
-                .enumerate()
-                .map(|(i, (_, score))| (i as u32, *score))
-                .collect();
-            let drawn = InterestDraw::pick_several(
-                &slate,
-                Self::breakout_watch_per_pass(club_overall_score),
-            );
-            for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
-                let s = &cand.summary;
-                let discovery = cand.breakout_score.max(cand.standing_score);
-                if TransferTrace::is(s.player_id) {
-                    TransferTrace::line(
-                        s.player_id,
-                        "buyer",
-                        format!(
-                            "club={} ({}) FILED discovery={:.1} (breakout {:.1} / standing {:.1})",
-                            club.name, club.id, discovery, cand.breakout_score, cand.standing_score,
-                        ),
-                    );
-                }
-                actions.push(WatchAction {
-                    club_id: club.id,
-                    recommender_staff_id: recommender_id,
-                    player_id: s.player_id,
-                    player_club_id: s.club_id,
-                    player_country_id: s.country_id,
-                    position: s.position,
-                    position_group: s.position_group,
-                    age: s.age,
-                    appearances: s.appearances,
-                    assessed_ability: s.skill_ability,
-                    assessed_potential: cand.estimated_potential,
-                    // Confidence scales with discovery strength so a clear
-                    // find lands meeting-ready — the interest can flow
-                    // straight into the shortlist when the window opens.
-                    confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
-                    estimated_value: s.estimated_value,
-                });
-            }
+            Self::evaluate_buyer(country, club, date, candidates, &mut actions);
         }
 
-        if actions.is_empty() {
-            return;
-        }
+        actions
+    }
 
+    /// Apply — file each find on the buyer's books.
+    fn file_finds(country: &mut Country, date: NaiveDate, actions: Vec<WatchAction>) {
         // ── Apply (mutable): file each find on the buyer's books. ──
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -833,7 +677,7 @@ impl PipelineProcessor {
                     .teams
                     .first()
                     .map(|t| {
-                        Self::staff_recommendation_cap_score(
+                        PipelineProcessor::staff_recommendation_cap_score(
                             t.reputation.level(),
                             t.reputation.overall_score(),
                         )
@@ -915,6 +759,266 @@ impl PipelineProcessor {
                 }
             }
         }
+    }
+
+    /// One club's read of the names the sweep turned up: is any of them
+    /// inside its network's reach, plausible for it, and worth a watch.
+    fn evaluate_buyer(
+        country: &Country,
+        club: &Club,
+        date: NaiveDate,
+        candidates: &[BreakoutCandidate],
+        actions: &mut Vec<WatchAction>,
+    ) {
+        if club.teams.teams.is_empty() {
+            return;
+        }
+        let plan = &club.transfer_plan;
+        let club_overall_score = club
+            .teams
+            .main()
+            .or_else(|| club.teams.teams.first())
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.0);
+        // How many files this department carries at once, and how many
+        // it may open this week. Both widen with reputation: a global
+        // recruitment operation runs a far longer watch list than a club
+        // with one part-time scout, and holding every club to the same
+        // three-a-week ceiling was itself a wall — a giant could see a
+        // standout abroad and simply never have a slot to file him in.
+        if !plan.initialized
+            || plan.scout_monitoring.len()
+                >= PipelineProcessor::breakout_watch_monitor_cap(club_overall_score)
+        {
+            return;
+        }
+        let Some(scan) = BuyerScan::build(country, club, date) else {
+            return;
+        };
+
+        let team = &club.teams.teams[0];
+        let resolved = team.staffs.resolve_for_transfers();
+        let recommender_id = resolved
+            .director_of_football
+            .map(|s| s.id)
+            .or_else(|| resolved.scouts.first().map(|s| s.id))
+            .unwrap_or(team.staffs.head_coach().id);
+        let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
+
+        // The club's scouting NETWORK — which regions of the world its
+        // watch actually covers. Always includes the home backyard, so
+        // domestic candidates pass by construction; reach beyond it
+        // widens continuously with reputation, the same curve the
+        // demand-driven scouting pass uses. This one gate is what
+        // keeps "form travels" meaning "as far as your scouts do".
+        let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+        let reach: HashSet<ScoutingRegion> =
+            PipelineProcessor::reputation_scout_regions(home_region, club_overall_score)
+                .into_iter()
+                .collect();
+
+        // Buyer-side relevance for a STANDING find — see
+        // [`InvestmentRelevance`]. Built once per buyer; the belief it
+        // ranks on is the club's own, so twenty rich clubs do not all
+        // file the same name in the same week.
+        let relevance = InvestmentRelevance::build(
+            club,
+            club_overall_score,
+            resolved.best_scout_judging_ability(),
+            club.finance
+                .transfer_budget
+                .as_ref()
+                .map(|b| b.amount)
+                .unwrap_or(plan.total_budget),
+        );
+
+        let scored = Self::score_candidates(
+            club,
+            date,
+            candidates,
+            &BuyerRead {
+                scan: &scan,
+                relevance: &relevance,
+                reach: &reach,
+                plausibility: &buyer_plaus_ctx,
+            },
+        );
+        let slate: Vec<(u32, f32)> = scored
+            .iter()
+            .enumerate()
+            .map(|(i, (_, score))| (i as u32, *score))
+            .collect();
+        let drawn = InterestDraw::pick_several(
+            &slate,
+            PipelineProcessor::breakout_watch_per_pass(club_overall_score),
+        );
+        for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
+            let s = &cand.summary;
+            let discovery = cand.breakout_score.max(cand.standing_score);
+            if TransferTrace::is(s.player_id) {
+                TransferTrace::line(
+                    s.player_id,
+                    "buyer",
+                    format!(
+                        "club={} ({}) FILED discovery={:.1} (breakout {:.1} / standing {:.1})",
+                        club.name, club.id, discovery, cand.breakout_score, cand.standing_score,
+                    ),
+                );
+            }
+            actions.push(WatchAction {
+                club_id: club.id,
+                recommender_staff_id: recommender_id,
+                player_id: s.player_id,
+                player_club_id: s.club_id,
+                player_country_id: s.country_id,
+                position: s.position,
+                position_group: s.position_group,
+                age: s.age,
+                appearances: s.appearances,
+                assessed_ability: s.skill_ability,
+                assessed_potential: cand.estimated_potential,
+                // Confidence scales with discovery strength so a clear
+                // find lands meeting-ready — the interest can flow
+                // straight into the shortlist when the window opens.
+                confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
+                estimated_value: s.estimated_value,
+            });
+        }
+    }
+
+    /// Score every name the sweep turned up against this buyer: is he inside
+    /// the network's reach, plausible for the club, and an upgrade on what it
+    /// already has.
+    fn score_candidates<'a>(
+        club: &Club,
+        date: NaiveDate,
+        candidates: &'a [BreakoutCandidate],
+        read: &BuyerRead<'_>,
+    ) -> Vec<(&'a BreakoutCandidate, f32)> {
+        let plan = &club.transfer_plan;
+        let scan = read.scan;
+        let relevance = read.relevance;
+        let reach = read.reach;
+        let buyer_plaus_ctx = read.plausibility;
+        let mut scored: Vec<(&BreakoutCandidate, f32)> = candidates
+            .iter()
+            .filter_map(|c| {
+                let s = &c.summary;
+                // Identity gates — own player, rival, or one this club is
+                // already tracking.
+                if s.club_id == club.id || club.is_rival(s.club_id) {
+                    return None;
+                }
+                if !reach.contains(&s.region) {
+                    return None;
+                }
+                if !plan.monitorings_for_player(s.player_id).is_empty() {
+                    return None;
+                }
+                // Meeting rejections blocklist the player for 6 months.
+                // The Rejected monitoring row fails is_active_interest,
+                // so the dedup above misses him and the watch used to
+                // re-seed a meeting-ready row the very next Monday —
+                // an agenda churn loop the blocklist exists to stop.
+                if plan.is_rejected(s.player_id, date) {
+                    return None;
+                }
+                // A standing find is a judgement about LEVEL, not a
+                // headline, so it only becomes a file where the buyer
+                // would actually be improved by him and where he fits
+                // the club's asset window. Output finds skip this: a
+                // man scoring freely is interesting to everyone above
+                // him, which is exactly what makes him a breakout.
+                if c.admitted_on_standing && !relevance.admits(s) {
+                    if TransferTrace::is(s.player_id) {
+                        TransferTrace::line(
+                            s.player_id,
+                            "buyer",
+                            format!(
+                                "club={} ({}) REJECT not-top-{} or outside asset window \
+                         (age {}, value {:.0})",
+                                club.name, club.id, relevance.top_k, s.age, s.estimated_value,
+                            ),
+                        );
+                    }
+                    return None;
+                }
+                // Staged plausibility veto — importance / country route /
+                // step-down realism. Unsolicited: we're scouting on form.
+                if matches!(
+                    TransferPlausibilityBuilder::evaluate_summary(
+                        &buyer_plaus_ctx,
+                        s,
+                        false,
+                        true,
+                        date,
+                        None,
+                    ),
+                    Some(TransferPlausibilityVerdict::HardReject(_))
+                ) {
+                    if TransferTrace::is(s.player_id) {
+                        TransferTrace::line(
+                            s.player_id,
+                            "buyer",
+                            format!(
+                                "club={} ({}) REJECT staged plausibility hard-reject",
+                                club.name, club.id,
+                            ),
+                        );
+                    }
+                    return None;
+                }
+
+                let view = ListedTargetView {
+                    ability: s.skill_ability,
+                    nationality_country_id: s.nationality_country_id,
+                    estimated_potential: c.estimated_potential,
+                    age: s.age,
+                    estimated_value: s.estimated_value,
+                    position_group: s.position_group,
+                    is_listed: s.is_listed,
+                    is_transfer_requested: s.seller_ctx.is_transfer_requested,
+                    is_unhappy: s.seller_ctx.is_unhappy,
+                    is_loan_listed: s.is_loan_listed,
+                    // The listed-target model ranks on "how strongly does
+                    // his form say take a look" — a standing read answers
+                    // the same question from the other side, so the
+                    // stronger of the two is the honest discovery signal
+                    // to rank him with.
+                    breakout_score: c.breakout_score.max(c.standing_score),
+                    world_reputation: s.world_reputation,
+                    current_reputation: s.current_reputation,
+                    ambition: c.ambition,
+                    parent_club_score: s.seller_ctx.club_reputation_score,
+                    parent_club_in_debt: s.seller_ctx.in_debt,
+                    days_available: c.days_available,
+                    contract_months_remaining: s.contract_months_remaining,
+                    low_usage: s.appearances < 8,
+                    recent_interest_count: c.recent_interest_count,
+                    failed_scans: c.failed_scans,
+                    last_block: None,
+                };
+                // Form-discovery mode: a not-yet-listed breakout is
+                // admitted, but the affordability / tier / reputation /
+                // squad-need gates are unchanged.
+                let ctx = scan.buyer_context(s.position_group, true);
+                match ListedTargetScreen::evaluate(&view, &ctx) {
+                    ListedTargetVerdict::Accept(score) => Some((c, score)),
+                    ListedTargetVerdict::Reject(_) => None,
+                }
+            })
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+
+        // Draw the names to file rather than taking the top rows. The
+        // acceptance score is built from the same public form data every
+        // club can see, so a straight top-N had every eligible buyer in the
+        // country open a file on the same two players in the same week —
+        // and re-file them the next week, since the ordering doesn't move
+        // while the form doesn't. The gates above are unchanged; this is
+        // only which of the players they already approved get watched.
+
+        scored
     }
 }
 

@@ -36,7 +36,7 @@ use crate::transfers::pipeline::{
 use crate::transfers::pool::FreeAgentBumpBatch;
 use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
-use crate::transfers::value::upgrade::{TargetBelief, UpgradeMath};
+use crate::transfers::value::upgrade::{DealValue, TargetBelief, UpgradeMath};
 use crate::transfers::value::wage::BuyerLevelWage;
 use crate::transfers::view::club::ClubView;
 use crate::utils::FormattingUtils;
@@ -198,32 +198,64 @@ impl ApproachBuilder {
         ctx: &ApproachContext<'_>,
         drift: &ApproachDrift,
     ) -> ApproachOutcome {
+        let (asking_price, actual_asking, mut offer) =
+            Self::open_offer(buyer, target, request, ctx, drift);
+
+        let (offered_annual_wage, deal, tier) = Self::price_to_buyer(
+            buyer,
+            target,
+            request,
+            ctx,
+            drift,
+            &actual_asking,
+            &mut offer,
+        );
+
+        Self::assemble(
+            buyer,
+            target,
+            request,
+            ctx,
+            drift,
+            &asking_price,
+            &actual_asking,
+            offer,
+            offered_annual_wage,
+            deal,
+            tier,
+        )
+    }
+
+    /// The club's opening number, priced by its own transfer strategy against
+    /// what the seller is asking — and, for a loan, against the rental a loan
+    /// fee actually is rather than the asset price.
+    fn open_offer(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+    ) -> (CurrencyValue, CurrencyValue, TransferOffer) {
         let club = buyer.club;
-        let team = buyer.team;
         let plan = buyer.plan;
         let buying_rep_score = buyer.rep_score;
         let buying_league_reputation = buyer.league_reputation;
         let avg_ability = buyer.avg_ability;
         let budget = buyer.budget;
         let price_level = ctx.price_level;
-
         let player = target.player;
         let selling_club = target.selling_club;
-        let selling_club_id = target.selling_club_id;
         let selling_rep_score = target.selling_rep_score;
-        let selling_league_reputation = target.selling_league_reputation;
         let player_id = player.id;
         let is_rival = target.is_rival;
         let monitoring = target.monitoring;
         let scouting_report = target.scouting_report;
-
         let buy_country = ctx.buy_country;
         let sell_country = ctx.sell_country;
         let date = ctx.date;
         let approach = &ctx.approach;
         let is_loan = ctx.is_loan;
         let has_option_to_buy = ctx.has_option_to_buy;
-        let is_prospect_purchase = ctx.is_prospect_purchase;
 
         let buying_aggressiveness =
             BuyingAggressiveness::from_rep(buying_rep_score, selling_rep_score);
@@ -310,8 +342,44 @@ impl ApproachBuilder {
             seller_is_rival: is_rival,
         };
 
-        let mut offer =
+        let offer =
             strategy.calculate_initial_offer_with_context(player, &actual_asking, &strategy_ctx);
+
+        (asking_price, actual_asking, offer)
+    }
+
+    /// What this deal is worth to THIS buyer.
+    ///
+    /// The strategy prices the offer off the asking price and the budget; it
+    /// has no way to say that the same player is worth three times as much to
+    /// a club sitting on years of income as to a break-even one, and that
+    /// asymmetry is the whole reason a market has ladders. [`UpgradeMath`]
+    /// supplies the buyer's own ceiling — the fee at which the deal stops
+    /// being worth doing — and the tier supplies how boldly it opens.
+    ///
+    /// Loans are left alone: a loan fee is a rental, not an asset purchase,
+    /// and the upgrade model prices assets.
+    #[allow(clippy::too_many_arguments)]
+    fn price_to_buyer(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        actual_asking: &CurrencyValue,
+        offer: &mut TransferOffer,
+    ) -> (u32, Option<DealValue>, BriefTier) {
+        let club = buyer.club;
+        let plan = buyer.plan;
+        let buying_rep_score = buyer.rep_score;
+        let buying_league_reputation = buyer.league_reputation;
+        let player = target.player;
+        let monitoring = target.monitoring;
+        let scouting_report = target.scouting_report;
+        let buy_country = ctx.buy_country;
+        let date = ctx.date;
+        let is_loan = ctx.is_loan;
+        let allocated_for_move = drift.allocated_budget;
 
         // ── What this deal is worth to THIS buyer ───────────
         //
@@ -423,6 +491,45 @@ impl ApproachBuilder {
                 offer.base_fee.amount = FormattingUtils::round_fee(capped);
             }
         }
+
+        (offered_annual_wage, deal, tier)
+    }
+
+    /// The clauses, the negotiator, the reason, and the last plausibility
+    /// check before a negotiation exists at all — a candidate refused here is
+    /// marked unavailable and never gets a synthetic listing downstream.
+    #[allow(clippy::too_many_arguments)]
+    fn assemble(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
+        asking_price: &CurrencyValue,
+        actual_asking: &CurrencyValue,
+        mut offer: TransferOffer,
+        offered_annual_wage: u32,
+        deal: Option<DealValue>,
+        tier: BriefTier,
+    ) -> ApproachOutcome {
+        let club = buyer.club;
+        let team = buyer.team;
+        let plan = buyer.plan;
+        let buying_rep_score = buyer.rep_score;
+        let buying_league_reputation = buyer.league_reputation;
+        let player = target.player;
+        let selling_club = target.selling_club;
+        let selling_club_id = target.selling_club_id;
+        let selling_rep_score = target.selling_rep_score;
+        let selling_league_reputation = target.selling_league_reputation;
+        let player_id = player.id;
+        let is_rival = target.is_rival;
+        let buy_country = ctx.buy_country;
+        let sell_country = ctx.sell_country;
+        let date = ctx.date;
+        let is_loan = ctx.is_loan;
+        let has_option_to_buy = ctx.has_option_to_buy;
+        let is_prospect_purchase = ctx.is_prospect_purchase;
 
         OfferClauses::attach_prospect_sell_on(
             &mut offer,
@@ -1097,9 +1204,7 @@ impl PipelineProcessor {
         } else {
             None
         };
-        let mut shortlist_matched = false;
 
-        let mut manager_satisfaction_hit: f32 = 0.0;
         if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let plan = &mut club.transfer_plan;
 
@@ -1132,102 +1237,8 @@ impl PipelineProcessor {
                 }
             }
 
-            // Position the club has just filled, if any. Collected inside the
-            // shortlist loop and acted on after it, because the loop holds the
-            // shortlists mutably for its whole body.
-            let mut filled_group: Option<PlayerFieldPositionGroup> = None;
-
-            for shortlist in &mut plan.shortlists {
-                if let Some(candidate) = shortlist
-                    .candidates
-                    .iter_mut()
-                    .find(|c| c.player_id == player_id)
-                {
-                    if accepted {
-                        candidate.status = ShortlistCandidateStatus::Signed;
-
-                        if let Some(req) = plan
-                            .transfer_requests
-                            .iter_mut()
-                            .find(|r| r.id == shortlist.transfer_request_id)
-                        {
-                            req.status = TransferRequestStatus::Fulfilled;
-                            filled_group = Some(req.position.position_group());
-                            // Signing a Critical target is a real morale lift.
-                            manager_satisfaction_hit += match req.priority {
-                                TransferNeedPriority::Critical => 3.0,
-                                TransferNeedPriority::Important => 1.5,
-                                TransferNeedPriority::Optional => 0.5,
-                            };
-                        }
-                    } else {
-                        candidate.status = ShortlistCandidateStatus::NegotiationFailed;
-                        shortlist.advance_to_next();
-
-                        // A need that was already Fulfilled (an FA instant
-                        // signing or a parallel deal landed while this
-                        // negotiation ran) or Abandoned (board veto) must
-                        // not be resurrected by an unrelated failed bid —
-                        // that re-opened filled needs and double-signed
-                        // the position.
-                        let request_live = plan
-                            .transfer_requests
-                            .iter()
-                            .find(|r| r.id == shortlist.transfer_request_id)
-                            .map(|r| {
-                                r.status != TransferRequestStatus::Fulfilled
-                                    && r.status != TransferRequestStatus::Abandoned
-                            })
-                            .unwrap_or(false);
-
-                        if request_live && shortlist.all_exhausted() {
-                            if let Some(req) = plan
-                                .transfer_requests
-                                .iter_mut()
-                                .find(|r| r.id == shortlist.transfer_request_id)
-                            {
-                                // A Critical need re-opens, and so now does one
-                                // the club has failed at before: walking away
-                                // from the weakest position in the side after a
-                                // single unlucky shortlist is how a squad ends
-                                // up carrying the same hole for years. The
-                                // escalation count is capped, so this loop
-                                // always terminates — once it tops out the
-                                // request closes and the next squad evaluation
-                                // picks the search back up, louder.
-                                let reopens = req.priority == TransferNeedPriority::Critical
-                                    || req.escalation.reopens_on_exhaustion();
-                                if reopens {
-                                    // Re-opened — but the repeated failure
-                                    // still stings.
-                                    req.status = TransferRequestStatus::Pending;
-                                    manager_satisfaction_hit -= 2.0;
-                                } else {
-                                    req.status = TransferRequestStatus::Abandoned;
-                                    // Abandoned target = identified need we
-                                    // couldn't address. Hits manager morale.
-                                    manager_satisfaction_hit -= match req.priority {
-                                        TransferNeedPriority::Critical => 4.0,
-                                        TransferNeedPriority::Important => 2.5,
-                                        TransferNeedPriority::Optional => 0.75,
-                                    };
-                                }
-                            }
-                        } else if request_live {
-                            if let Some(req) = plan
-                                .transfer_requests
-                                .iter_mut()
-                                .find(|r| r.id == shortlist.transfer_request_id)
-                            {
-                                req.status = TransferRequestStatus::Shortlisted;
-                            }
-                        }
-                    }
-
-                    shortlist_matched = true;
-                    break;
-                }
-            }
+            let (shortlist_matched, filled_group, manager_satisfaction_hit) =
+                Self::resolve_shortlist_entry(plan, player_id, accepted);
 
             // The search is over: whatever the club had learned about failing
             // to fill this position stops applying the moment somebody signs
@@ -1744,6 +1755,118 @@ impl PipelineProcessor {
         date: NaiveDate,
     ) {
         ForeignApproachPass::run(data, country_id, date);
+    }
+
+    /// Mirror one resolved negotiation onto the shortlist that produced it:
+    /// the candidate's own status, the request behind him, and what the
+    /// outcome does to the manager's standing. Reports whether any shortlist
+    /// claimed the player at all, and which position the club just filled.
+    fn resolve_shortlist_entry(
+        plan: &mut ClubTransferPlan,
+        player_id: u32,
+        accepted: bool,
+    ) -> (bool, Option<PlayerFieldPositionGroup>, f32) {
+        let mut shortlist_matched = false;
+        let mut manager_satisfaction_hit: f32 = 0.0;
+
+        // Position the club has just filled, if any. Collected inside the
+        // shortlist loop and acted on after it, because the loop holds the
+        // shortlists mutably for its whole body.
+        let mut filled_group: Option<PlayerFieldPositionGroup> = None;
+
+        for shortlist in &mut plan.shortlists {
+            if let Some(candidate) = shortlist
+                .candidates
+                .iter_mut()
+                .find(|c| c.player_id == player_id)
+            {
+                if accepted {
+                    candidate.status = ShortlistCandidateStatus::Signed;
+
+                    if let Some(req) = plan
+                        .transfer_requests
+                        .iter_mut()
+                        .find(|r| r.id == shortlist.transfer_request_id)
+                    {
+                        req.status = TransferRequestStatus::Fulfilled;
+                        filled_group = Some(req.position.position_group());
+                        // Signing a Critical target is a real morale lift.
+                        manager_satisfaction_hit += match req.priority {
+                            TransferNeedPriority::Critical => 3.0,
+                            TransferNeedPriority::Important => 1.5,
+                            TransferNeedPriority::Optional => 0.5,
+                        };
+                    }
+                } else {
+                    candidate.status = ShortlistCandidateStatus::NegotiationFailed;
+                    shortlist.advance_to_next();
+
+                    // A need that was already Fulfilled (an FA instant
+                    // signing or a parallel deal landed while this
+                    // negotiation ran) or Abandoned (board veto) must
+                    // not be resurrected by an unrelated failed bid —
+                    // that re-opened filled needs and double-signed
+                    // the position.
+                    let request_live = plan
+                        .transfer_requests
+                        .iter()
+                        .find(|r| r.id == shortlist.transfer_request_id)
+                        .map(|r| {
+                            r.status != TransferRequestStatus::Fulfilled
+                                && r.status != TransferRequestStatus::Abandoned
+                        })
+                        .unwrap_or(false);
+
+                    if request_live && shortlist.all_exhausted() {
+                        if let Some(req) = plan
+                            .transfer_requests
+                            .iter_mut()
+                            .find(|r| r.id == shortlist.transfer_request_id)
+                        {
+                            // A Critical need re-opens, and so now does one
+                            // the club has failed at before: walking away
+                            // from the weakest position in the side after a
+                            // single unlucky shortlist is how a squad ends
+                            // up carrying the same hole for years. The
+                            // escalation count is capped, so this loop
+                            // always terminates — once it tops out the
+                            // request closes and the next squad evaluation
+                            // picks the search back up, louder.
+                            let reopens = req.priority == TransferNeedPriority::Critical
+                                || req.escalation.reopens_on_exhaustion();
+                            if reopens {
+                                // Re-opened — but the repeated failure
+                                // still stings.
+                                req.status = TransferRequestStatus::Pending;
+                                manager_satisfaction_hit -= 2.0;
+                            } else {
+                                req.status = TransferRequestStatus::Abandoned;
+                                // Abandoned target = identified need we
+                                // couldn't address. Hits manager morale.
+                                manager_satisfaction_hit -= match req.priority {
+                                    TransferNeedPriority::Critical => 4.0,
+                                    TransferNeedPriority::Important => 2.5,
+                                    TransferNeedPriority::Optional => 0.75,
+                                };
+                            }
+                        }
+                    } else if request_live {
+                        if let Some(req) = plan
+                            .transfer_requests
+                            .iter_mut()
+                            .find(|r| r.id == shortlist.transfer_request_id)
+                        {
+                            req.status = TransferRequestStatus::Shortlisted;
+                        }
+                    }
+                }
+
+                shortlist_matched = true;
+                break;
+            }
+        }
+
+        (shortlist_matched, filled_group, manager_satisfaction_hit)
     }
 }
 

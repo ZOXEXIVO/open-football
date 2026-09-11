@@ -283,6 +283,69 @@ impl ClubTransferStrategy {
     ) -> TransferOffer {
         let max_budget = self.budget.as_ref().map(|b| b.amount).unwrap_or(f64::MAX);
 
+        let offer_amount = self.anchor_fee(player, asking_price, ctx, max_budget);
+
+        let offer = TransferOffer::new(
+            CurrencyValue {
+                amount: offer_amount,
+                currency: Currency::Usd,
+            },
+            self.club_id,
+            ctx.date,
+        );
+
+        // 5) Clause construction. Each block is gated on player
+        // profile and the club's preferences so a develop-and-sell
+        // club, an austerity club, and an ambitious giant all
+        // produce visibly different shapes for the same target.
+        let age = player.age(ctx.date);
+
+        let offer = self.attach_clauses(offer, player, ctx, offer_amount, age);
+
+        // Develop-and-sell: longer contracts for young targets
+        // (resale value protection).
+        let contract_years = if ctx.is_loan() {
+            // Loans carry no contract length on this side; the
+            // negotiation layer fills loan-specific clauses.
+            1
+        } else if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell) && age < 24
+        {
+            5
+        } else if age < 24 {
+            5
+        } else if age < 28 {
+            4
+        } else if age < 32 {
+            2
+        } else {
+            1
+        };
+
+        // Build the structured personal-terms package so execution can
+        // honour the buyer's actual commitment. Loans skip the package
+        // — the borrower keeps the player on the parent contract; only
+        // the wage-split is set later by the execution layer.
+        let mut offer = offer.with_contract_length(contract_years);
+        if !ctx.is_loan() {
+            let terms = PersonalTermsPackager::build(self, player, &ctx, contract_years, age);
+            offer = offer.with_personal_terms(terms);
+        }
+        offer
+    }
+
+    /// The number on the table, before any clause shapes how it is paid.
+    ///
+    /// Anchor on the asking price blended with the club's own valuation, move
+    /// the anchor for everything that changes the seller's leverage or the
+    /// buyer's urgency, then cap it — against what the club thinks the player
+    /// is worth, against what a loan fee may ever be, and against the budget.
+    fn anchor_fee(
+        &self,
+        player: &Player,
+        asking_price: &CurrencyValue,
+        ctx: &TransferStrategyContext,
+        max_budget: f64,
+    ) -> f64 {
         // Valuation anchored on the buying club's real league/club
         // reputation. `valuation_reputation` is the club's market-value
         // score; the league side prefers the live context when present.
@@ -417,21 +480,21 @@ impl ClubTransferStrategy {
 
         offer_amount = FormattingUtils::round_fee(offer_amount);
 
-        let mut offer = TransferOffer::new(
-            CurrencyValue {
-                amount: offer_amount,
-                currency: Currency::Usd,
-            },
-            self.club_id,
-            ctx.date,
-        );
+        offer_amount
+    }
 
-        // 5) Clause construction. Each block is gated on player
-        // profile and the club's preferences so a develop-and-sell
-        // club, an austerity club, and an ambitious giant all
-        // produce visibly different shapes for the same target.
-        let age = player.age(ctx.date);
-
+    /// Clause construction. Each block is gated on player profile and the
+    /// club's preferences, so a develop-and-sell club, an austerity club and
+    /// an ambitious giant all produce visibly different shapes for the same
+    /// target.
+    fn attach_clauses(
+        &self,
+        mut offer: TransferOffer,
+        player: &Player,
+        ctx: &TransferStrategyContext,
+        offer_amount: f64,
+        age: u8,
+    ) -> TransferOffer {
         // Assessed potential gap — hidden PA is never used: the
         // scouting context when present, the staff-free observable
         // ceiling otherwise.
@@ -515,34 +578,6 @@ impl ClubTransferStrategy {
             ));
         }
 
-        // Develop-and-sell: longer contracts for young targets
-        // (resale value protection).
-        let contract_years = if ctx.is_loan() {
-            // Loans carry no contract length on this side; the
-            // negotiation layer fills loan-specific clauses.
-            1
-        } else if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell) && age < 24
-        {
-            5
-        } else if age < 24 {
-            5
-        } else if age < 28 {
-            4
-        } else if age < 32 {
-            2
-        } else {
-            1
-        };
-
-        // Build the structured personal-terms package so execution can
-        // honour the buyer's actual commitment. Loans skip the package
-        // — the borrower keeps the player on the parent contract; only
-        // the wage-split is set later by the execution layer.
-        let mut offer = offer.with_contract_length(contract_years);
-        if !ctx.is_loan() {
-            let terms = PersonalTermsPackager::build(self, player, &ctx, contract_years, age);
-            offer = offer.with_personal_terms(terms);
-        }
         offer
     }
 }
