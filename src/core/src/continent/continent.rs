@@ -8,7 +8,7 @@ use crate::continent::{
 use crate::country::{CountryPendingState, CountryResult};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
-use crate::simulator::PerformanceProfiler;
+use crate::utils::PerformanceProfiler;
 use crate::utils::Logging;
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};

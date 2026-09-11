@@ -1,7 +1,7 @@
 use super::ContinentResult;
 use crate::continent::Continent;
 use crate::country::CountryResult;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind, HappinessEventType};
 use chrono::NaiveDate;
 use log::debug;

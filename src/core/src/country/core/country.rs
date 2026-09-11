@@ -16,7 +16,7 @@ use crate::league::result::{
 };
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
-use crate::simulator::PerformanceProfiler;
+use crate::utils::PerformanceProfiler;
 use crate::transfers::market::TransferMarket;
 use crate::transfers::market::map::CountryTransferProfile;
 use crate::transfers::pipeline::approach::ApproachPass;

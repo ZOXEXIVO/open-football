@@ -2,7 +2,7 @@ use super::cache::MondayAwardCache;
 use super::weekly::WeeklyAwardsTick;
 use crate::HappinessEventType;
 use crate::league::awards::{TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot};
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
 use chrono::NaiveDate;
 use rayon::prelude::*;

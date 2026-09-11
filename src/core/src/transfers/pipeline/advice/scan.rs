@@ -31,7 +31,7 @@ use super::{
 };
 use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::club::staff::recruitment::ResolvedStaff;
-use crate::simulator::PerformanceProfiler;
+use crate::utils::PerformanceProfiler;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::gate::TransferPlausibilityVerdict;
 use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};

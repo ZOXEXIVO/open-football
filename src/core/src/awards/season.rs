@@ -1,5 +1,5 @@
 use crate::league::awards::SeasonAwardsSnapshot;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, RecognitionEventContext,
     RecognitionEventKind,

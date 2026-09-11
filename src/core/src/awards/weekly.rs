@@ -1,6 +1,6 @@
 use super::cache::MondayAwardCache;
 use crate::league::player_of_week::{PlayerOfTheWeekAward, PlayerOfTheWeekSelector};
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
 use chrono::NaiveDate;
 use rayon::prelude::*;

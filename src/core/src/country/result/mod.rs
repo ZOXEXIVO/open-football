@@ -11,7 +11,8 @@ use crate::country::result::transfers::TransferTick;
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
 use crate::r#match::MatchResult;
-use crate::simulator::{PerformanceProfiler, SimulatorData};
+use crate::utils::PerformanceProfiler;
+use crate::world::SimulatorData;
 use crate::{ClubResult, SimulationResult};
 
 pub struct CountryResult {

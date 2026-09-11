@@ -990,7 +990,7 @@ mod tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::simulator::SimulatorData;
+    use crate::world::SimulatorData;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,

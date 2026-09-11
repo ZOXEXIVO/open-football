@@ -2,7 +2,7 @@ use super::CountryResult;
 use crate::Country;
 use crate::TeamInfo;
 use crate::league::Season;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use log::info;
 use rayon::prelude::*;

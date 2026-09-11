@@ -142,31 +142,22 @@ fn transfers_never_imports_the_country_result_layer() {
     );
 }
 
-/// `transfers` must never import from `simulator` except the profiler.
+/// `transfers` must never import from `simulator` at all.
 ///
-/// A softer guard than the one above, and deliberately so: the pipeline
-/// still takes `&mut SimulatorData` on the world-level paths, and that is
-/// the reach fork the refactor is collapsing rather than a rule it can
-/// assert today. What it CAN hold is that no new dependency on the tick
-/// orchestrator's internals creeps in while that work is in flight —
-/// `PerformanceProfiler` is instrumentation, `SimulatorData` is the world,
-/// and everything else in `simulator` belongs to the driver.
+/// The three things it legitimately reached for were never the tick
+/// driver's: `SimulatorData` and `FreeAgentFlowCounters` are the world
+/// (`crate::world`) and `PerformanceProfiler` is instrumentation
+/// (`crate::utils`). With those in their own modules, `crate::simulator`
+/// holds nothing but the phase order — and a market that needs to know
+/// the phase order has been written upside down.
 #[test]
-fn transfers_only_borrows_the_simulator_world_and_its_profiler() {
-    const ALLOWED: [&str; 3] = [
-        "SimulatorData",
-        "PerformanceProfiler",
-        "FreeAgentFlowCounters",
-    ];
-
-    let offenders = SourceScan::offenders(|line| {
-        line.starts_with("use crate::simulator") && !ALLOWED.iter().any(|n| line.contains(n))
-    });
+fn transfers_never_imports_the_tick_driver() {
+    let offenders = SourceScan::offenders(|line| line.starts_with("use crate::simulator"));
 
     assert!(
         offenders.is_empty(),
-        "src/transfers may borrow the world (`SimulatorData`) and the profiler, \
-         but not the tick driver's internals.\n{}",
+        "src/transfers may borrow the world (`crate::world`) and the profiler \
+         (`crate::utils`), but nothing from the tick driver.\n{}",
         offenders.join("\n")
     );
 }

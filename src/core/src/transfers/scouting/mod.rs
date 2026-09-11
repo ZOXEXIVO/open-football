@@ -32,7 +32,7 @@ use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::{Language, LanguageProfile};
 use crate::club::player::mind::GoalKind;
 use crate::club::player::statistics::StuckCareerScan;
-use crate::simulator::PerformanceProfiler;
+use crate::utils::PerformanceProfiler;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::{SquadEvidenceSource, TransferMoveStage, TransferPlausibilityVerdict};

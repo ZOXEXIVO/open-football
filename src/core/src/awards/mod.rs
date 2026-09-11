@@ -1,4 +1,15 @@
-pub(super) mod cache;
+//! World-level award ticks.
+//!
+//! Each tick reads the world, decides who the week / month / season
+//! belonged to, and writes the result onto the league or continent that
+//! keeps the shelf. The award *types* live with their owners
+//! ([`crate::league::awards`]); what lives here is the selection.
+//!
+//! [`MondayAwardCache`] is the shared read: all four Monday tickers need
+//! the same per-league weekly aggregates, so they are built once and
+//! passed around rather than recomputed per tick.
+
+pub(crate) mod cache;
 mod monthly;
 mod season;
 mod team_of_week;

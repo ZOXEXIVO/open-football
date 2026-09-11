@@ -466,6 +466,7 @@ impl HomeLoanGates {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transfers::market::map::RegionPrestigeTable;
 
     #[test]
     fn the_home_pull_is_a_lift_and_not_a_magnet() {
@@ -576,6 +577,11 @@ mod tests {
     /// was never posted and was loaned "elsewhere".
     #[test]
     fn a_strong_home_league_is_a_destination_even_with_no_mood_at_all() {
+        // The prestige numbers below are the authored constants, and
+        // `preference_for` reads them through the process-global table —
+        // which any fixture world built earlier in the run will have
+        // overwritten with its own two-country answer.
+        RegionPrestigeTable::clear();
         let sa = ScoutingRegion::SouthAmerica;
         let we = ScoutingRegion::WesternEurope;
         // A Brazilian development candidate at a Western European club,

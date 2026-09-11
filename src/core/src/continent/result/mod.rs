@@ -11,7 +11,8 @@ pub use types::*;
 use crate::SimulationResult;
 use crate::country::CountryResult;
 use crate::r#match::MatchResult;
-use crate::simulator::{PerformanceProfiler, SimulatorData};
+use crate::utils::PerformanceProfiler;
+use crate::world::SimulatorData;
 
 pub struct ContinentResult {
     pub continent_id: u32,

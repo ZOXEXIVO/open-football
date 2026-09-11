@@ -7,7 +7,7 @@ use crate::club::player::core::player::SellOnObligation;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::club::staff::mind::StaffSubMind;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::transfers::MarketLedgerUpdate;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;

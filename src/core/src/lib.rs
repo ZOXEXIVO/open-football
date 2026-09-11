@@ -1,3 +1,4 @@
+pub(crate) mod awards;
 pub mod club;
 pub mod competitions;
 pub mod config;
@@ -6,10 +7,12 @@ pub mod continent;
 pub mod country;
 pub mod league;
 pub mod r#match;
+pub(crate) mod news;
 pub mod shared;
 pub mod simulator;
 pub mod transfers;
 pub mod utils;
+pub mod world;
 
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
@@ -39,6 +42,7 @@ pub use country::{
 };
 pub use nalgebra::*;
 pub use simulator::*;
+pub use world::*;
 pub use utils::*;
 
 // Re-export club items

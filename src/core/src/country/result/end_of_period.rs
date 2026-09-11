@@ -7,7 +7,7 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::{
     AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventCause,

@@ -17,7 +17,7 @@ use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::shared::{Currency, CurrencyValue};
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};

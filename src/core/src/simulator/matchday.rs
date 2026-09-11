@@ -38,14 +38,14 @@ use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterato
 use rayon::prelude::IntoParallelRefMutIterator;
 
 use crate::MatchRuntime;
-use crate::SimulationResult;
-use crate::SimulatorData;
 use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 use crate::transfers::pool::FreeAgentBumpBatch;
+use crate::utils::PerformanceProfiler;
+use crate::world::SimulatorData;
 
-use super::{ContinentPanicMetrics, PerformanceProfiler, panic_message};
+use super::{ContinentPanicMetrics, SimulationResult};
 
 #[derive(Default)]
 pub struct WorldMatchdayResult<'gc> {
@@ -186,12 +186,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
                         continent.process_results(world, state, results)
                     }))
                     .unwrap_or_else(|payload| {
-                        ContinentPanicMetrics::record();
-                        let msg = panic_message(&payload);
-                        log::error!(
-                            "event=continent_process_panic continent_id={} continent_name={:?} message={:?} tick_action=continue_with_empty_result",
-                            cid, name, msg
-                        );
+                        ContinentPanicMetrics::swallow(&payload, "process", cid, &name);
                         ContinentResult::new(cid, Vec::new(), Vec::new())
                     }),
                 }

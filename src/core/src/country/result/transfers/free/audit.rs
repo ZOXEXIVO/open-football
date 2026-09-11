@@ -13,7 +13,7 @@ use super::pricing::FreeAgentMarketCalculator;
 use crate::Person;
 use crate::Player;
 use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
-use crate::simulator::{FreeAgentFlowCounters, SimulatorData};
+use crate::world::{FreeAgentFlowCounters, SimulatorData};
 use crate::transfers::market::region::ScoutingRegion;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::view::club::ClubView;

@@ -3,7 +3,7 @@ use crate::club::news::{
     NewsEditor, NewsStory, NewspaperIssue, PressMood, RecentEvents, RumourDesk,
 };
 use crate::league::{ChartsDesk, League};
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use rayon::prelude::*;
 use std::collections::HashMap;

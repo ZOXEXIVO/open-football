@@ -1,6 +1,6 @@
 //! How a market pass reaches the world it is moving players around in.
 
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{Club, Country};
 
 /// The world, as the transfer executors need to see it: countries by id,

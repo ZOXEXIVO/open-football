@@ -14,7 +14,7 @@ pub use types::*;
 use crate::league::LeagueTableResult;
 use crate::r#match::MatchResult;
 use crate::r#match::TeamScore;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{MatchHistoryItem, SimulationResult};
 
 pub struct LeagueResult {

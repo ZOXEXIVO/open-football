@@ -31,8 +31,8 @@ use crate::country::result::transfers::GlobalFreeAgentSummary;
 use crate::league::League;
 use crate::league::LeagueCollection;
 use crate::shared::indexes::SimulatorDataIndexes;
-use crate::simulator::CountryInfo;
-use crate::simulator::SimulatorData;
+use crate::world::CountryInfo;
+use crate::world::SimulatorData;
 use crate::transfers::MarketMap;
 use crate::transfers::TransferListing;
 use crate::transfers::pipeline::PlayerSummary;
@@ -751,7 +751,7 @@ pub struct WorldSnapshot<'a> {
 /// `&mut Country`. The simulator drains this serially after Phase A
 /// joins.
 ///
-/// Fields are public so the serial drain in `simulator/mod.rs` can
+/// Fields are public so the serial drain in `simulator::phase::periodic` can
 /// fold them straight into `data`. Each variant is a precise record
 /// of the original mutation — no need for a `Box<dyn FnOnce>` since
 /// the inputs are small and Copy/Clone.

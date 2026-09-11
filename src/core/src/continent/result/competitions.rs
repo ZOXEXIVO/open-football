@@ -2,7 +2,7 @@ use super::{ContinentResult, ContinentalCompetitionResults};
 use crate::continent::{CompetitionTier, ContinentalMatchResult};
 use crate::league::League;
 use crate::league::LeagueResult;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;

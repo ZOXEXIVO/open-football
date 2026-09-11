@@ -5,8 +5,8 @@ use crate::league::awards::{
     CandidateAggregate, TeamOfTheWeekAward, TeamOfTheWeekSelector, TeamOfTheWeekSlot,
     YOUNG_WEEKLY_MAX_AGE, YOUNG_WEEKLY_TOTW_MIN_SCORE,
 };
-use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
+use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
 use chrono::NaiveDate;
 use rayon::prelude::*;

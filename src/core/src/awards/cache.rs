@@ -1,6 +1,6 @@
 use crate::league::awards::{AwardAggregator, CandidateAggregate, WeeklyAggregate};
 use crate::league::player_of_week::PlayerOfTheWeekSelector;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use chrono::NaiveDate;
 use rayon::prelude::*;
 use std::collections::HashMap;

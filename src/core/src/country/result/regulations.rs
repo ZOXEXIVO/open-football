@@ -14,7 +14,7 @@
 
 use super::CountryResult;
 use crate::club::HappinessEventType;
-use crate::simulator::SimulatorData;
+use crate::world::SimulatorData;
 use crate::transfers::pipeline::TransferTrace;
 use crate::{
     Player, PlayerStatusType, RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind,

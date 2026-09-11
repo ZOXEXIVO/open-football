@@ -4,8 +4,8 @@ use crate::league::awards::{
     AwardAggregator, CandidateAggregate, MonthlyAwardSelector, MonthlyAwardsSnapshot,
     MonthlyPlayerAward, MonthlyStatLeader, TeamOfTheWeekSelector, TeamOfTheWeekSlot,
 };
-use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
+use crate::world::SimulatorData;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, RecognitionEventContext,
     RecognitionEventKind,
