@@ -1,4 +1,4 @@
-use crate::club::board::manager_market::ApproachState;
+use crate::club::board::manager::ApproachState;
 use crate::club::news::{ClubDugoutWatch, ManagerPursuit};
 use crate::world::SimulatorData;
 use rustc_hash::FxHashMap;

@@ -114,10 +114,7 @@ fn keeper_glide() {
             } else {
                 (ground, observed)
             };
-            let urge = ((observed - actor.speed) / Actors::PACE_RESPONSE / Actors::DRIVING)
-                .clamp(-1.0, 1.0);
-            actor.drive += (urge - actor.drive) * (1.0 - (-frame / Actors::DRIVE_RESPONSE).exp());
-            actor.speed += (observed - actor.speed) * pace;
+            actor.gather_pace(observed, pace, frame, false);
             let travelling = if ground <= 0.0 {
                 Vec3::ZERO
             } else {
@@ -165,7 +162,7 @@ fn keeper_glide() {
                 actor.heading += applied;
                 turn_signal = (applied / frame / Actors::HARD_TURN).clamp(-1.0, 1.0);
             }
-            actor.turn += (turn_signal - actor.turn) * pace;
+            actor.bank_into(turn_signal, frame, false);
 
             let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
             let sideways = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
@@ -221,9 +218,7 @@ fn keeper_glide() {
             });
             actor.carry += (f32::from(wanted_carry) - actor.carry) * pace;
 
-            let (stride, carry_ground) = Actors::stride_of(id, actor.speed, actor.underfoot);
-            actor.phase = (actor.phase + ground * PI / stride).rem_euclid(TAU);
-            actor.carry_ground = carry_ground;
+            actor.take_steps(frame, false);
             let gait = actor.gait();
 
             // ——— what he is drawn doing with his legs ———

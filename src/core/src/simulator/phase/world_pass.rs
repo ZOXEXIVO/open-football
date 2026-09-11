@@ -1,4 +1,4 @@
-use crate::club::board::manager_market::ManagerMarketTick;
+use crate::club::board::manager::ManagerMarketTick;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use crate::utils::PerformanceProfiler;

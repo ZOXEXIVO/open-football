@@ -86,6 +86,25 @@ impl OwnershipType {
         }
     }
 
+    /// Share of a sacked manager's remaining contract the owner settles.
+    ///
+    /// Sacking used to be free: the contract vanished with the man and no
+    /// money changed hands anywhere. The cost of dismissal is the main
+    /// real-world brake on boardroom churn, and a board that pays nothing
+    /// for it will always be more trigger-happy than a real one.
+    ///
+    /// Deep pockets pay the deal out in full; owners who count the money
+    /// negotiate a settlement.
+    pub fn severance_share(self) -> f64 {
+        match self {
+            OwnershipType::StateBacked => 1.00,
+            OwnershipType::Consortium | OwnershipType::PrivateEquity => 0.75,
+            OwnershipType::LocalBusiness
+            | OwnershipType::FamilyOwned
+            | OwnershipType::MemberOwned => 0.60,
+        }
+    }
+
     /// Wealth points the archetype itself is worth, before reputation,
     /// league money and any owner cheque.
     pub fn wealth_bias(self) -> i32 {

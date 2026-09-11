@@ -255,8 +255,8 @@ pub async fn player_personal_action(
         &i18n,
     );
 
-    let has_club_ties = manager_relationship.is_some()
-        || mind.as_ref().is_some_and(|m| !m.memories.is_empty());
+    let has_club_ties =
+        manager_relationship.is_some() || mind.as_ref().is_some_and(|m| !m.memories.is_empty());
 
     let player_info = get_player_info(player, &i18n);
     let reputation = get_reputation(player, &i18n);

@@ -119,6 +119,12 @@ pub struct BoardContext {
     pub injury_crisis_score: f32,
     /// Months left on the head coach's contract (0 when unknown / vacant).
     pub manager_contract_months_left: i32,
+    /// What the head coach is paid a year. Read with the months left to
+    /// price a dismissal before the board decides it can afford one.
+    pub manager_annual_salary: u32,
+    /// Gross transfer income the club has taken this season. Read to judge
+    /// whether a sale the board demanded actually happened.
+    pub fees_received_this_season: f64,
     /// Count of key (senior) players currently unhappy / agitating.
     pub key_player_unrest_count: u8,
 
@@ -169,6 +175,8 @@ impl BoardContext {
             u21_minutes_share: 0.0,
             injury_crisis_score: 0.0,
             manager_contract_months_left: 0,
+            manager_annual_salary: 0,
+            fees_received_this_season: 0.0,
             key_player_unrest_count: 0,
             facility_training: FacilityLevel::Average,
             facility_youth: FacilityLevel::Average,

@@ -34,7 +34,8 @@ pub use status::*;
 pub use finance::{
     ClubFinanceContext, ClubFinanceResult, ClubFinances, ClubFinancialBalance,
     ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract, DistressLevel,
-    SponsorPerformance, SponsorRenewalContext, TransferObligation, classify_distress,
+    SeasonTransferFees, SponsorPerformance, SponsorRenewalContext, TransferObligation,
+    classify_distress,
 };
 
 // Club press exports
@@ -285,13 +286,14 @@ pub use team::{
     MatchHistoryItem, MatchOutcome, MatchResultInfo, MatchTacticType, MentalGains,
     PeriodizationPhase, PhysicalGains, PlayerBehaviourResult, PlayerRelationshipChangeResult,
     RecommendationCategory, RecommendationPriority, ReputationLevel, ReputationRequirements,
-    ReputationTrend, RotationPreference, SkillType, SpecialInstruction, SquadAnalysis,
-    TACTICS_POSITIONS, TacticSelectionReason, TacticalDecisionEngine, TacticalDecisionResult,
-    TacticalFocus, TacticalRecommendation, TacticalStyle, Tactics, TacticsSelector, Team,
-    TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection, TeamContext, TeamReputation,
-    TeamResult, TeamTraining, TeamTrainingResult, TeamType, TechnicalGains, TrainingEffects,
-    TrainingFacilities, TrainingFocus, TrainingIntensity, TrainingIntensityPreference,
-    TrainingSchedule, TrainingSession, TrainingType, TransferItem, Transfers, WeeklyTrainingPlan,
+    ReputationTrend, RotationPreference, SeasonRecord, SkillType, SpecialInstruction,
+    SquadAnalysis, TACTICS_POSITIONS, TacticSelectionReason, TacticalDecisionEngine,
+    TacticalDecisionResult, TacticalFocus, TacticalRecommendation, TacticalStyle, Tactics,
+    TacticsSelector, Team, TeamBehaviour, TeamBehaviourResult, TeamBuilder, TeamCollection,
+    TeamContext, TeamReputation, TeamResult, TeamTraining, TeamTrainingResult, TeamType,
+    TechnicalGains, TrainingEffects, TrainingFacilities, TrainingFocus, TrainingIntensity,
+    TrainingIntensityPreference, TrainingSchedule, TrainingSession, TrainingType, TransferItem,
+    Transfers, WeeklyTrainingPlan,
 };
 // Also export context module for those who want to import from it
 pub use team::behaviour;

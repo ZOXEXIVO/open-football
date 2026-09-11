@@ -860,7 +860,7 @@ impl Staff {
     /// formula, so a manager's read of himself and the market's read of
     /// him cannot disagree.
     ///
-    /// [`ManagerCandidateScorer::score_free_agent`]: crate::club::board::manager_market::ManagerCandidateScorer::score_free_agent
+    /// [`ManagerCandidateScorer::score_free_agent`]: crate::club::board::manager::ManagerCandidateScorer::score_free_agent
     pub fn manager_standing(&self) -> f32 {
         let skill = self.staff_attributes.coaching.tactical as u32
             + self.staff_attributes.mental.man_management as u32

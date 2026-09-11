@@ -20,8 +20,11 @@ impl Club {
         let Some(targets) = self.board.season_targets.as_ref() else {
             return;
         };
-        let mandate_transfer = targets.transfer_budget.max(0) as f64;
-        let mandate_wage = targets.wage_budget.max(0) as f64;
+        // The mandate INCLUDING everything the board has moved this season.
+        // Reading the raw seasonal figure meant a cut or a grant survived
+        // only until the next monthly recompute rebuilt the budget from it.
+        let mandate_transfer = targets.adjusted_transfer_budget() as f64;
+        let mandate_wage = targets.adjusted_wage_budget() as f64;
 
         // Distress throttles the chest hard but never to exactly zero —
         // even a struggling club can do free-transfer and loan business,

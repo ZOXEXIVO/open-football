@@ -7,7 +7,6 @@ use crate::club::player::core::player::SellOnObligation;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::club::staff::mind::StaffSubMind;
-use crate::world::SimulatorData;
 use crate::transfers::MarketLedgerUpdate;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
@@ -22,6 +21,7 @@ use crate::transfers::pipeline::{
 use crate::transfers::squad::bands::TierBands;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::world::MarketWorld;
+use crate::world::SimulatorData;
 use crate::{
     ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind, ClubFinances,
     ClubPhilosophy, Country, NewSigningThreatContext, NewSigningThreatReason, Player,

@@ -42,8 +42,8 @@ pub use country::{
 };
 pub use nalgebra::*;
 pub use simulator::*;
-pub use world::*;
 pub use utils::*;
+pub use world::*;
 
 // Re-export club items
 pub use club::{

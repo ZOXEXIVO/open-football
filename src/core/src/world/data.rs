@@ -1,6 +1,6 @@
 use super::CountryInfo;
 use super::FreeAgentFlowCounters;
-use crate::club::board::manager_market::ManagerApproach;
+use crate::club::board::manager::ManagerApproach;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
 use crate::country::result::transfers::GlobalFreeAgentSummary;

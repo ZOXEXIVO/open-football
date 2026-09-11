@@ -177,6 +177,11 @@ impl BoardroomDesk {
                 ClubAffair::ManagerSacked { staff_id } => {
                     NewsStory::new(NewsStoryKind::ManagerSacked, date).by_staff(staff_id)
                 }
+                ClubAffair::SeverancePaid { staff_id, amount } => {
+                    NewsStory::new(NewsStoryKind::SeverancePaid, date)
+                        .by_staff(staff_id)
+                        .with_money(amount)
+                }
                 ClubAffair::ManagerPoached {
                     staff_id,
                     to_club_id,
@@ -283,8 +288,9 @@ impl BoardroomDesk {
                 .about(player_id)
                 .against(other_club_id),
                 ClubAffair::CrisisMeetingHeld => NewsStory::new(NewsStoryKind::CrisisTalks, date),
-                ClubAffair::PlayerSaleDemanded => {
-                    NewsStory::new(NewsStoryKind::BoardDemandsSale, date)
+                // Names him, because the whole story is which one.
+                ClubAffair::PlayerSaleDemanded { player_id } => {
+                    NewsStory::new(NewsStoryKind::BoardDemandsSale, date).about(player_id)
                 }
                 // Names the player, because the whole grievance is
                 // about which one.

@@ -9,6 +9,10 @@ use chrono::NaiveDate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromiseType {
     TransferBudget,
+    /// The board told the manager somebody had to go, and named the fee it
+    /// expected. Kept when the money comes in before the deadline; broken,
+    /// like any other pledge, when it does not.
+    SaleMandate,
     FacilityImprovement,
     YouthMinutes,
     ContinentalQualification,
@@ -44,6 +48,7 @@ impl BoardPromise {
             PromiseType::ContinentalQualification => (8, -9),
             PromiseType::Survival => (7, -10),
             PromiseType::TransferBudget => (5, -8),
+            PromiseType::SaleMandate => (4, -8),
             PromiseType::FacilityImprovement => (4, -6),
             PromiseType::YouthMinutes => (4, -5),
         };

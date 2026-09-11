@@ -7,9 +7,9 @@
 //!
 //! Scoped to the subsystems that have been brought to the rules: the transfer
 //! system — `src/transfers` (the market's own model) and
-//! `src/country/result/transfers` (the per-country pass that drives it) — and
-//! `src/club/core` (the club aggregate and its ticks). Widen the roots as
-//! other subsystems are cleaned up.
+//! `src/country/result/transfers` (the per-country pass that drives it) —
+//! `src/club/core` (the club aggregate and its ticks), and `src/club/board`
+//! (the boardroom). Widen the roots as other subsystems are cleaned up.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,10 +23,11 @@ impl ShapeScan {
     const SELF: &'static str = "shape.rs";
 
     /// Roots the scan covers, relative to the crate.
-    const ROOTS: [&'static str; 3] = [
+    const ROOTS: [&'static str; 4] = [
         "src/transfers",
         "src/country/result/transfers",
         "src/club/core",
+        "src/club/board",
     ];
 
     fn sources() -> Vec<PathBuf> {
@@ -166,6 +167,31 @@ impl ShapeScan {
             .next()
             .is_some_and(|tail| tail.matches("::").count() >= 1)
     }
+
+    /// Module path segments the scan treats as names, i.e. everything from a
+    /// root down to the file, with `mod.rs` standing for its own directory.
+    fn module_segments(path: &Path) -> Vec<String> {
+        let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let relative = path.strip_prefix(crate_root).unwrap_or(path);
+        let mut segments: Vec<String> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        // `src` and the leading root folder are layout, not module names.
+        if segments.first().map(String::as_str) == Some("src") {
+            segments.remove(0);
+        }
+        if let Some(last) = segments.last() {
+            if last == "mod.rs" {
+                segments.pop();
+            } else {
+                let trimmed = last.trim_end_matches(".rs").to_string();
+                let index = segments.len() - 1;
+                segments[index] = trimmed;
+            }
+        }
+        segments
+    }
 }
 
 /// Every function hangs off a struct that names what it is.
@@ -218,6 +244,45 @@ fn every_type_is_imported_rather_than_spelled_out() {
         offenders.is_empty(),
         "no inline type paths: `crate::a::b::Type` at a use site is a missing \
          `use`. Import the name, then use it bare.\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Module names are single words, and a module with parts is a folder.
+///
+/// `manager_market.rs` is two modules wearing one name: the underscore is the
+/// folder boundary somebody declined to make. Splitting it into
+/// `manager/{seat, search, shortlist, scorer, market, approach}` is what lets
+/// a reader open the one file they want instead of scrolling past two
+/// thousand lines of the five they don't.
+///
+/// So: no underscore in a module segment. If a name needs two words, it needs
+/// a directory.
+#[test]
+fn every_module_name_is_one_word() {
+    let mut offenders = Vec::new();
+    for path in ShapeScan::sources() {
+        if path.file_name().and_then(|f| f.to_str()) == Some(ShapeScan::SELF) {
+            continue;
+        }
+        for segment in ShapeScan::module_segments(&path) {
+            if segment.contains('_') {
+                offenders.push(format!(
+                    "{}  (segment `{}`)",
+                    ShapeScan::label(&path),
+                    segment
+                ));
+                break;
+            }
+        }
+    }
+    offenders.sort();
+    offenders.dedup();
+
+    assert!(
+        offenders.is_empty(),
+        "no underscored module names: a name that needs two words needs a \
+         directory of submodules instead.\n{}",
         offenders.join("\n")
     );
 }

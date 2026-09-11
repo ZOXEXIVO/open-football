@@ -7,8 +7,8 @@
 
 mod bonuses;
 mod debt;
-mod excess_cash;
 mod monthly;
-mod wage_relief;
+mod relief;
+mod surplus;
 
-pub use wage_relief::WageReliefSale;
+pub use relief::WageReliefSale;

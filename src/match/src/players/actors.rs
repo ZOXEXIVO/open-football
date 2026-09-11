@@ -59,8 +59,9 @@ pub struct PlayerActor {
     /// NOT running — breathing, shifting his weight, letting his arms drift.
     idle: f32,
     /// Smoothed turn rate, −1..1, so the body can bank into a change of
-    /// direction instead of pivoting on the spot.
+    /// direction instead of pivoting on the spot. Sprung, like `drive`.
     turn: f32,
+    turn_rate: f32,
     /// Smoothed yaw from his facing to the ball: where he is looking.
     look: f32,
     /// Whether this is a goalkeeper. Only a keeper ever takes the ball in his
@@ -166,8 +167,24 @@ pub struct PlayerActor {
     /// The kick he is in the middle of, if any. See [`Kick`].
     kick: Option<Kick>,
     /// Smoothed acceleration along his own running line, −1..1: driving off
-    /// the mark at +1, pulling up short at −1. See [`Gait::drive`].
+    /// the mark at +1, pulling up short at −1. Smoothed over
+    /// [`Actors::DRIVE_RESPONSE`], as it always was.
+    accelerating: f32,
+    /// …and **the trunk's answer to it**, which is what [`Gait::drive`]
+    /// reads: the same number through a [`Spring`], with its rate kept
+    /// beside it. The lean into a change of pace overshoots and settles,
+    /// which is the difference between a man with a trunk and a hinge.
+    ///
+    /// ⚠ The spring is fed the SMOOTHED acceleration, not the raw one.
+    /// Measured over a recorded chunk (`drive_probe`), the engine's own
+    /// speed wobbles at about one and a half hertz, and a spring fed that
+    /// directly rang on it: the lean changed sign 85–95 times a minute per
+    /// player against 77 through the old filter, and its rate of change
+    /// doubled — a body rocking on its own resonance rather than one
+    /// settling. Behind the filter it changes sign 53 times a minute and
+    /// moves at two thirds the old rate, and what is left is the settle.
     drive: f32,
+    drive_rate: f32,
     /// How much the ball is at his feet, 0..1. See [`Gait::carrying`].
     carrying: f32,
     /// Smoothed pitch from his eyeline to the ball, in radians.
@@ -256,6 +273,29 @@ pub struct PlayerActor {
     /// seek lands him wherever the clock says, which is right — a gesture is
     /// not a trajectory.
     clock: f32,
+    /// **How this step differs from the last**, −1..1 on each axis — see
+    /// [`Gait::jitter`]. Re-rolled off a hash of the step count every time a
+    /// foot comes through (`steps` below), and eased across the step so no
+    /// joint snaps at the boundary.
+    jitter: Vec2,
+    /// …and the count of steps he has taken, which is what it is rolled
+    /// from. Wraps; only ever hashed.
+    steps: u32,
+    /// **Ground rate the stride phase is advanced by**, in metres per second
+    /// of match time, smoothed over [`Actors::CADENCE_RESPONSE`].
+    ///
+    /// The phase used to advance by the raw ground covered THIS FRAME, which
+    /// is the only thing that keeps the feet on the turf — and at 60 fps a
+    /// frame's step is cut from a recording that samples every 30 ms and
+    /// drops samples until a player has moved 3.75 cm, so the step is
+    /// mostly quantisation. Measured over a real chunk
+    /// (`outfield::census_outfield`): against an even cadence the 5th
+    /// percentile frame advanced the legs at HALF the rate and the 95th at
+    /// one and a half times it. That is a leg strobing through its own
+    /// cycle, and it is what "not fluid" means when the poses are right.
+    /// Smoothed over a few sample intervals, the integral is the same
+    /// ground and the rate is a cadence.
+    tread: f32,
     /// **The gait this actor is being drawn in**, worked once at the end of
     /// its own update and read by everything downstream.
     ///
@@ -281,6 +321,56 @@ pub enum KeeperFlight {
     Leap,
     /// `Diving`: across at a shot, and over.
     Dive,
+}
+
+/// **A damped spring**: second-order smoothing, for the signals a body
+/// answers with its weight rather than with its eyes.
+///
+/// Every smoothed number on a [`PlayerActor`] used to be a first-order
+/// filter — an exponential catch-up toward the target, which is the right
+/// shape for where a man is LOOKING and the wrong one for how he is
+/// standing. A first-order filter never overshoots: a trunk driven by one
+/// leans into an acceleration and comes back to upright along the same
+/// decaying curve every time, and a body does not. A body has mass on the
+/// end of a spine. It leans in, comes back past upright by a little, and
+/// settles — and that last part, the settle, is the whole of what an eye
+/// reads as weight. Measured over a recording an outfielder is changing
+/// pace on 37% of his frames and turning hard on 35%, so the lean and the
+/// bank are on screen most of the time, and drawn without inertia they
+/// were most of what made the figures read as posed rather than moving.
+///
+/// Closed form rather than integrated, so it is exact at any frame time:
+/// a spring stepped by Euler at 16x playback on a slow tab would blow up,
+/// and this cannot.
+#[derive(Clone, Copy)]
+pub struct Spring {
+    /// The natural period, in seconds of match time.
+    pub period: f32,
+    /// The damping ratio, below 1: how much of one overshoot survives.
+    pub damping: f32,
+}
+
+impl Spring {
+    /// Advances `value` and its `rate` by `delta` seconds toward `target`.
+    pub fn settle(self, value: &mut f32, rate: &mut f32, target: f32, delta: f32) {
+        let omega = TAU / self.period;
+        let zeta = self.damping.min(0.999);
+        let damped = omega * (1.0 - zeta * zeta).sqrt();
+        let x = *value - target;
+        let v = *rate;
+        let decay = (-zeta * omega * delta).exp();
+        let (sin, cos) = (damped * delta).sin_cos();
+        let b = (v + zeta * omega * x) / damped;
+        let at = decay * (x * cos + b * sin);
+        *rate = -zeta * omega * at + decay * damped * (b * cos - x * sin);
+        *value = target + at;
+    }
+
+    /// …or puts it there outright, on a seek, with nothing left to settle.
+    pub fn snap(self, value: &mut f32, rate: &mut f32, target: f32) {
+        *value = target;
+        *rate = 0.0;
+    }
 }
 
 /// The name plate for one player, positioned each frame from the rig's
@@ -955,9 +1045,34 @@ impl Actors {
     /// The recording is quantised to 1.25 cm and resampled every 30 ms, so a
     /// frame-to-frame acceleration is mostly noise (the raw p90 is 14 m/s²,
     /// which no human produces). It is smoothed over [`Actors::DRIVE_RESPONSE`]
+    /// and then sprung through [`Actors::DRIVE_SPRING`]
     /// before being measured against this.
     const DRIVING: f32 = 4.5;
     const DRIVE_RESPONSE: f32 = 0.26;
+    /// …and the spring the trunk answers it through, behind that filter.
+    /// Slower than the filter and a little under critical: one visible
+    /// settle, no bounce, and nothing for the recording's own wobble to
+    /// ring on. Chosen off `drive_probe` — see [`PlayerActor::drive`].
+    const DRIVE_SPRING: Spring = Spring {
+        period: 0.80,
+        damping: 0.65,
+    };
+    /// The same for the bank into a turn, quicker and stiffer — a shoulder
+    /// dips into a turn faster than a chest leans into a sprint, and the
+    /// turn signal is already the output of a capped catch-up, so it has no
+    /// wobble of its own to ring on.
+    const TURN_SPRING: Spring = Spring {
+        period: 0.50,
+        damping: 0.70,
+    };
+    /// Seconds of match time over which the stride's ground rate is
+    /// smoothed — see [`PlayerActor::tread`]. Two or three sample intervals:
+    /// long enough to bridge the recorder's quantisation, short enough that
+    /// the feet still answer a change of pace inside a step.
+    const CADENCE_RESPONSE: f32 = 0.08;
+    /// …and over which one step's variation eases into the next, so a joint
+    /// does not snap at the step boundary. See [`Gait::jitter`].
+    const JITTER_RESPONSE: f32 = 0.10;
     /// Radians per second of the standing-still cycle: a weight shift roughly
     /// every three and a half seconds.
     const IDLE_RATE: f32 = 1.8;
@@ -2800,15 +2915,12 @@ impl Actors {
             // the same gap by the frame time instead — which is the obvious
             // way to write it — makes the answer eleven times too big at
             // 60 fps and a different number again at any other rate.
-            let urge =
-                ((observed - actor.speed) / Self::PACE_RESPONSE / Self::DRIVING).clamp(-1.0, 1.0);
-            actor.drive += (urge - actor.drive)
-                * if playback.seeked {
-                    1.0
-                } else {
-                    1.0 - (-delta / Self::DRIVE_RESPONSE).exp()
-                };
-            actor.speed += (observed - actor.speed) * pace;
+            // Seconds of MATCH time this frame covered, for everything that
+            // is a property of the body rather than of the viewer: a trunk
+            // settles in match time, so it settles eight times as fast on
+            // screen at 8x, which is what a replay at 8x is.
+            let match_delta = delta * playback.speed.max(0.1);
+            actor.gather_pace(observed, pace, match_delta, playback.seeked);
 
             // **WHICH WAY HE IS ACTUALLY GOING.**
             //
@@ -2910,7 +3022,6 @@ impl Actors {
             // players leave the turf in a recorded match to head a ball, and
             // every one of them used to be drawn toppling sideways with both
             // arms over his head.
-            let match_delta = delta * playback.speed.max(0.1);
             // Against the instantaneous pace as well as the smoothed one: a
             // keeper who was set and has just gone is still being caught up
             // with by his own average.
@@ -2970,7 +3081,6 @@ impl Actors {
                 // arcing round and a man rotating on the spot. Measured in
                 // MATCH time so the cap is the same at 1x and at 8x.
                 if !playback.seeked {
-                    let match_delta = delta * playback.speed.max(0.1);
                     let eased = (actor.speed / Self::SPRINT).clamp(0.0, 1.0);
                     let ceiling = (Self::PIVOT_RATE.0
                         + (Self::PIVOT_RATE.1 - Self::PIVOT_RATE.0) * eased)
@@ -2984,7 +3094,7 @@ impl Actors {
                 let rate = applied / (delta * playback.speed.max(0.1));
                 turn_signal = (rate / Self::HARD_TURN).clamp(-1.0, 1.0);
             }
-            actor.turn += (turn_signal - actor.turn) * pace;
+            actor.bank_into(turn_signal, match_delta, playback.seeked);
             transform.rotation = Quat::from_rotation_y(actor.heading);
 
             // **Which way he is going, relative to which way he is pointed.**
@@ -3191,10 +3301,7 @@ impl Actors {
             // at the same pace all took the same number of steps to do it,
             // which is most of what "lacks variety" means. Cadence is the
             // thing an eye picks a runner out by.
-            let (stride, carry_ground) = Self::stride_of(actor.id, actor.speed, actor.underfoot);
-            // Half a cycle per step: the other leg takes the next one.
-            actor.phase = (actor.phase + ground * PI / stride).rem_euclid(TAU);
-            actor.carry_ground = carry_ground;
+            actor.take_steps(match_delta, playback.seeked);
 
             // **Last**, once every field it reads has been written: the pose
             // this actor is in. Everything downstream — fifty-odd joints
@@ -3909,7 +4016,9 @@ impl PlayerActor {
             elation: 0.0,
             carry: 0.0,
             kick: None,
+            accelerating: 0.0,
             drive: 0.0,
+            drive_rate: 0.0,
             carrying: 0.0,
             dive: 0.0,
             stretch: 0.0,
@@ -3942,6 +4051,7 @@ impl PlayerActor {
             // which would be its own kind of robot.
             idle: Complexion::carriage(id) * std::f32::consts::PI,
             turn: 0.0,
+            turn_rate: 0.0,
             look: 0.0,
             course: Vec2::Y,
             open: 0.0,
@@ -3953,6 +4063,9 @@ impl PlayerActor {
             parry: 0.0,
             at_attention: None,
             clock: 0.0,
+            jitter: Vec2::ZERO,
+            steps: 0,
+            tread: 0.0,
             pose: Gait::resting(),
         }
     }
@@ -3978,6 +4091,7 @@ impl PlayerActor {
         self.heading = heading;
         self.previous = None;
         self.speed = 0.0;
+        self.tread = 0.0;
         self.travel = Vec3::ZERO;
         self.strike = None;
         self.kick = None;
@@ -4026,6 +4140,100 @@ impl PlayerActor {
     /// settle has no third answer. Without that second half a beaten keeper
     /// holding the kneel floats with both boots a quarter of a metre off
     /// the grass, which is the same fault the other way up.
+    /// **Takes up this frame's pace**: the stride's ground rate, the run
+    /// cycle's speed, and the trunk's lean into the difference between them.
+    ///
+    /// `observed` is the raw ground rate this frame, in metres per second of
+    /// match time; `pace` the catch-up share for the speed, worked by the
+    /// caller in viewer time as it always has been.
+    ///
+    /// **The acceleration is read off the two smoothed rates, not off the
+    /// raw one.** It used to be `(observed − speed)`: the gap between one
+    /// frame's quantised step and a fifth of a second's average, which is
+    /// mostly the recorder's rounding. Two first-order filters with
+    /// different windows lag a steady acceleration `a` by `a·τ` each, so
+    /// their difference is `a·(τ_speed − τ_tread)` — the same acceleration
+    /// at the same scale, read off a signal that has already had the sample
+    /// boundaries smoothed out of it. Then the filter it always had, and
+    /// the spring behind that — see [`PlayerActor::drive`] for why both.
+    fn gather_pace(&mut self, observed: f32, pace: f32, match_delta: f32, seeked: bool) {
+        let settle = if seeked {
+            1.0
+        } else {
+            1.0 - (-match_delta / Actors::CADENCE_RESPONSE).exp()
+        };
+        self.tread += (observed - self.tread) * settle;
+        let urge = ((self.tread - self.speed)
+            / (Actors::PACE_RESPONSE - Actors::CADENCE_RESPONSE)
+            / Actors::DRIVING)
+            .clamp(-1.0, 1.0);
+        if seeked {
+            self.accelerating = urge;
+            Actors::DRIVE_SPRING.snap(&mut self.drive, &mut self.drive_rate, urge);
+        } else {
+            self.accelerating +=
+                (urge - self.accelerating) * (1.0 - (-match_delta / Actors::DRIVE_RESPONSE).exp());
+            Actors::DRIVE_SPRING.settle(
+                &mut self.drive,
+                &mut self.drive_rate,
+                self.accelerating,
+                match_delta,
+            );
+        }
+        self.speed += (observed - self.speed) * pace;
+    }
+
+    /// …and **banks into a turn**, likewise, through [`Actors::TURN_SPRING`].
+    fn bank_into(&mut self, signal: f32, match_delta: f32, seeked: bool) {
+        if seeked {
+            Actors::TURN_SPRING.snap(&mut self.turn, &mut self.turn_rate, signal);
+        } else {
+            Actors::TURN_SPRING.settle(&mut self.turn, &mut self.turn_rate, signal, match_delta);
+        }
+    }
+
+    /// **Advances the stride** by the ground this frame covered, at the
+    /// smoothed rate [`Self::tread`] — and counts the steps off as the feet
+    /// come through, rolling each one its own [`Gait::jitter`].
+    ///
+    /// Half a cycle per step: the other leg takes the next one. The rate is
+    /// smoothed in match time (see [`Self::gather_pace`]), because the
+    /// stutter it removes lives in the recording, not in the frame rate —
+    /// at 8x the sample boundaries pass eight times as fast on screen and
+    /// the window has to shrink with them.
+    fn take_steps(&mut self, match_delta: f32, seeked: bool) {
+        let (stride, carry_ground) = Actors::stride_of(self.id, self.speed, self.underfoot);
+        let was = (self.phase / PI) as u32;
+        self.phase = (self.phase + self.tread * match_delta * PI / stride).rem_euclid(TAU);
+        if (self.phase / PI) as u32 != was {
+            self.steps = self.steps.wrapping_add(1);
+        }
+        self.carry_ground = carry_ground;
+        // This step's variation, eased in over the first tenth of it. The
+        // roll is a hash of the step count, so it is the same on a second
+        // viewing and the same after a seek lands on it.
+        let wanted = Vec2::new(self.roll(0), self.roll(1));
+        let ease = if seeked {
+            1.0
+        } else {
+            1.0 - (-match_delta / Actors::JITTER_RESPONSE).exp()
+        };
+        self.jitter += (wanted - self.jitter) * ease;
+    }
+
+    /// A −1..1 draw for one axis of this step, off the player and the step
+    /// count. The same mixer `Complexion` cuts a squad's appearance from,
+    /// salted by the axis so the two are independent.
+    fn roll(&self, axis: u32) -> f32 {
+        let mut hash =
+            (self.id ^ self.steps.wrapping_mul(0x9E37_79B9) ^ axis.wrapping_mul(0x85EB_CA6B))
+                .wrapping_mul(2_654_435_761);
+        hash ^= hash >> 15;
+        hash = hash.wrapping_mul(2_246_822_519);
+        hash ^= hash >> 13;
+        (hash % 2001) as f32 / 1000.0 - 1.0
+    }
+
     fn lift(&self) -> f32 {
         let (pitch, roll) = self.topple();
         let settled = Physique::HIP - Carriage::SETTLE * Carriage::tilt(pitch, roll);
@@ -4819,6 +5027,7 @@ impl PlayerActor {
             hop: self.hop,
             land: self.land,
             keeper: f32::from(self.is_goalkeeper),
+            jitter: self.jitter,
         }
     }
 }
@@ -7914,11 +8123,12 @@ pub(crate) mod replayed {
             let actor = &mut self.actor;
             // Read off the smoothing itself and BEFORE it is advanced, which
             // is what makes it an acceleration — see `Actors::animate`.
-            let urge = ((observed - actor.speed) / Actors::PACE_RESPONSE / Actors::DRIVING)
-                .clamp(-1.0, 1.0);
-            actor.drive += (urge - actor.drive) * (1.0 - (-frame / Actors::DRIVE_RESPONSE).exp());
-            actor.speed +=
-                (observed - actor.speed) * (1.0 - (-frame / Actors::PACE_RESPONSE).exp());
+            actor.gather_pace(
+                observed,
+                1.0 - (-frame / Actors::PACE_RESPONSE).exp(),
+                frame,
+                false,
+            );
             let travelling = Vec3::new(step.x, 0.0, step.z) / frame;
             let was = actor.travel;
             actor.travel =
@@ -7945,8 +8155,7 @@ pub(crate) mod replayed {
                 actor.heading += applied;
                 turn_signal = (applied / frame / Actors::HARD_TURN).clamp(-1.0, 1.0);
             }
-            actor.turn +=
-                (turn_signal - actor.turn) * (1.0 - (-frame / Actors::PACE_RESPONSE).exp());
+            actor.bank_into(turn_signal, frame, false);
 
             let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
             let sideways = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
@@ -7978,9 +8187,7 @@ pub(crate) mod replayed {
                     (wanted_set - actor.set) * (1.0 - (-frame / Actors::PACE_RESPONSE).exp());
             }
 
-            let (stride, carry_ground) = Actors::stride_of(actor.id, actor.speed, actor.underfoot);
-            actor.phase = (actor.phase + step.length() * PI / stride).rem_euclid(TAU);
-            actor.carry_ground = carry_ground;
+            actor.take_steps(frame, false);
             Some(forward)
         }
     }
@@ -8674,6 +8881,7 @@ mod outfield {
         };
         let (start, until) = tracks.ball.span().expect("a recorded chunk");
         let ids = Chunk::outfielders(&mut tracks, start);
+        let ids_counted = ids.len();
         let frame = 1.0f32 / 60.0;
         let frames = ((until - start) / (frame as f64 * 1000.0)) as u32;
 
@@ -8703,10 +8911,19 @@ mod outfield {
         // "not fluid" means in a run cycle.
         let mut cadence: Vec<f32> = Vec::new();
         let mut lurched = 0u64;
+        // **And how busy the trunk is.** The lean into a change of pace is
+        // sprung (see `PlayerActor::drive`), and a spring fed a noisy
+        // signal rings on it: the tell is how often the lean changes sign
+        // and how fast it moves, against the 77 flips a minute and 2.1/s
+        // the old first-order filter produced off the same recording.
+        let mut leaned = 0.0f64;
+        let mut flipped = 0u64;
+        let mut jerked = 0.0f64;
 
         for id in ids {
             let mut walker = Walker::new(id, false);
             let mut trail: VecDeque<(Vec3, Vec3, Vec3, f32, f32)> = VecDeque::new();
+            let (mut last_drive, mut drive_sign) = (0.0f32, 0i8);
             for f in 0..frames {
                 let now = start + f as f64 * frame as f64 * 1000.0;
                 let Some(p) = tracks.players.get_mut(&id).and_then(|t| t.position_at(now)) else {
@@ -8786,6 +9003,22 @@ mod outfield {
                 if gait.drive < -0.35 {
                     pulling += 1;
                 }
+                leaned += gait.drive.abs() as f64;
+                jerked += (((gait.drive - last_drive) / frame) as f64).powi(2);
+                last_drive = gait.drive;
+                let sign = if gait.drive > 0.1 {
+                    1
+                } else if gait.drive < -0.1 {
+                    -1
+                } else {
+                    0
+                };
+                if sign != 0 {
+                    if drive_sign != 0 && sign != drive_sign {
+                        flipped += 1;
+                    }
+                    drive_sign = sign;
+                }
                 if gait.turn.abs() > 0.35 {
                     hard_turn += 1;
                 }
@@ -8838,6 +9071,13 @@ mod outfield {
             share(urging, samples),
             share(pulling, samples),
             share(hard_turn, samples)
+        );
+        println!(
+            "  LEAN: mean |drive| {:.3}, changes sign {:.1} times a player-minute, \
+             moves at {:.2}/s rms",
+            leaned / samples.max(1) as f64,
+            flipped as f64 / ((until - start) / 60_000.0 * ids_counted as f64).max(1e-6),
+            (jerked / samples.max(1) as f64).sqrt(),
         );
 
         // **Which states he is actually IN**, by dwell rather than by

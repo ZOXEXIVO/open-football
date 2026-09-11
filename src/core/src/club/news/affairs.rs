@@ -38,6 +38,9 @@ use std::collections::VecDeque;
 pub enum ClubAffair {
     /// The board dismissed the head coach.
     ManagerSacked { staff_id: u32 },
+    /// The bill for the dismissal — what the club paid to end a deal
+    /// it had years left to run.
+    SeverancePaid { staff_id: u32, amount: i64 },
     /// Another club came for him, paid the compensation, and got him.
     ManagerPoached { staff_id: u32, to_club_id: u32 },
     /// A permanent appointment. `from_club_id` is `0` when the new man
@@ -115,7 +118,8 @@ pub enum ClubAffair {
     /// decision, it is the sound a boardroom makes before one.
     CrisisMeetingHeld,
     /// The board has told the manager somebody has to be sold.
-    PlayerSaleDemanded,
+    /// The board named somebody it wants off the wage bill.
+    PlayerSaleDemanded { player_id: u32 },
     /// …and the other direction: a deal the manager wanted, vetoed
     /// upstairs.
     TransferBlocked { player_id: u32 },
@@ -165,7 +169,8 @@ impl ClubAffair {
             | ClubAffair::CaretakerAppointed { staff_id }
             | ClubAffair::CaretakerConfirmed { staff_id }
             | ClubAffair::ManagerContractExtended { staff_id }
-            | ClubAffair::ManagerUltimatum { staff_id } => staff_id,
+            | ClubAffair::ManagerUltimatum { staff_id }
+            | ClubAffair::SeverancePaid { staff_id, .. } => staff_id,
             _ => 0,
         }
     }

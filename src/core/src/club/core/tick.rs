@@ -25,22 +25,30 @@ impl Club {
             .map(|c| c.tv_revenue_multiplier)
             .unwrap_or(1.0);
         let country_price_level = ctx.country.as_ref().map(|c| c.price_level).unwrap_or(1.0);
-        // League position from country-level context
-        let (league_pos, league_sz, total_matches, league_tier) = ctx
+        // League position from country-level context. `league_played` is
+        // the count for THIS season — the club's own match history is never
+        // truncated at a season turn, so it is the only honest source for
+        // how far into a campaign the board is judging.
+        let (league_pos, league_sz, league_played, total_matches, league_tier) = ctx
             .club
             .as_ref()
             .map(|c| {
                 (
                     c.league_position,
                     c.league_size,
+                    c.league_matches_played,
                     c.total_league_matches,
                     c.main_league_tier,
                 )
             })
-            .unwrap_or((0, 0, 0, 1));
+            .unwrap_or((0, 0, 0, 0, 1));
 
-        let mut board_ctx =
-            self.build_board_context(country_economic_factor, country_price_level, date);
+        let mut board_ctx = self.build_board_context(
+            country_economic_factor,
+            country_price_level,
+            league_played,
+            date,
+        );
         board_ctx.league_position = league_pos;
         board_ctx.league_size = league_sz;
         board_ctx.total_matches = total_matches;
@@ -270,14 +278,18 @@ impl Club {
             // Sync budgets from board targets to finance system
             if let Some(targets) = &self.board.season_targets {
                 self.finance.transfer_budget = Some(CurrencyValue {
-                    amount: targets.transfer_budget as f64,
+                    amount: targets.adjusted_transfer_budget() as f64,
                     currency: Currency::Usd,
                 });
                 self.finance.wage_budget = Some(CurrencyValue {
-                    amount: targets.wage_budget as f64,
+                    amount: targets.adjusted_wage_budget() as f64,
                     currency: Currency::Usd,
                 });
             }
+            // A new campaign's trading starts from nothing, and so do the
+            // board's one-shot guards on the money it may move.
+            self.finance.season_fees.reset();
+            self.board.budget_moves.on_new_season();
 
             self.reset_for_new_season();
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");

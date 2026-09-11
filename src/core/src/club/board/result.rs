@@ -1,5 +1,7 @@
 use crate::club::StaffPosition;
-use crate::club::board::manager_market;
+use crate::club::board::manager;
+use crate::club::board::sale::ForcedSale;
+use crate::club::board::severance::Severance;
 use crate::club::board::{BoardDecision, BoardFacility, BoardMoodState};
 use crate::club::facilities::FacilityLevel;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
@@ -344,6 +346,10 @@ impl BoardResult {
                 let club_name = club.name.clone();
                 let mut dismissed: Option<u32> = None;
                 let mut caretaker: Option<u32> = None;
+                // What ending the deal early costs, settled before the man
+                // leaves the roster — his contract goes with him.
+                let severance_share = club.board.ownership.ownership_type.severance_share();
+                let mut severance: Option<(u32, i64)> = None;
                 if let Some(main_team) = club.teams.main_mut() {
                     let mut sacked_salary: u32 = 0;
                     if let Some(mut staff) =
@@ -352,6 +358,10 @@ impl BoardResult {
                         let id = staff.id;
                         if let Some(c) = &staff.contract {
                             sacked_salary = c.salary;
+                            let owed = Severance::owed(c.salary, c.expired, today, severance_share);
+                            if owed > 0 {
+                                severance = Some((id, owed));
+                            }
                         }
                         info!(
                             "Board sacked manager (staff id {}) at {} — confidence {}",
@@ -377,7 +387,7 @@ impl BoardResult {
                         sacked_staff = Some(staff);
                     }
 
-                    let installed = manager_market::ManagerSeat::promote_best_caretaker(
+                    let installed = manager::ManagerSeat::promote_best_caretaker(
                         main_team,
                         sacked_salary,
                         today,
@@ -398,6 +408,16 @@ impl BoardResult {
                 if let Some(staff_id) = dismissed {
                     club.record_affair(ClubAffair::ManagerSacked { staff_id }, today);
                 }
+                // The bill. Cash out, and a story: a club that sacks three
+                // managers in two years is a club whose accounts say so.
+                if let Some((staff_id, amount)) = severance {
+                    club.finance.balance.push_cash_outflow(amount);
+                    club.record_affair(ClubAffair::SeverancePaid { staff_id, amount }, today);
+                    info!(
+                        "Severance of {} paid to sacked manager {} at {}",
+                        amount, staff_id, club_name
+                    );
+                }
                 if let Some(staff_id) = caretaker {
                     club.record_affair(ClubAffair::CaretakerAppointed { staff_id }, today);
                 }
@@ -412,7 +432,7 @@ impl BoardResult {
                     .find(|t| matches!(t.team_type, TeamType::Main))
                     .map(|t| t.reputation.world)
                     .unwrap_or(0);
-                manager_market::ManagerSearch::open(&mut club.board, today, club_rep);
+                manager::ManagerSearch::open(&mut club.board, today, club_rep);
             }
         } // end of `club` mutable-borrow scope
 
@@ -444,6 +464,13 @@ impl BoardResult {
                 // invented number the press has been caught printing
                 // before.
                 BoardDecision::IncreaseTransferBudget { amount, .. } => {
+                    // Written to the MANDATE as well as to the live budget.
+                    // The live figure is rebuilt from the mandate at every
+                    // monthly recompute, so money added only here lasted
+                    // until the next month and then evaporated.
+                    if let Some(targets) = club.board.season_targets.as_mut() {
+                        targets.mandate_adjustment += *amount;
+                    }
                     if let Some(budget) = club.finance.transfer_budget.as_mut() {
                         budget.amount += *amount as f64;
                         club.record_affair(
@@ -459,6 +486,9 @@ impl BoardResult {
                     );
                 }
                 BoardDecision::CutTransferBudget { amount, .. } => {
+                    if let Some(targets) = club.board.season_targets.as_mut() {
+                        targets.mandate_adjustment -= *amount;
+                    }
                     if let Some(budget) = club.finance.transfer_budget.as_mut() {
                         let before = budget.amount;
                         budget.amount = (budget.amount - *amount as f64).max(0.0);
@@ -476,6 +506,9 @@ impl BoardResult {
                     }
                 }
                 BoardDecision::AdjustWageBudget { amount, .. } => {
+                    if let Some(targets) = club.board.season_targets.as_mut() {
+                        targets.wage_mandate_adjustment += *amount;
+                    }
                     if let Some(budget) = club.finance.wage_budget.as_mut() {
                         budget.amount = (budget.amount + *amount as f64).max(0.0);
                     }
@@ -520,8 +553,32 @@ impl BoardResult {
                 BoardDecision::HoldCrisisMeeting => {
                     club.record_affair(ClubAffair::CrisisMeetingHeld, today);
                 }
-                BoardDecision::DemandPlayerSale { .. } => {
-                    club.record_affair(ClubAffair::PlayerSaleDemanded, today);
+                BoardDecision::DemandPlayerSale { reason } => {
+                    // A demand names somebody. It used to record a headline
+                    // and stop: no player listed, no price, no deadline, and
+                    // nothing anywhere that noticed whether the money came
+                    // in — so a board could demand a sale every month of a
+                    // crisis and the squad never lost anybody.
+                    let (league_rep, club_rep) = club
+                        .teams
+                        .main()
+                        .map(|t| (t.reputation.national, t.reputation.world))
+                        .unwrap_or((5_000, 5_000));
+                    if let Some(target) =
+                        ForcedSale::execute(club, *reason, today, league_rep, club_rep)
+                    {
+                        club.board.open_sale_mandate(
+                            target,
+                            club.finance.season_fees.received,
+                            today,
+                        );
+                        club.record_affair(
+                            ClubAffair::PlayerSaleDemanded {
+                                player_id: target.player_id,
+                            },
+                            today,
+                        );
+                    }
                 }
                 BoardDecision::BlockTransfer { player_id, .. } => {
                     club.record_affair(

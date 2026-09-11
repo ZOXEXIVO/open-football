@@ -79,10 +79,20 @@ impl Club {
         }
     }
 
+    /// Matches of form the board reads as "recent".
+    const FORM_WINDOW: usize = 5;
+
+    /// Assemble what the board is told today.
+    ///
+    /// `league_matches_played` comes from the country-level orchestrator and
+    /// is the count for THIS season — the one figure the club cannot derive,
+    /// because its own match history is never truncated at a season turn.
+    /// Every sporting number below is scoped to it.
     pub(in crate::club::core) fn build_board_context(
         &self,
         country_economic_factor: f32,
         country_price_level: f32,
+        league_matches_played: u8,
         date: NaiveDate,
     ) -> BoardContext {
         let main_team = self.teams.main();
@@ -102,25 +112,14 @@ impl Club {
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
 
-        // Recent form from match history (last 5 matches)
-        let (recent_wins, _draws, recent_losses) = main_team
-            .map(|t| t.match_history.recent_results(5))
-            .unwrap_or((0, 0, 0));
-        let recent_goal_difference = main_team
+        // Form, points and goals — all of them this season's, off one walk
+        // of the slice the league's own count delimits.
+        let season = main_team
             .map(|t| {
                 t.match_history
-                    .items()
-                    .iter()
-                    .rev()
-                    .take(5)
-                    .map(|m| m.score.0.get() as i16 - m.score.1.get() as i16)
-                    .sum()
+                    .season_record(league_matches_played as usize, Self::FORM_WINDOW)
             })
-            .unwrap_or(0);
-
-        let matches_played = main_team
-            .map(|t| t.match_history.items().len().min(255) as u8)
-            .unwrap_or(0);
+            .unwrap_or_default();
 
         // Average squad ability
         let avg_squad_ability = main_team
@@ -130,42 +129,30 @@ impl Club {
         let main_tactic = main_team
             .and_then(|t| t.tactics.as_ref())
             .map(|tac| tac.tactic_type);
-        let wage_budget_usage = self
-            .finance
-            .wage_budget
-            .as_ref()
-            .map(|b| {
-                if b.amount <= 0.0 {
-                    0.0
-                } else {
-                    total_annual_wages as f32 / b.amount as f32
-                }
+        // Both usage ratios are measured against the board's own MANDATE,
+        // not against the live budget.
+        //
+        // The live wage budget is itself derived from the mandate and then
+        // throttled by distress, so dividing the bill by it made the ratio
+        // partly a measurement of the board's own last decision: a club put
+        // under a distress throttle read as overspending purely because the
+        // denominator had shrunk.
+        let mandate = self.board.season_targets.as_ref();
+        let wage_budget_usage = mandate
+            .map(|t| t.adjusted_wage_budget())
+            .filter(|m| *m > 0)
+            .map(|m| total_annual_wages as f32 / m as f32)
+            .unwrap_or(0.0);
+        // …and what the manager has actually spent of his chest. Hard-coded
+        // to zero until now, so the financial component score could never
+        // see transfer spending at all.
+        let transfer_budget_usage = mandate
+            .map(|t| {
+                self.finance
+                    .season_fees
+                    .usage_against(t.adjusted_transfer_budget().min(i32::MAX as i64) as i32)
             })
             .unwrap_or(0.0);
-
-        // Full-season points-per-match and goal difference from the match
-        // history (score.0 = us, score.1 = them).
-        let (points_per_match, goal_difference) = main_team
-            .map(|t| {
-                let items = t.match_history.items();
-                if items.is_empty() {
-                    return (0.0f32, 0i16);
-                }
-                let mut points = 0u32;
-                let mut gd = 0i16;
-                for m in items {
-                    let us = m.score.0.get() as i16;
-                    let them = m.score.1.get() as i16;
-                    gd += us - them;
-                    if us > them {
-                        points += 3;
-                    } else if us == them {
-                        points += 1;
-                    }
-                }
-                (points as f32 / items.len() as f32, gd)
-            })
-            .unwrap_or((0.0, 0));
 
         // Squad age profile, youth share, injury crisis, and key-player
         // unrest from the main squad. `u21_minutes_share` is approximated
@@ -205,11 +192,13 @@ impl Club {
                 })
                 .unwrap_or((0, 0.0, 0.0, 0));
 
-        let manager_contract_months_left = main_team
+        let manager_contract = main_team
             .and_then(|t| t.staffs.find_by_position(StaffPosition::Manager))
-            .and_then(|s| s.contract.as_ref())
+            .and_then(|s| s.contract.as_ref());
+        let manager_contract_months_left = manager_contract
             .map(|c| ((c.expired - date).num_days() / 30).max(0) as i32)
             .unwrap_or(0);
+        let manager_annual_salary = manager_contract.map(|c| c.salary).unwrap_or(0);
 
         BoardContext {
             balance: self.finance.balance.balance,
@@ -226,29 +215,31 @@ impl Club {
             debt_standing: self.finance.debt.standing,
             league_position: 0,
             league_size: 0,
-            recent_wins,
-            recent_losses,
-            recent_goal_difference,
-            matches_played,
+            recent_wins: season.recent_wins,
+            recent_losses: season.recent_losses,
+            recent_goal_difference: season.recent_goal_difference,
+            matches_played: season.played,
             total_matches: 0,
             avg_squad_ability,
             squad_avg_age,
             wage_budget_usage,
             main_tactic,
             league_tier: 1,
-            points_per_match,
-            goal_difference,
+            points_per_match: season.points_per_match,
+            goal_difference: season.goal_difference,
             distance_to_relegation: 0,
             distance_to_europe_or_playoff: 0,
             attendance_ratio: 1.0,
             supporter_mood: 0.5,
-            transfer_budget_usage: 0.0,
+            transfer_budget_usage,
             debt_ratio: 0.0,
             profit_loss_12m: 0,
             academy_graduates_this_season: 0,
             u21_minutes_share,
             injury_crisis_score,
             manager_contract_months_left,
+            manager_annual_salary,
+            fees_received_this_season: self.finance.season_fees.received,
             key_player_unrest_count,
             facility_training: self.facilities.training.clone(),
             facility_youth: self.facilities.youth.clone(),

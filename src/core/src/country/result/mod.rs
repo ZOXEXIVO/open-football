@@ -5,7 +5,7 @@ mod reputation;
 mod statistics;
 pub mod transfers;
 
-use crate::club::board::manager_market::ManagerMarketTick;
+use crate::club::board::manager::ManagerMarketTick;
 use crate::country::result::transfers::DeferredTransferOps;
 use crate::country::result::transfers::TransferTick;
 use crate::league::LeagueResult;

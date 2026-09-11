@@ -1388,8 +1388,8 @@ mod severity_cap_tests {
     use crate::league::result::{DeferredContractInteraction, LeagueProcessAccess};
     use crate::shared::fullname::FullName;
     use crate::shared::indexes::SimulatorDataIndexes;
-    use crate::world::CountryInfo;
     use crate::transfers::TransferListing;
+    use crate::world::CountryInfo;
     use crate::{
         Club, ConflictLocation, Country, HappinessEventCause, HappinessEventSeverity,
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,

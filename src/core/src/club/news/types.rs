@@ -808,6 +808,8 @@ pub enum NewsStoryKind {
     ManagerPressure,
     BoardBacking,
     ManagerSacked,
+    /// What ending the deal early cost the club.
+    SeverancePaid,
     NewManagerArrives,
     /// A bigger club came for him and paid to take him. Not a sacking,
     /// and a town reads the two very differently.
@@ -1145,7 +1147,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 355] = [
+    pub const ALL: [NewsStoryKind; 356] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -1398,6 +1400,7 @@ impl NewsStoryKind {
         NewsStoryKind::ManagerPressure,
         NewsStoryKind::BoardBacking,
         NewsStoryKind::ManagerSacked,
+        NewsStoryKind::SeverancePaid,
         NewsStoryKind::NewManagerArrives,
         NewsStoryKind::ManagerPoached,
         NewsStoryKind::CaretakerTakesCharge,
@@ -1751,6 +1754,7 @@ impl NewsStoryKind {
             NewsStoryKind::ManagerPressure
             | NewsStoryKind::BoardBacking
             | NewsStoryKind::ManagerSacked
+            | NewsStoryKind::SeverancePaid
             | NewsStoryKind::NewManagerArrives
             | NewsStoryKind::ManagerPoached
             | NewsStoryKind::CaretakerTakesCharge
@@ -2130,6 +2134,7 @@ impl NewsStoryKind {
             NewsStoryKind::ManagerPressure => "manager_pressure",
             NewsStoryKind::BoardBacking => "board_backing",
             NewsStoryKind::ManagerSacked => "manager_sacked",
+            NewsStoryKind::SeverancePaid => "severance_paid",
             NewsStoryKind::NewManagerArrives => "new_manager",
             NewsStoryKind::ManagerPoached => "manager_poached",
             NewsStoryKind::CaretakerTakesCharge => "caretaker_takes_charge",
@@ -2263,6 +2268,10 @@ impl NewsStoryKind {
             // still talks about twenty years later.
             NewsStoryKind::AdministrationEntered => 860,
             NewsStoryKind::ManagerSacked => 820,
+            // The pay-off is a footnote to the sacking on the same page,
+            // and a real one: it is the number a supporter quotes back
+            // the next time the board says there is no money.
+            NewsStoryKind::SeverancePaid => 430,
             // Losing the manager to somebody bigger is very nearly the
             // same size of morning as sacking him, and it hurts more:
             // nobody at the club wanted this one.
@@ -2979,6 +2988,7 @@ impl NewsStoryKind {
             // one edition — which is what makes these safe as `Event`
             // where the old state-scraped versions were not.
             | NewsStoryKind::ManagerSacked
+            | NewsStoryKind::SeverancePaid
             | NewsStoryKind::NewManagerArrives
             | NewsStoryKind::ManagerPoached
             | NewsStoryKind::CaretakerTakesCharge

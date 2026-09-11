@@ -11,6 +11,27 @@ pub struct MatchHistory {
     items: Vec<MatchHistoryItem>,
 }
 
+/// What a team has done in the season the league says it is in.
+///
+/// One struct rather than five accessors because every consumer wants all
+/// of them at once off a single walk, and because keeping them together is
+/// what stops one of them being computed season-scoped and the next
+/// career-scoped.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SeasonRecord {
+    /// League matches played this season.
+    pub played: u8,
+    /// Points per match this season; 0.0 before a ball is kicked.
+    pub points_per_match: f32,
+    /// Goals for minus goals against across the season.
+    pub goal_difference: i16,
+    pub recent_wins: u8,
+    pub recent_draws: u8,
+    pub recent_losses: u8,
+    /// Goal difference across the form window only.
+    pub recent_goal_difference: i16,
+}
+
 impl Default for MatchHistory {
     fn default() -> Self {
         Self::new()
@@ -36,10 +57,76 @@ impl MatchHistory {
     /// this team; `score.1` is the opponent. Returns (0, 0, 0) if the team
     /// has no match history yet.
     pub fn recent_results(&self, n: usize) -> (u8, u8, u8) {
+        Self::tally(&self.items, n)
+    }
+
+    /// The matches belonging to the season the league says the team is in.
+    ///
+    /// `MatchHistory` accumulates for the life of the team and is never
+    /// truncated, so `items().len()` is a CAREER figure. The board judges a
+    /// season, and the league is the only place that knows where the season
+    /// started — it carries the count. The last `played` items are it.
+    ///
+    /// Reading the career total instead is what pinned every board in the
+    /// world to [`SeasonPhase::RunIn`](crate::club::board::SeasonPhase) from
+    /// its second season on: `played > total` for ever after, so the
+    /// early-season sacking grace and the softer sporting scale never
+    /// applied again.
+    pub fn season_slice(&self, played: usize) -> &[MatchHistoryItem] {
+        let from = self.items.len().saturating_sub(played);
+        &self.items[from..]
+    }
+
+    /// Everything the board judges a season on, off one walk of the season
+    /// slice. `recent` is the form window (the last `recent` matches *of
+    /// this season*, so a season three games old has a three-game form
+    /// reading rather than two of last season's).
+    ///
+    /// A `played` of 0 — pre-season, or a team the league has no count for
+    /// — returns the neutral record: no form, no goals, no points.
+    pub fn season_record(&self, played: usize, recent: usize) -> SeasonRecord {
+        let season = self.season_slice(played);
+        if season.is_empty() {
+            return SeasonRecord::default();
+        }
+
+        let mut points = 0u32;
+        let mut goal_difference = 0i16;
+        for m in season {
+            let (us, them) = (m.score.0.get() as i16, m.score.1.get() as i16);
+            goal_difference += us - them;
+            match us.cmp(&them) {
+                Ordering::Greater => points += 3,
+                Ordering::Equal => points += 1,
+                Ordering::Less => {}
+            }
+        }
+
+        let (recent_wins, recent_draws, recent_losses) = Self::tally(season, recent);
+        let recent_goal_difference = season
+            .iter()
+            .rev()
+            .take(recent)
+            .map(|m| m.score.0.get() as i16 - m.score.1.get() as i16)
+            .sum();
+
+        SeasonRecord {
+            played: season.len().min(u8::MAX as usize) as u8,
+            points_per_match: points as f32 / season.len() as f32,
+            goal_difference,
+            recent_wins,
+            recent_draws,
+            recent_losses,
+            recent_goal_difference,
+        }
+    }
+
+    /// Wins / draws / losses across the most recent `n` of `items`.
+    fn tally(items: &[MatchHistoryItem], n: usize) -> (u8, u8, u8) {
         let mut wins = 0u8;
         let mut draws = 0u8;
         let mut losses = 0u8;
-        for m in self.items.iter().rev().take(n) {
+        for m in items.iter().rev().take(n) {
             let us = m.score.0.get();
             let them = m.score.1.get();
             match us.cmp(&them) {
@@ -175,6 +262,75 @@ mod tests {
         let our = TeamScore::new_with_score(1, us);
         let their = TeamScore::new_with_score(2, them);
         MatchHistoryItem::new(date, 2, (our, their))
+    }
+
+    /// A career's worth of results, then three games of a new season. The
+    /// board must read the three.
+    #[test]
+    fn the_season_record_ignores_the_career_behind_it() {
+        let mut history = MatchHistory::new();
+        // Two seasons of routine wins — 73 of them.
+        for _ in 0..73 {
+            history.add(item(2, 0));
+        }
+        // …then a new campaign: win, draw, loss.
+        history.add(item(1, 0));
+        history.add(item(1, 1));
+        history.add(item(0, 2));
+
+        let record = history.season_record(3, 5);
+        assert_eq!(record.played, 3, "the season is three games old");
+        // 3 + 1 + 0 points over 3 matches.
+        assert!(
+            (record.points_per_match - 4.0 / 3.0).abs() < 1e-5,
+            "points came from the career, not the season: {}",
+            record.points_per_match
+        );
+        assert_eq!(record.goal_difference, -1);
+        assert_eq!(record.recent_wins, 1);
+        assert_eq!(record.recent_draws, 1);
+        assert_eq!(record.recent_losses, 1);
+        assert_eq!(record.recent_goal_difference, -1);
+        // The career reading, for contrast: 76 games, nearly all won.
+        assert_eq!(history.items().len(), 76);
+    }
+
+    /// Pre-season. Nobody has played anybody.
+    #[test]
+    fn no_matches_this_season_is_a_neutral_record() {
+        let mut history = MatchHistory::new();
+        for _ in 0..40 {
+            history.add(item(3, 0));
+        }
+        assert_eq!(history.season_record(0, 5), SeasonRecord::default());
+    }
+
+    /// A league count larger than the history (a team whose fixtures the
+    /// club has not recorded) takes what there is rather than panicking.
+    #[test]
+    fn a_count_past_the_history_is_clamped() {
+        let mut history = MatchHistory::new();
+        history.add(item(1, 0));
+        let record = history.season_record(38, 5);
+        assert_eq!(record.played, 1);
+        assert_eq!(record.recent_wins, 1);
+    }
+
+    /// The form window is the last N of THIS season, never a couple of
+    /// games borrowed from the last one.
+    #[test]
+    fn the_form_window_stays_inside_the_season() {
+        let mut history = MatchHistory::new();
+        for _ in 0..10 {
+            history.add(item(4, 0)); // last season: emphatic wins
+        }
+        history.add(item(0, 1)); // this season: two defeats
+        history.add(item(0, 1));
+
+        let record = history.season_record(2, 5);
+        assert_eq!(record.recent_wins, 0, "last season's wins leaked in");
+        assert_eq!(record.recent_losses, 2);
+        assert_eq!(record.recent_goal_difference, -2);
     }
 
     #[test]

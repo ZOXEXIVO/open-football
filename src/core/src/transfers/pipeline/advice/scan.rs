@@ -31,7 +31,6 @@ use super::{
 };
 use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::club::staff::recruitment::ResolvedStaff;
-use crate::utils::PerformanceProfiler;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::gate::TransferPlausibilityVerdict;
 use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
@@ -50,6 +49,7 @@ use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::view::player::CountryPlayerLookup;
 use crate::utils::IntegerUtils;
+use crate::utils::PerformanceProfiler;
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
     PositionCoverage, ReputationLevel, Team,

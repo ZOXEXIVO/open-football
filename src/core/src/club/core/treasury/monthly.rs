@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use log::debug;
 
 use super::debt::DebtServiceInputs;
-use super::excess_cash::ExcessCashDeployment;
+use super::surplus::ExcessCashDeployment;
 
 /// The local economy as the club's books see it. Every figure defaults to
 /// 1.0, so a club simulated without a country behind it keeps trading at

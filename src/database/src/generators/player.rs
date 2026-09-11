@@ -10,9 +10,9 @@ use core::utils::IntegerUtils;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerFieldPositionGroup, PlayerFoots, PlayerPosition,
-    PlayerPositionType,
-    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
+    PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
+    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical,
+    WageCalculator,
 };
 use log::warn;
 
@@ -2119,12 +2119,13 @@ impl OdbPositionCode {
         positions
             .iter()
             .filter_map(|p| parse_position_code(&p.code).map(|pt| (p.level, pt)))
-            .fold(None, |best: Option<(u8, PlayerPositionType)>, candidate| {
-                match best {
+            .fold(
+                None,
+                |best: Option<(u8, PlayerPositionType)>, candidate| match best {
                     Some((level, _)) if level >= candidate.0 => best,
                     _ => Some(candidate),
-                }
-            })
+                },
+            )
             .map(|(_, pt)| pt.position_group())
             .unwrap_or(PlayerFieldPositionGroup::Midfielder)
     }

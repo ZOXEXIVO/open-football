@@ -195,8 +195,7 @@ impl VenueJson {
             // An unknown visitor is read as a peer, which leaves the gate at
             // whatever the club ordinarily draws.
             visitor: away.map_or(home.reputation.world, |away| away.reputation.world),
-            youth: home.team_type.is_youth()
-                || away.is_some_and(|away| away.team_type.is_youth()),
+            youth: home.team_type.is_youth() || away.is_some_and(|away| away.team_type.is_youth()),
         }
     }
 }

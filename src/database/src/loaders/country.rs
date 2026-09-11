@@ -272,7 +272,12 @@ mod tests {
 
         let profiles = countries
             .iter()
-            .map(|c| (c.id, convert_country_transfers(c.transfers.as_ref(), &by_code)))
+            .map(|c| {
+                (
+                    c.id,
+                    convert_country_transfers(c.transfers.as_ref(), &by_code),
+                )
+            })
             .collect();
         let facts = countries
             .iter()

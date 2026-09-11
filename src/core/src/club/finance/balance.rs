@@ -30,6 +30,16 @@ pub struct ClubFinances {
     /// Parachute entitlement from a recent relegation, stepped down at each
     /// season boundary.
     pub parachute: Option<ParachuteEntitlement>,
+    /// Gross fees paid and received since the season opened.
+    ///
+    /// The board's financial score asks how much of the mandate the manager
+    /// has actually spent, and until now nothing could answer: the only
+    /// locally derivable figure was `(mandate − remaining)`, which conflates
+    /// genuine spending with a board-ordered cut and so punished a club
+    /// whose budget had just been slashed. These are the real thing,
+    /// accumulated at the two chokepoints every fee passes through and reset
+    /// at the season-start budget sync.
+    pub season_fees: SeasonTransferFees,
     /// Distress classification from the last monthly tick.
     ///
     /// Stored rather than applied directly: the result-stage used to
@@ -39,6 +49,35 @@ pub struct ClubFinances {
     /// showed a $0 chest. The board now reads this and recomputes budgets
     /// from revenue instead.
     pub distress_level: DistressLevel,
+}
+
+/// What the club has spent and taken in the market this season.
+///
+/// Gross, not net, and reset at the season turn — the board judges a
+/// campaign's trading, not a running total since the world began.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SeasonTransferFees {
+    /// Fees paid out on completed incoming permanent deals.
+    pub paid: f64,
+    /// Fees taken in on completed outgoing deals.
+    pub received: f64,
+}
+
+impl SeasonTransferFees {
+    /// Share of the season's transfer mandate already committed. Zero when
+    /// no mandate is set, which the financial score reads as "unknown"
+    /// rather than as "spent nothing".
+    pub fn usage_against(&self, mandate: i32) -> f32 {
+        if mandate <= 0 {
+            return 0.0;
+        }
+        (self.paid / mandate as f64) as f32
+    }
+
+    /// A new campaign opens with the books clear.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 /// One amortization stream: a transfer fee spread across the contract
@@ -93,6 +132,7 @@ impl ClubFinances {
             home_matches_this_month: 0,
             debt: DebtProfile::default(),
             parachute: None,
+            season_fees: SeasonTransferFees::default(),
             distress_level: DistressLevel::None,
         }
     }
@@ -113,6 +153,7 @@ impl ClubFinances {
             home_matches_this_month: 0,
             debt: DebtProfile::default(),
             parachute: None,
+            season_fees: SeasonTransferFees::default(),
             distress_level: DistressLevel::None,
         }
     }
@@ -256,6 +297,7 @@ impl ClubFinances {
             budget.amount -= amount;
         }
         self.balance.push_cash_outflow(amount as i64);
+        self.season_fees.paid += amount;
         let years = contract_years.max(1) as u32;
         let months = years * 12;
         let monthly = (amount as i64) / months as i64;
@@ -283,6 +325,7 @@ impl ClubFinances {
             budget.amount = (budget.amount - amount).max(0.0);
         }
         self.balance.push_cash_outflow(amount as i64);
+        self.season_fees.paid += amount;
         let years = contract_years.max(1) as u32;
         let months = years * 12;
         let monthly = (amount as i64) / months as i64;
@@ -394,6 +437,7 @@ impl ClubFinances {
     /// [`Self::REINVEST_SHARE`].
     pub fn add_transfer_income_at(&mut self, amount: f64, reinvest_share: f64) {
         self.balance.push_income(amount as i64);
+        self.season_fees.received += amount.max(0.0);
 
         let recycled = amount * reinvest_share.clamp(0.0, 1.0);
         if let Some(ref mut budget) = self.transfer_budget {

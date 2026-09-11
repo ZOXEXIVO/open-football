@@ -70,6 +70,13 @@ impl ManagerRelationship {
         Self::nudge(&mut self.trust_communication, delta as f32);
     }
 
+    /// Apply a direct trust adjustment to results, for the judgements the
+    /// monthly drift cannot express — a long-term horizon that ran out with
+    /// the trophy cabinet still empty.
+    pub fn adjust_results(&mut self, delta: i32) {
+        Self::nudge(&mut self.trust_results, delta as f32);
+    }
+
     /// Blended 0..100 loyalty equivalent. Results weigh heaviest — a board
     /// forgives a lot if the team is winning.
     pub fn overall_trust(&self) -> u8 {
