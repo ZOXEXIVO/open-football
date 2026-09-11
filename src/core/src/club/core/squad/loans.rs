@@ -14,9 +14,7 @@ use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
 
 use super::decision::SquadDecision;
-use super::depth::{
-    KeeperLoanView, MainPromotionFloor, YouthDevelopmentLoanPolicy, YouthSquadDepth,
-};
+use super::depth::{KeeperLoanView, PromotionBar, YouthDevelopmentLoanPolicy, YouthSquadDepth};
 
 /// The club's loan-out sweep, squad by squad.
 pub(in crate::club::core) struct LoanSweep;
@@ -128,8 +126,8 @@ impl LoanSweep {
 
     /// Age-based development loans for ONE youth squad: a youngster old enough
     /// for senior football (>= [`YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE`])
-    /// who won't make the first team (current ability below the main-team
-    /// promotion floor at his position) should go out on loan for minutes
+    /// who won't make the first team (observable level below the [`PromotionBar`]
+    /// at his position) should go out on loan for minutes
     /// rather than stagnate in the youth side. Complements
     /// [`Self::positional_surplus`]: that one loans positional *surplus*
     /// (deep groups); this one loans *blocked but ready* youngsters even when
@@ -141,17 +139,17 @@ impl LoanSweep {
         club: &Club,
         team: &Team,
         team_idx: usize,
-        main_floor: &MainPromotionFloor,
+        bar: &PromotionBar,
         keepers: &KeeperLoanView,
         date: NaiveDate,
         out: &mut Vec<SquadDecision>,
     ) {
         for group in PlayerFieldPositionGroup::ALL {
-            let floor = main_floor.get(group);
+            let floor = bar.floor(group);
             let min_field = YouthDevelopmentLoanPolicy::min_field(group);
 
             // Stay-eligible players in this group, excluding anyone the
-            // surplus pass already flagged. (id, age, current ability).
+            // surplus pass already flagged. (id, age, observable level).
             let active: Vec<(u32, u8, u8, bool)> = team
                 .players
                 .iter()
@@ -172,7 +170,7 @@ impl LoanSweep {
                     (
                         p.id,
                         p.age(date),
-                        p.player_attributes.current_ability,
+                        AbilityEstimator::observable_level(p),
                         // The boy who is already good enough to start for
                         // the first team is a promotion, not a development
                         // loan. He still counts toward the youth side's
@@ -192,10 +190,10 @@ impl LoanSweep {
             // youth rotation). Loan them down to the fielding minimum.
             let mut candidates: Vec<(u32, u8)> = active
                 .iter()
-                .filter(|(_, age, ca, parent_holds)| {
+                .filter(|(_, age, level, parent_holds)| {
                     !parent_holds
                         && *age >= YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE
-                        && *ca < floor
+                        && *level < floor
                 })
                 .map(|(id, age, _, _)| (*id, *age))
                 .collect();

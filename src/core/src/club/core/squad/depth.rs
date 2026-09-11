@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use chrono::NaiveDate;
 
 use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
+use crate::club::staff::perception::AbilityEstimator;
 use crate::{PlayerFieldPositionGroup, Team};
 
 /// Squad sizes below which a pass stops taking players out of a team.
@@ -61,54 +62,79 @@ impl MainSquadDepth {
     }
 }
 
-/// Per-group main-team promotion floor: the current ability at/above which a
-/// non-main player is promoted to the first team by the weekly
-/// [`crate::Club::rebalance_squads`]. The youth development-loan pass reads
-/// it so a promotion-bound prospect (at/above the bar) is left for the
-/// rebalance to promote rather than loaned away.
+/// The level at/above which a non-main player is pulled into the first team,
+/// per position group — and whether that group is a body short.
 ///
-/// The bar is expressed in raw `current_ability`, unlike the surplus
-/// classifier. It is a coordination bar with the promotion engine rather than
-/// a keep/sell judgement, and the engine itself has since moved to the
-/// coach-observable level ([`PromotionBar`] in `rebalance.rs`) — so the two
-/// are now near-agreeing approximations rather than the same measure, and a
-/// player either side of the gap between them can still be loaned in the week
-/// the rebalance would have called him up. Moving this one to observable level
-/// closes that, and changes which players leave, so it is a behaviour change
-/// rather than part of the split.
+/// One bar, read by everything that has an opinion about a promotion. The
+/// weekly [`crate::Club::rebalance_squads`] promotes off it; the youth
+/// development-loan pass leaves anyone at/above it for the rebalance to
+/// promote instead of loaning him away; the parked-prime pass treats anyone
+/// within reach of it as genuine first-team cover. They have to agree, or one
+/// ships out the player another is about to call up.
 ///
-/// [`PromotionBar`]: super::rebalance
-pub(in crate::club::core) struct MainPromotionFloor {
-    floors: [(PlayerFieldPositionGroup, u8); PlayerFieldPositionGroup::COUNT],
+/// Measured in the coach-observable level (visible skill + results +
+/// training), on both sides of every comparison, never the hidden CA digit: a
+/// promotion is a staff judgement on what they can see, the same basis as the
+/// surplus trim and the squad-asset classifier.
+///
+/// A single global "bottom-3" floor across all positions caused a keeper
+/// ping-pong: a youth GK at 82 cleared the global floor (~75) even when the
+/// main team already had three senior keepers at 100+, so the depth cap
+/// demoted a keeper every pass and another youth GK got promoted the next
+/// week. The position-aware bar is the real signal — "does this youth displace
+/// an actual peer at the same role?" — and it resolves the churn without
+/// special-casing the goalkeeper position.
+///
+/// Snapshotted once per pass: the thresholds used to be closures re-walking
+/// the whole main squad for every player in every other squad.
+pub(in crate::club::core) struct PromotionBar {
+    groups: [(PlayerFieldPositionGroup, u8, bool); PlayerFieldPositionGroup::COUNT],
 }
 
-impl MainPromotionFloor {
+impl PromotionBar {
     pub(in crate::club::core) fn snapshot(main: &Team) -> Self {
-        MainPromotionFloor {
-            floors: PlayerFieldPositionGroup::ALL.map(|g| (g, Self::for_group(main, g))),
+        PromotionBar {
+            groups: PlayerFieldPositionGroup::ALL.map(|group| {
+                let (count, worst) = main
+                    .players
+                    .iter()
+                    .filter(|p| p.position().position_group() == group)
+                    .map(AbilityEstimator::observable_level)
+                    .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
+                let short = count < MainSquadDepth::min_for(group);
+                // A group short of bodies (retirement, transfer, release) takes
+                // any youth above the gap floor to plug the hole; otherwise the
+                // bar is strictly above the current worst — an equal level
+                // wouldn't improve depth but would still trigger the demotion
+                // cycle. An empty group is always short, so `worst` is never
+                // read at its `u8::MAX` seed.
+                let floor = if short {
+                    MainSquadDepth::GAP_FLOOR
+                } else {
+                    worst.saturating_add(1)
+                };
+                (group, floor, short)
+            }),
         }
     }
 
-    fn for_group(main: &Team, group: PlayerFieldPositionGroup) -> u8 {
-        let (count, worst) = main
-            .players
+    pub(in crate::club::core) fn floor(&self, group: PlayerFieldPositionGroup) -> u8 {
+        self.groups
             .iter()
-            .filter(|p| p.position().position_group() == group)
-            .map(|p| p.player_attributes.current_ability)
-            .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
-        if count < MainSquadDepth::min_for(group) {
-            MainSquadDepth::GAP_FLOOR
-        } else {
-            worst.saturating_add(1)
-        }
-    }
-
-    pub(in crate::club::core) fn get(&self, group: PlayerFieldPositionGroup) -> u8 {
-        self.floors
-            .iter()
-            .find(|(g, _)| *g == group)
-            .map(|(_, f)| *f)
+            .find(|(g, _, _)| *g == group)
+            .map(|(_, floor, _)| *floor)
             .unwrap_or(u8::MAX)
+    }
+
+    /// Is the first team a body short in this group? A promotion into a hole
+    /// is never held up by the squad it comes out of — the youth side can be
+    /// topped up, a matchday XI cannot.
+    pub(in crate::club::core) fn main_short(&self, group: PlayerFieldPositionGroup) -> bool {
+        self.groups
+            .iter()
+            .find(|(g, _, _)| *g == group)
+            .map(|(_, _, short)| *short)
+            .unwrap_or(false)
     }
 }
 

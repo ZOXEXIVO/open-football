@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::treasury::WageReliefSale;
 use super::decision::SquadDecision;
-use super::depth::{KeeperLoanView, MainPromotionFloor};
+use super::depth::{KeeperLoanView, PromotionBar};
 use super::loans::LoanSweep;
 
 impl Club {
@@ -71,12 +71,12 @@ impl Club {
         let mut loan_players: Vec<SquadDecision> = Vec::new();
         let mut transfer_players: Vec<SquadDecision> = Vec::new();
 
-        // Per-group main-team promotion floor — the current ability at/above
-        // which a non-main player is promoted to the first team by the weekly
-        // `rebalance_squads`. The youth development-loan pass only fires BELOW
-        // this bar, so a promotion-bound prospect is left for the rebalance to
-        // promote rather than loaned away.
-        let main_floor = MainPromotionFloor::snapshot(&self.teams.teams[main_idx]);
+        // The first team's promotion bar, per position group — the same one
+        // the weekly `rebalance_squads` promotes off. The youth
+        // development-loan pass only fires BELOW it, and the parked-prime pass
+        // only above it, so a promotion-bound player is left for the rebalance
+        // to call up rather than shipped out the week before.
+        let promotion_bar = PromotionBar::snapshot(&self.teams.teams[main_idx]);
 
         // The goalkeeping department's say over its own keepers. Two things
         // this audit cannot work out on its own: that the boy it is about to
@@ -119,7 +119,7 @@ impl Club {
                         self,
                         team,
                         ti,
-                        &main_floor,
+                        &promotion_bar,
                         &keepers,
                         date,
                         &mut loan_players,
@@ -141,7 +141,7 @@ impl Club {
                 Self::collect_parked_prime_resolutions(
                     team,
                     ti,
-                    &main_floor,
+                    &promotion_bar,
                     &asset_ctx,
                     date,
                     &mut loan_players,

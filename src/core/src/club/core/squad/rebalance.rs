@@ -13,9 +13,9 @@ use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferTrace,
 };
-use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, Team, TeamType};
+use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamType};
 
-use super::depth::{MainSquadDepth, SquadSize};
+use super::depth::{PromotionBar, SquadSize};
 use super::promotion::{ProfessionalContractPromotion, PromotionEvidence};
 
 /// Why the rebalance wants a player moved. The execution phase reads the
@@ -60,74 +60,6 @@ struct PendingMove {
     /// He was carrying a loan intent when the promotion fired, so the intent
     /// is withdrawn as part of the move.
     withdraws_loan: bool,
-}
-
-/// The bar a non-main player must clear to be pulled into the first team, per
-/// position group.
-///
-/// A single global "bottom-3" floor across all positions caused a keeper
-/// ping-pong: a youth GK at 82 cleared the global floor (~75) even when the
-/// main team already had three senior keepers at 100+, so the depth-cap
-/// demoted a keeper every pass and another youth GK got promoted the next
-/// week. The position-aware bar is the real signal — "does this youth
-/// displace an actual peer at the same role?" — and it resolves the churn
-/// without special-casing the goalkeeper position.
-///
-/// Both sides of the comparison read the coach-observable level (visible
-/// skill + results + training), never the hidden CA digit: a promotion is a
-/// staff judgement on what they can see, consistent with the surplus trim.
-///
-/// Snapshotted once per pass. The thresholds used to be closures re-walking
-/// the whole main squad for every player in every other squad.
-struct PromotionBar {
-    groups: [(PlayerFieldPositionGroup, u8, bool); PlayerFieldPositionGroup::COUNT],
-}
-
-impl PromotionBar {
-    fn snapshot(main: &Team) -> Self {
-        PromotionBar {
-            groups: PlayerFieldPositionGroup::ALL.map(|group| {
-                let (count, worst) = main
-                    .players
-                    .iter()
-                    .filter(|p| p.position().position_group() == group)
-                    .map(AbilityEstimator::observable_level)
-                    .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
-                let short = count < MainSquadDepth::min_for(group);
-                // A group short of bodies (retirement, transfer, release) takes
-                // any youth above the gap floor to plug the hole; otherwise the
-                // bar is strictly above the current worst — an equal level
-                // wouldn't improve depth but would still trigger the demotion
-                // cycle. An empty group is always short, so `worst` is never
-                // read at its `u8::MAX` seed.
-                let floor = if short {
-                    MainSquadDepth::GAP_FLOOR
-                } else {
-                    worst.saturating_add(1)
-                };
-                (group, floor, short)
-            }),
-        }
-    }
-
-    fn floor(&self, group: PlayerFieldPositionGroup) -> u8 {
-        self.groups
-            .iter()
-            .find(|(g, _, _)| *g == group)
-            .map(|(_, floor, _)| *floor)
-            .unwrap_or(u8::MAX)
-    }
-
-    /// Is the first team a body short in this group? A promotion into a hole
-    /// is never held up by the squad it comes out of — the youth side can be
-    /// topped up, a matchday XI cannot.
-    fn main_short(&self, group: PlayerFieldPositionGroup) -> bool {
-        self.groups
-            .iter()
-            .find(|(g, _, _)| *g == group)
-            .map(|(_, _, short)| *short)
-            .unwrap_or(false)
-    }
 }
 
 impl Club {

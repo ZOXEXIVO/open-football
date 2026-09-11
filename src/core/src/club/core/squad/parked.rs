@@ -15,7 +15,7 @@ use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use crate::{Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
 
 use super::decision::SquadDecision;
-use super::depth::{MainPromotionFloor, YouthDevelopmentLoanPolicy};
+use super::depth::{PromotionBar, YouthDevelopmentLoanPolicy};
 
 impl Club {
     /// Resolve prime-age professionals parked in a senior reserve squad
@@ -38,7 +38,7 @@ impl Club {
     pub(in crate::club::core) fn collect_parked_prime_resolutions(
         team: &Team,
         team_idx: usize,
-        main_floor: &MainPromotionFloor,
+        bar: &PromotionBar,
         asset_ctx: &SquadAssetContext,
         date: NaiveDate,
         loan_players: &mut Vec<SquadDecision>,
@@ -114,7 +114,7 @@ impl Club {
             // rebalance will promote him the moment he clears the bar.
             let group = player.position().position_group();
             let level = AbilityEstimator::observable_level(player);
-            if level + PROMOTION_REACH >= main_floor.get(group) {
+            if level + PROMOTION_REACH >= bar.floor(group) {
                 continue;
             }
 
