@@ -1,3 +1,4 @@
+use crate::club::staff::DossierTuning;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::scouting::recruitment::meeting::MeetingPass;
 use crate::transfers::view::player::PlayerView;
@@ -571,6 +572,11 @@ impl ShortlistPass {
         reports: &[&DetailedScoutingReport],
     ) -> Vec<ShortlistCandidate> {
         let depth = PositionDepth::at(club, assignment.target_position.position_group());
+        // What the man in the dugout makes of each name, where he has
+        // worked with him before. Read once for the whole assignment: the
+        // dossier lookup is a binary search but the head-coach resolution
+        // walks the staff list, and there is no reason to do it per report.
+        let manager = club.teams.main().map(|team| team.staffs.head_coach());
         let fit = SquadFitSnapshot::build(
             club,
             assignment.target_position.position_group(),
@@ -619,6 +625,20 @@ impl ShortlistPass {
                 let plausibility_mult = plausibility
                     .map(|v| v.adjustment().shortlist_score_multiplier)
                     .unwrap_or(1.0);
+                // A manager who has been let down badly enough by a player
+                // will not have him at any price, and the club does not
+                // put a name in front of him that he has already answered.
+                // An emergency overrides him — a squad that cannot field a
+                // side takes who it can get.
+                if manager
+                    .filter(|coach| coach.id != 0)
+                    .is_some_and(|coach| {
+                        coach.affinity_for(r.player_id, date) <= DossierTuning::AFFINITY_VETO
+                    })
+                    && !fit.is_emergency()
+                {
+                    return None;
+                }
                 Some((r, plausibility_mult))
             })
             .map(|(r, plausibility_mult)| {
@@ -700,12 +720,23 @@ impl ShortlistPass {
                     Some(_) => Self::WATCHLIST_LIFT,
                     None => 1.0,
                 };
+                // And what the manager thinks of a man he has had before.
+                // This is the one term on the list that is not about the
+                // player at all — it is about a working relationship, and
+                // it is why managers sign the same people over and over.
+                let affinity = manager
+                    .filter(|coach| coach.id != 0)
+                    .map(|coach| coach.affinity_for(r.player_id, date))
+                    .unwrap_or(0.0);
+                let affinity_mult = 1.0 + DossierTuning::AFFINITY_SCALE * affinity;
+
                 let score = base_score
                     * depth_mult
                     * risk_multiplier
                     * role_mult
                     * meeting_mult
                     * watchlist_mult
+                    * affinity_mult
                     * plausibility_mult;
 
                 ShortlistCandidate {

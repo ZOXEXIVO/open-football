@@ -418,6 +418,16 @@ pub enum NewsStoryKind {
     /// …and the other half: a mistake the manager has not finished
     /// forgetting, whatever he says in a press conference.
     ManagerDoubtsLinger,
+    /// The manager has stopped picking him altogether. Not a run of
+    /// omissions — the press box can tell the difference, and so can the
+    /// player.
+    FrozenOutOfTheSide,
+    /// The new manager is one he has played for before, and it went well.
+    /// The story every returning coach's favourite gets.
+    ReunitedWithHisManager,
+    /// …and the other kind: the new man is one he fell out with, and
+    /// everybody in the building knows what that means.
+    OldWoundsReopened,
 
     // ── Squad desk: the training ground and the bench ─────────────
     /// The reports out of the training ground are good — the week's
@@ -1147,7 +1157,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 356] = [
+    pub const ALL: [NewsStoryKind; 359] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -1258,6 +1268,9 @@ impl NewsStoryKind {
         NewsStoryKind::CliqueConcerns,
         NewsStoryKind::BigMatchTrust,
         NewsStoryKind::ManagerDoubtsLinger,
+        NewsStoryKind::FrozenOutOfTheSide,
+        NewsStoryKind::ReunitedWithHisManager,
+        NewsStoryKind::OldWoundsReopened,
         NewsStoryKind::TrainingGroundBuzz,
         NewsStoryKind::FormationRevolution,
         NewsStoryKind::TrainingConcerns,
@@ -1849,6 +1862,9 @@ impl NewsStoryKind {
             | NewsStoryKind::DisciplinaryOmission
             | NewsStoryKind::BigMatchTrust
             | NewsStoryKind::ManagerDoubtsLinger
+            | NewsStoryKind::FrozenOutOfTheSide
+            | NewsStoryKind::ReunitedWithHisManager
+            | NewsStoryKind::OldWoundsReopened
             | NewsStoryKind::RoleFrustration => NewsDesk::Dugout,
             NewsStoryKind::PeckingOrderUp
             | NewsStoryKind::PeckingOrderDown
@@ -1990,6 +2006,9 @@ impl NewsStoryKind {
             NewsStoryKind::CliqueConcerns => "clique_concerns",
             NewsStoryKind::BigMatchTrust => "big_match_trust",
             NewsStoryKind::ManagerDoubtsLinger => "manager_doubts_linger",
+            NewsStoryKind::FrozenOutOfTheSide => "frozen_out_of_the_side",
+            NewsStoryKind::ReunitedWithHisManager => "reunited_with_his_manager",
+            NewsStoryKind::OldWoundsReopened => "old_wounds_reopened",
             NewsStoryKind::TrainingGroundBuzz => "training_ground_buzz",
             NewsStoryKind::FormationRevolution => "formation_revolution",
             NewsStoryKind::TrainingConcerns => "training_concerns",
@@ -2820,6 +2839,12 @@ impl NewsStoryKind {
             // box rather than said out loud by anybody.
             NewsStoryKind::BigMatchTrust => 342,
             NewsStoryKind::ManagerDoubtsLinger => 356,
+            // A man frozen out of the side is a bigger story than a man
+            // the manager has doubts about: one is a mood and the other is
+            // a decision with a career attached to it.
+            NewsStoryKind::FrozenOutOfTheSide => 430,
+            NewsStoryKind::ReunitedWithHisManager => 360,
+            NewsStoryKind::OldWoundsReopened => 395,
             NewsStoryKind::TakenUnderWing => 233,
 
             // ── Everything else a real back page carries ──────────
@@ -2976,6 +3001,10 @@ impl NewsStoryKind {
             | NewsStoryKind::MarqueeUpgrade
             | NewsStoryKind::BargainBuy
             | NewsStoryKind::AcademyGraduate
+            // A reunion happens on the day the new man walks in, and
+            // it is one edition either way.
+            | NewsStoryKind::ReunitedWithHisManager
+            | NewsStoryKind::OldWoundsReopened
             | NewsStoryKind::LoanedOutToGrow
             | NewsStoryKind::PlayerSold
             | NewsStoryKind::StarSold
@@ -3302,6 +3331,7 @@ impl NewsStoryKind {
             | NewsStoryKind::CliqueConcerns
             | NewsStoryKind::BigMatchTrust
             | NewsStoryKind::ManagerDoubtsLinger
+            | NewsStoryKind::FrozenOutOfTheSide
             | NewsStoryKind::FormationRevolution
             | NewsStoryKind::BreakthroughSeason
             | NewsStoryKind::TrainingTransformation

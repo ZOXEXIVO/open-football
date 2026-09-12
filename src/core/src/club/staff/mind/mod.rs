@@ -96,7 +96,7 @@ use crate::club::mind::organs::goals::{
 use crate::club::mind::organs::memory::{
     ActorRef, ConsolidationReport, EncodingInputs, EpisodeKind, EpochDay, FactClaim, MemoryCensus,
     MemoryContext, MindClock, MindEpisode, MindHolder, MindMemory, RecallContext, RecallCue,
-    RecallResult,
+    RecallResult, Semantic,
 };
 use crate::club::person::PersonAttributes;
 use chrono::NaiveDate;
@@ -334,6 +334,29 @@ impl StaffMind {
     }
 
     /// Is `claim` held about `subject`, and how firmly?
+    /// Assert something he has concluded about a person, directly.
+    ///
+    /// Most convictions are *consolidated* — the memory organ notices that
+    /// the same thing has happened enough times and forms the belief on its
+    /// own. This is the other route, for the handful of conclusions a
+    /// manager reaches at a moment rather than over a season: what he
+    /// decided a player was, on the day they parted.
+    pub fn conclude(
+        &mut self,
+        claim: FactClaim,
+        subject: ActorRef,
+        strength: f32,
+        today: NaiveDate,
+    ) {
+        Semantic::assert(
+            &mut self.organs.shared.memory.semantic,
+            claim,
+            subject,
+            MindClock::day(today),
+            strength,
+        );
+    }
+
     #[inline]
     pub fn believes(&self, claim: FactClaim, subject: ActorRef) -> f32 {
         self.organs.shared.memory.believes(claim, subject)

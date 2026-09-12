@@ -1,3 +1,5 @@
+use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
+use crate::club::staff::perception::CoachProfile;
 use crate::club::player::ManagerPromiseKind;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::FreeAgentReleaseReason;
@@ -66,8 +68,54 @@ impl TeamBehaviourResult {
     pub fn process<D: LeagueProcessAccess>(&self, data: &mut D) {
         self.players.process(data);
         self.process_manager_talks(data);
+        self.record_talks_with_the_manager(data);
         self.process_contract_terminations(data);
         self.process_fines(data);
+    }
+
+    /// The coach's side of a conversation.
+    ///
+    /// A talk moved the player's morale, his relation and his rapport, and
+    /// left nothing at all on the man who had it with him — so a manager
+    /// could clear the air with a player every month and his own view of
+    /// him never budged. It moves his standing now, in the direction the
+    /// talk went, and a run of failed conversations is one of the things
+    /// that tips a man out of favour.
+    ///
+    /// Separate from [`Self::process_manager_talks`] because the player and
+    /// the coach cannot be borrowed at once and the two halves genuinely
+    /// belong to different people.
+    fn record_talks_with_the_manager<D: LeagueProcessAccess>(&self, data: &mut D) {
+        for talk in &self.manager_talks {
+            let Some((_, _, club_id, _)) = data
+                .indexes()
+                .and_then(|indexes| indexes.get_player_location(talk.player_id))
+            else {
+                continue;
+            };
+            let Some(club) = data.club_mut(club_id) else {
+                continue;
+            };
+            let Some(coach) = club
+                .teams
+                .main_mut()
+                .and_then(|team| team.staffs.head_coach_mut())
+            else {
+                continue;
+            };
+            // Only the man who actually had the conversation.
+            if coach.id == 0 || coach.id != talk.staff_id {
+                continue;
+            }
+            let profile = CoachProfile::from_staff(coach);
+            let lens = EvidenceLens {
+                loyalty: coach.attributes.loyalty,
+                ..EvidenceLens::default()
+            };
+            if let Some(standing) = coach.coach_memory.standing_of_mut(talk.player_id) {
+                StandingEvidence::talked(standing, talk.success, &profile, &lens);
+            }
+        }
     }
 
     fn process_fines<D: LeagueProcessAccess>(&self, data: &mut D) {
@@ -81,6 +129,30 @@ impl TeamBehaviourResult {
             };
             if let Some(club) = data.club_mut(club_id) {
                 club.finance.adjust_cash(fine.amount as f64);
+
+                // A fine is a disciplinary judgement, and the man who
+                // issued it holds one. Before this the club took the money
+                // and the manager's own view of the player did not move —
+                // so a squad could be fined into bankruptcy without anybody
+                // in the dugout concluding anything about anybody.
+                if let Some(coach) = club
+                    .teams
+                    .main_mut()
+                    .and_then(|team| team.staffs.head_coach_mut())
+                {
+                    if coach.id != 0 {
+                        let profile = CoachProfile::from_staff(coach);
+                        let lens = EvidenceLens {
+                            loyalty: coach.attributes.loyalty,
+                            ..EvidenceLens::default()
+                        };
+                        if let Some(standing) =
+                            coach.coach_memory.standing_of_mut(fine.player_id)
+                        {
+                            StandingEvidence::indiscipline(standing, &profile, &lens);
+                        }
+                    }
+                }
             }
             log::debug!(
                 "Disciplinary fine: player {} fined {} by club {}",

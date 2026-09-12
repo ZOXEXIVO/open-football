@@ -144,6 +144,17 @@ pub enum EpisodeKind {
     PlayerRepaidMyFaith,
     SignedAPlayerIWanted,
     SignedAPlayerIDidNotWant,
+    /// A player he was picking asked to leave. Not a refusal — he would
+    /// still have played — but the end of something the coach thought was
+    /// working.
+    PlayerWalkedOutOnMe,
+    /// A player he had no more use for went, and both of them knew it was
+    /// time.
+    PlayerLeftWithMyBlessing,
+    /// He is working with a man he has worked with before. The valence is
+    /// supplied by the emit site, because a reunion is a good day for one
+    /// pair and a problem for another.
+    ReunitedWithAPlayerIKnow,
 
     // ── His football ────────────────────────────────────────────
     MyGambleCameOff,
@@ -360,6 +371,11 @@ impl EpisodeKind {
             EpisodeKind::SquadFoughtForMe => S::ordinary(0.70, 0.80, D::Squad),
             EpisodeKind::PlayerRefusedToPlayForMe => S::betrayal(0.80, -0.80, D::Squad),
             EpisodeKind::PlayerRepaidMyFaith => S::ordinary(0.60, 0.75, D::Squad),
+            EpisodeKind::PlayerWalkedOutOnMe => S::ordinary(0.55, -0.55, D::Squad),
+            EpisodeKind::PlayerLeftWithMyBlessing => S::ordinary(0.35, 0.30, D::Squad),
+            // Sign supplied by the emit site: how a reunion feels is the
+            // whole question, and the catalog cannot answer it.
+            EpisodeKind::ReunitedWithAPlayerIKnow => S::ordinary(0.40, 0.0, D::Squad),
             EpisodeKind::SignedAPlayerIWanted => S::ordinary(0.50, 0.55, D::Squad),
             EpisodeKind::SignedAPlayerIDidNotWant => S::ordinary(0.55, -0.50, D::Squad),
 
@@ -480,6 +496,9 @@ impl EpisodeKind {
             EpisodeKind::SquadFoughtForMe => "mind_episode_squad_fought_for_me",
             EpisodeKind::PlayerRefusedToPlayForMe => "mind_episode_player_refused_to_play",
             EpisodeKind::PlayerRepaidMyFaith => "mind_episode_player_repaid_faith",
+            EpisodeKind::PlayerWalkedOutOnMe => "mind_episode_player_walked_out",
+            EpisodeKind::PlayerLeftWithMyBlessing => "mind_episode_player_left_blessing",
+            EpisodeKind::ReunitedWithAPlayerIKnow => "mind_episode_reunited_with_player",
             EpisodeKind::SignedAPlayerIWanted => "mind_episode_signed_player_i_wanted",
             EpisodeKind::SignedAPlayerIDidNotWant => "mind_episode_signed_player_i_did_not_want",
             EpisodeKind::MyGambleCameOff => "mind_episode_gamble_came_off",
@@ -578,6 +597,9 @@ impl EpisodeKind {
         EpisodeKind::SquadFoughtForMe,
         EpisodeKind::PlayerRefusedToPlayForMe,
         EpisodeKind::PlayerRepaidMyFaith,
+        EpisodeKind::PlayerWalkedOutOnMe,
+        EpisodeKind::PlayerLeftWithMyBlessing,
+        EpisodeKind::ReunitedWithAPlayerIKnow,
         EpisodeKind::SignedAPlayerIWanted,
         EpisodeKind::SignedAPlayerIDidNotWant,
         EpisodeKind::MyGambleCameOff,
@@ -820,7 +842,7 @@ mod tests {
         // both together when adding a kind.
         assert_eq!(
             EpisodeKind::ALL.len(),
-            92,
+            95,
             "EpisodeKind::ALL is out of sync with the enum"
         );
     }

@@ -16,6 +16,9 @@
 //! score, so old saves and freshly-built staff load without surprise.
 
 use crate::club::staff::CoachProfile;
+use crate::club::staff::coach::standing::{
+    CoachStanding, EvidenceLens, LadderContext, StandingEvidence, StandingLadder, StandingTuning,
+};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -86,6 +89,13 @@ impl CoachMemoryFlags {
     pub const EARLY_HOOK_RECENT: u32 = 1 << 3;
     /// Coach has formed a positive overall impression — survives mild dips.
     pub const TRUSTED_CORE: u32 = 1 << 4;
+    /// This is a man he has worked with before. Set when a record is seeded
+    /// from a dossier rather than built from nothing, and read wherever a
+    /// first impression would otherwise be treated as a blank sheet.
+    pub const KNOWN_QUANTITY: u32 = 1 << 5;
+    /// He is out on loan. The coach still holds the record, is not watching
+    /// him, and will read the reports when he comes back.
+    pub const AWAY_ON_LOAN: u32 = 1 << 6;
 
     pub fn contains(&self, flag: u32) -> bool {
         self.0 & flag != 0
@@ -143,6 +153,18 @@ pub struct CoachMemory {
     /// coach sees them perform in their natural slot vs an emergency one.
     pub role_fit_confidence: f32,
     pub flags: CoachMemoryFlags,
+    /// Where the player stands with him, and what it would take to change
+    /// it. The part of the record that holds a position rather than
+    /// tracking an average — see [`crate::club::staff::coach::standing`].
+    pub standing: CoachStanding,
+    /// Matches already on the clock when this spell opened. A reunion seeds
+    /// `matches_observed` from the old record, and the dossier needs to know
+    /// how much of it is new.
+    pub spell_start_matches: u16,
+    /// How much of an old dossier this record was seeded from, 0 for a man
+    /// he had never met. A known quantity is re-rated more slowly than a
+    /// stranger, and this is the dial that does it.
+    pub prior_at_seed: f32,
     /// Sliding 5-match bit mask: bit 0 = most recent match was poor.
     /// Used to refresh `recent_low_rating_count` without storing per-
     /// match history.
@@ -190,6 +212,20 @@ impl CoachMemory {
         (gap * 0.5 + streak_bump + window_bump).clamp(0.0, 1.0)
     }
 
+    /// Form pressure as the coach actually acts on it: the raw reading,
+    /// softened by how much he is backing the man. A player he trusts feels
+    /// less of his own bad month than a player he does not.
+    pub fn felt_form_pressure(&self, today: NaiveDate) -> f32 {
+        self.form_pressure() * self.standing.form_dampener(today)
+    }
+
+    /// Matches watched during the spell running now.
+    #[inline]
+    pub fn matches_this_spell(&self) -> u16 {
+        self.matches_observed
+            .saturating_sub(self.spell_start_matches)
+    }
+
     /// Form lift in [0.0, 1.0] — symmetric counterpart to `form_pressure`.
     /// A player on a hot streak feels the lift; the assessment layer can
     /// turn it into a small selection bonus.
@@ -227,6 +263,9 @@ impl Default for CoachMemory {
             professionalism_read: 0.5,
             role_fit_confidence: 0.5,
             flags: CoachMemoryFlags::default(),
+            standing: CoachStanding::default(),
+            spell_start_matches: 0,
+            prior_at_seed: 0.0,
             low_window_mask: 0,
             high_window_mask: 0,
         }
@@ -258,6 +297,58 @@ impl CoachMemoryStore {
         self.records.get_mut(&player_id)
     }
 
+    /// A record seeded from an older one, for a player the coach has
+    /// worked with before.
+    ///
+    /// Takes the handful of fields a reunion actually restores rather than
+    /// a whole `CoachMemory`, so the sliding form windows — which are about
+    /// matches he has just watched, and there are none — stay where they
+    /// belong: empty.
+    #[allow(clippy::too_many_arguments)]
+    pub fn seed_reunion(
+        &mut self,
+        player_id: u32,
+        observed: u16,
+        prior: f32,
+        long_form: f32,
+        trust: (f32, f32, f32),
+        professionalism: f32,
+        flags: CoachMemoryFlags,
+        standing: CoachStanding,
+        today: NaiveDate,
+    ) {
+        let (tactical, big_match, training) = trust;
+        self.records.insert(
+            player_id,
+            CoachMemory {
+                player_id,
+                matches_observed: observed,
+                spell_start_matches: observed,
+                prior_at_seed: prior,
+                recent_rating_ema: long_form,
+                long_form_rating: long_form,
+                tactical_trust: tactical,
+                big_match_trust: big_match,
+                training_trust: training,
+                professionalism_read: professionalism,
+                last_observed_date: Some(today),
+                flags,
+                standing,
+                ..CoachMemory::default()
+            },
+        );
+    }
+
+    /// Install a record built elsewhere.
+    ///
+    /// The one write that does not come from watching a match: a coach
+    /// starting work with a man he already knows does not begin from
+    /// nothing, and the reunion seeder is what decides how much of the old
+    /// record he starts from. Replaces whatever was there.
+    pub fn seed(&mut self, record: CoachMemory) {
+        self.records.insert(record.player_id, record);
+    }
+
     /// Drop a player from memory entirely. Used when the player leaves
     /// the club (transfer / release) so we don't grow the map without
     /// bound and don't risk a future stale read.
@@ -278,6 +369,27 @@ impl CoachMemoryStore {
     /// recent EMA more aggressively; a high-judging-accuracy coach
     /// trusts a single signal less.
     pub fn observe(&mut self, obs: &CoachMatchObservation, profile: &CoachProfile) {
+        self.observe_in(
+            obs,
+            profile,
+            &LadderContext::default(),
+            &EvidenceLens::default(),
+        );
+    }
+
+    /// As [`Self::observe`], with what the standing ladder needs to know
+    /// about the coach, the player and the squad around him.
+    ///
+    /// The plain [`Self::observe`] stays for callers who have no squad to
+    /// declare — the defaults read as a full squad and an ordinary coach,
+    /// which is the honest answer when nobody has said otherwise.
+    pub fn observe_in(
+        &mut self,
+        obs: &CoachMatchObservation,
+        profile: &CoachProfile,
+        context: &LadderContext,
+        lens: &EvidenceLens,
+    ) {
         let record = self
             .records
             .entry(obs.player_id)
@@ -285,7 +397,43 @@ impl CoachMemoryStore {
                 player_id: obs.player_id,
                 ..CoachMemory::default()
             });
-        MemoryEngine::apply(record, obs, profile);
+        MemoryEngine::apply_in(record, obs, profile, context, lens);
+    }
+
+    /// Weigh a week of training into the standing of every player the coach
+    /// has a record of. Training is the slow signal and only a run of weeks
+    /// at one extreme registers — see [`StandingEvidence::training_week`].
+    pub fn observe_training_week(
+        &mut self,
+        player_id: u32,
+        impression: f32,
+        profile: &CoachProfile,
+        lens: &EvidenceLens,
+    ) {
+        let Some(record) = self.records.get_mut(&player_id) else {
+            return;
+        };
+        StandingEvidence::training_week(&mut record.standing, impression, profile, lens);
+    }
+
+    /// A month has turned: the training allowance resets for everybody.
+    pub fn new_month(&mut self) {
+        for record in self.records.values_mut() {
+            StandingEvidence::new_month(&mut record.standing);
+        }
+    }
+
+    /// Borrow the standing for one player, if the coach has a record.
+    pub fn standing_of(&self, player_id: u32) -> Option<&CoachStanding> {
+        self.records.get(&player_id).map(|record| &record.standing)
+    }
+
+    /// Mutable counterpart, for the emit sites that report a refusal, a
+    /// transfer request, a talk or a promise.
+    pub fn standing_of_mut(&mut self, player_id: u32) -> Option<&mut CoachStanding> {
+        self.records
+            .get_mut(&player_id)
+            .map(|record| &mut record.standing)
     }
 
     /// Soften streak counters and pull EMAs toward the long-form
@@ -357,6 +505,25 @@ impl MemoryEngine {
     /// Apply `obs` to `record` in place. Personality shapes the
     /// reaction strength.
     pub fn apply(record: &mut CoachMemory, obs: &CoachMatchObservation, profile: &CoachProfile) {
+        Self::apply_in(
+            record,
+            obs,
+            profile,
+            &LadderContext::default(),
+            &EvidenceLens::default(),
+        );
+    }
+
+    /// As [`Self::apply`], with the context the standing ladder needs.
+    pub fn apply_in(
+        record: &mut CoachMemory,
+        obs: &CoachMatchObservation,
+        profile: &CoachProfile,
+        context: &LadderContext,
+        lens: &EvidenceLens,
+    ) {
+        // What he expected of *this* player, read before the averages move.
+        let expected = record.expected_rating();
         let rating = obs.effective_rating.clamp(1.0, 10.0);
 
         // Personality-shaped EMA coefficients. A recency-biased coach
@@ -369,7 +536,12 @@ impl MemoryEngine {
         // a new signing being assessed), each match moves the read
         // harder; by the sixth observation the coach settles into his
         // normal update rate. Continuous taper, no window cliff.
-        let early_boost: f32 = 1.0 + ((6.0 - record.matches_observed as f32) / 6.0).max(0.0) * 0.6;
+        // A known quantity is re-rated more slowly than a stranger: the
+        // coach is not forming a first impression, he is updating one he
+        // has held for years.
+        let familiarity = 1.0 - record.prior_at_seed.clamp(0.0, 1.0);
+        let early_boost: f32 =
+            1.0 + ((6.0 - record.matches_observed as f32) / 6.0).max(0.0) * 0.6 * familiarity;
         let recent_alpha =
             (RECENT_FORM_ALPHA * recency_scale * acc_dampen * early_boost).clamp(0.20, 0.85);
         let long_alpha = (LONG_FORM_ALPHA * early_boost).min(0.45);
@@ -440,6 +612,18 @@ impl MemoryEngine {
 
         record.matches_observed = record.matches_observed.saturating_add(1);
         record.last_observed_date = Some(obs.date);
+
+        // And where he now stands. Read against what the coach expected of
+        // him before this match, not after — a standing is about whether a
+        // man met the bar, and the bar moves once the match is counted.
+        let ladder = LadderContext {
+            matches_observed: record.matches_observed,
+            ..*context
+        };
+        let under_pressure = record.form_pressure() >= StandingTuning::FAVOURITE_PRESSURE;
+        StandingEvidence::from_match(&mut record.standing, obs, expected, profile, lens, &ladder);
+        StandingLadder::carry_or_drop(&mut record.standing, under_pressure, &ladder);
+        StandingLadder::after_match(&mut record.standing, &ladder, obs.date);
     }
 
     fn update_tactical_trust(
@@ -572,6 +756,15 @@ impl MemoryEngine {
         if days < INACTIVE_DECAY_DAYS {
             return;
         }
+        // A standing nobody is adding to softens as well. The context here
+        // is deliberately the default: a man the coach has not seen for a
+        // month is not a man he is weighing against his squad today.
+        StandingLadder::decay(
+            &mut record.standing,
+            days as f32 / 30.0,
+            &LadderContext::default(),
+            today,
+        );
         let steps = (days / INACTIVE_DECAY_DAYS).min(8) as f32;
         let total_decay = (INACTIVE_DECAY_PER_STEP * steps).clamp(0.0, 0.95);
 

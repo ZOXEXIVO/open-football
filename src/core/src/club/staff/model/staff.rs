@@ -1,12 +1,16 @@
 // Assuming rand is available
 extern crate rand;
 use crate::club::mind::organs::goals::GoalKind;
-use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindClock};
 use crate::club::mind::verdict::{MindOption, ReasonSet};
 use crate::club::staff::goalkeeping::KeeperRoomPlan;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::mind::{StaffMind, StaffTickContext};
-use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
+use crate::club::staff::coach::dossier::closer::{PartingReport, SpellCloser};
+use crate::club::staff::{
+    CoachDossierStore, CoachMemoryStore, CoachSquadPlan, DossierTuning, Dossiers, ReunionSeeder,
+    ScarFlags, SeparationCause, SpellOpening,
+};
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
@@ -135,6 +139,21 @@ pub struct Staff {
     /// and `coach_memory` rather than replacing them; see
     /// `docs/staff_mind.md` for what each phase switches over.
     pub mind: StaffMind,
+
+    /// What he carries about every player he has worked with, once they
+    /// have parted.
+    ///
+    /// The four stores above are all about this Saturday, and every one of
+    /// them is discarded when a spell ends — a plan for a player who has
+    /// left is not an opinion, it is a leak. This is the residue: how long
+    /// they were together, what he concluded the man was, what he did to
+    /// him and for him, how it ended, and whether he would have him again.
+    /// Bounded and evicting, unlike `coach_memory`, because a record of
+    /// everybody a coach ever watched is a log rather than a memory.
+    ///
+    /// Empty for everyone who never takes a dugout, and empty by default,
+    /// so every consumer falls back to the behaviour it had before.
+    pub dossiers: CoachDossierStore,
 }
 
 #[derive(Debug, Clone)]
@@ -653,6 +672,7 @@ impl Staff {
             keeper_plan: KeeperRoomPlan::new(),
             decision_state: CoachDecisionState::unbound(),
             mind: StaffMind::new(),
+            dossiers: CoachDossierStore::new(),
         }
     }
 
@@ -848,8 +868,111 @@ impl Staff {
     ///
     /// Call **after** recording the episode that ended the spell, so the
     /// sacking is filed against the club he was still at.
+    ///
+    /// Every working relationship he had there closes here too — with the
+    /// cause supplied, because being sacked and choosing to walk leave a
+    /// man feeling differently about the players he is leaving behind.
+    pub fn leave_club_as(&mut self, club_id: u32, cause: SeparationCause, today: NaiveDate) {
+        for player_id in Dossiers::open_player_ids(&self.dossiers) {
+            let report = PartingReport::bare(player_id, club_id, 0);
+            if let Some(kind) = SpellCloser::close(self, &report, cause, today) {
+                self.remember(kind, ActorRef::player(player_id), today, club_id);
+            }
+        }
+        self.mind.on_club_change(club_id);
+    }
+
+    /// As [`Self::leave_club_as`], for callers with no date and no cause to
+    /// declare. Closes nothing: a spell with no parting recorded is better
+    /// left open than closed under a guess, because the cause is what the
+    /// dossier is mostly made of.
     pub fn leave_club(&mut self, club_id: u32) {
         self.mind.on_club_change(club_id);
+    }
+
+    /// He is working with this player from today.
+    ///
+    /// Returns whether this is somebody new or somebody he knows, so the
+    /// caller can fire the reunion events on both sides. Idempotent: called
+    /// again for an open spell it does nothing.
+    ///
+    /// `age` is the player's, and it is needed because how much of an old
+    /// read still applies depends on whether the man has crossed a band
+    /// since — a boy who grew up elsewhere and a thirty-two-year-old are
+    /// both people the coach has to look at again.
+    pub fn player_joined_at(
+        &mut self,
+        player_id: u32,
+        club_id: u32,
+        age: u8,
+        today: NaiveDate,
+    ) -> SpellOpening {
+        let opening = Dossiers::open(
+            &mut self.dossiers,
+            player_id,
+            club_id,
+            MindClock::day(today),
+        );
+        if opening.is_reunion() {
+            ReunionSeeder::seed(self, player_id, age, today);
+        }
+        opening
+    }
+
+    /// As [`Self::player_joined_at`], for callers with no age in hand. The
+    /// reunion still seeds; it simply cannot apply the age-band discount,
+    /// which errs toward the coach trusting his old read.
+    pub fn player_joined(&mut self, player_id: u32, club_id: u32, today: NaiveDate) -> SpellOpening {
+        let age = Dossiers::of(&self.dossiers, player_id)
+            .map(|record| record.age_at_parting)
+            .unwrap_or(0);
+        self.player_joined_at(player_id, club_id, age, today)
+    }
+
+    /// They have stopped working together. Consolidates everything he was
+    /// carrying about the man into a dossier and drops the rest.
+    ///
+    /// Returns the episode he would record about the parting, if it is one
+    /// he would remember at all.
+    pub fn player_left(
+        &mut self,
+        report: &PartingReport,
+        cause: SeparationCause,
+        today: NaiveDate,
+    ) -> Option<EpisodeKind> {
+        SpellCloser::close(self, report, cause, today)
+    }
+
+    /// What he makes of a player he has worked with before, −1..=1.
+    ///
+    /// Positive means he would have him again. Reads the dossier and the
+    /// convictions together, because they answer different halves of it:
+    /// the dossier is how it went, and the convictions are what he decided
+    /// it meant.
+    pub fn affinity_for(&self, player_id: u32, today: NaiveDate) -> f32 {
+        let day = MindClock::day(today);
+        let Some(record) = Dossiers::of(&self.dossiers, player_id) else {
+            return 0.0;
+        };
+        let player = ActorRef::player(player_id);
+        let scar = record.scar_now(day);
+        let poisonous = record.scars.contains(ScarFlags::POISONOUS);
+
+        let base = record.warmth_now(day) * DossierTuning::AFFINITY_W_WARMTH
+            + (record.level() - 0.5) * 2.0 * DossierTuning::AFFINITY_W_LEVEL;
+        let held_against = if poisonous {
+            scar * DossierTuning::AFFINITY_W_SCAR
+        } else {
+            scar * DossierTuning::AFFINITY_W_SCAR * 0.5
+        };
+        let convictions = self.mind.believes(FactClaim::HeIsWorthBuildingAround, player)
+            * DossierTuning::AFFINITY_CONVICTION_WORTH
+            + self.mind.believes(FactClaim::HeLetMeDown, player)
+                * DossierTuning::AFFINITY_CONVICTION_LET_DOWN
+            + self.mind.believes(FactClaim::IWasWrongAboutHim, player)
+                * DossierTuning::AFFINITY_CONVICTION_WRONG;
+
+        (base - held_against + convictions).clamp(-1.0, 1.0)
     }
 
     /// His own standing in the game, 0..1.
@@ -921,6 +1044,17 @@ impl Staff {
         // reflect where the board and the squad are both in hand, which
         // is `Club::run_manager_mind`. A neutral situation is not a
         // neutral input.
+        // Monthly: a coach's read of a man he has not seen softens, and
+        // the standing he holds him at drifts back toward nothing. This is
+        // the pass the store's own doc comment always claimed ran here and
+        // which in fact only ever ran after a match — so a manager between
+        // jobs, or one whose squad had not played, kept a three-month-old
+        // grudge at full strength.
+        if ctx.simulation.is_month_beginning() {
+            self.coach_memory.decay_inactive(now.date());
+            self.coach_memory.new_month();
+        }
+
         let club_id = ctx.club.as_ref().map(|club| club.id).unwrap_or(0);
         self.mind.tick(&self.mind_context(now.date(), club_id));
 

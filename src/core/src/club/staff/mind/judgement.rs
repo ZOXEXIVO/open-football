@@ -457,6 +457,44 @@ mod tests {
     }
 
     #[test]
+    fn the_audit_only_settles_a_view_he_was_committed_to() {
+        let mut mind = StaffMind::new();
+        let glance = Fixture::context(Fixture::date(2030, 8, 1), 7);
+        mind.form_judgement(ActorRef::player(50), 0.3, 0.35, &glance);
+
+        let later = Fixture::context(Fixture::date(2035, 6, 1), 7);
+        assert_eq!(
+            mind.settle_judgement(ActorRef::player(50), 0.95, &later),
+            None,
+            "a man he watched once teaches him nothing about his own eye"
+        );
+        assert_eq!(mind.judgement.wrong, 0);
+        assert_eq!(mind.judgement.vindicated, 0);
+    }
+
+    #[test]
+    fn a_question_is_settled_once_and_then_left_alone() {
+        let mut mind = StaffMind::new();
+        Fixture::wrote_him_off(&mut mind, 21);
+        let later = Fixture::context(Fixture::date(2033, 6, 1), 7);
+
+        assert_eq!(
+            mind.settle_judgement(ActorRef::player(21), 0.92, &later),
+            Some(JudgementOutcome::Wrong)
+        );
+        let patience = mind.judgement.patience();
+        assert_eq!(
+            mind.settle_judgement(ActorRef::player(21), 0.92, &later),
+            None
+        );
+        assert_eq!(
+            mind.judgement.patience(),
+            patience,
+            "he does not learn the same lesson twice"
+        );
+    }
+
+    #[test]
     fn he_argues_against_signing_a_player_he_does_not_rate() {
         let mut mind = StaffMind::new();
         Fixture::wrote_him_off(&mut mind, 21);

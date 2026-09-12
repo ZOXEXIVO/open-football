@@ -156,6 +156,11 @@ pub enum SelectionOmissionReason {
     /// Benched because a want-away player's morale and manager relationship have
     /// both soured (a disaffected sulk), not a pure quality call.
     OmittedDueToDisaffection,
+    /// The manager has stopped picking him altogether. Distinct from every
+    /// other reason here: the rest are readings of a match, a rival or a
+    /// body, and this one is a standing decision about the man. A player is
+    /// entitled to be told, and the newsroom has a story for it.
+    FrozenOutByManager,
 }
 
 impl SelectionOmissionReason {
@@ -222,6 +227,7 @@ impl SelectionOmissionReason {
             SelectionOmissionReason::RestedDueToAgreedTransfer => {
                 "selection_reason_rested_agreed_transfer"
             }
+            SelectionOmissionReason::FrozenOutByManager => "selection_reason_frozen_out_by_manager",
             SelectionOmissionReason::OmittedDueToDisaffection => {
                 "selection_reason_omitted_disaffection"
             }

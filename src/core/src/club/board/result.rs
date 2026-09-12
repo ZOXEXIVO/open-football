@@ -1,3 +1,4 @@
+use crate::club::staff::SeparationCause;
 use crate::club::StaffPosition;
 use crate::club::board::manager;
 use crate::club::board::sale::ForcedSale;
@@ -381,7 +382,11 @@ impl BoardResult {
                             today,
                             self.club_id,
                         );
-                        staff.leave_club(self.club_id);
+                        // And every working relationship he had here ends
+                        // with it. Being sacked is not the players' doing
+                        // and the record says so — the partings are filed
+                        // against the club rather than against them.
+                        staff.leave_club_as(self.club_id, SeparationCause::IWasSacked, today);
 
                         dismissed = Some(id);
                         sacked_staff = Some(staff);

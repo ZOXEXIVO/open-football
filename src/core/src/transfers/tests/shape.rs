@@ -23,11 +23,13 @@ impl ShapeScan {
     const SELF: &'static str = "shape.rs";
 
     /// Roots the scan covers, relative to the crate.
-    const ROOTS: [&'static str; 4] = [
+    const ROOTS: [&'static str; 6] = [
         "src/transfers",
         "src/country/result/transfers",
         "src/club/core",
         "src/club/board",
+        "src/club/staff/coach/dossier",
+        "src/club/staff/coach/standing",
     ];
 
     fn sources() -> Vec<PathBuf> {

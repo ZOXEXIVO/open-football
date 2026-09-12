@@ -39,6 +39,7 @@ use crate::{
     RoleStatusEventContext, RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason,
     SelectionRole, SubstitutionFrustrationContext, SubstitutionFrustrationKind,
 };
+use crate::club::mind::organs::memory::{ActorRef, EncodingInputs, EpisodeKind, FactClaim};
 use chrono::NaiveDate;
 
 /// Result of a private-talk detection pass. The driver is "what's the
@@ -99,6 +100,69 @@ impl Player {
             magnitude,
             None,
             ctx,
+        );
+    }
+
+    // ───────────────────────────────────────────────────────────
+    // ReunitedWithFormerManager
+    // ───────────────────────────────────────────────────────────
+
+    /// The manager who has just walked in is one he has played for before.
+    ///
+    /// Every other player in the room gets the new-manager bounce, which is
+    /// hope: nobody knows what the new man thinks, so everybody's chances
+    /// have just been reset. This player knows exactly what the new man
+    /// thinks, and the difference is the whole event. For one of them it is
+    /// the best news of his season; for another it is the moment he starts
+    /// thinking about leaving.
+    ///
+    /// Signed and scaled by his own account of the coach — the standing in
+    /// his memory's ledger, plus the convictions he has formed about him.
+    /// The coach's record is not consulted, which is deliberate: the two of
+    /// them are allowed to remember it differently.
+    pub fn on_reunited_with_manager(&mut self, coach_id: u32, club_id: u32, date: NaiveDate) {
+        let coach = ActorRef::staff(coach_id);
+        let mind_ctx = self.mind_context(date, Some(club_id));
+        let standing = self.mind.standing_with(coach, &mind_ctx);
+        let made_me = self.mind.believes(FactClaim::MadeMeAPlayer, coach);
+        let backed_me = self.mind.believes(FactClaim::HeBackedMe, coach);
+        let clashed = self.mind.believes(FactClaim::WeClashed, coach);
+        let never_trusted = self.mind.believes(FactClaim::NeverTrustedMe, coach);
+        let word_worthless = self.mind.believes(FactClaim::HisWordIsWorthless, coach);
+
+        let feeling = (standing
+            + made_me * 0.5
+            + backed_me * 0.35
+            - clashed * 0.5
+            - never_trusted * 0.45
+            - word_worthless * 0.6)
+            .clamp(-1.0, 1.0);
+
+        let catalog = HappinessConfig::default().catalog;
+        let magnitude = catalog.magnitude(HappinessEventType::ReunitedWithFormerManager) * feeling;
+        let severity = HappinessEventSeverity::from_magnitude(magnitude);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerVerdict,
+            severity,
+            HappinessEventScope::Personal,
+        );
+        self.happiness.add_event_with_context(
+            HappinessEventType::ReunitedWithFormerManager,
+            magnitude,
+            None,
+            ctx,
+        );
+
+        // And the read of where he stands starts from what he remembers
+        // rather than from nothing.
+        self.mind.professional.on_reunited(coach, feeling);
+
+        self.mind.remember_with(
+            EpisodeKind::ManagerArrived,
+            coach,
+            &mind_ctx,
+            EncodingInputs::neutral(0.5),
+            Some(feeling),
         );
     }
 

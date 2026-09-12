@@ -272,7 +272,10 @@ impl MarketDiscoveryDiagnosis {
             }
             TransferPlausibilityReason::DomesticStepDownForPrimeStarter
             | TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub
-            | TransferPlausibilityReason::LoanNotCredible => {
+            | TransferPlausibilityReason::LoanNotCredible
+            // Refusing the manager is refusing the move, and from the
+            // market's side it looks the same: he would not come.
+            | TransferPlausibilityReason::RefusesToWorkForThatManager => {
                 AvailabilityBlockReason::PlayerWontStepDown
             }
             TransferPlausibilityReason::UnaffordableWages => AvailabilityBlockReason::WageTooHigh,

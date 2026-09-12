@@ -55,6 +55,16 @@ pub enum CoachDecisionReason {
     ProtectingStar,
     /// Sticky doubt flag has not yet been cleared.
     StickyDoubt,
+    /// The coach has stopped picking him at all. Not a reading of form —
+    /// a decision, and one the player is entitled to be told about.
+    FrozenOut,
+    /// He is out of the side and has not played his way back in.
+    OutOfFavour,
+    /// The coach does not leave him out.
+    Undroppable,
+    /// He is owed a start — a promise the coach broke, or an unfair drop —
+    /// and this is a fixture the coach can afford to pay it in.
+    SecondChance,
 }
 
 impl CoachDecisionReason {
@@ -86,6 +96,10 @@ impl CoachDecisionReason {
             CoachDecisionReason::CardRisk => "coach_reason_card_risk",
             CoachDecisionReason::ProtectingStar => "coach_reason_protecting_star",
             CoachDecisionReason::StickyDoubt => "coach_reason_sticky_doubt",
+            CoachDecisionReason::FrozenOut => "coach_reason_frozen_out",
+            CoachDecisionReason::OutOfFavour => "coach_reason_out_of_favour",
+            CoachDecisionReason::Undroppable => "coach_reason_undroppable",
+            CoachDecisionReason::SecondChance => "coach_reason_second_chance",
         }
     }
 
@@ -106,6 +120,8 @@ impl CoachDecisionReason {
                 | CoachDecisionReason::CostlyError
                 | CoachDecisionReason::CardRisk
                 | CoachDecisionReason::StickyDoubt
+                | CoachDecisionReason::FrozenOut
+                | CoachDecisionReason::OutOfFavour
         )
     }
 }

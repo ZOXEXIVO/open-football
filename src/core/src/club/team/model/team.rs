@@ -1,3 +1,7 @@
+use crate::HappinessEventType;
+use crate::club::player::player::ManagerPromiseKind;
+use crate::club::staff::coach::PlannedRole;
+use crate::club::staff::coach::standing::StandingEvidence;
 use crate::club::news::TeamNewsroom;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
@@ -215,6 +219,73 @@ impl Team {
         self.revise_coach_squad_plan(date);
     }
 
+    /// The manager's side of a promise he made and the verifier has now
+    /// judged.
+    ///
+    /// The player's side is complete — his morale moved, his trust in the
+    /// man's word moved, an episode was filed against the coach who gave
+    /// it. The coach's side was missing entirely, so a manager could put a
+    /// man down as a starter, never pick him, and carry no sense at all of
+    /// owing him anything.
+    ///
+    /// A broken promise does not cost the player his standing: he did
+    /// nothing wrong. It puts a debt on the coach, and a coach with
+    /// man-management pays it — which is what the second chance in the
+    /// selection read is for.
+    fn settle_promises_with_the_coach(&mut self) {
+        let coach_id = self.staffs.head_coach().id;
+        if coach_id == 0 {
+            return;
+        }
+        let settled: Vec<(u32, bool)> = self
+            .players
+            .players
+            .iter()
+            .filter(|player| {
+                player
+                    .promises
+                    .iter()
+                    .any(|promise| promise.made_by_staff_id == Some(coach_id))
+                    || player.interactions.entries.iter().any(|entry| {
+                        entry.staff_id == coach_id && entry.promise_created
+                    })
+            })
+            .flat_map(|player| {
+                player
+                    .happiness
+                    .recent_events
+                    .iter()
+                    .filter(|event| event.days_ago <= Self::PROMISE_SETTLED_WITHIN_DAYS)
+                    .filter_map(move |event| match event.event_type {
+                        HappinessEventType::PromiseKept => Some((player.id, true)),
+                        HappinessEventType::PromiseBroken => Some((player.id, false)),
+                        _ => None,
+                    })
+            })
+            .collect();
+        if settled.is_empty() {
+            return;
+        }
+        let Some(coach) = self.staffs.head_coach_mut() else {
+            return;
+        };
+        for (player_id, kept) in settled {
+            let Some(standing) = coach.coach_memory.standing_of_mut(player_id) else {
+                continue;
+            };
+            if kept {
+                StandingEvidence::promise_kept(standing);
+            } else {
+                StandingEvidence::promise_broken(standing);
+            }
+        }
+    }
+
+    /// How fresh a settled promise has to be for the weekly pass to be the
+    /// one that tells the manager about it. A week, because that is how
+    /// often this runs.
+    const PROMISE_SETTLED_WITHIN_DAYS: u16 = 7;
+
     /// Refresh the head coach's standing plan for this squad, and tell
     /// anyone whose role changed.
     ///
@@ -234,22 +305,84 @@ impl Team {
             return;
         }
         let mut plan = std::mem::take(&mut coach.squad_plan);
-        let changes = plan.revise_with_keepers(&self.players, keepers.as_ref(), date);
+        let memory = std::mem::take(&mut coach.coach_memory);
+        let changes = plan.revise_with_standing(
+            &self.players,
+            keepers.as_ref(),
+            Some(&memory),
+            date,
+        );
         if let Some(coach) = self.staffs.head_coach_mut() {
             coach.squad_plan = plan;
+            coach.coach_memory = memory;
         }
 
-        // Being told where you stand is the point of the plan. Only a
-        // move onto an exit path is delivered as news — a player learns
-        // he is not in the manager's plans, which is exactly the
-        // conversation the sim never used to have.
+        // Being told where you stand is the point of the plan. A move onto
+        // an exit path is delivered as news — a player learns he is not in
+        // the manager's plans, which is exactly the conversation the sim
+        // never used to have.
+        //
+        // And a role that commits the coach to real football is a promise
+        // rather than a note: `promises_minutes` said which roles those
+        // were and nothing ever read it, so a manager could put a man down
+        // as a starter, never pick him, and owe him nothing. Only a coach
+        // who actually talks to his players makes it — a role held in
+        // silence is not an assurance anybody was given.
+        let coach_id = self.staffs.head_coach().id;
+        let tells_them = self
+            .staffs
+            .head_coach()
+            .staff_attributes
+            .mental
+            .man_management
+            >= Self::PROMISES_MINUTES_MAN_MANAGEMENT;
+
         for (player_id, role) in changes {
-            if !role.is_exit_path() {
+            let Some(player) = self.players.players.iter_mut().find(|p| p.id == player_id) else {
+                continue;
+            };
+            if role.is_exit_path() {
+                player.on_told_where_he_stands(date, role);
                 continue;
             }
-            if let Some(player) = self.players.players.iter_mut().find(|p| p.id == player_id) {
-                player.on_told_where_he_stands(date, role);
+            if !role.promises_minutes() || !tells_them || coach_id == 0 {
+                continue;
             }
+            let (kind, target) = Self::minutes_promised_by(role);
+            player.record_promise_full(
+                kind,
+                date,
+                Self::PROMISE_HORIZON_DAYS,
+                Some(coach_id),
+                Some(target),
+                false,
+            );
+        }
+    }
+
+    /// Man-management at which a coach tells a player where he stands
+    /// rather than letting the team sheet say it for him. Below it the
+    /// plan is still real and the player simply never hears about it —
+    /// which is the silence that costs those managers their dressing rooms.
+    const PROMISES_MINUTES_MAN_MANAGEMENT: u8 = 12;
+
+    /// How long a plan role stands as an assurance before the verifier
+    /// asks whether it was honoured. One transfer window.
+    const PROMISE_HORIZON_DAYS: i64 = 90;
+
+    /// What each role actually commits him to.
+    ///
+    /// A starter is promised a share of the starts; everybody else on a
+    /// minutes-promising role is promised appearances, because that is
+    /// what the role means and what the player would hold him to.
+    fn minutes_promised_by(role: PlannedRole) -> (ManagerPromiseKind, u16) {
+        match role {
+            PlannedRole::Cornerstone => (ManagerPromiseKind::StartingRole, 75),
+            PlannedRole::Starter => (ManagerPromiseKind::StartingRole, 60),
+            PlannedRole::Rotation => (ManagerPromiseKind::PlayingTime, 8),
+            PlannedRole::CupKeeper => (ManagerPromiseKind::PlayingTime, 4),
+            PlannedRole::SuccessionHeir => (ManagerPromiseKind::PlayingTime, 6),
+            _ => (ManagerPromiseKind::LoanDevelopment, 6),
         }
     }
 
@@ -258,6 +391,8 @@ impl Team {
     /// any per-player development so today's mentoring drift is already
     /// visible when weekly skill growth is computed.
     fn run_weekly_pass(&mut self, week_date: NaiveDate) {
+        self.settle_promises_with_the_coach();
+
         let hoy_wwy = self.staffs.best_youth_development_wwy(10);
         let _pairings = MentorshipProcessor::process(&mut self.players.players, week_date, hoy_wwy);
 

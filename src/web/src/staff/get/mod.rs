@@ -7,8 +7,11 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::{DateUtils, FormattingUtils};
-use core::{SimulatorData, StaffPosition};
+use chrono::NaiveDate;
+use core::club::mind::organs::memory::MindClock;
+use core::{SimulatorData, Staff, StaffPosition};
 use serde::Deserialize;
+use std::cmp::Ordering;
 
 #[derive(Deserialize)]
 pub struct StaffGetRequest {
@@ -53,6 +56,28 @@ pub struct StaffViewModel {
     pub mental: StaffMentalDto,
     pub knowledge: StaffKnowledgeDto,
     pub medical: StaffMedicalDto,
+    /// The men he has worked with, warmest first.
+    ///
+    /// The one thing on this page that is not an attribute: everything
+    /// above is what he can do, and this is who he knows.
+    pub known_players: Vec<KnownPlayerDto>,
+}
+
+/// One player a manager has worked with before.
+pub struct KnownPlayerDto {
+    pub id: u32,
+    pub name: String,
+    /// Separate spells at the same or different clubs.
+    pub spells: u8,
+    pub matches: u16,
+    /// Five-step label for how warmly he remembers him.
+    pub regard_key: &'static str,
+    /// Whether they are working together right now.
+    pub working_together: bool,
+    /// How it ended, when it has.
+    pub parted_key: Option<&'static str>,
+    pub medals: Vec<&'static str>,
+    pub scars: Vec<&'static str>,
 }
 
 pub struct StaffContractDto {
@@ -95,32 +120,37 @@ pub struct StaffMedicalDto {
     pub sports_science: u8,
 }
 
-fn position_to_i18n_key(position: &StaffPosition) -> &'static str {
-    match position {
-        StaffPosition::Manager => "staff_manager",
-        StaffPosition::AssistantManager => "staff_assistant_manager",
-        StaffPosition::CaretakerManager => "staff_caretaker_manager",
-        StaffPosition::Coach => "staff_coach",
-        StaffPosition::FirstTeamCoach => "staff_first_team_coach",
-        StaffPosition::FitnessCoach => "staff_fitness_coach",
-        StaffPosition::GoalkeeperCoach => "staff_goalkeeper_coach",
-        StaffPosition::YouthCoach => "staff_youth_coach",
-        StaffPosition::U21Manager => "staff_u21_manager",
-        StaffPosition::U19Manager => "staff_u19_manager",
-        StaffPosition::Scout => "staff_scout",
-        StaffPosition::ChiefScout => "staff_chief_scout",
-        StaffPosition::Physio => "staff_physio",
-        StaffPosition::HeadOfPhysio => "staff_head_of_physio",
-        StaffPosition::Chairman => "staff_chairman",
-        StaffPosition::Director => "staff_director",
-        StaffPosition::ManagingDirector => "staff_managing_director",
-        StaffPosition::DirectorOfFootball => "staff_director_of_football",
-        StaffPosition::GeneralManager => "staff_general_manager",
-        StaffPosition::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
-        StaffPosition::MediaPundit => "staff_media_pundit",
-        StaffPosition::DataAnalyst => "staff_data_analyst",
-        StaffPosition::HeadOfRecruitment => "staff_head_of_recruitment",
-        StaffPosition::Free => "staff_free",
+/// What a member of staff is called on his own page.
+struct StaffRole;
+
+impl StaffRole {
+    fn as_i18n_key(position: &StaffPosition) -> &'static str {
+        match position {
+            StaffPosition::Manager => "staff_manager",
+            StaffPosition::AssistantManager => "staff_assistant_manager",
+            StaffPosition::CaretakerManager => "staff_caretaker_manager",
+            StaffPosition::Coach => "staff_coach",
+            StaffPosition::FirstTeamCoach => "staff_first_team_coach",
+            StaffPosition::FitnessCoach => "staff_fitness_coach",
+            StaffPosition::GoalkeeperCoach => "staff_goalkeeper_coach",
+            StaffPosition::YouthCoach => "staff_youth_coach",
+            StaffPosition::U21Manager => "staff_u21_manager",
+            StaffPosition::U19Manager => "staff_u19_manager",
+            StaffPosition::Scout => "staff_scout",
+            StaffPosition::ChiefScout => "staff_chief_scout",
+            StaffPosition::Physio => "staff_physio",
+            StaffPosition::HeadOfPhysio => "staff_head_of_physio",
+            StaffPosition::Chairman => "staff_chairman",
+            StaffPosition::Director => "staff_director",
+            StaffPosition::ManagingDirector => "staff_managing_director",
+            StaffPosition::DirectorOfFootball => "staff_director_of_football",
+            StaffPosition::GeneralManager => "staff_general_manager",
+            StaffPosition::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
+            StaffPosition::MediaPundit => "staff_media_pundit",
+            StaffPosition::DataAnalyst => "staff_data_analyst",
+            StaffPosition::HeadOfRecruitment => "staff_head_of_recruitment",
+            StaffPosition::Free => "staff_free",
+        }
     }
 }
 
@@ -147,7 +177,7 @@ pub async fn staff_get_action(
     let role_key = staff
         .contract
         .as_ref()
-        .map(|c| position_to_i18n_key(&c.position).to_string())
+        .map(|c| StaffRole::as_i18n_key(&c.position).to_string())
         .unwrap_or_else(|| "staff_free".to_string());
 
     let contract = staff.contract.as_ref().map(|c| StaffContractDto {
@@ -170,6 +200,8 @@ pub async fn staff_get_action(
         "{} {}",
         staff.full_name.first_name, staff.full_name.last_name
     );
+
+    let known_players = KnownPlayers::of(staff, simulator_data, now);
 
     let staff_vm = StaffViewModel {
         id: staff.id,
@@ -208,6 +240,7 @@ pub async fn staff_get_action(
             judging_player_potential: staff.staff_attributes.knowledge.judging_player_potential,
             tactical_knowledge: staff.staff_attributes.knowledge.tactical_knowledge,
         },
+        known_players,
         medical: StaffMedicalDto {
             physiotherapy: staff.staff_attributes.medical.physiotherapy,
             sports_science: staff.staff_attributes.medical.sports_science,
@@ -289,4 +322,84 @@ fn get_neighbor_teams(
             .map(|(_, name, slug)| (name, slug))
             .collect(),
     ))
+}
+
+/// The block on a manager's page that is not an attribute.
+///
+/// Everything else there is what he can do. This is who he knows — the
+/// men he has worked with, how it went, and whether he would have them
+/// again.
+struct KnownPlayers;
+
+impl KnownPlayers {
+    /// Rows shown. A thirty-year career fills the store, and a page that
+    /// lists a hundred and ninety names is a database dump rather than a
+    /// profile. The ones cut are by construction the ones he cares least
+    /// about.
+    const SHOWN: usize = 24;
+
+    /// The men he has worked with, warmest first.
+    fn of(staff: &Staff, data: &SimulatorData, today: NaiveDate) -> Vec<KnownPlayerDto> {
+        let day = MindClock::day(today);
+        let mut rows: Vec<(f32, KnownPlayerDto)> = staff
+            .dossiers
+            .iter()
+            .filter_map(|record| {
+                // A name the page cannot resolve is a name it should not
+                // print.
+                let player = data
+                    .player(record.player_id)
+                    .or_else(|| data.retired_player(record.player_id))?;
+                let warmth = record.warmth_now(day);
+                Some((
+                    warmth,
+                    KnownPlayerDto {
+                        id: record.player_id,
+                        name: format!(
+                            "{} {}",
+                            player.full_name.first_name, player.full_name.last_name
+                        ),
+                        spells: record.spells,
+                        matches: record.matches_together,
+                        regard_key: Self::regard(warmth),
+                        working_together: record.open,
+                        parted_key: (!record.open).then(|| record.parted.as_i18n_key()),
+                        medals: record.medals.held().map(|(_, key)| key).collect(),
+                        scars: record.scars.held().map(|(_, key)| key).collect(),
+                    },
+                ))
+            })
+            .collect();
+
+        // Warmest first, then the ones he knows best — so the top of the
+        // list is the men he would ring, and the bottom is the ones he
+        // would not.
+        rows.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| b.1.matches.cmp(&a.1.matches))
+        });
+        rows.truncate(Self::SHOWN);
+        rows.into_iter().map(|(_, row)| row).collect()
+    }
+
+    /// How warmly he remembers a man, as a word rather than a number.
+    ///
+    /// Five steps, because the underlying figure is a blend nobody outside
+    /// the simulation should be asked to read, and because the honest
+    /// answer for most players a manager has worked with is "he has no
+    /// strong feelings either way".
+    fn regard(warmth: f32) -> &'static str {
+        if warmth >= 0.5 {
+            "regard_would_sign_again"
+        } else if warmth >= 0.15 {
+            "regard_fondly"
+        } else if warmth > -0.15 {
+            "regard_no_strong_view"
+        } else if warmth > -0.5 {
+            "regard_reservations"
+        } else {
+            "regard_would_not_work_with"
+        }
+    }
 }

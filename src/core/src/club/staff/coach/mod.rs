@@ -19,10 +19,12 @@
 
 pub mod assessment;
 pub mod bond;
+pub mod dossier;
 pub mod engine;
 pub mod plan;
 pub mod reason;
 pub mod snapshot;
+pub mod standing;
 pub mod strategy;
 
 #[cfg(test)]
@@ -36,6 +38,11 @@ pub use crate::club::staff::mind::organs::judgements::coach_memory as memory;
 
 pub use assessment::{CoachDecisionScore, CoachPlayerAssessment};
 pub use bond::{CoachPlayerBond, CoachPlayerBondBreakdown};
+pub use dossier::{
+    CoachDossierStore, DossierCensus, DossierTuning, Dossiers, MedalFlags, PartingReport,
+    PlayerDossier, ReunionPrior, ReunionSeed, ReunionSeeder, ScarFlags, SeparationCause,
+    SpellCloser, SpellOpening,
+};
 pub use engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionContext};
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,
@@ -43,4 +50,8 @@ pub use memory::{
 pub use plan::{CoachSquadPlan, PlannedRole, PlayerPlanEntry, SquadDepthRanks};
 pub use reason::CoachDecisionReason;
 pub use snapshot::CoachMatchSnapshot;
+pub use standing::{
+    CoachStanding, EvidenceLens, GrievanceFlags, LadderContext, StandingEvidence, StandingLadder,
+    StandingOutcome, StandingRead, StandingRung, StandingTuning,
+};
 pub use strategy::{CoachStrategy, StrategyDeriver, StrategyInputs};

@@ -1155,6 +1155,10 @@ fn compute_drop_magnitude(player: &Player, ctx: &MatchSelectionContext) -> f32 {
         // Benching a disaffected want-away player is a consequence of his own
         // stance; he's already unhappy, so it's a moderate, not severe, hit.
         SelectionOmissionReason::OmittedDueToDisaffection => 0.9,
+        // Being frozen out is the worst of them, and not because of one
+        // team sheet: it is the player finding out that there will not be
+        // a next one either.
+        SelectionOmissionReason::FrozenOutByManager => 1.8,
     };
 
     let repeat_mul = if ctx.repeated { 1.4 } else { 1.0 };

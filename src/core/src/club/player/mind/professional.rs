@@ -87,6 +87,26 @@ impl ProfessionalMind {
         self.unexplained_weeks = 0;
     }
 
+    /// The man in charge is one he has worked for before.
+    ///
+    /// Not a clean slate, which is what [`Self::on_manager_change`] gives
+    /// everybody else: he already knows what this manager thinks of him,
+    /// and — the part that matters — he is usually right, because the coach
+    /// arrives holding the same view. `standing` is −1..=1, read from the
+    /// player's own account of the man rather than from the coach's record,
+    /// so the two of them can still disagree.
+    pub fn on_reunited(&mut self, manager: ActorRef, standing: f32) {
+        let standing = standing.clamp(-1.0, 1.0);
+        self.manager = manager;
+        // He expects to be rated roughly as he was, and to understand his
+        // role sooner than a stranger would let him — but less confidently
+        // than he expects the rating, because a manager's plans change
+        // and his opinions of people do not.
+        self.rated_pct = (standing * 60.0).round() as i8;
+        self.clarity_pct = (standing * 30.0).round() as i8;
+        self.unexplained_weeks = 0;
+    }
+
     /// He has signed, and this is the man who wanted him.
     ///
     /// Recorded at the transfer chokepoint rather than inferred, because

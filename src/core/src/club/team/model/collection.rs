@@ -1,6 +1,8 @@
+use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
+use crate::club::staff::coach::standing::EvidenceLens;
 use crate::club::staff::perception::{CoachProfile, date_to_week};
 use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
@@ -272,6 +274,16 @@ impl TeamCollection {
             }
         }
 
+        // Whoever is in the seat starts working with the squad in front of
+        // him. For most of them that is a first look; for the ones he has
+        // coached before it is not, and a new manager walking in already
+        // holding a view of half a dressing room is the single thing the
+        // dossier layer exists to express.
+        let reunions = self.open_spells_with_the_squad(date);
+        if !reunions.is_empty() {
+            Self::fire_reunion_events(&mut self.teams, coach_id, &reunions, date);
+        }
+
         // Refresh the coach's squad-satisfaction read (size / performance /
         // quality spread / position coverage) — cheap, and it's the "how
         // complete is my squad" signal recruitment urgency consumes. Lift
@@ -285,6 +297,77 @@ impl TeamCollection {
             self.restore_coach_state(state);
         }
         manager_changed
+    }
+
+    /// Open a working relationship between whoever is in the dugout and
+    /// every senior player at the club, and report the ones he already
+    /// knows.
+    ///
+    /// Runs on every `ensure_coach_state`, not only on a change of manager:
+    /// a squad gains players continually, and a spell that opened late is
+    /// better than one that never opened at all. Opening is idempotent, so
+    /// the ordinary case costs one binary search per player.
+    fn open_spells_with_the_squad(&mut self, date: NaiveDate) -> Vec<u32> {
+        let Some(index) = self.main_index() else {
+            return Vec::new();
+        };
+        let club_id = self.teams[index].club_id;
+        let squad: Vec<(u32, u8)> = self.teams[index]
+            .players
+            .players
+            .iter()
+            .filter(|player| !player.is_on_loan())
+            .map(|player| (player.id, player.age(date)))
+            .collect();
+
+        let Some(coach) = self.teams[index].staffs.head_coach_mut() else {
+            return Vec::new();
+        };
+        if coach.id == 0 {
+            return Vec::new();
+        }
+        let mut reunions = Vec::new();
+        for (player_id, age) in squad {
+            if coach
+                .player_joined_at(player_id, club_id, age, date)
+                .is_reunion()
+            {
+                reunions.push(player_id);
+            }
+        }
+        for player_id in &reunions {
+            coach.remember(
+                EpisodeKind::ReunitedWithAPlayerIKnow,
+                ActorRef::player(*player_id),
+                date,
+                club_id,
+            );
+        }
+        reunions
+    }
+
+    /// The players' half of a reunion. A man who worked under this coach
+    /// before does not get the generic new-manager bounce — he already
+    /// knows exactly what he is getting, and whether that is good news
+    /// depends entirely on how it went last time.
+    fn fire_reunion_events(
+        teams: &mut [Team],
+        incoming_coach_id: u32,
+        reunions: &[u32],
+        date: NaiveDate,
+    ) {
+        for team in teams.iter_mut() {
+            if !matches!(team.team_type, TeamType::Main) {
+                continue;
+            }
+            let club_id = team.club_id;
+            for player in team.players.players.iter_mut() {
+                if !reunions.contains(&player.id) {
+                    continue;
+                }
+                player.on_reunited_with_manager(incoming_coach_id, club_id, date);
+            }
+        }
     }
 
     fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32, date: NaiveDate) {
@@ -382,7 +465,39 @@ impl TeamCollection {
         // Decay emotional heat once per update cycle (not per player)
         state.emotional_heat *= 0.80;
 
+        // A week of training, weighed into where each man stands. Only a
+        // *run* of weeks at one extreme registers — training is the slow
+        // signal, and one good week in the gym has never got anybody into
+        // a team — so this is cheap and almost always a no-op.
+        let training: Vec<(u32, f32)> = state
+            .impressions
+            .iter()
+            .map(|(player_id, impression)| {
+                (*player_id, (impression.training_impression / 20.0).clamp(0.0, 1.0))
+            })
+            .collect();
+
         self.restore_coach_state(Some(state));
+
+        let Some(index) = self.main_index() else {
+            return;
+        };
+        let Some(coach) = self.teams[index].staffs.head_coach_mut() else {
+            return;
+        };
+        if coach.id == 0 {
+            return;
+        }
+        let profile = CoachProfile::from_staff(coach);
+        let lens = EvidenceLens {
+            loyalty: coach.attributes.loyalty,
+            ..EvidenceLens::default()
+        };
+        for (player_id, impression) in training {
+            coach
+                .coach_memory
+                .observe_training_week(player_id, impression, &profile, &lens);
+        }
     }
 
     /// Proactively offer contract renewals to valuable players whose

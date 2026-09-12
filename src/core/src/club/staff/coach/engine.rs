@@ -15,6 +15,7 @@
 use super::assessment::{CoachDecisionScore, CoachPlayerAssessment};
 use super::memory::{CoachMemory, CoachMemoryFlags, CoachMemoryStore};
 use super::reason::CoachDecisionReason;
+use super::standing::{StandingOutcome, StandingRead, StandingRung};
 use super::strategy::CoachStrategy;
 use crate::club::staff::CoachProfile;
 use crate::utils::DateUtils;
@@ -118,7 +119,10 @@ impl<'a> CoachDecisionEngine<'a> {
         let memory = self.memory_for(player.id);
         let mut reasons: Vec<CoachDecisionReason> = Vec::new();
 
-        let form_confidence = AssessmentMath::form_confidence(memory, self.profile);
+        let backing = memory
+            .map(|m| m.standing.form_dampener(ctx.date))
+            .unwrap_or(1.0);
+        let form_confidence = AssessmentMath::form_confidence(memory, self.profile, backing);
         AssessmentMath::push_form_reasons(memory, self.profile, &mut reasons);
 
         let trust_score = AssessmentMath::trust_score(memory, self.profile);
@@ -168,13 +172,31 @@ impl<'a> CoachDecisionEngine<'a> {
             + development_priority * weights.development)
             .clamp(0.0, 1.0);
 
+        // And then where the man actually stands with him, which is a
+        // decision rather than a reading and therefore lands on top of the
+        // composite rather than inside it. A player with no standing — no
+        // record, or a record with nothing decided — moves nothing.
+        let standing = StandingRead::for_selection(
+            memory.map(|m| &m.standing),
+            ctx.is_cup || ctx.is_derby || ctx.is_continental,
+            ctx.match_importance,
+            self.profile.man_management,
+            ctx.date,
+        );
+        AssessmentMath::push_standing_reasons(memory, &standing, &mut reasons);
+
+        let selection_confidence =
+            (selection_confidence + standing.start_shift).clamp(0.0, 1.0);
         let drop_risk = (1.0 - selection_confidence).clamp(0.0, 1.0);
 
         // Bench preference is a softened version of start preference —
         // a player the coach has lost trust in still gets named in the
         // 18 if no alternative exists.
-        let bench_preference =
-            (selection_confidence * 0.7 + 0.15 + development_priority * 0.10).clamp(0.0, 1.0);
+        let bench_preference = (selection_confidence * 0.7
+            + 0.15
+            + development_priority * 0.10
+            + standing.bench_shift)
+            .clamp(0.0, 1.0);
 
         CoachPlayerAssessment {
             selection_confidence,
@@ -333,7 +355,13 @@ impl<'a> CoachDecisionEngine<'a> {
 
         CoachPlayerAssessment {
             selection_confidence: 1.0 - sub_off_urgency,
-            form_confidence: AssessmentMath::form_confidence(memory, self.profile),
+            form_confidence: AssessmentMath::form_confidence(
+                memory,
+                self.profile,
+                memory
+                    .map(|m| m.standing.form_dampener(live.date))
+                    .unwrap_or(1.0),
+            ),
             risk_confidence: 1.0 - live_perf_gap,
             trust_score: AssessmentMath::trust_score(memory, self.profile),
             role_fit_score: memory.map(|m| m.role_fit_confidence).unwrap_or(0.5),
@@ -496,7 +524,11 @@ impl AssessmentMath {
     const BENCH_SCALE: f32 = 0.30;
     const LIVE_SCALE: f32 = 0.30;
 
-    fn form_confidence(memory: Option<&CoachMemory>, profile: &CoachProfile) -> f32 {
+    fn form_confidence(
+        memory: Option<&CoachMemory>,
+        profile: &CoachProfile,
+        dampener: f32,
+    ) -> f32 {
         let Some(m) = memory else { return 0.5 };
         if !m.is_well_observed() {
             return 0.5;
@@ -510,8 +542,13 @@ impl AssessmentMath {
         let lift = m.form_lift();
         let pressure = m.form_pressure();
         let reaction = profile.form_reaction_weight();
-        let dampener = profile.one_bad_game_dampener();
-        let net = (lift * reaction - pressure * dampener * reaction).clamp(-1.0, 1.0);
+        let one_bad_game = profile.one_bad_game_dampener();
+        let standing_backing = dampener;
+        // Two dampeners, and they are different things: the coach's own
+        // tolerance for one bad game, and how far he is backing this
+        // particular man through a slump.
+        let net =
+            (lift * reaction - pressure * one_bad_game * standing_backing * reaction).clamp(-1.0, 1.0);
         (0.5 + net * 0.5).clamp(0.0, 1.0)
     }
 
@@ -625,6 +662,33 @@ impl AssessmentMath {
         }
         if m.training_trust >= 0.70 {
             reasons.push(CoachDecisionReason::TrainingLevel);
+        }
+    }
+
+    /// Reasons that come from where the man stands rather than from how he
+    /// has been playing. The distinction matters to the omissions feed: a
+    /// player left out on form has a way back this month, and a player left
+    /// out because the manager has stopped picking him does not.
+    fn push_standing_reasons(
+        memory: Option<&CoachMemory>,
+        standing: &StandingOutcome,
+        reasons: &mut Vec<CoachDecisionReason>,
+    ) {
+        if standing.frozen_out {
+            reasons.insert(0, CoachDecisionReason::FrozenOut);
+            return;
+        }
+        if standing.big_match_untrusted {
+            reasons.push(CoachDecisionReason::BigMatchFailure);
+        }
+        if standing.owed_a_start {
+            reasons.push(CoachDecisionReason::SecondChance);
+        }
+        let Some(memory) = memory else { return };
+        if memory.standing.rung.is_out() {
+            reasons.push(CoachDecisionReason::OutOfFavour);
+        } else if memory.standing.rung == StandingRung::Undroppable {
+            reasons.push(CoachDecisionReason::Undroppable);
         }
     }
 

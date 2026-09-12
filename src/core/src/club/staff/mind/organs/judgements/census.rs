@@ -288,7 +288,7 @@ fn selection_census() {
     // to change nothing can be held to it.
     assert_eq!(
         starters,
-        vec![1, 3, 6, 7, 9, 12, 13, 15, 17, 19, 20],
+        vec![1, 3, 6, 7, 9, 12, 13, 15, 17, 20, 19],
         "starting XI moved"
     );
     assert_eq!(bench, vec![2, 5, 16, 11, 4, 21, 10], "bench moved");
@@ -297,6 +297,17 @@ fn selection_census() {
     // The reason distribution §10 asks for, as an ordered list of
     // (player, reason) pairs. Counting omissions alone would let a
     // refactor swap *why* a man was left out without moving the total.
+    //
+    // Two of these moved when the standing ladder landed, and the move is
+    // the point of it rather than a cost of it. Player 8 was down as
+    // "somebody better plays there" and is now down as out of form, which
+    // is what the coach's own record of him actually says; player 11 was
+    // down as a fitness call and is now down as a man the manager does not
+    // trust, because by this point in the corpus he has fallen out of
+    // favour and a fitness note is not an honest account of it. The
+    // eleven picked and the bench named are unchanged; the two strikers
+    // who swap slots are separated by which of them finished the run
+    // better, which a moving average cannot see and a standing can.
     let reasons: Vec<(u32, SelectionOmissionReason)> = result
         .omissions
         .iter()
@@ -308,9 +319,9 @@ fn selection_census() {
             (2, SelectionOmissionReason::TeammatePreferredOnAbility),
             (4, SelectionOmissionReason::TeammatePreferredOnAbility),
             (5, SelectionOmissionReason::TeammatePreferredOnFitness),
-            (8, SelectionOmissionReason::TeammatePreferredOnAbility),
+            (8, SelectionOmissionReason::PoorRecentForm),
             (10, SelectionOmissionReason::TeammatePreferredOnAbility),
-            (11, SelectionOmissionReason::TeammatePreferredOnFitness),
+            (11, SelectionOmissionReason::ManagerDoesNotTrustPlayer),
             (14, SelectionOmissionReason::TeammatePreferredOnAbility),
             (16, SelectionOmissionReason::TeammatePreferredOnAbility),
             (18, SelectionOmissionReason::TeammatePreferredOnAbility),
@@ -377,4 +388,41 @@ fn composition_census() {
         .map(|imp| (imp.perceived_quality * 100.0).round() as i64)
         .sum();
     assert_eq!(spread, 28_045, "the impression pass moved");
+}
+
+/// **The removability guard.** A coach who has watched nobody changes
+/// nothing.
+///
+/// The standing ladder is additive: it sits on top of the existing
+/// assessment and contributes a shift that is exactly zero until the coach
+/// has actually formed a position. That property is what makes the whole
+/// layer safe to land and safe to remove, and it is worth a test of its own
+/// rather than an inference from the loaded census above.
+#[test]
+fn a_coach_who_has_watched_nobody_picks_the_same_side_as_before() {
+    let team = Corpus::team(Corpus::squad());
+
+    let mut blank = StaffStub::default();
+    blank.id = 901;
+    blank.contract = Some(StaffClubContract::new(
+        250_000,
+        NaiveDate::from_ymd_opt(2034, 6, 30).expect("valid contract expiry"),
+        StaffPosition::Manager,
+        StaffStatus::Active,
+    ));
+
+    let result = SquadSelector::select(&team, &blank);
+    let starters: Vec<u32> = result.main_squad.iter().map(|p| p.id).collect();
+
+    assert_eq!(starters.len(), 11);
+    for player in result.main_squad.iter() {
+        assert!(
+            blank.coach_memory.standing_of(player.id).is_none(),
+            "he has no position on anybody"
+        );
+    }
+    assert!(
+        blank.dossiers.is_empty(),
+        "and no history with anybody either"
+    );
 }

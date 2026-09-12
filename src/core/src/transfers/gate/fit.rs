@@ -247,6 +247,15 @@ impl SquadFitSnapshot {
     ///   the candidate would rank strictly outside the cap. Displacing an
     ///   incumbent (equal or better rank) is normal squad upgrading and
     ///   stays allowed; the incumbent becomes the surplus body instead.
+    /// The squad is short enough at this position that the club takes who
+    /// it can get.
+    ///
+    /// The one thing that overrides a manager refusing to work with a man:
+    /// a side that cannot be fielded is a problem that outranks a grudge.
+    pub fn is_emergency(&self) -> bool {
+        self.group_size + 1 < self.group_cap
+    }
+
     pub fn would_be_surplus(&self, assessed_ability: u8, assessed_potential: u8, age: u8) -> bool {
         // A high-ceiling youngster is exempt from both surplus rules —
         // but only while the club still has room on its prospect desk at

@@ -53,6 +53,7 @@ pub mod stance;
 pub use appraisal::*;
 pub use stance::*;
 
+use crate::club::staff::DossierTuning;
 use crate::club::player::calculators::WageCalculator;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus, TeamType};
@@ -87,6 +88,14 @@ pub enum TransferPlausibilityReason {
     /// nine-figure teenager could be lent to a second-division club for
     /// nothing.
     LoanBeyondBorrowerMeans,
+    /// He will not play for that manager. The one gate on this list that is
+    /// about a person rather than a club: a player who believes a coach's
+    /// word is worthless, or who fell out with him badly enough the last
+    /// time, does not sign for him whatever the club is offering.
+    ///
+    /// Not absolute. A big enough step up and enough ambition still moves
+    /// him — ambition is the one thing that reliably beats a grudge.
+    RefusesToWorkForThatManager,
 }
 
 // ============================================================
@@ -415,6 +424,15 @@ pub struct TransferPlausibilityInputs {
     /// [`crate::WageCalculator::expected_annual_wage_raw`]) so the
     /// evaluator stays free of wage policy.
     pub expected_annual_wage: u32,
+
+    /// −1..=1: how the player feels about the man who would be picking
+    /// him, where they have worked together before. Zero when they have
+    /// not, which is the overwhelming majority of moves.
+    ///
+    /// Read from the *player's* memory rather than the coach's dossier, so
+    /// the two of them are allowed to remember it differently — and they
+    /// often should.
+    pub manager_affinity: f32,
     /// The player's stored [`crate::club::player::transfer::BigStagePull`]
     /// score, 0..1 — how strongly he is drawn toward a bigger competition.
     ///
@@ -1217,6 +1235,22 @@ impl TransferMovePlausibility {
     /// floor and leaves only the probability texture to the resolver.
     /// Returns the reason he would refuse, or `None` if the move is
     /// basically reasonable for him.
+    /// Reputation bands of step up that buy off a grudge against the man
+    /// in the dugout. Two is a lot — the sort of move a career is made of.
+    const GRUDGE_BOUGHT_OFF_REP: i32 = 2 * thresholds::REP_STEP_DOWN_GAP as i32;
+
+    /// Whether the move is big enough that he would swallow it.
+    ///
+    /// `rep_drop` is positive when the player is stepping *down*, so a step
+    /// up is a negative of matching size.
+    fn ambition_outweighs_the_grudge(
+        inputs: &TransferPlausibilityInputs,
+        rep_drop: i32,
+    ) -> bool {
+        rep_drop <= -Self::GRUDGE_BOUGHT_OFF_REP
+            && !matches!(inputs.availability_strength(), AvailabilityStrength::Forced)
+    }
+
     pub fn player_terms_floor(
         inputs: &TransferPlausibilityInputs,
     ) -> Option<TransferPlausibilityReason> {
@@ -1232,6 +1266,14 @@ impl TransferMovePlausibility {
             (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX).contains(&inputs.player_age);
         let domestic = inputs.same_country || inputs.same_league_or_division;
 
+        // He will not work for that man again. Checked before the sporting
+        // gates because it does not depend on them: this is not a player
+        // weighing a step down, it is a player who has already decided.
+        if inputs.manager_affinity <= DossierTuning::PLAYER_AFFINITY_REFUSAL
+            && !Self::ambition_outweighs_the_grudge(inputs, rep_drop)
+        {
+            return Some(TransferPlausibilityReason::RefusesToWorkForThatManager);
+        }
         // First-team / key player refuses a clear sporting step down.
         if importance >= thresholds::IMPORTANT && drop >= thresholds::BIG_SPORTING_DROP {
             return Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub);
@@ -1633,6 +1675,7 @@ mod tests {
 
     fn base_inputs() -> TransferPlausibilityInputs {
         TransferPlausibilityInputs {
+            manager_affinity: 0.0,
             buyer_rep: 0.45,
             seller_rep: 0.80,
             buyer_league_rep: 5500,
@@ -1686,6 +1729,7 @@ mod tests {
     /// factor rather than the very-important / huge-drop hard wall.
     fn moderate_step_down_inputs() -> TransferPlausibilityInputs {
         TransferPlausibilityInputs {
+            manager_affinity: 0.0,
             buyer_rep: 0.55,
             seller_rep: 0.78,
             buyer_league_rep: 5000,
@@ -2881,6 +2925,7 @@ mod tests {
 
     fn foreign_base_inputs() -> TransferPlausibilityInputs {
         TransferPlausibilityInputs {
+            manager_affinity: 0.0,
             buyer_rep: 0.28,
             seller_rep: 0.78,
             buyer_league_rep: 2000,
@@ -3180,6 +3225,7 @@ mod agent_channel_tests {
     impl AgentFixtures {
         fn contented_standout() -> TransferPlausibilityInputs {
             TransferPlausibilityInputs {
+                manager_affinity: 0.0,
                 buyer_rep: 0.85,
                 seller_rep: 0.55,
                 buyer_league_rep: 9_200,

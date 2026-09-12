@@ -26,6 +26,8 @@ use chrono::NaiveDate;
 
 use crate::club::person::Person;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::coach::memory::CoachMemoryStore;
+use crate::club::staff::coach::standing::StandingRead;
 use crate::club::staff::goalkeeping::{KeeperRoomPlan, KeeperTier};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::{Player, PlayerCollection, PlayerFieldPositionGroup};
@@ -35,6 +37,7 @@ use crate::{Player, PlayerCollection, PlayerFieldPositionGroup};
 /// Ordered loosely from most to least central so a consumer can compare
 /// standing without a lookup table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum PlannedRole {
     /// The team is built around him.
     Cornerstone,
@@ -77,6 +80,52 @@ impl PlannedRole {
     /// Roles under which the club has no reason to offer fresh terms.
     pub fn is_exit_path(self) -> bool {
         matches!(self, Self::ShopWindow | Self::NotInPlans)
+    }
+
+    /// Every role, most central first. The order is the ladder, and it is
+    /// what makes "a step down" a well-defined move.
+    pub const LADDER: [PlannedRole; 9] = [
+        Self::Cornerstone,
+        Self::Starter,
+        Self::Rotation,
+        Self::CupKeeper,
+        Self::SuccessionHeir,
+        Self::DevelopmentPathway,
+        Self::Cover,
+        Self::ShopWindow,
+        Self::NotInPlans,
+    ];
+
+    /// Packed form, for the dossier. A *lower* value is a higher role.
+    #[inline]
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    /// Inverse of [`Self::as_u8`]. An unknown value reads as
+    /// [`PlannedRole::Cornerstone`] only because zero is the discriminant it
+    /// holds; every caller passes a value this type produced.
+    pub fn from_u8(value: u8) -> Self {
+        Self::LADDER
+            .get(value as usize)
+            .copied()
+            .unwrap_or(Self::NotInPlans)
+    }
+
+    /// One rung more central, saturating at the top.
+    pub fn promoted(self) -> Self {
+        Self::from_u8(self.as_u8().saturating_sub(1))
+    }
+
+    /// One rung less central, saturating at the bottom.
+    pub fn demoted(self) -> Self {
+        Self::from_u8((self.as_u8() + 1).min(Self::NotInPlans.as_u8()))
+    }
+
+    /// True when `self` is at least as central as `other`.
+    #[inline]
+    pub fn is_at_least(self, other: PlannedRole) -> bool {
+        self.as_u8() <= other.as_u8()
     }
 
     /// Stable key for the events feed / UI.
@@ -143,6 +192,32 @@ impl CoachSquadPlan {
         }
     }
 
+    /// Set a role directly, outside the monthly revision.
+    ///
+    /// The revision is the ordinary route and this is the exception: a
+    /// manager who has decided a man has no future does not wait until the
+    /// first of next month to act on it, and a reunion floor has to be in
+    /// place before the first team sheet.
+    pub fn force_role(&mut self, player_id: u32, role: PlannedRole, today: NaiveDate) {
+        self.entries.insert(
+            player_id,
+            PlayerPlanEntry {
+                role,
+                set_on: today,
+                succeeds: None,
+            },
+        );
+    }
+
+    /// Drop one player from the plan.
+    ///
+    /// Called when a spell ends: a plan for a man who has left the club is
+    /// not an opinion, it is a stale row that the renewal desk and the
+    /// listing sweep would both read as current.
+    pub fn remove(&mut self, player_id: u32) {
+        self.entries.remove(&player_id);
+    }
+
     /// A new manager inherits a squad, not a plan.
     pub fn clear(&mut self) {
         self.entries.clear();
@@ -178,6 +253,24 @@ impl CoachSquadPlan {
         keepers: Option<&KeeperRoomPlan>,
         today: NaiveDate,
     ) -> Vec<(u32, PlannedRole)> {
+        self.revise_with_standing(players, keepers, None, today)
+    }
+
+    /// As [`Self::revise_with_keepers`], with where each man stands.
+    ///
+    /// The depth chart says who is the better footballer and the standing
+    /// says who the manager is actually picking, and they are different
+    /// questions. A plan derived from the first alone produces a squad in
+    /// which a man can be frozen out of every team sheet for a season and
+    /// still be down on paper as a starter — which is how a career used to
+    /// stall here with nothing on the record to say it had.
+    pub fn revise_with_standing(
+        &mut self,
+        players: &PlayerCollection,
+        keepers: Option<&KeeperRoomPlan>,
+        memory: Option<&CoachMemoryStore>,
+        today: NaiveDate,
+    ) -> Vec<(u32, PlannedRole)> {
         let ranks = SquadDepthRanks::build(players, today);
         let mut changes = Vec::new();
 
@@ -186,8 +279,11 @@ impl CoachSquadPlan {
             if player.is_on_loan() {
                 continue;
             }
-            let role = Self::keeper_role(player, keepers)
+            let standing = memory.and_then(|store| store.standing_of(player.id));
+            let derived = Self::keeper_role(player, keepers)
                 .unwrap_or_else(|| Self::derive_role(player, &ranks, today));
+            let level = AbilityEstimator::observable_level(player);
+            let role = StandingRead::bound_role(derived, standing, ranks.rank_of(player, level));
             let previous = self.entries.get(&player.id).map(|e| e.role);
             if previous != Some(role) {
                 changes.push((player.id, role));

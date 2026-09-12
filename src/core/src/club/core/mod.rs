@@ -10,10 +10,11 @@
 mod academy;
 mod boardroom;
 mod club;
-mod squad;
+pub mod squad;
 mod tick;
 mod treasury;
 
 pub use boardroom::LeagueStanding;
+pub use squad::SquadDepartures;
 pub use club::{Club, ClubColors, ClubPhilosophy};
 pub use treasury::WageReliefSale;

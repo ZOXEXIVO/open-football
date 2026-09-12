@@ -1,11 +1,21 @@
+mod beard;
+mod body;
+mod canvas;
+mod color;
+mod features;
 mod generator;
+mod geometry;
+mod hair;
+mod identity;
 pub mod routes;
+mod shading;
 pub mod skin;
+mod tones;
 
 /// Cache-busting version for /face.svg URLs. Responses are served
 /// `immutable`, so bump this whenever generator output changes — every
 /// template injects it via `{{ crate::face::FACE_VERSION }}`.
-pub const FACE_VERSION: u32 = 9;
+pub const FACE_VERSION: u32 = 11;
 
 /// Where the real head shots live: the picture library every `<img>` on the
 /// site already points at, and the first thing the match viewer tries for a

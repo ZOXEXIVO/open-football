@@ -3088,7 +3088,15 @@ impl GlobalFreeAgentPool {
         // squad, and the contract/history identity and squad-cap check above
         // were already keyed to it. The historical first-team insert rostered
         // pool signings on whatever squad happened to sit first.
-        TransferExecution::add_to_main_team(&mut buying_country.clubs[buying_club_idx], player);
+        // Through the coach-aware door, not the bare one: a free signing is
+        // a man walking into a dressing room like any other, and the manager
+        // is entitled to have an opinion about him — including the opinion
+        // he already formed somewhere else.
+        TransferExecution::sign_into_main_team(
+            &mut buying_country.clubs[buying_club_idx],
+            player,
+            date,
+        );
 
         // A pool signing is business in a market, exactly like a paid one: the
         // four paid executors write the ledger and this door did not, so a club

@@ -627,6 +627,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::ManagerTrustGrowing => "event_manager_trust_growing",
         HappinessEventType::ManagerTrustEroding => "event_manager_trust_eroding",
         HappinessEventType::NewManagerBounce => "event_new_manager_bounce",
+        HappinessEventType::ReunitedWithFormerManager => "event_reunited_with_former_manager",
         HappinessEventType::RalliesBehindManager => "event_rallies_behind_manager",
         HappinessEventType::SensesManagerChange => "event_senses_manager_change",
         HappinessEventType::FormalWarningIssued => "event_formal_warning_issued",

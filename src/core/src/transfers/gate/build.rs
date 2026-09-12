@@ -19,6 +19,8 @@
 //! [`stance`]: crate::transfers::gate::stance
 //! [`fit`]: crate::transfers::gate::fit
 
+use crate::club::mind::organs::memory::{ActorRef, FactClaim};
+use crate::club::staff::DossierTuning;
 use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 
@@ -178,6 +180,10 @@ impl TransferPlausibilityBuilder {
         );
 
         Some(TransferPlausibilityInputs {
+            // A summary carries no memory, so this path cannot know
+            // whether the two of them have history. Zero is the honest
+            // answer and the overwhelmingly common one.
+            manager_affinity: 0.0,
             buyer_rep: buyer_ctx.buyer_rep,
             seller_rep: seller.club_reputation_score,
             buyer_league_rep: buyer_ctx.buyer_league_rep,
@@ -380,6 +386,7 @@ impl TransferPlausibilityBuilder {
         );
 
         TransferPlausibilityInputs {
+            manager_affinity: PlayerManagerAffinity::of(player, buying_club, date),
             buyer_rep: buyer_ctx.buyer_rep,
             seller_rep,
             buyer_league_rep: buyer_ctx.buyer_league_rep,
@@ -574,5 +581,49 @@ impl TransferPlausibilityBuilder {
         };
 
         (market_affinity, buyer_market_knowledge)
+    }
+}
+
+/// How a player feels about the man who would be picking him.
+///
+/// Read from the *player's* side — his standing with the coach and the
+/// convictions he has formed about him — rather than from the coach's
+/// dossier. The two are allowed to disagree and frequently should: a
+/// manager who remembers moving a squad player on remembers it as routine,
+/// and the player remembers being moved on.
+pub(in crate::transfers) struct PlayerManagerAffinity;
+
+impl PlayerManagerAffinity {
+    /// −1..=1, and exactly zero for the overwhelming majority of moves,
+    /// where the two of them have never met.
+    pub(in crate::transfers) fn of(player: &Player, buying_club: &Club, date: NaiveDate) -> f32 {
+        let Some(coach) = buying_club.teams.main().map(|team| team.staffs.head_coach()) else {
+            return 0.0;
+        };
+        if coach.id == 0 {
+            return 0.0;
+        }
+        let manager = ActorRef::staff(coach.id);
+        let ctx = player.mind_context(date, buying_club.id.into());
+        let standing = player.mind.standing_with(manager, &ctx);
+        if standing == 0.0
+            && player.relations.get_staff(coach.id).is_none()
+            && player.rapport.score(coach.id) == 0
+        {
+            return 0.0;
+        }
+
+        (standing
+            + player.mind.believes(FactClaim::MadeMeAPlayer, manager)
+                * DossierTuning::PLAYER_AFFINITY_W_MADE
+            + player.mind.believes(FactClaim::HeBackedMe, manager)
+                * DossierTuning::PLAYER_AFFINITY_W_BACKED
+            + player.mind.believes(FactClaim::WeClashed, manager)
+                * DossierTuning::PLAYER_AFFINITY_W_CLASHED
+            + player.mind.believes(FactClaim::NeverTrustedMe, manager)
+                * DossierTuning::PLAYER_AFFINITY_W_NEVER_TRUSTED
+            + player.mind.believes(FactClaim::HisWordIsWorthless, manager)
+                * DossierTuning::PLAYER_AFFINITY_W_WORD)
+            .clamp(-1.0, 1.0)
     }
 }

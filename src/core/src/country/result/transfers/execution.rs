@@ -1,3 +1,5 @@
+use crate::club::SquadDepartures;
+use crate::club::staff::SeparationCause;
 use super::types::DeferredTransfer;
 use crate::club::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
@@ -98,6 +100,7 @@ impl TransferExecution {
     /// him a player he rated.
     pub(crate) fn sign_into_main_team(club: &mut Club, player: Player, date: NaiveDate) {
         let player_id = player.id;
+        let signing_age = player.age(date);
         Self::add_to_main_team(club, player);
 
         let club_id = club.id;
@@ -141,6 +144,19 @@ impl TransferExecution {
         // Every arrival under him is a piece of the squad becoming his,
         // whatever he thought of it.
         manager.mind.ambition.signings = manager.mind.ambition.signings.saturating_add(1);
+
+        // And the working relationship starts here. For most arrivals that
+        // is a blank sheet; for the ones he has coached before it is not,
+        // and the difference is what the reunion seeder is for.
+        let opening = manager.player_joined_at(player_id, club_id, signing_age, date);
+        if opening.is_reunion() {
+            manager.remember(
+                EpisodeKind::ReunitedWithAPlayerIKnow,
+                ActorRef::player(player_id),
+                date,
+                club_id,
+            );
+        }
 
         // Whether he *wanted* him is a question only his judgement organ
         // can answer, and only about a player he has already formed a
@@ -819,10 +835,21 @@ impl TransferExecutor {
         selling_club_id: u32,
         fee: f64,
         is_loan: bool,
+        today: NaiveDate,
     ) -> Option<(Player, TeamInfo, Option<u32>, u32)> {
         let country = data.country_mut(selling_country_id)?;
 
         let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
+
+        // Tell the dugout before the squad loses him. A loan suspends the
+        // working relationship rather than ending it: he is still the
+        // manager's player and the reports will be read when he comes back.
+        let cause = if is_loan {
+            SeparationCause::LoanedOutByMe
+        } else {
+            SquadDepartures::sale_cause(selling_club, player_id)
+        };
+        SquadDepartures::notify(selling_club, player_id, cause, today);
 
         let league_id = selling_club.teams.main().and_then(|t| t.league_id);
 
@@ -929,6 +956,7 @@ impl TransferExecutor {
             selling_club_id,
             upfront,
             false,
+            date,
         );
 
         let (mut player, from_info, selling_league_id, _) = match taken {
@@ -1110,6 +1138,7 @@ impl TransferExecutor {
             selling_club_id,
             loan_fee,
             true,
+            date,
         );
 
         let (mut player, from_info, _, parent_team_id) = match taken {

@@ -96,5 +96,41 @@
             </div>
         </div>
     </section>
+
+    {% if !staff.known_players.is_empty() %}
+    <section class="fm-section">
+        <h3>{{ i18n.t("staff_players_he_knows") }}</h3>
+        <p class="fm-section-note">{{ i18n.t("staff_players_he_knows_note") }}</p>
+        <table class="fm-skills fm-known-players">
+            <tr>
+                <th>{{ i18n.t("staff_known_player") }}</th>
+                <th>{{ i18n.t("staff_known_spells") }}</th>
+                <th>{{ i18n.t("staff_known_matches") }}</th>
+                <th>{{ i18n.t("staff_known_regard") }}</th>
+                <th>{{ i18n.t("staff_known_standing") }}</th>
+            </tr>
+            {% for known in staff.known_players %}
+            <tr>
+                <td><a href="/{{ lang }}/players/{{ known.id }}">{{ known.name }}</a></td>
+                <td>{{ known.spells }}</td>
+                <td>{{ known.matches }}</td>
+                <td>{{ i18n.t(known.regard_key) }}</td>
+                <td>
+                    {% if known.working_together %}
+                        {{ i18n.t("staff_known_working_together") }}
+                    {% else %}
+                        {% match known.parted_key %}
+                            {% when Some with (key) %}{{ i18n.t(key) }}
+                            {% when None %}&mdash;
+                        {% endmatch %}
+                    {% endif %}
+                    {% for medal in known.medals %}<span class="fm-known-medal">{{ i18n.t(medal) }}</span>{% endfor %}
+                    {% for scar in known.scars %}<span class="fm-known-scar">{{ i18n.t(scar) }}</span>{% endfor %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}

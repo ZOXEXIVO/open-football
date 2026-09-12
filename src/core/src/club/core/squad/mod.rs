@@ -9,6 +9,7 @@
 //! department's review of the one queue that runs through every squad.
 
 mod decision;
+pub mod departure;
 mod depth;
 mod goalkeeping;
 mod loans;
@@ -17,3 +18,5 @@ mod promotion;
 mod rebalance;
 mod trim;
 mod utilization;
+
+pub use departure::SquadDepartures;

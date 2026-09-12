@@ -16,6 +16,7 @@
 //! status / relations / events stay owned by the Player module per
 //! [`crate::club`] conventions.
 
+use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
 use super::TeamBehaviour;
 use crate::club::staff::CoachPlayerBond;
 use crate::club::team::CaptainMediation;
@@ -67,7 +68,7 @@ impl TeamBehaviour {
     /// counter, and roll the escalation events when conditions hold.
     pub(super) fn process_conflict_escalation(
         players: &mut PlayerCollection,
-        staffs: &StaffCollection,
+        staffs: &mut StaffCollection,
         _result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
@@ -98,13 +99,62 @@ impl TeamBehaviour {
             })
             .collect();
 
+        let mut escalations: Vec<(u32, ConflictEscalation)> = Vec::new();
         for (player_id, effective_risk) in candidates {
             if let Some(player) = players.iter_mut().find(|p| p.id == player_id) {
                 player.on_weekly_conflict_risk(effective_risk);
-                player.roll_conflict_escalation(effective_risk, today, rand::random::<f32>);
+                let escalated =
+                    player.roll_conflict_escalation(effective_risk, today, rand::random::<f32>);
+                if escalated != ConflictEscalation::None {
+                    escalations.push((player_id, escalated));
+                }
+            }
+        }
+
+        // And the manager finds out. A player asking to leave, or taking
+        // it to the press, is the sharpest single thing that can happen to
+        // where he stands — it is not a reading of his football, it is a
+        // fact about the relationship, and the ladder treats it as one.
+        if escalations.is_empty() {
+            return;
+        }
+        let Some(coach) = staffs.head_coach_mut() else {
+            return;
+        };
+        if coach.id == 0 || coach.id != coach_id {
+            return;
+        }
+        let lens = EvidenceLens {
+            loyalty: coach.attributes.loyalty,
+            ..EvidenceLens::default()
+        };
+        for (player_id, escalated) in escalations {
+            let Some(standing) = coach.coach_memory.standing_of_mut(player_id) else {
+                continue;
+            };
+            match escalated {
+                ConflictEscalation::TransferRequest => {
+                    StandingEvidence::asked_to_leave(standing, &lens)
+                }
+                ConflictEscalation::WentPublic => StandingEvidence::went_public(standing),
+                ConflictEscalation::None => {}
             }
         }
     }
+}
+
+/// What a week of unresolved friction actually produced.
+///
+/// Only the two that reach the manager: a private complaint and a formal
+/// unhappiness are the player's own state, and a coach who is the cause of
+/// them is by definition not being told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictEscalation {
+    None,
+    /// He asked to leave.
+    TransferRequest,
+    /// He said it where everybody could hear.
+    WentPublic,
 }
 
 /// Per-player handler invoked from the orchestrator. Lives on Player
@@ -140,10 +190,10 @@ impl Player {
         effective_risk: f32,
         today: NaiveDate,
         mut dice: impl FnMut() -> f32,
-    ) {
+    ) -> ConflictEscalation {
         // Suppress all rolls when the bond is calm.
         if effective_risk < ConflictEscalationThresholds::RANDOM_CONFLICT_SUPPRESS {
-            return;
+            return ConflictEscalation::None;
         }
 
         let already_unhappy = self.statuses.has(PlayerStatusType::Unh);
@@ -171,7 +221,10 @@ impl Player {
             self.statuses.add(today, PlayerStatusType::Unh);
             self.happiness.adjust_morale(-6.0);
             self.happiness.conflict_risk_streak = 0;
-            return;
+            // Formal unhappiness is the player's own state. The manager
+            // is usually the cause of it and is by definition not being
+            // told — which is exactly why it escalates from here.
+            return ConflictEscalation::None;
         }
 
         // ── Transfer-request roll — requires streak + ambition or
@@ -190,7 +243,7 @@ impl Player {
                     self.statuses.add(today, PlayerStatusType::Req);
                     self.happiness.adjust_morale(-8.0);
                     self.happiness.conflict_risk_streak = 0;
-                    return;
+                    return ConflictEscalation::TransferRequest;
                 }
             }
         }
@@ -207,8 +260,10 @@ impl Player {
                 if !self.statuses.has(PlayerStatusType::PR) {
                     self.statuses.add(today, PlayerStatusType::PR);
                 }
+                return ConflictEscalation::WentPublic;
             }
         }
+        ConflictEscalation::None
     }
 
     /// Spec composite of "how much will personality push this player

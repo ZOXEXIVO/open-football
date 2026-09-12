@@ -32,7 +32,7 @@ impl Team {
             date,
         );
 
-        let coach_snapshot = MatchCoachSnapshot::for_rotation(head_coach);
+        let coach_snapshot = MatchCoachSnapshot::for_rotation(head_coach, date);
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -252,7 +252,7 @@ impl MatchCoachSnapshot {
     /// Build a snapshot for a rotation / dev-league fixture — match
     /// importance is implicitly low, philosophy is irrelevant. The
     /// strategy collapses to [`CoachStrategy::DevelopYouth`].
-    fn for_rotation(head_coach: &Staff) -> Option<CoachMatchSnapshot> {
+    fn for_rotation(head_coach: &Staff, date: NaiveDate) -> Option<CoachMatchSnapshot> {
         if head_coach.id == 0 {
             return None;
         }
@@ -262,6 +262,7 @@ impl MatchCoachSnapshot {
             head_coach.coach_memory.clone(),
             profile,
             strategy,
+            date,
         ))
     }
 
@@ -284,6 +285,7 @@ impl MatchCoachSnapshot {
             head_coach.coach_memory.clone(),
             profile,
             strategy,
+            ctx.date,
         ))
     }
 }

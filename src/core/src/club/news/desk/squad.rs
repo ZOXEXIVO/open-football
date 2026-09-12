@@ -392,8 +392,17 @@ impl SquadDesk {
     /// matters, so the paper is entitled to it; what it is not entitled
     /// to do is quote anybody on it, which is why neither of these is a
     /// quote piece.
+    /// Matches into a reunion after which it stops being news and starts
+    /// being the season.
+    const REUNION_STILL_NEWS_MATCHES: u16 = 4;
+    /// Standing at which a reunion is a good story, and at which it is the
+    /// other kind.
+    const REUNION_WARM: f32 = 0.25;
+    const REUNION_COLD: f32 = -0.20;
+
     fn file_coach_verdict(out: &mut Vec<NewsStory>, team: &Team, player: &Player, date: NaiveDate) {
         use crate::club::staff::coach::memory::CoachMemoryFlags;
+        use crate::club::staff::coach::standing::StandingRung;
 
         let coach = team.staffs.head_coach();
         // A vacant dugout falls back to a stub with no id, and a stub
@@ -407,6 +416,42 @@ impl SquadDesk {
         };
 
         let importance = PlayerStanding::importance(player);
+
+        // A man who is not being picked at all is a different story from a
+        // man the manager has doubts about, and the press box can tell the
+        // difference: one is a mood and the other is a decision with a
+        // career attached to it. It leads.
+        if memory.standing.rung == StandingRung::FrozenOut {
+            out.push(
+                NewsStory::new(NewsStoryKind::FrozenOutOfTheSide, date)
+                    .about(player.id)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // And a man who has just started working for a manager he knows.
+        // Filed off the record rather than off an event, so it keeps while
+        // the reunion is still the story.
+        if memory.flags.contains(CoachMemoryFlags::KNOWN_QUANTITY)
+            && memory.matches_this_spell() <= Self::REUNION_STILL_NEWS_MATCHES
+        {
+            let kind = if memory.standing.score >= Self::REUNION_WARM {
+                Some(NewsStoryKind::ReunitedWithHisManager)
+            } else if memory.standing.score <= Self::REUNION_COLD {
+                Some(NewsStoryKind::OldWoundsReopened)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                out.push(
+                    NewsStory::new(kind, date)
+                        .about(player.id)
+                        .weighted(importance),
+                );
+                return;
+            }
+        }
 
         if memory.flags.contains(CoachMemoryFlags::STICKY_DOUBT) {
             out.push(

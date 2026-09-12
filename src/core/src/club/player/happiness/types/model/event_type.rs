@@ -725,6 +725,12 @@ pub enum HappinessEventType {
     /// Counterpart of `ManagerDeparture`, which carries the loyalists'
     /// grief for the outgoing coach.
     NewManagerBounce,
+    /// The new manager is one he has played for before, and he already
+    /// knows what to expect. Not the bounce — the bounce is hope, and this
+    /// is knowledge. Signed at the emit site by how it went last time, so
+    /// the same event is one player's best news of the season and
+    /// another's cue to ask for a transfer.
+    ReunitedWithFormerManager,
 
     // ── Manager pressure, club discipline & collective reaction ──
     /// The board has publicly put the manager on notice and this player

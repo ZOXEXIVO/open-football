@@ -4,7 +4,10 @@ use chrono::{Duration, NaiveDate};
 
 use crate::Club;
 use crate::club::context::ClubContext;
+use crate::club::mind::organs::memory::ActorRef;
+use crate::club::person::Person;
 use crate::club::staff::mind::StaffSituation;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::utils::DateUtils;
 
 /// The four table numbers a manager's situation reads.
@@ -99,6 +102,12 @@ impl Club {
     /// Nothing downstream reads the result yet — the mind accumulates in
     /// parallel with `job_satisfaction` and `CoachMemoryStore`, exactly
     /// as `PlayerMind` accumulates alongside `PlayerHappiness`.
+    /// Age at which what a player is now is what he is going to be, so a
+    /// view of his ceiling can be marked right or wrong.
+    const VERDICT_AGE: u8 = 25;
+    /// Or, for a view formed long enough ago, the waiting is the answer.
+    const VERDICT_DAYS: u16 = 365 * 3;
+
     pub fn run_manager_mind(&mut self, today: NaiveDate, table: LeagueStanding) {
         let mut situation = self.manager_situation(table);
         let club_id = self.id;
@@ -147,6 +156,67 @@ impl Club {
         };
 
         manager.mind.tick_with(&context, &situation);
+    }
+
+    /// The monthly audit: which of the manager's views about his players
+    /// the careers in front of him have now answered.
+    ///
+    /// This is the loop that closes. A coach forms a judgement about every
+    /// player he watches, and until now nothing ever scored one — so
+    /// `JudgementOutcome` never left `Open`, `IWasWrongAboutHim` could
+    /// never form, and a manager's patience and self-belief sat at whatever
+    /// they were seeded with for a thirty-year career.
+    ///
+    /// Only settles questions a career has actually answered: a man old
+    /// enough that what he is now is what he is going to be, or a view held
+    /// long enough that the waiting is itself the answer. And only ones the
+    /// coach was committed enough to be right or wrong about — an opinion
+    /// he was never sure of teaches him nothing, which
+    /// [`PlayerJudgement::settle`] enforces on its own.
+    pub fn audit_manager_judgements(&mut self, today: NaiveDate) {
+        let club_id = self.id;
+        let Some(main) = self.teams.main_mut() else {
+            return;
+        };
+        let squad: Vec<(u32, u8, f32)> = main
+            .players
+            .players
+            .iter()
+            .map(|player| {
+                (
+                    player.id,
+                    player.age(today),
+                    AbilityEstimator::observable_level(player) as f32 / 200.0,
+                )
+            })
+            .collect();
+
+        let Some(manager) = main.staffs.head_coach_mut() else {
+            return;
+        };
+        if manager.id == 0 {
+            return;
+        }
+        let context = manager.mind_context(today, club_id);
+        let day = context.day();
+
+        for (player_id, age, true_level) in squad {
+            let player = ActorRef::player(player_id);
+            let Some(view) = manager.mind.judgement_of(player) else {
+                continue;
+            };
+            if view.outcome.is_settled() {
+                continue;
+            }
+            let old_enough = age >= Self::VERDICT_AGE;
+            let long_enough = day.saturating_sub(view.formed) >= Self::VERDICT_DAYS;
+            if !old_enough && !long_enough {
+                continue;
+            }
+            manager
+                .mind
+                .settle_judgement(player, true_level, &context);
+        }
     }
 
     /// Pause club-driven listings so a just-appointed head coach can form

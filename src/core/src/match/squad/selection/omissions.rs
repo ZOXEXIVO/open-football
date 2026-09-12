@@ -566,6 +566,10 @@ impl OmissionReasonMap {
             CoachDecisionReason::BigMatchFailure => {
                 SelectionOmissionReason::ManagerDoesNotTrustPlayer
             }
+            CoachDecisionReason::FrozenOut => SelectionOmissionReason::FrozenOutByManager,
+            CoachDecisionReason::OutOfFavour => {
+                SelectionOmissionReason::ManagerDoesNotTrustPlayer
+            }
             CoachDecisionReason::RoleMismatch => SelectionOmissionReason::PositionFitIssue,
             CoachDecisionReason::FatigueRisk => SelectionOmissionReason::FatigueManagement,
             CoachDecisionReason::InjuryRisk => SelectionOmissionReason::FitnessProtection,
@@ -581,6 +585,8 @@ impl OmissionReasonMap {
             | CoachDecisionReason::TacticalNeed
             | CoachDecisionReason::LiveMatchUnderperformance
             | CoachDecisionReason::CostlyError
+            | CoachDecisionReason::Undroppable
+            | CoachDecisionReason::SecondChance
             | CoachDecisionReason::CardRisk => return None,
         };
         Some(mapped)

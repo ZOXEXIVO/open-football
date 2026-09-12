@@ -15,6 +15,7 @@
 use super::memory::CoachMemoryStore;
 use super::strategy::CoachStrategy;
 use crate::club::staff::CoachProfile;
+use chrono::NaiveDate;
 
 /// Live-match coach snapshot. Cloned from the head coach at
 /// squad-construction time. The memory store is the only field with
@@ -24,14 +25,28 @@ pub struct CoachMatchSnapshot {
     pub memory: CoachMemoryStore,
     pub profile: CoachProfile,
     pub strategy: CoachStrategy,
+    /// The day the fixture is played.
+    ///
+    /// Carried because the live substitution reads dated state — how far
+    /// the coach is backing a man through a slump expires on a date — and
+    /// the match engine has no calendar of its own. It used to pass the
+    /// first of January 2000, which read as every protection having
+    /// lapsed two centuries ago.
+    pub date: NaiveDate,
 }
 
 impl CoachMatchSnapshot {
-    pub fn new(memory: CoachMemoryStore, profile: CoachProfile, strategy: CoachStrategy) -> Self {
+    pub fn new(
+        memory: CoachMemoryStore,
+        profile: CoachProfile,
+        strategy: CoachStrategy,
+        date: NaiveDate,
+    ) -> Self {
         CoachMatchSnapshot {
             memory,
             profile,
             strategy,
+            date,
         }
     }
 }

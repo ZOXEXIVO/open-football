@@ -1,3 +1,4 @@
+use crate::club::SquadDepartures;
 use crate::club::player::calculators::{FreeAgentReleaseReason, WageCalculator};
 use crate::club::player::transfer::ReleaseContext;
 use crate::shared::{Currency, CurrencyValue};
@@ -65,6 +66,21 @@ impl SimulatorData {
                 let mut new_history: Vec<CompletedTransfer> = Vec::new();
                 for club in &mut country.clubs {
                     let club_id = club.id;
+                    // The dugout hears first, and while the players are all
+                    // still in their squads: once the sweep below has lifted
+                    // them out there is nobody left to close a spell with.
+                    let leaving: Vec<u32> = club
+                        .teams
+                        .teams
+                        .iter()
+                        .flat_map(|team| team.players.players.iter())
+                        .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
+                        .map(|p| p.id)
+                        .collect();
+                    for player_id in leaving {
+                        let cause = SquadDepartures::release_cause(club, player_id);
+                        SquadDepartures::notify(club, player_id, cause, date);
+                    }
                     let identity = ClubIdentity::resolve(club, &league_lookup);
                     for team in &mut club.teams.teams {
                         let release_team_info = identity.team_info_for(team);

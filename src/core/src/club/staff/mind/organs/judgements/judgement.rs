@@ -262,6 +262,17 @@ impl PlayerJudgement {
         *axis = (moved * 100.0).round() as u8;
     }
 
+    /// Restore a view from a longer-lived record of it.
+    ///
+    /// The store holds 48 opinions and a career runs through many more, so
+    /// a man he genuinely has a view of can fall out of it. The dossier
+    /// outlives the store, and when the two of them meet again this is how
+    /// the view comes back: at the confidence the years have left it,
+    /// rather than at the fifteen per cent of a first impression.
+    pub fn rehydrate(&mut self, confidence: f32) {
+        self.confidence_pct = (confidence.clamp(0.0, 1.0) * 100.0).round() as u8;
+    }
+
     /// Revise what he thinks the player is worth. Confidence damps the
     /// revision: a coach who is sure of a player does not re-rate him on
     /// one training session.

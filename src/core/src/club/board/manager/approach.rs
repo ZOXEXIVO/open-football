@@ -1,3 +1,4 @@
+use crate::club::staff::SeparationCause;
 use crate::club::board::manager::scorer::ManagerCandidateScorer;
 use crate::club::board::manager::search::ManagerSearch;
 use crate::club::board::manager::seat::ManagerSeat;
@@ -362,6 +363,18 @@ impl ManagerApproach {
         // relations so the new manager doesn't carry stale player
         // rapport from the old squad.
         let new_id = staff.id;
+
+        // He leaves one place and arrives at another on the same
+        // morning, and the order matters: the spell is closed against
+        // the club he was at, and only then does he take the new job.
+        // Memory and his judgements of players travel with him; his
+        // standing with that board, room and crowd does not.
+        //
+        // Closing runs *before* the relations are wiped, because how a
+        // player felt about working for him is one of the things a
+        // parting record is made of, and the wipe takes it with it.
+        staff.leave_club_as(self.source_club_id, SeparationCause::IMovedOn, today);
+
         staff.contract = Some(ManagerSeat::build_manager_contract(
             self.offered_salary,
             today,
@@ -369,13 +382,6 @@ impl ManagerApproach {
         staff.relations = Relations::new();
         staff.fatigue = 0.0;
         staff.job_satisfaction = 75.0; // Fresh job: optimistic.
-
-        // He leaves one place and arrives at another on the same
-        // morning, and the order matters: the spell is closed against
-        // the club he was at, and only then does he take the new job.
-        // Memory and his judgements of players travel with him; his
-        // standing with that board, room and crowd does not.
-        staff.leave_club(self.source_club_id);
         staff.remember(
             EpisodeKind::AppointedManager,
             ActorRef::club(self.requesting_club_id),

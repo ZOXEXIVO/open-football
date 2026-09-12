@@ -603,6 +603,10 @@ pub struct MoraleEventCatalog {
     /// Squad-wide lift when a new head coach takes charge; frozen-out
     /// players scale it up at the emit site (clean-slate hope).
     pub new_manager_bounce: f32,
+    /// Base size of a reunion with a former manager. Signed and scaled at
+    /// the emit site by how the player remembers him, so this is the
+    /// magnitude of a *strong* feeling either way rather than a default.
+    pub reunited_with_former_manager: f32,
     /// Loyalist fork of the manager-pressure story — fired up to save
     /// the coach's job.
     pub rallies_behind_manager: f32,
@@ -960,6 +964,7 @@ impl Default for MoraleEventCatalog {
             manager_trust_growing: 3.5,
             manager_trust_eroding: -4.0,
             new_manager_bounce: 2.5,
+            reunited_with_former_manager: 6.0,
             rallies_behind_manager: 3.0,
             senses_manager_change: -2.0,
             formal_warning_issued: -1.5,
@@ -1170,6 +1175,7 @@ impl MoraleEventCatalog {
             ManagerTrustGrowing => self.manager_trust_growing,
             ManagerTrustEroding => self.manager_trust_eroding,
             NewManagerBounce => self.new_manager_bounce,
+            ReunitedWithFormerManager => self.reunited_with_former_manager,
             RalliesBehindManager => self.rallies_behind_manager,
             SensesManagerChange => self.senses_manager_change,
             FormalWarningIssued => self.formal_warning_issued,

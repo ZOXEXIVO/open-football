@@ -229,6 +229,10 @@ impl Club {
             if self.teams.ensure_coach_state(date) {
                 self.open_manager_review_window(date);
             }
+            // Which of the manager's views about his players their careers
+            // have now answered. The loop that turns being wrong about
+            // somebody into something he learns from.
+            self.audit_manager_judgements(date);
             // Offer proactive contract renewals. Pass the chairman's wage
             // cap and league prestige so the renewal pass sizes its offers
             // correctly.

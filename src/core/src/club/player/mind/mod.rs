@@ -355,6 +355,16 @@ impl PlayerMind {
             .standing_with(actor, MindClock::day(ctx.today))
     }
 
+    /// Is `claim` held about `subject`, and how firmly?
+    ///
+    /// The read side of a conviction. Distinct from a standing, which is an
+    /// account that drifts: a conviction is a thing he has decided about
+    /// somebody and it does not fade on its own.
+    #[inline]
+    pub fn believes(&self, claim: FactClaim, subject: ActorRef) -> f32 {
+        self.organs.memory.believes(claim, subject)
+    }
+
     /// Want something, or want it more. The single write the whole
     /// simulation uses to feed the goal stack.
     ///

@@ -11,6 +11,7 @@ use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::club::player::events::{MatchOutcome, MatchParticipation, MatchTeamRef};
 use crate::club::player::personality::adaptation::AdaptationSquadContext;
 use crate::club::player::player::Player;
+use crate::club::staff::coach::standing::{EvidenceLens, LadderContext, StandingTuning};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::reputation::{
     CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
@@ -2578,12 +2579,76 @@ impl CoachObservationBuilder {
     /// players the coach hasn't seen recently softens.
     fn apply(team: &mut Team, observations: &[CoachMatchObservation]) {
         let club_id = team.club_id;
+        // Read the ceilings before the staff list is borrowed: what a coach
+        // thinks a player might become is a perception read over the
+        // player, and the two cannot be borrowed at once.
+        let date = observations.first().map(|obs| obs.date);
+        let ceilings: HashMap<u32, f32> = match date {
+            Some(date) => observations
+                .iter()
+                .filter_map(|obs| {
+                    let player = team.players.players.iter().find(|p| p.id == obs.player_id)?;
+                    Some((
+                        obs.player_id,
+                        PotentialEstimator::observable_ceiling(player, date) as f32 / 200.0,
+                    ))
+                })
+                .collect(),
+            None => HashMap::new(),
+        };
+        // What the ladder needs about the squad around each man, read
+        // before the staff list is borrowed. Without it every observation
+        // was weighed as though the coach had a full squad, no captain and
+        // no young player worth being patient with — which is the default
+        // and which is wrong precisely when it matters.
+        let captain_id = team.captain_id;
+        let fit_seniors = team
+            .players
+            .players
+            .iter()
+            .filter(|player| !player.is_on_loan() && player.is_ready_for_match())
+            .count();
+        let ages: HashMap<u32, u8> = match date {
+            Some(date) => team
+                .players
+                .players
+                .iter()
+                .map(|player| (player.id, player.age(date)))
+                .collect(),
+            None => HashMap::new(),
+        };
+
         let Some(head_coach) = team.staffs.head_coach_mut() else {
             return;
         };
         let profile = CoachProfile::from_staff(head_coach);
+        let patience = head_coach.mind.judgement.patience();
+        let lens = EvidenceLens {
+            loyalty: head_coach.attributes.loyalty,
+            ..EvidenceLens::default()
+        };
         for obs in observations {
-            head_coach.coach_memory.observe(obs, &profile);
+            let age = ages.get(&obs.player_id).copied().unwrap_or(0);
+            let context = LadderContext {
+                stubbornness: profile.stubbornness,
+                man_management: profile.man_management,
+                volatility: profile.emotional_volatility,
+                judging_accuracy: profile.judging_accuracy,
+                matches_observed: 0,
+                fit_seniors,
+                is_captain: captain_id == Some(obs.player_id),
+                // A patient coach gives a young player a run before he
+                // judges him — and how patient he is is a thing his own
+                // career taught him.
+                in_youth_grace: age > 0
+                    && age <= StandingTuning::YOUTH_GRACE_AGE
+                    && patience >= StandingTuning::YOUTH_GRACE_PATIENCE,
+                has_recovery_signal: false,
+                cleared_the_air: false,
+            };
+            head_coach
+                .coach_memory
+                .observe_in(obs, &profile, &context, &lens);
         }
         if let Some(latest) = observations.last() {
             head_coach.coach_memory.decay_inactive(latest.date);
@@ -2608,10 +2673,21 @@ impl CoachObservationBuilder {
                 .map(|memory| ((memory.long_form_rating - 5.0) / 3.0).clamp(0.0, 1.0))
                 .unwrap_or(0.5);
             let ctx = head_coach.mind_context(obs.date, club_id);
-            // Ceiling seeded at the level he sees. A coach who never
-            // looked past what a young player already was is exactly
-            // the coach `IWasWrongAboutHim` is for.
-            head_coach.mind.form_judgement(player, read, read, &ctx);
+            // Level from his own baseline; ceiling from what he makes of
+            // the player's potential, through his own eye for it.
+            //
+            // Seeding both at the level — which is what this did — meant a
+            // coach could never be wrong in the direction that matters: he
+            // had no view about what a young player might become, so there
+            // was nothing for a career to prove him wrong about, and
+            // `IWasWrongAboutHim` could not form even once the audit that
+            // scores these views was running.
+            let ceiling = ceilings
+                .get(&obs.player_id)
+                .copied()
+                .unwrap_or(read)
+                .max(read);
+            head_coach.mind.form_judgement(player, read, ceiling, &ctx);
             head_coach
                 .mind
                 .watched(player, obs.effective_rating, obs.is_big_match(), &ctx);

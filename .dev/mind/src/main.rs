@@ -42,7 +42,9 @@
 //! directly rather than piping through `tee`, which block-buffers the
 //! whole run into silence.
 
+use core::club::mind::organs::memory::MindClock;
 use core::club::player::mind::{GoalStatus, MemoryCensus, MindNoteKind};
+use core::club::staff::StandingRung;
 use core::utils::DateUtils;
 use core::{
     FootballSimulator, PlayerStatusType, SimulationResult, SimulatorData, Staff, StaffPosition,
@@ -269,6 +271,23 @@ struct MindCensus {
     raw_job_satisfaction: Spread,
     raw_mind_satisfaction: Spread,
 
+    // ── What he carries about the players ─────────────────────────────
+    /// Lasting records held, and how many are live working relationships.
+    dossiers_held: Spread,
+    dossiers_open: Spread,
+    /// Men he has worked with more than once.
+    dossiers_reunited: Spread,
+    dossiers_warm: Spread,
+    dossiers_cold: Spread,
+    /// Hot memory records against the size of the squad he picks from.
+    /// Above one means he is carrying records for men who have left.
+    memory_to_squad: Vec<f32>,
+    /// Where his current squad stands with him.
+    standing_ladder: HashMap<&'static str, usize>,
+    /// Players actively under a grievance of some kind.
+    standing_grievances: usize,
+    standing_counted: usize,
+
     // ── Manager market (§10) ──────────────────────────────────────────
     /// Tenure in months, from the manager's own record of taking the job.
     tenure_months: Spread,
@@ -307,6 +326,12 @@ impl MindCensus {
     fn collect_club(&mut self, club: &core::Club, today: NaiveDate) {
         let mut seat_filled = false;
         let mut seat_is_caretaker = false;
+
+        // Where the head coach's squad stands with him, and whether his hot
+        // memory has outgrown the squad it is supposed to be about. Read at
+        // club level because both questions need the coach and the players
+        // in hand at once.
+        self.collect_standing(club, today);
 
         for team in club.teams.teams.iter() {
             for player in team.players.iter() {
@@ -359,12 +384,12 @@ impl MindCensus {
         }
 
         for goal in player.mind.goals().live() {
-            *self.goal_ladder.entry(status_label(goal.status)).or_default() += 1;
+            *self.goal_ladder.entry(Label::status_label(goal.status)).or_default() += 1;
         }
 
         self.diary.push(player.mind.journal().len() as u32);
         for note in player.mind.journal().iter() {
-            *self.note_kinds.entry(note_label(note.kind)).or_default() += 1;
+            *self.note_kinds.entry(Label::note_label(note.kind)).or_default() += 1;
         }
 
         // Phase 3b. `Req` is the status the transfer path acts on today;
@@ -381,6 +406,36 @@ impl MindCensus {
             .push(profile.as_morale(), player.happiness.morale);
         self.raw_morale.push(player.happiness.morale.round() as u32);
         self.raw_mind_morale.push(profile.as_morale().round() as u32);
+    }
+
+    /// The standing ladder across one club's senior squad, plus the
+    /// bounded-memory check the whole spell lifecycle exists to deliver.
+    fn collect_standing(&mut self, club: &core::Club, _today: NaiveDate) {
+        let Some(main) = club.teams.main() else {
+            return;
+        };
+        let coach = main.staffs.head_coach();
+        if coach.id == 0 {
+            return;
+        }
+        let squad = main.players.players.len();
+        if squad > 0 {
+            self.memory_to_squad
+                .push(coach.coach_memory.len() as f32 / squad as f32);
+        }
+        for player in main.players.iter() {
+            let Some(standing) = coach.coach_memory.standing_of(player.id) else {
+                continue;
+            };
+            self.standing_counted += 1;
+            *self
+                .standing_ladder
+                .entry(Label::rung_label(standing.rung))
+                .or_default() += 1;
+            if !standing.grievance.is_empty() {
+                self.standing_grievances += 1;
+            }
+        }
     }
 
     fn collect_staff(&mut self, staff: &Staff, today: NaiveDate) {
@@ -416,9 +471,16 @@ impl MindCensus {
         for goal in staff.mind.goals().live() {
             *self
                 .mgr_goal_ladder
-                .entry(status_label(goal.status))
+                .entry(Label::status_label(goal.status))
                 .or_default() += 1;
         }
+
+        let census = staff.dossiers.census(MindClock::day(today));
+        self.dossiers_held.push(census.held as u32);
+        self.dossiers_open.push(census.open as u32);
+        self.dossiers_reunited.push(census.reunited as u32);
+        self.dossiers_warm.push(census.warm as u32);
+        self.dossiers_cold.push(census.cold as u32);
 
         let profile = staff.mind.appraise();
         self.mgr_coverage.push(profile.coverage());
@@ -435,30 +497,18 @@ impl MindCensus {
     }
 }
 
-fn status_label(status: GoalStatus) -> &'static str {
-    match status {
-        GoalStatus::Latent => "Latent",
-        GoalStatus::Active => "Active",
-        GoalStatus::Voiced => "Voiced",
-        GoalStatus::Pressing => "Pressing",
-        GoalStatus::Satisfied => "Satisfied",
-        GoalStatus::Frustrated => "Frustrated",
-        GoalStatus::Abandoned => "Abandoned",
-    }
-}
-
-fn note_label(kind: MindNoteKind) -> &'static str {
-    match kind {
-        MindNoteKind::None => "None",
-        MindNoteKind::WantFormed => "WantFormed",
-        MindNoteKind::WantVoiced => "WantVoiced",
-        MindNoteKind::WantPressed => "WantPressed",
-        MindNoteKind::WantSatisfied => "WantSatisfied",
-        MindNoteKind::WantFrustrated => "WantFrustrated",
-        MindNoteKind::WantAbandoned => "WantAbandoned",
-        MindNoteKind::ConvictionFormed => "ConvictionFormed",
-    }
-}
+/// Ladder rungs, most favoured first — the order the report prints them in
+/// is the order a manager's regard runs.
+/// Rungs in the order a manager's regard actually runs.
+const RUNGS: [&str; 7] = [
+    "Undroppable",
+    "Trusted",
+    "InFavour",
+    "Neutral",
+    "UnderReview",
+    "OutOfFavour",
+    "FrozenOut",
+];
 
 /// The diary's vocabulary in catalog order. `None` is left out: it is
 /// the store's empty slot and is never written, so printing it would
@@ -527,7 +577,7 @@ impl ReportPrinter {
             "  {:<28} {} ({:.1}% of seniors)  ← an emit-site wiring check",
             "empty minds",
             census.empty_minds,
-            pct(census.empty_minds, census.seniors),
+            Label::pct(census.empty_minds, census.seniors),
         );
 
         println!("\n── the diary, players ──");
@@ -553,7 +603,7 @@ impl ReportPrinter {
         println!(
             "  {:<28} mean={:.2}  ← how much of a player the faculties can read",
             "faculty coverage",
-            mean(&census.coverage),
+            Label::mean(&census.coverage),
         );
     }
 
@@ -569,6 +619,27 @@ impl ReportPrinter {
             "{}",
             census.mgr_wrong_judgements.line("  …he got wrong")
         );
+
+        println!("\n── coach ↔ player ──");
+        println!("{}", census.dossiers_held.line("dossiers (cap 192)"));
+        println!("{}", census.dossiers_open.line("  …open spells"));
+        println!("{}", census.dossiers_reunited.line("  …worked with twice"));
+        println!("{}", census.dossiers_warm.line("  …he would have back"));
+        println!("{}", census.dossiers_cold.line("  …he would not"));
+        println!(
+            "  {:<28} mean={:.2}  ← above 1.0 means he is carrying records for men who have left",
+            "memory / squad size",
+            Label::mean(&census.memory_to_squad),
+        );
+        println!(
+            "  {:<28} {} of {} squad players",
+            "under a grievance",
+            census.standing_grievances,
+            census.standing_counted,
+        );
+
+        println!("\n── where the squad stands with him ──");
+        Self::histogram(&census.standing_ladder, &RUNGS, 12);
 
         println!("\n── the goal ladder, managers ──");
         Self::ladder(&census.mgr_goal_ladder);
@@ -589,7 +660,7 @@ impl ReportPrinter {
         println!(
             "  {:<28} mean={:.2}",
             "faculty coverage",
-            mean(&census.mgr_coverage),
+            Label::mean(&census.mgr_coverage),
         );
     }
 
@@ -629,10 +700,10 @@ impl ReportPrinter {
         let total: usize = counts.values().sum();
         for label in order {
             let n = counts.get(label).copied().unwrap_or(0);
-            let bar = "█".repeat((pct(n, total) / 2.0).round() as usize);
+            let bar = "█".repeat((Label::pct(n, total) / 2.0).round() as usize);
             println!(
                 "  {label:<width$} {n:>7}  {:>5.1}%  {bar}",
-                pct(n, total),
+                Label::pct(n, total),
                 width = width
             );
         }
@@ -640,28 +711,8 @@ impl ReportPrinter {
     }
 
     fn ladder(counts: &HashMap<&'static str, usize>) {
-        let total: usize = counts.values().sum();
-        for rung in LADDER {
-            let n = counts.get(rung).copied().unwrap_or(0);
-            let bar = "█".repeat((pct(n, total) / 2.0).round() as usize);
-            println!("  {rung:<12} {n:>7}  {:>5.1}%  {bar}", pct(n, total));
-        }
-        println!("  {:<12} {total:>7}", "total");
+        Self::histogram(counts, &LADDER, 12);
     }
-}
-
-fn pct(part: usize, whole: usize) -> f64 {
-    if whole == 0 {
-        return 0.0;
-    }
-    part as f64 / whole as f64 * 100.0
-}
-
-fn mean(values: &[f32]) -> f32 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.iter().sum::<f32>() / values.len() as f32
 }
 
 // ---------------------------------------------------------------------
@@ -770,4 +821,64 @@ fn main() {
     ReportPrinter::print(&mut initial, &harness.data, 0, 0.0);
 
     harness.run(days, every);
+}
+
+/// The words and the arithmetic every line of this report is made of.
+///
+/// One place, so a label and the fixed order it is printed in cannot
+/// drift apart — a histogram whose rows are named in one file and
+/// ordered in another is how a census quietly starts lying.
+struct Label;
+
+impl Label {
+    fn status_label(status: GoalStatus) -> &'static str {
+        match status {
+            GoalStatus::Latent => "Latent",
+            GoalStatus::Active => "Active",
+            GoalStatus::Voiced => "Voiced",
+            GoalStatus::Pressing => "Pressing",
+            GoalStatus::Satisfied => "Satisfied",
+            GoalStatus::Frustrated => "Frustrated",
+            GoalStatus::Abandoned => "Abandoned",
+        }
+    }
+
+    fn rung_label(rung: StandingRung) -> &'static str {
+        match rung {
+            StandingRung::Undroppable => "Undroppable",
+            StandingRung::Trusted => "Trusted",
+            StandingRung::InFavour => "InFavour",
+            StandingRung::Neutral => "Neutral",
+            StandingRung::UnderReview => "UnderReview",
+            StandingRung::OutOfFavour => "OutOfFavour",
+            StandingRung::FrozenOut => "FrozenOut",
+        }
+    }
+
+    fn note_label(kind: MindNoteKind) -> &'static str {
+        match kind {
+            MindNoteKind::None => "None",
+            MindNoteKind::WantFormed => "WantFormed",
+            MindNoteKind::WantVoiced => "WantVoiced",
+            MindNoteKind::WantPressed => "WantPressed",
+            MindNoteKind::WantSatisfied => "WantSatisfied",
+            MindNoteKind::WantFrustrated => "WantFrustrated",
+            MindNoteKind::WantAbandoned => "WantAbandoned",
+            MindNoteKind::ConvictionFormed => "ConvictionFormed",
+        }
+    }
+
+    fn pct(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            return 0.0;
+        }
+        part as f64 / whole as f64 * 100.0
+    }
+
+    fn mean(values: &[f32]) -> f32 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.iter().sum::<f32>() / values.len() as f32
+    }
 }

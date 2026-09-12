@@ -1,3 +1,6 @@
+use crate::club::SquadDepartures;
+use crate::club::staff::SpellCloser;
+use crate::club::staff::SeparationCause;
 use super::CountryResult;
 use super::transfers::settlement::TransferClauseSettler;
 use crate::ContractBonusType;
@@ -1360,6 +1363,17 @@ impl CountryResult {
 
         // Take player from wherever they are
         let player_pos = data.find_player_position(event.player_id);
+        // The borrowing manager's spell with him ends here. The parent
+        // club's does not — his was suspended, not closed, and it resumes
+        // when the player walks back through the door.
+        if let Some((ci, coi, cli, _)) = player_pos {
+            SquadDepartures::notify(
+                &mut data.continents[ci].countries[coi].clubs[cli],
+                event.player_id,
+                SeparationCause::LoanEnded,
+                date,
+            );
+        }
         let mut player = match player_pos {
             Some((ci, coi, cli, ti)) => {
                 match data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
@@ -1559,6 +1573,19 @@ impl CountryResult {
         data.continents[pci].countries[pcoi].clubs[pcli].teams.teams[pti]
             .players
             .add(player);
+
+        // And his own manager picks the relationship back up. The spell was
+        // suspended rather than closed when he went out, so nothing has to
+        // be rebuilt — what is new is a season of football the coach did
+        // not watch, which enters his read as the reports he actually gets
+        // rather than as matches he was at.
+        if let Some(coach) = data.continents[pci].countries[pcoi].clubs[pcli]
+            .teams
+            .main_mut()
+            .and_then(|team| team.staffs.head_coach_mut())
+        {
+            SpellCloser::resume_from_loan(coach, event.player_id, loan_apps, loan_rating, date);
+        }
     }
 
     /// Borrowing-side `TeamInfo` for a loan-return event, aliased to the
@@ -1732,6 +1759,12 @@ impl CountryResult {
         }
 
         for (club_idx, team_idx, player_id) in to_retire {
+            SquadDepartures::notify(
+                &mut country.clubs[club_idx],
+                player_id,
+                SeparationCause::HeRetired,
+                date,
+            );
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
                 .players
                 .take_player(&player_id)
@@ -1826,6 +1859,14 @@ impl CountryResult {
 
         // Execute retirements: remove from team, add Ret status, store in retired_players
         for (club_idx, team_idx, player_id) in to_retire {
+            // The dugout hears about it first: a man retiring on him is one
+            // of the few partings a manager remembers warmly.
+            SquadDepartures::notify(
+                &mut country.clubs[club_idx],
+                player_id,
+                SeparationCause::HeRetired,
+                date,
+            );
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
                 .players
                 .take_player(&player_id)

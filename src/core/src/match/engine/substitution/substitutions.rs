@@ -1238,7 +1238,12 @@ impl Substitutions {
             };
             let out_score = SubScoring::sub_off_score_protected(out, live, need, local_dampening);
             let coach_off_nudge = coach
-                .map(|c| c.sub_off_adjustment(out.id, &CoachLiveAdapter::live_ctx(out, live, true)))
+                .map(|c| {
+                    c.sub_off_adjustment(
+                        out.id,
+                        &CoachLiveAdapter::live_ctx(out, live, true, today),
+                    )
+                })
                 .unwrap_or(0.0);
 
             for sub in &bench {
@@ -1262,7 +1267,7 @@ impl Substitutions {
                     .map(|c| {
                         c.sub_in_adjustment(
                             sub.id,
-                            &CoachLiveAdapter::live_ctx_sub(sub, total_match_time_ms),
+                            &CoachLiveAdapter::live_ctx_sub(sub, total_match_time_ms, today),
                         )
                     })
                     .unwrap_or(0.0);
@@ -1336,9 +1341,10 @@ impl CoachLiveAdapter {
         player: &MatchPlayer,
         live: &LiveSubstitutionStats,
         is_starter: bool,
+        date: NaiveDate,
     ) -> CoachLiveMatchContext {
         CoachLiveMatchContext {
-            date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            date,
             match_minute: live.match_minute,
             goal_diff: live.goal_diff,
             live_rating: live.live_rating,
@@ -1355,9 +1361,13 @@ impl CoachLiveAdapter {
     /// Build a neutral live context for a bench player — the sub-in
     /// scorer doesn't have a live rating for him; the coach engine
     /// reads memory only.
-    fn live_ctx_sub(sub: &MatchPlayer, total_match_time_ms: u64) -> CoachLiveMatchContext {
+    fn live_ctx_sub(
+        sub: &MatchPlayer,
+        total_match_time_ms: u64,
+        date: NaiveDate,
+    ) -> CoachLiveMatchContext {
         CoachLiveMatchContext {
-            date: chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+            date,
             match_minute: (total_match_time_ms / 60_000) as u32,
             goal_diff: 0,
             live_rating: 6.7,
