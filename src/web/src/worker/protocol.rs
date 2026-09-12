@@ -1,5 +1,5 @@
-//! Bincode message envelopes that travel over the raw-TCP frame
-//! transport (see `transport.rs`). The coordinator opens one
+//! Message envelopes that travel over the raw-TCP frame transport (see
+//! `transport.rs`), encoded with wincode. The coordinator opens one
 //! connection per worker entry, sends `Request::Handshake` first, then
 //! any number of `Request::PlayBatch`. Every request is answered by exactly one
 //! terminal `Response`, in order — a `PlayBatch` may be preceded by any number
@@ -23,7 +23,10 @@ use serde::{Deserialize, Serialize};
 /// v4: the replay crosses as the finished chunk files rather than a wire-only
 /// mirror of the recorder, and each one gets its own frame
 /// ([`Response::Artifacts`]) instead of sharing the batch's.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// v5: the payload codec is wincode rather than bincode 2. The message shapes
+/// are unchanged, but the bytes are not, so a peer still on bincode cannot
+/// read even the handshake.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// What the coordinator wants recorded, sent once per connection.
 ///

@@ -1,6 +1,6 @@
 //! Wire DTOs for the worker protocol. Wraps `core::r#match::MatchSquad`
 //! / `MatchPlayer` (which carry engine runtime state that is undefined
-//! at squad-build time) in a flat, bincode-friendly form. Everything
+//! at squad-build time) in a flat, wire-friendly form. Everything
 //! that already serde-derives in core is held inline — only the few
 //! engine-runtime fields are stripped and re-initialised to defaults
 //! on the worker side via the inverse `into_squad` / `into_player`

@@ -10,10 +10,10 @@
 //!
 //! * **Worker** (`--worker --worker-port=18001`): skips DB load and
 //!   the web UI; runs `WorkerServer` on the chosen port. Each accepted
-//!   TCP connection speaks the framed bincode protocol — first message
+//!   TCP connection speaks the framed wincode protocol — first message
 //!   is a handshake, then any number of play-batch requests.
 //!
-//! Wire format is bincode 2 over a 4-byte length prefix. No HTTP.
+//! Wire format is wincode over a 4-byte length prefix. No HTTP.
 //!
 //! A worker records what the coordinator would have recorded — it is told on
 //! the handshake — and sends each match's replay home beside the result.

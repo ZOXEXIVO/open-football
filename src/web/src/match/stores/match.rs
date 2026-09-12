@@ -202,11 +202,12 @@ impl MatchStore {
 /// Two things can go quietly wrong. Bytes that are not what the viewer fetches
 /// — a chunk keyed off its position in the list rather than its position on the
 /// clock, a metadata document missing the segment list — leave a replay that
-/// loads to a grey pitch. And artifacts that do not survive bincode leave a
+/// loads to a grey pitch. And artifacts that do not survive the wire codec leave a
 /// worker whose every match arrives blank.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::worker::transport::Frame;
     use core::r#match::{RecordingScope, ResultPositionDataItem};
     use flate2::read::GzDecoder;
     use std::io::Read;
@@ -322,16 +323,14 @@ mod tests {
     }
 
     /// What the worker protocol does with them. A worker bakes and never writes,
-    /// so bincode is the only thing standing between its CPU and the
+    /// so the wire codec is the only thing standing between its CPU and the
     /// coordinator's disk.
     #[test]
     fn artifacts_survive_the_wire() {
         let artifacts = MatchStore::bake(&recorded(RecordingScope::Goals));
-        let config = bincode::config::standard();
 
-        let encoded = bincode::serde::encode_to_vec(&artifacts, config).expect("artifacts encode");
-        let (back, _): (RecordingArtifacts, _) =
-            bincode::serde::decode_from_slice(&encoded, config).expect("and decode");
+        let encoded = Frame::encode(&artifacts).expect("artifacts encode");
+        let back: RecordingArtifacts = Frame::decode(&encoded).expect("and decode");
 
         assert_eq!(back.chunks, artifacts.chunks);
         assert_eq!(back.metadata, artifacts.metadata);

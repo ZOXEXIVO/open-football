@@ -574,7 +574,7 @@ impl MatchPlayer {
     }
 
     /// Input-style constructor used by the distributed worker wire
-    /// layer to rebuild a `MatchPlayer` from the bincode payload. Takes
+    /// layer to rebuild a `MatchPlayer` from the wire payload. Takes
     /// only the fields that meaningfully cross the network — engine
     /// runtime state (memory, waypoints, in-state timers, statistics,
     /// fatigue accumulator) is initialised to the same defaults

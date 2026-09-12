@@ -34,7 +34,8 @@ flate2 = "1.1.10"
 rayon = "1.12.0"
 hostname = "0.4.2"
 sysinfo = { version = "0.39.6", features = ["system"] }
-bincode = { version = "2.0", features = ["serde"] }
+wincode = "0.6.1"
+serde-wincode = "0.1.2"
 
 
 # Compiles `src/match` (the Bevy replay viewer) to WebAssembly and stages it
