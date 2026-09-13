@@ -32,7 +32,7 @@ impl StateProcessingHandler for ForwardRestingState {
 
         // 2. Ball is very close - must react regardless of fatigue
         if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD {
-            if !ctx.ball().is_owned() {
+            if !ctx.ball().is_owned() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::TakeBall,
                 ));

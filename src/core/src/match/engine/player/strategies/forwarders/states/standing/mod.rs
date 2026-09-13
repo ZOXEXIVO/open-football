@@ -99,7 +99,10 @@ impl StateProcessingHandler for ForwardStandingState {
             }
         } else {
             // If notified by ball system, always respond (only 1 per team gets notified)
-            if ctx.ball().is_player_notified() && !ctx.ball().is_owned() {
+            if ctx.ball().is_player_notified()
+                && !ctx.ball().is_owned()
+                && ctx.team().is_best_player_to_chase_ball()
+            {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::TakeBall,
                 ));

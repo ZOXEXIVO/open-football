@@ -507,6 +507,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         let ball_dir = ball_v / ball_speed;
         let ball_pos = Vector3::new(field.ball.position.x, field.ball.position.y, 0.0);
+        let pass_target_team = (field.ball.flags.in_flight_state > 0)
+            .then_some(field.ball.pass_target_player_id)
+            .flatten()
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+            .map(|p| p.team_id);
 
         for p in field.players.iter() {
             let line = match p.state {
@@ -515,6 +520,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 PlayerState::Forward(ForwardState::TakeBall) => 2,
                 PlayerState::Goalkeeper(GoalkeeperState::TakeBall) => 3,
                 _ => continue,
+            };
+            let situation = match pass_target_team {
+                None => 0,
+                Some(team) if team == p.team_id => 1,
+                Some(_) => 2,
             };
             let flat = Vector3::new(p.position.x, p.position.y, 0.0);
             let to_ball = ball_pos - flat;
@@ -542,7 +552,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // ball's travel. Zero is a man pointed at where the ball is.
             let lead = (p_dir - to_ball_dir * p_dir.dot(&to_ball_dir)).dot(&ball_dir);
 
-            ChaseDiag::note(rate, lead, align, gap, ball_speed, line);
+            ChaseDiag::note(rate, lead, align, gap, ball_speed, line, situation);
         }
     }
 

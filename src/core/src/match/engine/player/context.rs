@@ -1,14 +1,17 @@
-use crate::r#match::engine::ball::ball::RunUpPhase;
+use crate::PlayerPositionType;
+use crate::r#match::common_states::ChasePath;
+use crate::r#match::engine::ball::ball::{
+    Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, RunUpPhase,
+};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::position_players::PlayerFieldMetadata;
+use crate::r#match::position_players::PlayerFieldData;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
     PlayerSide, ShotTarget, Space, SpatialGrid,
 };
-use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use nalgebra::Vector3;
 use std::cell::RefCell;
 
@@ -17,10 +20,10 @@ pub struct GameTickContext {
     pub grid: SpatialGrid,
     pub ball: BallMetadata,
     pub space: Space,
-    /// Per-side closest-to-loose-ball table, recomputed whenever the
-    /// ball view refreshes. Replaces the per-player O(N) roster scan in
-    /// the dispatcher's loose-ball force/yield overrides (22 players ×
-    /// ~44 entries per un-owned tick) with an O(1) lookup per player.
+    /// Per-side first-to-the-ball table, recomputed whenever the ball
+    /// view refreshes. Replaces the per-player O(N) roster scan in the
+    /// dispatcher's loose-ball force/yield overrides (22 players × ~44
+    /// entries per un-owned tick) with an O(1) lookup per player.
     pub chase: LooseBallChase,
     /// Once-per-tick join of the on-pitch roster (`context.players.
     /// entries`) with the live position store. The `teammates()/
@@ -284,7 +287,7 @@ impl GameTickContext {
         grid.update(field);
         let positions = MatchObjectsPositions::from(field);
         let mut chase = LooseBallChase::new();
-        chase.update(&positions);
+        chase.update(&positions, &field.ball);
         let mut roster = RosterJoin::new();
         roster.update(players, &positions);
         GameTickContext {
@@ -329,7 +332,7 @@ impl GameTickContext {
         self.ball.update(field);
         self.positions.update(field);
         self.grid.update(field);
-        self.chase.update(&self.positions);
+        self.chase.update(&self.positions, &field.ball);
         self.roster.update(players, &self.positions);
     }
 
@@ -342,39 +345,79 @@ impl GameTickContext {
     pub fn refresh_ball(&mut self, field: &MatchField) {
         self.ball.update(field);
         self.positions.ball.update_from(&field.ball);
-        // Landing position may have moved (restart, deflection inside
-        // play_ball) — the chase table keys off it, so recompute. Same
-        // for the roster's control table (keys off the ball position).
-        self.chase.update(&self.positions);
+        // The ball may have moved (restart, deflection inside play_ball)
+        // — the chase table keys off its path, so recompute. Same for
+        // the roster's control table (keys off the ball position).
+        self.chase.update(&self.positions, &field.ball);
         self.roster.refresh_control(self.positions.ball.position);
     }
 }
 
-/// One roster entry in the loose-ball chase table.
+/// One entry in the roster's ball-distance control table.
 #[derive(Debug, Clone, Copy)]
 pub struct ChaseEntry {
     pub dist_sq: f32,
     pub id: u32,
 }
 
-/// Per-side two-smallest `(dist_sq, id)` table against the ball's
-/// landing position, over the SAME entry set the dispatcher's loose-ball
-/// overrides used to scan per player (`positions.players.as_slice()`,
-/// substitutes included) MINUS players committed to an un-abortable
-/// action (`chase_eligible == false`). Lexicographic ordering (dist_sq, then id)
-/// makes the O(1) queries reproduce the original scans exactly:
+impl ChaseEntry {
+    #[inline]
+    fn beats(self, other: ChaseEntry) -> bool {
+        self.dist_sq < other.dist_sq || (self.dist_sq == other.dist_sq && self.id < other.id)
+    }
+}
+
+/// One player in the loose-ball chase table.
+#[derive(Debug, Clone, Copy)]
+pub struct ChaseRow {
+    pub id: u32,
+    pub side: PlayerSide,
+    pub eligible: bool,
+    /// Ticks until he can be on the ball — see [`ChasePath`] — scaled
+    /// by his role's `chase_bias`.
+    pub cost: f32,
+}
+
+impl ChaseRow {
+    /// Lexicographic `(cost, id)`: exactly one man per side, the same
+    /// one from every asker's point of view.
+    #[inline]
+    fn beats(self, other: ChaseRow) -> bool {
+        self.cost < other.cost || (self.cost == other.cost && self.id < other.id)
+    }
+}
+
+/// Who gets to a loose ball first, per side, over the SAME entry set the
+/// dispatcher's loose-ball overrides used to scan per player
+/// (`positions.players.as_slice()`, substitutes included). Players
+/// committed to an un-abortable action (`chase_eligible == false`) keep
+/// a row but never hold a designation.
 ///
-///   * `should_force_takeball`: "no other same-side entry strictly
-///     closer, id tie-break" ⇔ best-other's (dist_sq, id) doesn't beat
-///     mine.
-///   * `should_yield_takeball`: "any other same-side entry closer than
-///     threshold" ⇔ best-other's dist_sq < threshold.
+/// Priced in TIME along the ball's projected path rather than distance
+/// to where it is — see [`ChasePath`] for why. The two-smallest slots
+/// per side answer every election query in O(1); `should_force_takeball`
+/// is "nobody on my side beats my row" and `should_yield_takeball` is
+/// "the best other row beats mine by the hysteresis".
 ///
-/// Two slots per side suffice because queries exclude at most one entry
-/// (the asking player) and every id appears once in the store.
+/// A pass in flight ends where its receiver takes it: the path every
+/// row is priced on stops at his collection point ([`ChasePath::end_at`]),
+/// so the defending side's man races to where the pass is collected
+/// rather than along a roll the ball will never complete.
 pub struct LooseBallChase {
-    left: [Option<ChaseEntry>; 2],
-    right: [Option<ChaseEntry>; 2],
+    left: [Option<ChaseRow>; 2],
+    right: [Option<ChaseRow>; 2],
+    rows: [ChaseRow; PlayerFieldData::CAPACITY],
+    len: usize,
+    end: Option<PathEnd>,
+}
+
+/// Where a pass in flight is going to be taken, and by whom.
+#[derive(Debug, Clone, Copy)]
+pub struct PathEnd {
+    pub receiver: u32,
+    pub point: Vector3<f32>,
+    /// Ticks from now.
+    pub tick: f32,
 }
 
 impl LooseBallChase {
@@ -382,72 +425,90 @@ impl LooseBallChase {
         LooseBallChase {
             left: [None; 2],
             right: [None; 2],
+            rows: [ChaseRow {
+                id: 0,
+                side: PlayerSide::Left,
+                eligible: false,
+                cost: f32::INFINITY,
+            }; PlayerFieldData::CAPACITY],
+            len: 0,
+            end: None,
         }
     }
 
-    #[inline]
-    fn beats(a: ChaseEntry, b: ChaseEntry) -> bool {
-        a.dist_sq < b.dist_sq || (a.dist_sq == b.dist_sq && a.id < b.id)
-    }
-
-    /// The distance a chase designation is judged on — not the geometric
-    /// one.
-    ///
-    /// Striker gamble: forwards read rebounds early and commit, so they win
-    /// loose balls a real midfielder at the same distance would not. 0.82 on
-    /// `dist_sq` is ~10% on distance.
-    ///
-    /// Both the table and the reference scans that check it go through here.
-    /// They have to weigh a candidate identically or the debug oracles fire
-    /// on a table that is doing exactly what it was asked to.
-    #[inline]
-    pub fn chase_dist_sq(meta: &PlayerFieldMetadata, ball_pos: Vector3<f32>) -> f32 {
-        let raw = (ball_pos - meta.position).norm_squared();
-        if meta.is_forward { raw * 0.82 } else { raw }
-    }
-
-    pub fn update(&mut self, positions: &MatchObjectsPositions) {
-        let ball_pos = positions.ball.landing_position;
+    pub fn update(&mut self, positions: &MatchObjectsPositions, ball: &Ball) {
+        let mut path = ChasePath::project(&positions.ball, ball.field_width, ball.field_height);
+        self.end = (ball.flags.in_flight_state > 0)
+            .then_some(ball.pass_target_player_id)
+            .flatten()
+            .and_then(|id| {
+                positions
+                    .players
+                    .as_slice()
+                    .iter()
+                    .find(|meta| meta.player_id == id && meta.chase_eligible)
+            })
+            .map(|meta| {
+                let tick = path.time_to_reach(meta.position, meta.max_speed, CONTROL_DISTANCE);
+                PathEnd {
+                    receiver: meta.player_id,
+                    point: path.end_at(tick),
+                    tick,
+                }
+            });
         self.left = [None; 2];
         self.right = [None; 2];
+        self.len = 0;
         for meta in positions.players.as_slice() {
-            // A player mid-dive / mid-header / mid-tackle cannot take over
-            // a chase, so they must not hold the "closest teammate"
-            // designation either — otherwise skipping the redirect for
-            // them would strand the ball with nobody claiming it. Dropping
-            // them here hands the designation to the next-closest
-            // teammate, which is what a real defensive line does.
+            let row = ChaseRow {
+                id: meta.player_id,
+                side: meta.side,
+                eligible: meta.chase_eligible,
+                cost: path.time_to_reach(meta.position, meta.max_speed, LOOSE_CLAIM_DISTANCE)
+                    * meta.chase_bias,
+            };
+            self.rows[self.len] = row;
+            self.len += 1;
             if !meta.chase_eligible {
                 continue;
             }
-            let entry = ChaseEntry {
-                dist_sq: Self::chase_dist_sq(meta, ball_pos),
-                id: meta.player_id,
-            };
             let slots = match meta.side {
                 PlayerSide::Left => &mut self.left,
                 PlayerSide::Right => &mut self.right,
             };
             match slots[0] {
-                None => slots[0] = Some(entry),
-                Some(best) if Self::beats(entry, best) => {
+                None => slots[0] = Some(row),
+                Some(best) if row.beats(best) => {
                     slots[1] = slots[0];
-                    slots[0] = Some(entry);
+                    slots[0] = Some(row);
                 }
                 Some(_) => match slots[1] {
-                    None => slots[1] = Some(entry),
-                    Some(second) if Self::beats(entry, second) => slots[1] = Some(entry),
+                    None => slots[1] = Some(row),
+                    Some(second) if row.beats(second) => slots[1] = Some(row),
                     Some(_) => {}
                 },
             }
         }
     }
 
-    /// Lexicographic-min `(dist_sq, id)` entry on `side`, excluding
-    /// `exclude_id` (the asking player). `None` only when the side has
-    /// no other entries.
+    /// Every player's row, in position-store order.
     #[inline]
-    pub fn best_other(&self, side: PlayerSide, exclude_id: u32) -> Option<ChaseEntry> {
+    pub fn rows(&self) -> &[ChaseRow] {
+        &self.rows[..self.len]
+    }
+
+    /// This player's time to the ball. `None` only for an id that is not
+    /// in the position store.
+    #[inline]
+    pub fn cost_of(&self, id: u32) -> Option<f32> {
+        self.rows().iter().find(|r| r.id == id).map(|r| r.cost)
+    }
+
+    /// Lexicographic-min `(cost, id)` eligible row on `side`, excluding
+    /// `exclude_id` (the asking player). `None` only when the side has
+    /// no other eligible row.
+    #[inline]
+    pub fn best_other(&self, side: PlayerSide, exclude_id: u32) -> Option<ChaseRow> {
         let slots = match side {
             PlayerSide::Left => &self.left,
             PlayerSide::Right => &self.right,
@@ -459,43 +520,42 @@ impl LooseBallChase {
         }
     }
 
-    /// The side's designated chaser, whoever he is.
-    ///
-    /// [`Self::best_other`] answers "is somebody ELSE nearer than me",
-    /// which is the question a player asks about his own team. This one
-    /// is for asking it about the OTHER side: whether the opposition has
-    /// a man closer to the drop than we do decides whether a loose ball
-    /// is ours to win or theirs to collect.
     #[inline]
-    pub fn best(&self, side: PlayerSide) -> Option<ChaseEntry> {
+    pub fn best(&self, side: PlayerSide) -> Option<ChaseRow> {
         match side {
             PlayerSide::Left => self.left[0],
             PlayerSide::Right => self.right[0],
         }
     }
 
-    /// Is this player his side's designated chaser for a loose ball at
-    /// `my_dist_sq` from him?
+    /// Is this player his side's designated chaser for the loose ball —
+    /// no other eligible row on his side beats his?
     ///
-    /// The lexicographic `(dist_sq, id)` minimum over the side's
-    /// chase-eligible entries — one man, deterministically, with no
-    /// ability weighting beyond the striker gamble already baked into
-    /// [`Self::chase_dist_sq`]. `my_dist_sq` is deliberately the caller's
-    /// RAW distance: only the team-mates being weighed against him carry
-    /// the gamble.
-    ///
-    /// Shared so the two questions that must agree cannot drift apart —
-    /// `PlayerFieldPositionGroup::should_force_takeball`, which sends him
-    /// after it, and `DefensiveRecovery::depth_override`, which must not
-    /// then turn him round and run him at his own goal.
+    /// Shared so the questions that must agree cannot drift apart —
+    /// `PlayerFieldPositionGroup::should_force_takeball`, which sends
+    /// him after it, `TeamOperationsImpl::is_best_player_to_chase_ball`,
+    /// which the state trees ask, and `DefensiveRecovery::depth_override`,
+    /// which must not then turn him round and run him at his own goal.
     #[inline]
-    pub fn is_designated(&self, side: PlayerSide, id: u32, my_dist_sq: f32) -> bool {
+    pub fn is_designated(&self, side: PlayerSide, id: u32) -> bool {
+        let Some(cost) = self.cost_of(id) else {
+            return true;
+        };
         match self.best_other(side, id) {
-            Some(best) => {
-                !(best.dist_sq < my_dist_sq || (best.dist_sq == my_dist_sq && best.id < id))
-            }
+            Some(best) => !best.beats(ChaseRow {
+                id,
+                side,
+                eligible: true,
+                cost,
+            }),
             None => true,
         }
+    }
+
+    /// Where the pass in flight, if there is one, is going to be taken.
+    #[inline]
+    pub fn path_end(&self) -> Option<PathEnd> {
+        self.end
     }
 }
 
@@ -506,9 +566,8 @@ impl Default for LooseBallChase {
 }
 
 /// One on-pitch player in the per-tick roster join: the static
-/// `PlayerEntry` fields, the live position/velocity copied from the
-/// position store, and the precomputed chase-ability denominator used
-/// by `is_best_player_to_chase_ball`.
+/// `PlayerEntry` fields and the live position/velocity copied from the
+/// position store.
 #[derive(Clone, Copy)]
 pub struct RosterEntryLive {
     pub id: u32,
@@ -519,12 +578,6 @@ pub struct RosterEntryLive {
     pub position_type: PlayerPositionType,
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
-    /// `(pace/20 · accel/20 · position_factor · 0.5 + 0.5)²` — the exact
-    /// per-teammate denominator `is_best_player_to_chase_ball` derived
-    /// via a `by_id` skill lookup per candidate per call. Skills are
-    /// static in-match and the position factor keys off the entry's
-    /// tactical position, so once per tick is exact.
-    pub chase_ability_sq: f32,
 }
 
 /// Once-per-tick join of `MatchPlayerCollection::entries` (the on-pitch
@@ -576,46 +629,12 @@ impl RosterJoin {
         self.entries.truncate(n);
         for (i, entry) in players.entries.iter().enumerate() {
             let (position, velocity) = positions.players.pos_vel(entry.id);
-            // Skills are static in-match and the position factor keys off
-            // the entry's tactical position, so the denominator computed
-            // last tick is still exact while the same (id, position)
-            // occupies the same slot — the steady state between roster /
-            // shape changes. Only recompute (a `by_id` probe + a few
-            // flops) when that pairing breaks.
-            let cached = self.entries.get(i).and_then(|prev| {
-                (prev.id == entry.id && prev.position_type == entry.position)
-                    .then_some(prev.chase_ability_sq)
-            });
-            let chase_ability_sq = match cached {
-                Some(a) => a,
-                None => match players.by_id(entry.id) {
-                    Some(p) => {
-                        let pace_factor = p.skills.physical.pace / 20.0;
-                        let acceleration_factor = p.skills.physical.acceleration / 20.0;
-                        let position_factor = match entry.position.position_group() {
-                            PlayerFieldPositionGroup::Forward => 1.2,
-                            PlayerFieldPositionGroup::Midfielder => 1.1,
-                            PlayerFieldPositionGroup::Defender => 0.9,
-                            PlayerFieldPositionGroup::Goalkeeper => 0.5,
-                        };
-                        let ability =
-                            pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
-                        ability * ability
-                    }
-                    // Mirrors the old scan's `by_id → None => return false`
-                    // arm ("candidate can't disqualify me"). A NaN denominator
-                    // makes `dist_sq / chase_ability_sq < threshold` always
-                    // false — the candidate is skipped, same as before.
-                    None => f32::NAN,
-                },
-            };
             let live = RosterEntryLive {
                 id: entry.id,
                 team_id: entry.team_id,
                 position_type: entry.position,
                 position,
                 velocity,
-                chase_ability_sq,
             };
             if let Some(slot) = self.entries.get_mut(i) {
                 *slot = live;
@@ -691,15 +710,13 @@ impl RosterJoin {
             };
             match slot[0] {
                 None => slot[0] = Some(candidate),
-                Some(best) if LooseBallChase::beats(candidate, best) => {
+                Some(best) if candidate.beats(best) => {
                     slot[1] = slot[0];
                     slot[0] = Some(candidate);
                 }
                 Some(_) => match slot[1] {
                     None => slot[1] = Some(candidate),
-                    Some(second) if LooseBallChase::beats(candidate, second) => {
-                        slot[1] = Some(candidate)
-                    }
+                    Some(second) if candidate.beats(second) => slot[1] = Some(candidate),
                     Some(_) => {}
                 },
             }

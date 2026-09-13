@@ -112,12 +112,12 @@ impl StateProcessingHandler for DefenderPassingState {
             }
         }
 
-        // Normal passing situation - evaluate options more carefully
-        // Defenders use shorter max distance (200 units) to avoid wild long passes
+        // Normal passing situation - evaluate options more carefully.
+        // 280u = 35 m: far enough to find a winger, short of a hoof.
         if let Some((best_target, _reason)) = ctx
             .player()
             .passing()
-            .find_best_pass_option_with_distance(200.0)
+            .find_best_pass_option_with_distance(280.0)
         {
             // ANTI-LOOP: Ensure pass target is far enough away for the ball to actually reach them.
             // Very short passes (< 30 units) with low pass force create claim-pass-reclaim loops.

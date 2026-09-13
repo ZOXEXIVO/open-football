@@ -3020,6 +3020,21 @@ pub struct Gait {
     /// which is why it cannot borrow the keeper's throw, that one being
     /// pointedly one-armed.
     pub throw_in: f32,
+    /// 0..1: **a pass arriving, taken on the inside of the boot** — the
+    /// receiving leg out to it, turned so the boot faces it, the standing
+    /// knee giving, the arms out. Rides `swing` like every strike: fully
+    /// out AT contact, which is the whole point of it, and back under him
+    /// through the follow-through as the ball settles at his feet.
+    ///
+    /// Measured over a recording a pass arrives at 33 m/s on one sample
+    /// and sits at 2 m/s on the man's own centre on the next, and nothing
+    /// on him moved: the ball simply stopped at his chest line. The most
+    /// repeated thing in the game after the pass itself, and it was drawn
+    /// as a thing that happened to the ball.
+    pub trap: f32,
+    /// …and where the boot meets it, in his own frame: `x` across him, `y`
+    /// ahead, metres. See `Kick::at`.
+    pub trap_at: Vec2,
     /// 0..1: he has just conceded.
     ///
     /// The only thing in this rig that is not derived from the position track,
@@ -3258,6 +3273,20 @@ pub struct Gait {
     /// so an arm that swings a little wider is not always paired with a
     /// knee that lifts a little higher.
     pub jitter: Vec2,
+    /// **The stagger he stands with**, in radians of hip on top of the
+    /// resting swing — see `Complexion::stance`. Zero for anybody moving:
+    /// it is the pose a stop leaves him in, not a stride.
+    pub stance: f32,
+    /// 0..1: **he is turning on the spot**, and stepping round to do it.
+    ///
+    /// A standing man is drawn facing the ball, and the ball moves, so for
+    /// the tenth of a match he spends still his heading is slowly coming
+    /// round — on planted feet, which is a body on a turntable. Measured,
+    /// more than half of all stops are followed by a restart sixty degrees
+    /// or more off the line he arrived on. A pivot is a side-step taken
+    /// round himself, so this is what turns the lateral gait on for a man
+    /// covering no ground at all: see [`Joint::sidling`].
+    pub pivot: f32,
 }
 
 impl Gait {
@@ -3297,6 +3326,8 @@ impl Gait {
             throwing: 0.0,
             header: 0.0,
             throw_in: 0.0,
+            trap: 0.0,
+            trap_at: Vec2::ZERO,
             drive: 0.0,
             carrying: 0.0,
             despair: 0.0,
@@ -3323,6 +3354,8 @@ impl Gait {
             land: 0.0,
             keeper: 0.0,
             jitter: Vec2::ZERO,
+            stance: 0.0,
+            pivot: 0.0,
         }
     }
 
@@ -4299,6 +4332,20 @@ impl Joint {
     const CARRY_DROP: f32 = 0.022;
     const CARRY_SPREAD: f32 = 0.16;
     const CARRY_ELBOW: f32 = -0.30;
+    /// **The trap.** How far out the receiving leg is at the top of the
+    /// reach, at contact and in the follow-through, as a share of the
+    /// reach [`Gait::trap_at`] asks for — see [`Joint::trap_leg`]; the
+    /// knee under it at the same three keys; how far the boot turns out
+    /// at the ankle so its inside faces the ball, in radians, and how far
+    /// the toes come up.
+    const TRAP_HIP: (f32, f32, f32) = (0.30, 1.0, 0.30);
+    const TRAP_KNEE: (f32, f32, f32) = (0.55, 0.28, 0.35);
+    const TRAP_OPEN: f32 = 0.55;
+    const TRAP_TOE_UP: f32 = 0.25;
+    /// The trunk over it and away from it, and the arms out.
+    const TRAP_STOOP: f32 = 0.14;
+    const TRAP_LEAN: f32 = 0.10;
+    const TRAP_ARM_SPREAD: f32 = 0.30;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -4422,7 +4469,11 @@ impl Joint {
                             // actually gains, which is the other end of the
                             // same axis. See [`Joint::SAVE_RISE_HIP`].
                             + Self::SAVE_RISE * Self::reaching(gait)
-                            - Self::KICK_DROP * gait.power * Self::taper(gait.swing))
+                            - Self::KICK_DROP * gait.power * Self::taper(gait.swing)
+                            // The standing knee under a trap is the standing
+                            // knee under a kick, and costs the same.
+                            - Self::KICK_DROP * gait.trap * Self::taper(gait.swing)
+                            - Self::stagger_drop(gait))
             }
             _ => self.origin,
         }
@@ -4493,10 +4544,13 @@ impl Joint {
         // one number and the amplitudes are several.
         let heading = gait.header * taper;
         let tossing = gait.throw_in * taper;
+        let trapping = gait.trap * taper;
         // +1 if this is the kicking side of the body, −1 if it is the standing
         // side. Zero for everybody not kicking, which leaves both halves equal
         // and every term below at rest.
         let striking = self.side * gait.foot;
+        // …and how much of the trap THIS leg is: the receiving one.
+        let receiving = trapping * striking.max(0.0);
         // Which of the four ways he took it, split rather than blended — see
         // [`Gait::hands_to_head`]. All four are zero for every player for all
         // but the few seconds after a goal, so every layer they drive
@@ -4685,6 +4739,10 @@ impl Joint {
                             * kicking,
                     )
                     * Quat::from_rotation_z(Self::KICK_ROLL * gait.foot * kicking)
+                    // Down over a ball he is taking, and away from the leg
+                    // that is out to it.
+                    * Quat::from_rotation_x(Self::TRAP_STOOP * trapping)
+                    * Quat::from_rotation_z(Self::TRAP_LEAN * gait.foot * trapping)
                     // And the two strikes that come out of the trunk rather
                     // than out of a leg. Both are identity for anybody not
                     // making them, which is twenty-two players out of
@@ -4773,6 +4831,9 @@ impl Joint {
                     + 0.07 * gait.run
                     + 0.055 * gait.signature
                     + Self::CARRY_SPREAD * gait.carrying
+                    // …and out for balance over a leg that is out to a
+                    // ball.
+                    + Self::TRAP_ARM_SPREAD * trapping
                     // Out from his sides across a side-step, which is a man
                     // balancing rather than a man running — and ANSWERING the
                     // step rather than held at a constant width, which is a
@@ -5261,7 +5322,8 @@ impl Joint {
                 // the direction of travel, so a keeper dropping backwards
                 // onto his line runs the cycle the other way round instead of
                 // moonwalking down the pitch.
-                let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait);
+                let amplitude =
+                    Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait) + gait.stance;
                 // The lateral half of the same decomposition. A wide base
                 // (both legs out, so the feet stay on their own sides of him)
                 // and then each foot stepping across in turn — antiphase,
@@ -5394,12 +5456,13 @@ impl Joint {
                 );
                 // And the kick, on the striking leg only — the other one is
                 // planted and keeps its stride.
-                across
-                    * Self::held(
-                        down,
-                        Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
-                        kicking * striking.max(0.0),
-                    )
+                let kicked = Self::held(
+                    down,
+                    Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
+                    kicking * striking.max(0.0),
+                );
+                // …and the trap, likewise: the receiving leg out to the ball.
+                across * Self::held(kicked, Self::trap_leg(gait), receiving)
             }
             // Deepest as the leg folds through underneath the player, and all
             // but straight again by the time it reaches out to land. Squaring
@@ -5506,12 +5569,25 @@ impl Joint {
                     Quat::from_rotation_x(Self::PLANT_KNEE),
                     kicking * (-striking).max(0.0),
                 );
+                // The receiving knee softens as the leg goes out and gives
+                // as the ball arrives; the standing one takes his weight
+                // exactly as it does under a kick.
+                let received = Self::held(
+                    planted,
+                    Quat::from_rotation_x(Self::through(Self::TRAP_KNEE, gait.swing)),
+                    receiving,
+                );
+                let braced = Self::held(
+                    received,
+                    Quat::from_rotation_x(Self::PLANT_KNEE),
+                    trapping * (-striking).max(0.0),
+                );
                 // A throw-in is taken off both feet, and they give under it:
                 // the knees bend into the arch and push back up through the
                 // release. It is the only strike in football where the legs
                 // do the same thing as each other.
                 Self::held(
-                    planted,
+                    braced,
                     Quat::from_rotation_x(Self::through(Self::TOSS_KNEE, gait.swing)),
                     tossing,
                 )
@@ -5583,13 +5659,43 @@ impl Joint {
                 );
                 // …and the standing leg locks under a kick while the
                 // striking foot points through the ball.
-                Self::held(
+                let struck = Self::held(
                     flying,
                     Quat::from_rotation_x(Self::ANKLE_PLANTAR * 0.8),
                     kicking * striking.max(0.0),
+                );
+                // Taking a pass the foot turns out and the toes come up, so
+                // it is the inside of the boot the ball meets. At the ankle
+                // rather than the hip, so the boot turns where it lands.
+                Self::held(
+                    struck,
+                    Quat::from_rotation_y(gait.foot * Self::TRAP_OPEN)
+                        * Quat::from_rotation_x(-Self::TRAP_TOE_UP),
+                    receiving,
                 )
             }
         }
+    }
+
+    /// **The receiving leg, out to the ball**: yawed toward where it will
+    /// meet it and swung forward far enough for a straight leg to reach,
+    /// both by how far through the trap he is, plus the turn-out that puts
+    /// the inside of the boot on it.
+    fn trap_leg(gait: Gait) -> Quat {
+        let out = Self::through(Self::TRAP_HIP, gait.swing);
+        // From the socket the leg hangs off, not from his centreline, and
+        // against the leg as the knee under it leaves it — the same
+        // two-link solve the stride makes, see [`Joint::swinging`].
+        let from_socket = gait.trap_at - Vec2::new(gait.foot * Physique::HIP_SPREAD, 0.0);
+        let yaw = from_socket.x.atan2(from_socket.y.max(0.02));
+        let knee = Self::through(Self::TRAP_KNEE, gait.swing);
+        let along = Self::THIGH_LINK + Self::SHIN_LINK * knee.cos();
+        let back = Self::SHIN_LINK * knee.sin();
+        let reach = (from_socket.length() / along.hypot(back))
+            .clamp(0.0, 0.95)
+            .asin()
+            + back.atan2(along);
+        Quat::from_rotation_y(yaw * out) * Quat::from_rotation_x(-reach * out)
     }
 
     /// How much authority a swing has over the pose at this point in it.
@@ -5858,6 +5964,23 @@ impl Joint {
         (extent(unloaded) - extent(unloaded + Self::loaded(gait, PI))).max(0.0)
     }
 
+    /// **What the stagger costs him in height**, in metres: a straight leg
+    /// swung `θ` off vertical reaches `L·cos θ` down, so two feet planted
+    /// fore and aft of the hips are two feet off the grass unless the hips
+    /// come down to meet them. Only the stance's own share — the resting
+    /// swing under it is the reference every standing pose is measured
+    /// against, and it is left exactly where it was.
+    fn stagger_drop(gait: Gait) -> f32 {
+        if gait.stance <= 0.0 {
+            return 0.0;
+        }
+        let reach = |amplitude: f32| {
+            (amplitude.sin() * Self::stride_gain() * Self::striding(gait.phase)).clamp(-0.95, 0.95)
+        };
+        let lift = |along: f32| Physique::LEG * (1.0 - (1.0 - along * along).sqrt());
+        lift(reach(Self::HIP_SWING.0 + gait.stance)) - lift(reach(Self::HIP_SWING.0))
+    }
+
     /// **The two links of a leg**: hip to knee, and knee to the sole of the
     /// boot.
     ///
@@ -6070,7 +6193,9 @@ impl Joint {
     /// he is going, not how fast — a man stepping across himself at a metre
     /// a second is fully stepping across himself.
     fn sidling(gait: Gait) -> f32 {
-        Self::afoot(gait) * gait.course.x.abs()
+        // …or turning on the spot, which is the one side-step a man takes
+        // without going anywhere. See [`Gait::pivot`].
+        (Self::afoot(gait) * gait.course.x.abs()).max(gait.pivot)
     }
 
     /// …and how much of it is BACKWARDS, which is the other half of the same

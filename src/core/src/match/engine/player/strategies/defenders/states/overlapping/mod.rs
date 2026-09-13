@@ -84,7 +84,10 @@ impl StateProcessingHandler for DefenderOverlappingState {
 
         // A ball rolled into the channel ahead of him is what the run was
         // for.
-        if ctx.ball().is_towards_player() && ctx.ball().distance() < 120.0 && !ctx.ball().is_owned()
+        if ctx.ball().is_towards_player()
+            && ctx.ball().distance() < 120.0
+            && !ctx.ball().is_owned()
+            && ctx.team().is_best_player_to_chase_ball()
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,

@@ -87,6 +87,19 @@ use std::collections::VecDeque;
 /// not deliveries.
 pub const CONTROL_DISTANCE: f32 = 12.0;
 
+/// How close a player must be to a LOOSE ball to claim it — the general
+/// scan in `check_ball_ownership`, one stride short of the receiver's
+/// [`CONTROL_DISTANCE`]: a stretched leg keeps a pass played to you, a
+/// fifty-fifty is won by the man who gets his foot on it.
+///
+/// The chase steering settles to the ball's own speed inside this
+/// radius and no wider (`SteeringBehavior::SETTLE`), and the chase
+/// election prices a loose ball as the time to get inside it. A wider
+/// settle band had chasers matching pace with a ball they had not yet
+/// reached — travelling a metre behind it, which is the reported
+/// "running alongside without taking it" at close range.
+pub const LOOSE_CLAIM_DISTANCE: f32 = 5.0;
+
 /// Hard cap on how far the ball will track to its owner before ownership
 /// is treated as impossible and dropped (1.9 m). See [`CONTROL_DISTANCE`].
 pub const MAX_OWNER_TRACK_DISTANCE: f32 = 15.0;

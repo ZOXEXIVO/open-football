@@ -1,6 +1,157 @@
 use crate::r#match::engine::ball::ball::{BallRoll, RunOff};
+use crate::r#match::position_ball::BallFieldData;
 use crate::r#match::{StateProcessingContext, SteeringBehavior};
 use nalgebra::Vector3;
+
+/// The ball's projected path, sampled once a tick, that every chase
+/// cost is read off.
+///
+/// A chase is priced in TIME — when a runner can first be on the ball —
+/// because distance to where the ball IS elects the man behind a
+/// rolling ball, the one man guaranteed never to reach it, over the
+/// team-mate downstream who can step into its line. Measured before
+/// this existed: a defender in `TakeBall` ran parallel to a genuinely
+/// loose ball on 68% of samples. The roll is [`BallRoll`]'s closed
+/// form, so the election and the steering that follows it
+/// ([`LooseBallChase::earliest_meeting`]) read the same ball; a ball in
+/// the air is priced at its landing spot, faded in over the height band
+/// [`LooseBallChase::aim`] uses.
+///
+/// Coarse on purpose: one projection serves every player on the pitch
+/// each tick, so the roll is a dozen samples and the crossing is linear
+/// between them. It is an ordering, not a steering target.
+///
+/// The path can END early — see [`Self::end_at`]: a pass in flight goes
+/// no further than the man it was played to.
+pub struct ChasePath {
+    samples: [(Vector3<f32>, f32); Self::SAMPLES + 1],
+    origin: Vector3<f32>,
+    dir: Vector3<f32>,
+    speed: f32,
+    bounds: (f32, f32, f32, f32),
+    rest: Vector3<f32>,
+    rest_ticks: f32,
+    landing: Vector3<f32>,
+    aerial: f32,
+}
+
+impl ChasePath {
+    const SAMPLES: usize = 12;
+
+    pub fn project(ball: &BallFieldData, field_width: f32, field_height: f32) -> Self {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let origin = flat(ball.position);
+        let velocity = flat(ball.velocity);
+        let speed = velocity.norm();
+        let dir = if speed < BallRoll::STOPPED {
+            Vector3::zeros()
+        } else {
+            velocity / speed
+        };
+        let rest_ticks = BallRoll::rest_ticks(speed);
+        let t = ((ball.position.z - LooseBallChase::GROUND_H)
+            / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
+            .clamp(0.0, 1.0);
+        let mut path = ChasePath {
+            samples: [(origin, 0.0); Self::SAMPLES + 1],
+            origin,
+            dir,
+            speed,
+            bounds: RunOff::ball_bounds(field_width, field_height),
+            rest: origin,
+            rest_ticks,
+            landing: flat(ball.landing_position),
+            aerial: t * t * (3.0 - 2.0 * t),
+        };
+        for i in 1..=Self::SAMPLES {
+            // Quadratic spacing: the near end of the roll, where almost
+            // every meeting happens, gets the resolution.
+            let share = i as f32 / Self::SAMPLES as f32;
+            let t = rest_ticks * share * share;
+            path.samples[i] = (path.roll_at(t), t);
+        }
+        path.rest = path.samples[Self::SAMPLES].0;
+        path
+    }
+
+    /// Where the roll is after `t` ticks — against the boards if it gets
+    /// that far.
+    fn roll_at(&self, t: f32) -> Vector3<f32> {
+        let there = self.origin + self.dir * BallRoll::distance(self.speed, t);
+        let (min_x, max_x, min_y, max_y) = self.bounds;
+        Vector3::new(
+            there.x.clamp(min_x, max_x),
+            there.y.clamp(min_y, max_y),
+            0.0,
+        )
+    }
+
+    /// Where the ball is after `t` ticks: the roll, or the landing spot
+    /// for a ball in the air, faded across the same band as everything
+    /// else here.
+    pub fn point_at(&self, t: f32) -> Vector3<f32> {
+        let roll = self.roll_at(t);
+        roll + (self.landing - roll) * self.aerial
+    }
+
+    /// End the path `t` ticks from now: the ball is taken there and goes
+    /// no further. Returns where.
+    ///
+    /// A pass in flight is its receiver's — its travel ends where he
+    /// takes it, and nobody else's chase is to a point beyond that.
+    /// Pricing the defending side against the whole roll sent its
+    /// nearest man after a ball he could only escort (45% of every tick
+    /// anybody spent in a `TakeBall` state, parallel to the pass on 61%
+    /// of them); pricing him against nothing at all left the receiver a
+    /// free first touch (shots struck with nobody inside 1.25 m went
+    /// 51% → 59%, goals 2.4 → 3.1 a match). His race is to where the
+    /// pass is collected, which is where a defender closing a receiver
+    /// down actually runs.
+    pub fn end_at(&mut self, t: f32) -> Vector3<f32> {
+        let t = t.min(self.rest_ticks);
+        let stop = self.roll_at(t);
+        for sample in self.samples.iter_mut() {
+            if sample.1 > t {
+                *sample = (stop, t);
+            }
+        }
+        self.rest = stop;
+        self.rest_ticks = t;
+        self.point_at(t)
+    }
+
+    /// Ticks until a runner at `position` with top speed `speed` is
+    /// within `reach` of the ball.
+    pub fn time_to_reach(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
+        let position = Vector3::new(position.x, position.y, 0.0);
+        let speed = speed.max(1e-3);
+        let land = ((self.landing - position).norm() - reach).max(0.0) / speed;
+        if self.aerial >= 1.0 {
+            return land;
+        }
+        let roll = self.roll_time(position, speed, reach);
+        roll + (land - roll) * self.aerial
+    }
+
+    fn roll_time(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
+        // How far outside `reach` he still is at each sample, flat out.
+        let mut prev_t = 0.0;
+        let mut prev_short = (self.samples[0].0 - position).norm() - reach;
+        if prev_short <= 0.0 {
+            return 0.0;
+        }
+        for &(point, t) in &self.samples[1..] {
+            let short = (point - position).norm() - reach - speed * t;
+            if short <= 0.0 {
+                return prev_t + (t - prev_t) * prev_short / (prev_short - short);
+            }
+            prev_t = t;
+            prev_short = short;
+        }
+        // Past the roll the ball is a fixed point.
+        (((self.rest - position).norm() - reach).max(0.0) / speed).max(self.rest_ticks)
+    }
+}
 
 /// The rule that keeps a race for a loose ball a RACE.
 ///
@@ -75,7 +226,7 @@ impl LooseBallChase {
         // where it is standing — see [`Self::meeting_point`]. The aerial
         // end always was: `landing` is that same answer for a ball that
         // has to come down before anybody can play it.
-        let rolling = Self::meeting_point(ctx, ball_pos, ball_vel);
+        let (rolling, taken) = Self::meeting(ctx, ball_pos, ball_vel);
         let target = rolling + (landing - rolling) * aerial;
 
         // ⚠ THE TWO BRANCHES ARE NOT INTERCHANGEABLE, AND COLLAPSING THEM
@@ -112,12 +263,16 @@ impl LooseBallChase {
             .velocity
         };
 
-        let velocity = if aerial >= 1.0 {
+        // A ball somebody else is going to take first is a fixed point
+        // too — the place it stops — and is braked into like a landing
+        // spot. See [`ChasePath::end_at`].
+        let brake_share = aerial + (1.0 - aerial) * taken;
+        let velocity = if brake_share >= 1.0 {
             brake()
-        } else if aerial <= 0.0 {
+        } else if brake_share <= 0.0 {
             cut_off()
         } else {
-            cut_off() * (1.0 - aerial) + brake() * aerial
+            cut_off() * (1.0 - brake_share) + brake() * brake_share
         };
 
         (target, velocity)
@@ -204,8 +359,25 @@ impl LooseBallChase {
         ball_pos: Vector3<f32>,
         ball_vel: Vector3<f32>,
     ) -> Vector3<f32> {
+        Self::meeting(ctx, ball_pos, ball_vel).0
+    }
+
+    /// Ticks either side of a receiver's collection time across which a
+    /// chase fades from cutting the ball out to closing down the man
+    /// collecting it. A race that close is a contest, not a verdict, and
+    /// a hard switch between the two targets would snap the heading.
+    const TAKEN_BAND: f32 = 50.0;
+
+    /// [`Self::meeting_point`], and how far it has been pulled back to
+    /// where a receiver takes the ball first — 0 is his own read of the
+    /// roll, 1 is the collection point. See [`ChasePath::end_at`].
+    pub fn meeting(
+        ctx: &StateProcessingContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
         if Self::tail_chase() {
-            return ball_pos;
+            return (ball_pos, 0.0);
         }
         let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
         let player_pos = flat(ctx.player.position);
@@ -215,11 +387,11 @@ impl LooseBallChase {
         let ball_speed = ball_vel.norm();
         // Nothing to lead: a ball at rest, or one already at his feet.
         if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
-            return ball_pos;
+            return (ball_pos, 0.0);
         }
         let speed = ctx.player.max_speed_with_condition_cached().max(1e-3);
 
-        let point = if Self::concede() {
+        let (point, when) = if Self::concede() {
             // The 2026-08-22 estimate, kept as the `OF_CONCEDE` arm:
             // match the ball across the line of sight, call what is left
             // the closing speed, and read the roll at `gap / closing`
@@ -234,18 +406,35 @@ impl LooseBallChase {
             let closing = (speed * speed - across.norm_squared()).max(0.0).sqrt()
                 - ball_vel.dot(&line_of_sight);
             let ticks = gap / closing.max(1e-3);
-            flat(ball_pos) + ball_dir * BallRoll::distance(ball_speed, ticks)
+            (
+                flat(ball_pos) + ball_dir * BallRoll::distance(ball_speed, ticks),
+                ticks,
+            )
         } else {
-            Self::earliest_meeting(player_pos, speed, flat(ball_pos), ball_vel).0
+            Self::earliest_meeting(player_pos, speed, flat(ball_pos), ball_vel)
+        };
+
+        // The end of the path is defined BY the receiver's meeting, so it
+        // cannot constrain him; everybody else's read stops there.
+        let (point, taken) = match ctx.tick_context.chase.path_end() {
+            Some(end) if end.receiver != ctx.player.id => {
+                let t = ((when - end.tick) / Self::TAKEN_BAND + 0.5).clamp(0.0, 1.0);
+                let taken = t * t * (3.0 - 2.0 * t);
+                (point + (end.point - point) * taken, taken)
+            }
+            _ => (point, 0.0),
         };
 
         let size = &ctx.context.field_size;
         let (min_x, max_x, min_y, max_y) =
             RunOff::ball_bounds(size.width as f32, size.height as f32);
-        Vector3::new(
-            point.x.clamp(min_x, max_x),
-            point.y.clamp(min_y, max_y),
-            0.0,
+        (
+            Vector3::new(
+                point.x.clamp(min_x, max_x),
+                point.y.clamp(min_y, max_y),
+                0.0,
+            ),
+            taken,
         )
     }
 

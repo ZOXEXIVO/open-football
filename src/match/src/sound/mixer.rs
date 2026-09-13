@@ -106,8 +106,10 @@ impl Knock {
         };
         match kind {
             // The full range: a ball rolled five metres and a shot struck at
-            // forty are both this, and they sound nothing alike.
-            Strike::Boot => Knock {
+            // forty are both this, and they sound nothing alike. A trap is
+            // never handed here — an arrival is `Meeting::Received` — but a
+            // boot is what it would be.
+            Strike::Boot | Strike::Trap => Knock {
                 from: 140.0 + 95.0 * weight,
                 to: 52.0,
                 fall: 0.05 + 0.03 * weight,

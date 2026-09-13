@@ -67,7 +67,10 @@ impl StateProcessingHandler for MidfielderHoldingWidthState {
         // — it force-elects a chaser across the whole side — but a ball
         // played INTO the channel for him is not loose, and nothing else
         // would pick it up.
-        if ctx.ball().is_towards_player() && ctx.ball().distance() < 120.0 && !ctx.ball().is_owned()
+        if ctx.ball().is_towards_player()
+            && ctx.ball().distance() < 120.0
+            && !ctx.ball().is_owned()
+            && ctx.team().is_best_player_to_chase_ball()
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,

@@ -36,7 +36,11 @@ impl StateProcessingHandler for DefenderInterceptingState {
         }
 
         // Loose ball nearby — go claim it directly
-        if !ctx.ball().is_owned() && ball_distance < 60.0 && ctx.ball().speed() < 4.0 {
+        if !ctx.ball().is_owned()
+            && ball_distance < 60.0
+            && ctx.ball().speed() < 4.0
+            && ctx.team().is_best_player_to_chase_ball()
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));

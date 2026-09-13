@@ -53,7 +53,11 @@ impl StateProcessingHandler for MidfielderInterceptingState {
             let ball_distance = ctx.ball().distance();
 
             // Loose ball nearby — claim it directly instead of tackling thin air
-            if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
+            if !ctx.ball().is_owned()
+                && ball_distance < 50.0
+                && ctx.ball().speed() < 3.0
+                && ctx.team().is_best_player_to_chase_ball()
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::TakeBall,
                 ));

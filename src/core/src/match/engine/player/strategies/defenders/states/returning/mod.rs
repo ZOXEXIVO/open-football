@@ -77,7 +77,7 @@ impl StateProcessingHandler for DefenderReturningState {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
-                } else {
+                } else if ctx.team().is_best_player_to_chase_ball() {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::TakeBall,
                     ));

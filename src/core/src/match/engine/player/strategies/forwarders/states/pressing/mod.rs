@@ -34,7 +34,11 @@ impl StateProcessingHandler for ForwardPressingState {
         }
 
         // Loose ball nearby — go claim it directly instead of pressing thin air
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
+        if !ctx.ball().is_owned()
+            && ctx.ball().distance() < 50.0
+            && ctx.ball().speed() < 3.0
+            && ctx.team().is_best_player_to_chase_ball()
+        {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::TakeBall,
             ));

@@ -104,7 +104,10 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         }
 
         // A ground ball loose right at our feet — pounce on it.
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 8.0 {
+        if !ctx.ball().is_owned()
+            && ctx.ball().distance() < 8.0
+            && ctx.team().is_best_player_to_chase_ball()
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));

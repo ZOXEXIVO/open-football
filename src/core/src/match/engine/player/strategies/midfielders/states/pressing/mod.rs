@@ -56,7 +56,7 @@ impl StateProcessingHandler for MidfielderPressingState {
         // vs 16.9 across the same A/B.
         if Interception::is_available(ctx)
             && ctx.ball().distance() < 30.0
-            && !Self::teammate_is_closer(ctx)
+            && ctx.team().is_best_player_to_chase_ball()
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
@@ -166,7 +166,7 @@ impl StateProcessingHandler for MidfielderPressingState {
         if !ctx.ball().is_owned()
             && ball_distance < 50.0
             && ctx.ball().speed() < 3.0
-            && !Self::teammate_is_closer(ctx)
+            && ctx.team().is_best_player_to_chase_ball()
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
@@ -319,25 +319,6 @@ impl StateProcessingHandler for MidfielderPressingState {
 }
 
 impl MidfielderPressingState {
-    /// Is a team-mate meaningfully nearer the ball than I am?
-    ///
-    /// The same 5u margin the loose-ball branch has always used, lifted
-    /// out so both routes into `TakeBall` ask it. Deliberately a MARGIN
-    /// rather than a tie-break: at exact equality two players each see
-    /// the other as closer and neither goes.
-    fn teammate_is_closer(ctx: &StateProcessingContext) -> bool {
-        let cutoff = ctx.ball().distance() - 5.0;
-        if cutoff <= 0.0 {
-            return false;
-        }
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        ctx.players()
-            .teammates()
-            .nearby_at(ball_pos, cutoff)
-            .next()
-            .is_some()
-    }
-
     // New helper function to determine if pressing is making progress
     fn is_making_progress(&self, ctx: &StateProcessingContext) -> bool {
         let player_velocity = ctx.player.velocity;

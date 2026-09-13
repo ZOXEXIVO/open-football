@@ -323,9 +323,9 @@ impl DefensiveRecovery {
     /// The same lexicographic election `should_force_takeball` uses to
     /// redirect exactly one player per side into `TakeBall`, asked
     /// through the one shared predicate ([`LooseBallChase::is_designated`])
-    /// so the two cannot drift apart. Measured against the ball's LANDING
-    /// position for the same reason that election is: a delivery is
-    /// contested at the drop, not at its apex.
+    /// so the two cannot drift apart. Priced in time along the ball's
+    /// path for the same reason that election is: a delivery is
+    /// contested where it can be met, not where it is.
     ///
     /// Deliberately the ELECTION and not the `TakeBall` state. Exempting
     /// the state outright is recorded as tried and reverted — it is
@@ -376,13 +376,11 @@ impl DefensiveRecovery {
         if let Some(taker) = RestartHold::taker(ctx.tick_context) {
             return taker == ctx.player.id;
         }
-        let drop = ctx.tick_context.positions.ball.landing_position;
-        let my_dist_sq = (drop - ctx.player.position).norm_squared();
-        if !ctx
-            .tick_context
-            .chase
-            .is_designated(side, ctx.player.id, my_dist_sq)
-        {
+        let chase = &ctx.tick_context.chase;
+        let Some(my_cost) = chase.cost_of(ctx.player.id) else {
+            return false;
+        };
+        if !chase.is_designated(side, ctx.player.id) {
             return false;
         }
         // …AND IT HAS TO BE A BALL HE CAN ACTUALLY WIN.
@@ -404,15 +402,13 @@ impl DefensiveRecovery {
         // It was not costing compactness; it was taking a defender out
         // of shape 60 m from a ball he was never going to reach.
         //
-        // The striker gamble in [`LooseBallChase::chase_dist_sq`] is on
+        // The striker gamble (`PlayerFieldMetadata::chase_bias`) is on
         // both sides of this comparison, which is right: a forward really
         // does read a rebound earlier, and a defender who knows the
         // striker will beat him to it should be dropping off.
-        let theirs_closer = ctx
-            .tick_context
-            .chase
+        let theirs_closer = chase
             .best(side.opposite())
-            .is_some_and(|best| best.dist_sq < my_dist_sq);
+            .is_some_and(|best| best.cost < my_cost);
         !theirs_closer
     }
 

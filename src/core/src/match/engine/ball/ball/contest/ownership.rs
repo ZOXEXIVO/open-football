@@ -4,7 +4,9 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::{AerialReach, AwaitedRestart, Ball, PlayerReach};
+use crate::r#match::engine::ball::ball::{
+    AerialReach, AwaitedRestart, Ball, LOOSE_CLAIM_DISTANCE, PlayerReach,
+};
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
@@ -1444,7 +1446,7 @@ impl Ball {
         // to the ball) and gives a wider interception window without
         // affecting actual contact semantics. Genuinely fast balls
         // (> 10 u/t) still get the tighter 1-unit rule below.
-        const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
+        const BALL_DISTANCE_THRESHOLD: f32 = LOOSE_CLAIM_DISTANCE;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 =
             BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         // **The vertical reach belongs to the PLAYER, not to this scan.**

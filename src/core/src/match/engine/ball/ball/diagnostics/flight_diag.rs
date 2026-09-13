@@ -129,6 +129,34 @@ pub static INTERCEPTS_NO_LEAP: AtomicU64 = AtomicU64::new(0);
 pub static HEADERS: AtomicU64 = AtomicU64::new(0);
 pub static HEADERS_AIRBORNE: AtomicU64 = AtomicU64::new(0);
 
+/// The shape every PASS was struck with, by the distance it covered.
+///
+/// The launch histogram above sees every kick — shots, clearances, punts,
+/// crosses — and so cannot say whether a 2 m apex was a corner or a ten-
+/// metre ball to feet. This one is fed from `handle_pass_to_event` alone,
+/// after the trajectory has been chosen and solved, and keeps the reason
+/// the ball left the deck: a body in the lane, or the distance itself.
+pub const PASS_BANDS: [f32; 5] = [80.0, 120.0, 240.0, 480.0, f32::INFINITY];
+pub const PASS_BAND_LABELS: [&str; 5] = ["<10m", "10-15m", "15-30m", "30-60m", "60m+"];
+pub const PASS_SHAPES: [&str; 7] = [
+    "ground", "driven", "medium", "high", "chip", "cross-lo", "cross-hi",
+];
+pub static PASS_SHAPE: [[AtomicU64; 7]; 5] = [const { [const { AtomicU64::new(0) }; 7] }; 5];
+/// Passes per band whose shape was forced by a body in the lane rather
+/// than chosen on distance.
+pub static PASS_TRAFFIC_LIFT: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// Passes per band that peak at chest height or above (≥ 1 m) — what a
+/// viewer reads as "lofted" — and at knee height or above (≥ 0.5 m).
+pub static PASS_AIRBORNE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub static PASS_LIFTED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// Passes per band played toward the passer's own goal.
+pub static PASS_BACKWARD: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// Passes per band aimed into a wide channel (outer fifth of the pitch
+/// either side), and open-play passes (not modelled crosses) aimed into
+/// the opponent's penalty area from outside it.
+pub static PASS_WIDE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub static PASS_INTO_BOX: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
 /// Accessors. Grouped on a struct so the module exposes no free
 /// functions; the statics stay module-level because Rust has no
 /// associated statics.
@@ -204,6 +232,61 @@ impl FlightDiag {
         }
     }
 
+    /// Book one pass: how far it was struck, which shape the solver
+    /// chose, whether lane traffic forced it, and the apex the launch
+    /// actually implies.
+    pub fn note_pass(
+        distance_units: f32,
+        shape: usize,
+        traffic_lifted: bool,
+        apex_m: f32,
+        backward: bool,
+        wide: bool,
+        into_box: bool,
+    ) {
+        let band = PASS_BANDS
+            .iter()
+            .position(|&b| distance_units < b)
+            .unwrap_or(PASS_BANDS.len() - 1);
+        if let Some(c) = PASS_SHAPE[band].get(shape) {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        if traffic_lifted {
+            PASS_TRAFFIC_LIFT[band].fetch_add(1, Ordering::Relaxed);
+        }
+        if apex_m >= 1.0 {
+            PASS_AIRBORNE[band].fetch_add(1, Ordering::Relaxed);
+        }
+        if apex_m >= 0.5 {
+            PASS_LIFTED[band].fetch_add(1, Ordering::Relaxed);
+        }
+        if backward {
+            PASS_BACKWARD[band].fetch_add(1, Ordering::Relaxed);
+        }
+        if wide {
+            PASS_WIDE[band].fetch_add(1, Ordering::Relaxed);
+        }
+        if into_box {
+            PASS_INTO_BOX[band].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Per band: `(shape counts, traffic-lifted, apex ≥ 1 m, apex ≥ 0.5 m,
+    /// backward, wide, into the box)`.
+    pub fn pass_snapshot() -> [([u64; 7], u64, u64, u64, u64, u64, u64); 5] {
+        std::array::from_fn(|b| {
+            (
+                std::array::from_fn(|s| PASS_SHAPE[b][s].load(Ordering::Relaxed)),
+                PASS_TRAFFIC_LIFT[b].load(Ordering::Relaxed),
+                PASS_AIRBORNE[b].load(Ordering::Relaxed),
+                PASS_LIFTED[b].load(Ordering::Relaxed),
+                PASS_BACKWARD[b].load(Ordering::Relaxed),
+                PASS_WIDE[b].load(Ordering::Relaxed),
+                PASS_INTO_BOX[b].load(Ordering::Relaxed),
+            )
+        })
+    }
+
     /// `(launches, apex_hist, apex_max_m, peak_z_m, peak_speed)`
     pub fn launch_snapshot() -> (u64, [u64; 8], f32, f32, f32) {
         (
@@ -258,6 +341,19 @@ impl FlightDiag {
         }
         for c in ABSURD_BY_STATE.iter() {
             c.store(0, Ordering::Relaxed);
+        }
+        for band in PASS_SHAPE.iter() {
+            for c in band.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for b in 0..PASS_BANDS.len() {
+            PASS_TRAFFIC_LIFT[b].store(0, Ordering::Relaxed);
+            PASS_AIRBORNE[b].store(0, Ordering::Relaxed);
+            PASS_LIFTED[b].store(0, Ordering::Relaxed);
+            PASS_BACKWARD[b].store(0, Ordering::Relaxed);
+            PASS_WIDE[b].store(0, Ordering::Relaxed);
+            PASS_INTO_BOX[b].store(0, Ordering::Relaxed);
         }
         for i in 0..STAGES.len() {
             JUMPS[i].store(0, Ordering::Relaxed);

@@ -109,23 +109,24 @@ fn keeper_glide() {
             // ——— the integrator, as `animate` runs it ———
             let ground = step.length();
             let observed = ground / frame;
-            let (ground, observed) = if observed > Actors::TELEPORT {
+            let teleported = observed > Actors::TELEPORT;
+            let (ground, observed) = if teleported {
                 (0.0, actor.speed)
             } else {
                 (ground, observed)
             };
-            actor.gather_pace(observed, pace, frame, false);
-            let travelling = if ground <= 0.0 {
-                Vec3::ZERO
-            } else {
-                step / frame
-            };
+            let stepping = actor.gain_ground(position, teleported) / frame;
+            actor.gather_pace(stepping, pace, frame, false);
+            let travelling = stepping;
             let was = actor.travel;
             actor.travel =
                 was + (travelling - was) * (1.0 - (-frame / Actors::TRAVEL_RESPONSE).exp());
             actor.height = position.y;
-            actor.declared =
-                Actors::declared(&mut tracks.states, id, now, position.y, actor.declared);
+            let named = tracks
+                .states
+                .get_mut(&id)
+                .and_then(|track| track.name_at(now));
+            actor.declared = Actors::declared(named, position.y, actor.declared);
             let launch = actor.speed.max(observed);
             let was_airborne = actor.air > 0.0;
             let airborne = actor.track_flight(frame, launch, observed, false);
@@ -151,6 +152,7 @@ fn keeper_glide() {
             }
             let facing = Actors::facing(&actor, &state, position, step, false);
             let mut turn_signal = 0.0f32;
+            let mut yawed = 0.0f32;
             if let Some(facing) = Vec3::new(facing.x, 0.0, facing.z).try_normalize() {
                 let wanted = facing.x.atan2(facing.z);
                 let swing = (wanted - actor.heading + PI).rem_euclid(TAU) - PI;
@@ -160,6 +162,7 @@ fn keeper_glide() {
                     * frame;
                 let applied = (swing * turn).clamp(-ceiling, ceiling);
                 actor.heading += applied;
+                yawed = applied;
                 turn_signal = (applied / frame / Actors::HARD_TURN).clamp(-1.0, 1.0);
             }
             actor.bank_into(turn_signal, frame, false);
@@ -218,7 +221,7 @@ fn keeper_glide() {
             });
             actor.carry += (f32::from(wanted_carry) - actor.carry) * pace;
 
-            actor.take_steps(frame, false);
+            actor.take_steps(frame, yawed, false);
             let gait = actor.gait();
 
             // ——— what he is drawn doing with his legs ———

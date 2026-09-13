@@ -363,6 +363,18 @@ impl Complexion {
         0.80 + Self::trait_of(id, 0x3D9E) as f32 / 250.0
     }
 
+    /// **How he stands once he has stopped**, −1..1: below zero he brings
+    /// his feet together and rests on one leg, above it he stays on the
+    /// stride he pulled up on, and the further above the wider the stagger.
+    ///
+    /// The stride phase used to freeze wherever the ground ran out, so the
+    /// stance a man ended up in was whatever the last frame of a run left
+    /// him — a third of all stops with one foot still coming through. A
+    /// stop is a step taken deliberately, and which step is his.
+    pub fn stance(id: u32) -> f32 {
+        Self::trait_of(id, 0x4D2F) as f32 / 50.0 - 1.0
+    }
+
     /// **How he takes a goal**, as a 0..99 draw — hands on his head, on his
     /// hips, bent over his knees, or arms hanging.
     ///

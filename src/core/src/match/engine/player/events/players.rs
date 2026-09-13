@@ -4,6 +4,8 @@ use crate::r#match::engine::ball::ball::AwaitedRestart;
 use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
     Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GROUND_FRICTION, PlayerReach,
@@ -538,7 +540,6 @@ struct PassSkills {
     technique: f32,
     vision: f32,
     composure: f32,
-    decisions: f32,
     concentration: f32,
     flair: f32,
     long_shots: f32,
@@ -586,9 +587,6 @@ impl PassSkills {
         let composure =
             (peer(effective_skill(player, player.skills.mental.composure, mental) / 20.0))
                 .clamp(0.02, 1.0);
-        let decisions =
-            (peer(effective_skill(player, player.skills.mental.decisions, mental) / 20.0))
-                .clamp(0.02, 1.0);
         let concentration =
             (peer(effective_skill(player, player.skills.mental.concentration, mental) / 20.0))
                 .clamp(0.02, 1.0);
@@ -619,7 +617,6 @@ impl PassSkills {
             technique,
             vision,
             composure,
-            decisions,
             concentration,
             flair,
             long_shots,
@@ -638,31 +635,18 @@ impl PassSkills {
         // skill values already ship the per-match condition curve.
         base_quality * self.availability_factor
     }
-
-    /// Decision-making quality for trajectory selection. Same rule:
-    /// no second condition multiplier — only the independent
-    /// availability factor on top of effective skills.
-    fn decision_quality(&self) -> f32 {
-        (self.decisions * 0.4 + self.vision * 0.3 + self.concentration * 0.2 + self.composure * 0.1)
-            * self.availability_factor
-    }
 }
 
 /// What is standing between a passer and their target.
 struct LaneTraffic {
-    /// Opponents inside the lane corridor.
-    count: usize,
-    /// Distance ALONG the lane to the nearest of them, in game units.
-    /// `f32::MAX` when the lane is clear.
+    /// Distance ALONG the lane to the nearest opponent inside the lane
+    /// corridor, in game units. `f32::MAX` when the lane is clear.
     nearest: f32,
 }
 
 impl Default for LaneTraffic {
     fn default() -> Self {
-        LaneTraffic {
-            count: 0,
-            nearest: f32::MAX,
-        }
+        LaneTraffic { nearest: f32::MAX }
     }
 }
 
@@ -698,6 +682,20 @@ impl TrajectoryType {
             TrajectoryType::MediumArc | TrajectoryType::HighArc | TrajectoryType::Chip => true,
             TrajectoryType::Cross(ct) => ct.is_lofted(),
             _ => false,
+        }
+    }
+
+    /// Column in `flight_diag::PASS_SHAPES`.
+    #[cfg(feature = "match-logs")]
+    fn diag_index(self) -> usize {
+        match self {
+            TrajectoryType::Ground => 0,
+            TrajectoryType::LowDriven => 1,
+            TrajectoryType::MediumArc => 2,
+            TrajectoryType::HighArc => 3,
+            TrajectoryType::Chip => 4,
+            TrajectoryType::Cross(ct) if !ct.is_lofted() => 5,
+            TrajectoryType::Cross(_) => 6,
         }
     }
 }
@@ -3158,6 +3156,48 @@ impl PlayerEventDispatcher {
             final_velocity.y *= scale;
         }
 
+        #[cfg(feature = "match-logs")]
+        {
+            let traffic = Self::scan_passing_lane(
+                &passer_position,
+                &actual_target,
+                passer_team_id,
+                &field.players,
+            );
+            let traffic_lifted = event_model.cross_type.is_none()
+                && traffic.nearest <= Self::LIFT_TRIGGER_DISTANCE
+                && !matches!(
+                    trajectory_type,
+                    TrajectoryType::Ground | TrajectoryType::LowDriven
+                );
+            let backward = passer_side
+                .is_some_and(|s| s.forward_delta(passer_position.x, actual_target.x) < -8.0);
+            let field_w = field.size.width as f32;
+            let field_h = field.size.height as f32;
+            let centre_y = field_h * 0.5;
+            let wide = (actual_target.y - centre_y).abs() > field_h * 0.30;
+            let in_opp_box = |p: &Vector3<f32>| {
+                let depth = match passer_side {
+                    Some(PlayerSide::Left) => field_w - p.x,
+                    Some(PlayerSide::Right) => p.x,
+                    None => f32::MAX,
+                };
+                depth < 132.0 && (p.y - centre_y).abs() < 161.0
+            };
+            let into_box = event_model.cross_type.is_none()
+                && in_opp_box(&actual_target)
+                && !in_opp_box(&passer_position);
+            FlightDiag::note_pass(
+                actual_horizontal_distance,
+                trajectory_type.diag_index(),
+                traffic_lifted,
+                Ball::apex_for_launch(final_velocity.z.max(0.0)),
+                backward,
+                wide,
+                into_box,
+            );
+        }
+
         // Apply ball physics
         field.ball.velocity = final_velocity;
 
@@ -3317,8 +3357,17 @@ impl PlayerEventDispatcher {
         horizontal_direction * (needed_velocity * skill_modifier)
     }
 
-    /// Select trajectory type based on obstacles in the passing lane
-    /// Simple rule: obstacles present → cross (lofted), no obstacles → ground pass
+    /// How far down the lane a body has to be to count as stood at the
+    /// passer's feet. 40u = 5 m: within one defensive stride.
+    const LIFT_TRIGGER_DISTANCE: f32 = 40.0;
+
+    /// Pick the shape of a pass from how far it has to travel and whether
+    /// a body is stood in the line of it. Distance is the one continuous
+    /// signal: inside 25 m the ball is rolled or driven, and from there the
+    /// odds of lifting it climb to a certainty at 60 m. A body at the
+    /// passer's feet does not put the ball in the air on its own — the dink
+    /// over him is a vision-and-touch minority; most players slide it past
+    /// him on the deck and let the interception model settle it.
     fn select_trajectory_type_contextual(
         horizontal_distance: f32,
         skills: &PassSkills,
@@ -3328,174 +3377,49 @@ impl PlayerEventDispatcher {
         passer_team_id: u32,
         players: &[MatchPlayer],
     ) -> TrajectoryType {
-        // Traffic in the passing lane.
         let traffic = Self::scan_passing_lane(from_position, to_position, passer_team_id, players);
-        // A body in the lane only forces the ball into the air if it is
-        // CLOSE — the man actually pressing you, whom you have to lift it
-        // over. A defender standing 15 m down the lane is played around or
-        // driven past; nobody chips a 20 m ball to feet because someone is
-        // loitering halfway.
-        //
-        // The old rule was "any opponent anywhere along the lane → never
-        // play it low", which was survivable only because the distance
-        // bands underneath it were four times too small. Rescaling those
-        // bands turned it into a machine for lofting ordinary midfield
-        // passes: pressed players started chipping every ball they played.
-        //
-        // 40u = 5 m: within one defensive stride of the passer.
-        const LIFT_TRIGGER_DISTANCE: f32 = 40.0;
-        let obstacles_in_lane = if traffic.nearest <= LIFT_TRIGGER_DISTANCE {
-            traffic.count
-        } else {
-            0
-        };
+        let pressed_lane = traffic.nearest <= Self::LIFT_TRIGGER_DISTANCE;
+        let metres = horizontal_distance * 0.125;
 
-        // Calculate decision quality - determines how well player chooses trajectory
-        let decision_quality = skills.decision_quality();
-        let vision_quality = skills.vision;
+        // 0 at 25 m → 1 at 60 m.
+        let air = ((metres - 25.0) / 35.0).clamp(0.0, 1.0);
+        // Of the lofted balls, the hoist takes over from the clip.
+        let hoist = ((metres - 32.0) / 28.0).clamp(0.0, 1.0);
+        // Of the balls on the deck, the drive takes over from the roll.
+        let drive = ((metres - 12.0) / 20.0).clamp(0.0, 1.0);
 
-        // Better decision makers make more appropriate choices
-        let skill_influenced_random = {
-            let pure_random = rng.random_range(0.0..1.0);
-            let randomness_factor = 1.0 - (decision_quality * 0.6);
-            let skill_bias = decision_quality * 0.3;
-            (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
-        };
-
-        // Distance categories. The field is 840u = 105m, so **1 unit =
-        // 0.125 m** — the old bands were annotated "1 unit ≈ 0.5m" and were
-        // therefore four times too small. Under them, "short" ended at 3.8 m
-        // and everything past 15 m fell into the always-lofted bucket, which
-        // is essentially every pass in a football match: the engine chose an
-        // aerial trajectory for a routine 20 m ball to feet.
-        //
-        // Rescaled to what the labels actually claim.
-        let is_short = horizontal_distance <= 120.0; // ≤15m — quick one-touch
-        let is_medium = horizontal_distance > 120.0 && horizontal_distance <= 240.0; // 15-30m
-        let is_long = horizontal_distance > 240.0 && horizontal_distance <= 480.0; // 30-60m
-        // > 480 units = very long (60m+)
-
-        // Passes should be lofted based on BOTH obstacles AND distance.
-        // In real football, passes over 25m often leave the ground even without obstacles.
-        if obstacles_in_lane == 0 {
-            // CLEAR LANE — trajectory based on distance
-            if is_short {
-                // Short passes — ground
-                TrajectoryType::Ground
-            } else if is_medium {
-                // Medium passes — mostly ground, some driven
-                if skill_influenced_random < 0.60 {
-                    TrajectoryType::Ground
-                } else {
-                    TrajectoryType::LowDriven
-                }
-            } else if is_long {
-                // Long passes (30-60 m) down an empty lane — driven along
-                // the floor or clipped over the top. Both are real; the
-                // driven ball is the more common of the two.
-                if skill_influenced_random < 0.45 {
-                    TrajectoryType::LowDriven
-                } else if skill_influenced_random < 0.70 {
-                    TrajectoryType::MediumArc
-                } else {
-                    TrajectoryType::HighArc
-                }
-            } else {
-                // Very long (60 m+) — the switch of play and the goal kick.
-                // These want to be in the air. Past ~44 m the solver cannot
-                // buy the arc at this gravity and drives it instead, which
-                // is handled for us (`calculate_pass_velocity`).
-                if skill_influenced_random < 0.30 {
-                    TrajectoryType::MediumArc
-                } else {
-                    TrajectoryType::HighArc
-                }
+        if pressed_lane {
+            // A dink is a short-range answer: past 25 m the ball that goes
+            // over him is the long ball below, not a chip.
+            let vision_p = SkillCurve::new(skills.vision * 20.0, 14.0, 0.6).probability();
+            if rng.bernoulli(vision_p * 0.30 * (1.0 - air)) {
+                return TrajectoryType::Chip;
             }
-        } else {
-            // OBSTACLES PRESENT - Use lofted passes (crosses).
-            // Smooth crossing / vision gates via sigmoid pivots at the
-            // old `> 0.7` (=14/20) thresholds — `skills.*` are already
-            // normalised 0-1 so we re-scale to raw 1-20 for the curve.
-            let many_obstacles = obstacles_in_lane >= 2;
-            let crossing_p = SkillCurve::new(skills.crossing * 20.0, 14.0, 0.6).probability();
-            let vision_p = SkillCurve::new(vision_quality * 20.0, 14.0, 0.6).probability();
-            let has_good_crossing = rng.random_range(0.0..1.0) < crossing_p;
+        }
 
-            if is_short {
-                // Pressed, playing short. A dink over the man in front is
-                // the picture-book answer but it is a hard, low-percentage
-                // skill — most players just slide it past him instead, and
-                // let the interception model decide whether that works.
-                // "NEVER low" here was the other half of the always-lofted
-                // problem.
-                let chip_p = vision_p * 0.45;
-                if skill_influenced_random < chip_p {
-                    TrajectoryType::Chip // Smart chip over defender, scaled by vision
-                } else {
-                    TrajectoryType::Ground
-                }
-            } else if is_medium {
-                // Medium pass with obstacles - cross with arc (NEVER low)
-                if many_obstacles {
-                    // Multiple obstacles - higher arc needed
-                    if skill_influenced_random < 0.70 {
-                        TrajectoryType::HighArc // 70% high cross
-                    } else {
-                        TrajectoryType::MediumArc // 30% medium cross
-                    }
-                } else {
-                    // One obstacle - medium/high arc to clear it
-                    if skill_influenced_random < 0.70 {
-                        TrajectoryType::MediumArc // 70% medium cross
-                    } else {
-                        TrajectoryType::HighArc // 30% high cross
-                    }
-                }
-            } else if is_long {
-                // Long pass with obstacles - definitely need arc
-                if many_obstacles || has_good_crossing {
-                    // Multiple obstacles or good crosser - high arc
-                    if skill_influenced_random < 0.75 {
-                        TrajectoryType::HighArc // 75% high cross
-                    } else {
-                        TrajectoryType::MediumArc // 25% medium cross
-                    }
-                } else {
-                    // One obstacle - medium/high arc mix
-                    if skill_influenced_random < 0.60 {
-                        TrajectoryType::MediumArc // 60% medium cross
-                    } else {
-                        TrajectoryType::HighArc // 40% high cross
-                    }
-                }
+        if rng.bernoulli(air) {
+            // A poor striker of a long ball hoists it; a good one clips it
+            // flatter and faster.
+            let long_ball = (skills.long_shots + skills.vision + skills.crossing) / 3.0;
+            let high_p = (hoist + (0.5 - long_ball) * 0.3).clamp(0.0, 1.0);
+            return if rng.bernoulli(high_p) {
+                TrajectoryType::HighArc
             } else {
-                // Very long pass with obstacles - high cross
-                let long_pass_ability = skills.long_shots * skills.vision * skills.crossing;
-                if long_pass_ability > 0.7 {
-                    // Elite crosser - controlled high arc
-                    if skill_influenced_random < 0.80 {
-                        TrajectoryType::HighArc // 80% high cross
-                    } else {
-                        TrajectoryType::MediumArc // 20% medium cross
-                    }
-                } else {
-                    // Average crosser - mostly high arc
-                    if skill_influenced_random < 0.70 {
-                        TrajectoryType::HighArc // 70% high cross
-                    } else {
-                        TrajectoryType::MediumArc // 30% medium cross
-                    }
-                }
-            }
+                TrajectoryType::MediumArc
+            };
+        }
+
+        if rng.bernoulli(drive) {
+            TrajectoryType::LowDriven
+        } else {
+            TrajectoryType::Ground
         }
     }
 
-    /// Opponents standing in the passing lane, and how far down the lane
-    /// the closest of them is.
+    /// How far down the passing lane the closest opponent stands.
     ///
-    /// The distance matters as much as the count: whether a pass has to
-    /// leave the ground depends on whether the body is at the passer's
-    /// feet or thirty yards away. See the `LIFT_TRIGGER_DISTANCE` note in
+    /// Whether a body matters depends on whether it is at the passer's
+    /// feet or thirty yards away — see `LIFT_TRIGGER_DISTANCE` in
     /// `select_trajectory_type_contextual`.
     fn scan_passing_lane(
         from_position: &Vector3<f32>,
@@ -3533,9 +3457,7 @@ impl PlayerEventDispatcher {
             let projection_point = *from_position + pass_direction * projection_length;
             let perpendicular_distance = (player.position - projection_point).magnitude();
 
-            // Player is an obstacle if within lane width
             if perpendicular_distance < LANE_WIDTH {
-                traffic.count += 1;
                 traffic.nearest = traffic.nearest.min(projection_length);
             }
         }
@@ -3564,9 +3486,9 @@ impl PlayerEventDispatcher {
             // Rolling — a couple of centimetres, so the ball rides bumps
             // rather than grinding along at exactly z = 0.
             TrajectoryType::Ground => 0.02,
-            // Skimming drive: off the deck, never above the shin. Not
+            // Skimming drive: off the deck, never above the ankle. Not
             // required to arrive on the fly — it lands early and runs on.
-            TrajectoryType::LowDriven => (0.20 + metres * 0.010).clamp(0.20, 0.9),
+            TrajectoryType::LowDriven => (0.06 + metres * 0.005).clamp(0.06, 0.30),
             // The workhorse lofted ball — over a leg, onto his chest.
             TrajectoryType::MediumArc => (1.0 + metres * 0.075).clamp(1.0, 5.0),
             // Cross, switch, goal kick. A 50 m kick peaks at 10 m and hangs
@@ -7323,7 +7245,6 @@ mod pass_ballistics_tests {
             technique: 0.8,
             vision: 0.8,
             composure: 0.8,
-            decisions: 0.8,
             concentration: 0.8,
             flair: 0.8,
             long_shots: 0.8,

@@ -1,3 +1,4 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::{MatchField, PlayerSide};
 use nalgebra::Vector3;
 
@@ -26,15 +27,11 @@ pub struct PlayerFieldMetadata {
     /// the ball instead of yanking a diving keeper or a player already
     /// in the air out of their action.
     pub chase_eligible: bool,
-    /// True for forwards. Strikers gamble on loose balls and rebounds —
-    /// it is a defining part of the role — so they get a small
-    /// effective-distance edge in the loose-ball chase. Without it the
-    /// table is pure proximity, and at youth level (where a forward's
-    /// pace and finishing edge is smallest) midfielders were winning
-    /// the six-yard-box scraps: measured 28.2% of youth MID shots came
-    /// from <6m vs forwards' 17.5%, exactly inverted from senior
-    /// (8.0% vs 25.0%).
-    pub is_forward: bool,
+    /// Multiplier on this player's time to a loose ball in the chase
+    /// election — see [`Self::chase_bias_for`].
+    pub chase_bias: f32,
+    /// Top speed this tick, in u/tick — what a chase is priced in.
+    pub max_speed: f32,
 }
 
 impl Default for PlayerFieldMetadata {
@@ -46,12 +43,34 @@ impl Default for PlayerFieldMetadata {
             position: Vector3::zeros(),
             velocity: Vector3::zeros(),
             chase_eligible: true,
-            is_forward: false,
+            chase_bias: 1.0,
+            max_speed: 0.0,
+        }
+    }
+}
+
+impl PlayerFieldMetadata {
+    /// Strikers gamble on loose balls and rebounds — it is a defining
+    /// part of the role — so they read ~10% quicker to one than they
+    /// are. Without it the election is pure geometry, and at youth level
+    /// (where a forward's pace and finishing edge is smallest)
+    /// midfielders were winning the six-yard-box scraps: measured 28.2%
+    /// of youth MID shots came from <6m vs forwards' 17.5%, exactly
+    /// inverted from senior (8.0% vs 25.0%). Keepers read slower: a ball
+    /// an outfielder can reach is his to reach, and the keeper's own
+    /// territory gates decide the rest.
+    pub fn chase_bias_for(group: PlayerFieldPositionGroup) -> f32 {
+        match group {
+            PlayerFieldPositionGroup::Forward => 0.9,
+            PlayerFieldPositionGroup::Goalkeeper => 1.25,
+            _ => 1.0,
         }
     }
 }
 
 impl PlayerFieldData {
+    pub const CAPACITY: usize = MAX_FIELD_PLAYERS;
+
     #[inline(always)]
     fn hash_slot(player_id: u32) -> u32 {
         player_id.wrapping_mul(2654435761) & (SLOT_TABLE_SIZE as u32 - 1)
@@ -177,8 +196,10 @@ impl PlayerFieldData {
                     position: p.position,
                     velocity: p.velocity,
                     chase_eligible: !p.state.is_committed_action(),
-                    is_forward: p.tactical_position.current_position.position_group()
-                        == crate::PlayerFieldPositionGroup::Forward,
+                    chase_bias: PlayerFieldMetadata::chase_bias_for(
+                        p.tactical_position.current_position.position_group(),
+                    ),
+                    max_speed: p.max_speed_with_condition_cached(),
                 };
                 self.insert_slot(p.id, idx as u8);
                 self.len += 1;
@@ -197,6 +218,7 @@ impl PlayerFieldData {
                 self.items[i].position = p.position;
                 self.items[i].velocity = p.velocity;
                 self.items[i].chase_eligible = !p.state.is_committed_action();
+                self.items[i].max_speed = p.max_speed_with_condition_cached();
             }
         }
     }

@@ -1,10 +1,10 @@
+use crate::Tactics;
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
     AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
     MatchCoach, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape,
     TeamTacticalState, WidePlan,
 };
-use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
 // Only the debug-assert reference recomputation still needs `Ordering`;
 // in release the cfg-gated block compiles out along with this import.
@@ -915,8 +915,6 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     fn compute_is_best_player_to_chase_ball(&self) -> bool {
-        let ball_position = self.ctx.tick_context.positions.ball.position;
-
         // Don't chase the ball if a teammate already has it
         if let Some(owner_id) = self.ctx.ball().owner_id() {
             if let Some(owner) = self.ctx.context.players.by_id(owner_id) {
@@ -925,51 +923,23 @@ impl<'b> TeamOperationsImpl<'b> {
                 }
             }
         }
-
-        // Score for current player (use norm_squared to avoid sqrt)
-        let player_dist_sq = (ball_position - self.ctx.player.position).norm_squared();
-        let player_score = {
-            let skills = &self.ctx.player.skills;
-            let pace_factor = skills.physical.pace / 20.0;
-            let acceleration_factor = skills.physical.acceleration / 20.0;
-            let position_factor = match self
-                .ctx
-                .player
-                .tactical_position
-                .current_position
-                .position_group()
-            {
-                PlayerFieldPositionGroup::Forward => 1.2,
-                PlayerFieldPositionGroup::Midfielder => 1.1,
-                PlayerFieldPositionGroup::Defender => 0.9,
-                PlayerFieldPositionGroup::Goalkeeper => 0.5,
-            };
-            let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
-            player_dist_sq / (ability * ability)
+        let Some(side) = self.ctx.player.side else {
+            return false;
+        };
+        let chase = &self.ctx.tick_context.chase;
+        let Some(my_cost) = chase.cost_of(self.ctx.player.id) else {
+            return false;
         };
 
-        let threshold = player_score * 0.64; // 0.8^2
-
-        // Compare against teammates via the per-tick roster join. The
-        // per-candidate `(pace·accel·pos_factor·0.5+0.5)²` denominator is
-        // precomputed once per tick (`RosterEntryLive::chase_ability_sq`,
-        // identical operand order), replacing a `by_id` skill lookup per
-        // candidate per call. A NaN denominator (missing player) makes
-        // the comparison false — same as the old `by_id → None` skip.
+        // A team-mate has to be MEANINGFULLY quicker to the ball to rule
+        // me out — the same tolerance the distance version carried, so
+        // two men a stride apart both read as candidates and the state
+        // trees keep their own hysteresis. The dispatcher's election is
+        // the strict one; this is the band around it.
+        const TOLERANCE: f32 = 0.8;
         let my_id = self.ctx.player.id;
-        let my_team = self.ctx.player.team_id;
-        !self.ctx.tick_context.roster.iter().any(|entry| {
-            if entry.id == my_id || entry.team_id != my_team {
-                return false;
-            }
-            let dist_sq = (ball_position - entry.position).norm_squared();
-            // Quick distance check
-            if dist_sq > player_dist_sq {
-                return false;
-            }
-
-            let score = dist_sq / entry.chase_ability_sq;
-            score < threshold
+        !chase.rows().iter().any(|row| {
+            row.id != my_id && row.side == side && row.eligible && row.cost < my_cost * TOLERANCE
         })
     }
 }

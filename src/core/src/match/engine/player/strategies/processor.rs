@@ -17,7 +17,6 @@ use crate::r#match::player::strategies::common::states::{
     CornerHold, KeeperReleaseSpace, RestartCarry, ThrowInDelivery,
 };
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::player_context::LooseBallChase;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
@@ -304,31 +303,28 @@ impl PlayerFieldPositionGroup {
         let Some(my_side) = player.side else {
             return false;
         };
-        // Use landing_position here to match `should_force_takeball`.
-        // If yield used the current aerial position and force used
-        // landing, a designated chaser could get yielded mid-flight
-        // because a teammate happens to be closer to the ball's apex
-        // — and nobody converges on the bounce.
-        let ball_pos = tick_context.positions.ball.landing_position;
-        let my_dist_sq = (ball_pos - player.position).norm_squared();
-        // Hysteresis: only yield if a teammate is MEANINGFULLY closer
-        // (by at least HYSTERESIS units). Otherwise tick-to-tick jitter
-        // in movement swaps the "closest" designation between teammates
-        // every tick, turning the chase into a ping-pong where each
-        // player keeps yielding to the other and nobody commits long
-        // enough to cover the final few units into the claim radius.
+        let Some(my_cost) = tick_context.chase.cost_of(player.id) else {
+            return false;
+        };
+        // Hysteresis: only yield if a teammate is MEANINGFULLY quicker
+        // to the ball. Otherwise tick-to-tick jitter in movement swaps
+        // the designation between teammates every tick, turning the
+        // chase into a ping-pong where each player keeps yielding to the
+        // other and nobody commits long enough to cover the final few
+        // units into the claim radius.
         //
         // ⚠ AND IT HAS TO BE WIDER WHILE THE BALL IS IN THE AIR, because
         // then the target itself is moving: `landing_position` slides as
-        // the ball travels, so "closest man to where it will land" is a
-        // different player from tick to tick and a 1 m margin on a moving
-        // point buys nothing.
+        // the ball travels, so "first man to where it will land" is a
+        // different player from tick to tick and a small margin on a
+        // moving point buys nothing.
         //
-        // Measured: **4,987 forces and 17,505 yields a match, 98% of the
-        // forces during a delivery in flight** — three and a half yields
-        // per force, and `Midfielder: Running <-> Take Ball` the second
-        // largest loop in the engine (~20,500 round trips per three
-        // matches).
+        // Measured (when the margin was 8 u of distance — 16 ticks is
+        // the same margin at a sprint): **4,987 forces and 17,505 yields
+        // a match, 98% of the forces during a delivery in flight** —
+        // three and a half yields per force, and `Midfielder: Running
+        // <-> Take Ball` the second largest loop in the engine (~20,500
+        // round trips per three matches).
         //
         // ⚠ …AND SUPPRESSING IT COSTS GOALS. Both ways of doing so were
         // measured over three runs each, and both lose in proportion to
@@ -341,7 +337,7 @@ impl PlayerFieldPositionGroup {
         //   | hold the chase all flight  | 9,952        | 5.25  |
         //
         // The re-election IS the defending. Because `landing_position`
-        // moves, asking every tick is how the man who is ACTUALLY closest
+        // moves, asking every tick is how the man who is ACTUALLY first
         // to where the ball ends up gets there; freezing the designation
         // at the first tick of a delivery commits the wrong man and the
         // pass completes. The churn is a symptom of a moving target, not
@@ -351,23 +347,19 @@ impl PlayerFieldPositionGroup {
         // Same lesson as the `Running <-> Marking` loop in
         // `defenders/states/marking`: in this engine a two-state cycle is
         // often load-bearing. Measure the match, not the loop count.
-        const HYSTERESIS: f32 = 8.0;
-        let yield_threshold_sq = {
-            let my_dist = my_dist_sq.sqrt();
-            let threshold = (my_dist - HYSTERESIS).max(0.0);
-            threshold * threshold
-        };
-        // "Any same-side entry (excluding me) closer than the threshold"
-        // ⇔ the side's min distance excluding me beats the threshold —
-        // read from the once-per-tick chase table instead of re-scanning
-        // the roster for every player.
+        const HYSTERESIS_TICKS: f32 = 16.0;
+        let yield_threshold = my_cost - HYSTERESIS_TICKS;
+        // "Any same-side row (excluding me) quicker than the threshold"
+        // ⇔ the side's min cost excluding me beats the threshold — read
+        // from the once-per-tick chase table instead of re-scanning the
+        // roster for every player.
         let result = match tick_context.chase.best_other(my_side, player.id) {
-            Some(best) => best.dist_sq < yield_threshold_sq,
+            Some(best) => best.cost < yield_threshold,
             None => false,
         };
         debug_assert_eq!(
             result,
-            Self::yield_takeball_scan(player, tick_context, ball_pos, yield_threshold_sq, my_side),
+            Self::yield_takeball_scan(player, tick_context, yield_threshold, my_side),
             "loose-ball yield chase-table mismatch"
         );
         result
@@ -380,30 +372,20 @@ impl PlayerFieldPositionGroup {
     fn yield_takeball_scan(
         player: &MatchPlayer,
         tick_context: &GameTickContext,
-        ball_pos: Vector3<f32>,
-        yield_threshold_sq: f32,
+        yield_threshold: f32,
         my_side: PlayerSide,
     ) -> bool {
-        for tm in tick_context.positions.players.as_slice() {
-            if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
-                continue;
-            }
-            if LooseBallChase::chase_dist_sq(tm, ball_pos) < yield_threshold_sq {
-                return true;
-            }
-        }
-        false
+        tick_context.chase.rows().iter().any(|row| {
+            row.id != player.id && row.side == my_side && row.eligible && row.cost < yield_threshold
+        })
     }
 
     /// True when this player should ignore their current-state logic and
     /// sprint to claim a loose ball. Fires when:
     ///   - The ball is not owned (free, not in-flight-with-intent),
-    ///   - The ball is within meaningful chase range (saves compute on
-    ///     balls that have rolled into the far corner — someone closer
-    ///     will handle them),
-    ///   - This player is the strictly-closest teammate by raw distance
-    ///     (no ability weighting — we want exactly one claimant, not the
-    ///     tolerance band of `is_best_player_to_chase_ball`),
+    ///   - This player is the strictly-first teammate to it by the chase
+    ///     table's time (we want exactly one claimant, not the tolerance
+    ///     band of `is_best_player_to_chase_ball`),
     ///   - Not already in TakeBall (don't re-trigger and reset timers).
     // `pub(crate)` for the same reason as `should_yield_takeball`.
     pub(crate) fn should_force_takeball(
@@ -476,10 +458,11 @@ impl PlayerFieldPositionGroup {
             }
         }
 
-        // See `should_yield_takeball` for why landing position is
-        // preferred: lofted clearances need their chaser to converge on
-        // the bounce, not the apex. `landing_position == position` for
-        // ground balls, so this doesn't change ground-ball behaviour.
+        // The keeper's territory tests below are against where the ball
+        // comes down: a lofted clearance is his to sweep at the bounce,
+        // not at the apex. `landing_position == position` for ground
+        // balls. The election itself no longer reads this — it prices
+        // the chase in time along the ball's path (`ChasePath`).
         let ball_pos = tick_context.positions.ball.landing_position;
 
         // Goalkeepers only claim balls near their box — the outfield
@@ -588,10 +571,8 @@ impl PlayerFieldPositionGroup {
             }
         }
 
-        let my_dist_sq = (ball_pos - player.position).norm_squared();
-
-        // Am I the strictly-closest teammate? Tie-break by player id so
-        // two players at exactly equal distance don't both trigger.
+        // Am I the strictly-first teammate to it? Tie-break by player id
+        // so two players at exactly equal cost don't both trigger.
         //
         // CRITICAL: use the live position store (via the chase table)
         // rather than `context.players` (a static snapshot taken at
@@ -602,23 +583,16 @@ impl PlayerFieldPositionGroup {
         //
         // Team membership is derived from `side` because the live store
         // doesn't carry team_id. Sent-off players are stashed at
-        // (-500, -500), so they naturally fail any distance comparison
-        // — no explicit filter needed.
-        //
-        // The chase table's lexicographic (dist_sq, id) minimum over the
-        // same entries reproduces the old scan exactly: "some other
-        // entry is strictly closer, or equally close with a lower id"
-        // ⇔ the best-other beats my (my_dist_sq, my id).
+        // (-500, -500), so they naturally lose any race — no explicit
+        // filter needed.
         let my_side = match player.side {
             Some(s) => s,
             None => return false,
         };
-        let result = tick_context
-            .chase
-            .is_designated(my_side, player.id, my_dist_sq);
+        let result = tick_context.chase.is_designated(my_side, player.id);
         debug_assert_eq!(
             result,
-            Self::force_takeball_scan(player, tick_context, ball_pos, my_dist_sq, my_side),
+            Self::force_takeball_scan(player, tick_context, my_side),
             "loose-ball force chase-table mismatch"
         );
         result
@@ -630,22 +604,19 @@ impl PlayerFieldPositionGroup {
     fn force_takeball_scan(
         player: &MatchPlayer,
         tick_context: &GameTickContext,
-        ball_pos: Vector3<f32>,
-        my_dist_sq: f32,
         my_side: PlayerSide,
     ) -> bool {
-        for tm in tick_context.positions.players.as_slice() {
-            if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
+        let Some(my_cost) = tick_context.chase.cost_of(player.id) else {
+            return true;
+        };
+        for row in tick_context.chase.rows() {
+            if row.id == player.id || row.side != my_side || !row.eligible {
                 continue;
             }
-            // `my_dist_sq` is deliberately the caller's raw distance, as the
-            // table query compares it: only the teammate being weighed gets
-            // the striker gamble.
-            let d_sq = LooseBallChase::chase_dist_sq(tm, ball_pos);
-            if d_sq < my_dist_sq {
+            if row.cost < my_cost {
                 return false;
             }
-            if d_sq == my_dist_sq && tm.player_id < player.id {
+            if row.cost == my_cost && row.id < player.id {
                 return false;
             }
         }

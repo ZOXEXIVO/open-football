@@ -1,6 +1,6 @@
 use crate::r#match::MatchPlayer;
 use crate::r#match::common_states::LooseBallChase;
-use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+use crate::r#match::engine::ball::ball::LOOSE_CLAIM_DISTANCE;
 use nalgebra::Vector3;
 
 pub enum SteeringBehavior<'a> {
@@ -95,16 +95,21 @@ pub enum SteeringBehavior<'a> {
     /// winnable race stays on the proven law; a lost one is read like a
     /// player reads it: let it run, take the line to where it slows.
     /// The fade is scaled by `aim`'s own ground/aerial band, because a
-    /// flying ball's travel does not decay like a roll's (see below),
-    /// and by the COMMITMENT HORIZON [`Self::COMMIT_NEAR`]/
-    /// [`Self::COMMIT_FAR`], because rescuing meetings ten seconds of
-    /// roll downstream turned out to rewrite the match economy — the
-    /// unbounded rescue measured **+0.54 goals/match**, all of it shot
-    /// VOLUME (13.0 → 15.0/team) at flat quality, from marathon cuts
-    /// keeping attacking sequences alive that used to die over a line.
-    /// `OF_CONCEDE` restores the old collapse as the A/B control, and
-    /// `loose_ball_chase_tests` pins the rescue, the declined marathon,
-    /// and the untouched winnable cases.
+    /// flying ball's travel does not decay like a roll's (see below).
+    /// `OF_CONCEDE` restores the old collapse as the A/B control.
+    ///
+    /// The rescue used to be gated by a commitment horizon as well —
+    /// faded out for meetings more than a few seconds of roll away, so
+    /// that "marathon" cuts would not rewrite the match economy (the
+    /// unbounded rescue had measured +0.54 goals/match of shot volume).
+    /// Past the horizon the law was the pure cross-track run: full
+    /// sprint on a line that never converges, which is the reported
+    /// frame by construction, and for the loose-ball population that
+    /// matters (0.5–1.0 u/tick, 63% of samples) the meeting is ALWAYS
+    /// past the horizon. Whether a chase that far out is worth running
+    /// is a question about WHO is sent, and the chase election now
+    /// prices it in time (`ChasePath`); the man who is sent runs the
+    /// converging line.
     ///
     /// ### The two prior attempts, and why their verdicts did not count
     ///
@@ -437,32 +442,17 @@ impl<'a> SteeringBehavior<'a> {
                 let mut desired = if lost <= 0.0 || LooseBallChase::concede() {
                     hold
                 } else {
-                    let (meet, when) = LooseBallChase::earliest_meeting(
+                    let (meet, _) = LooseBallChase::earliest_meeting(
                         here,
                         max_speed,
                         Self::flat(*target),
                         target_velocity,
                     );
-                    // Commitment is priced in TIME. A meeting he can
-                    // make inside a few seconds is attacked flat out; one
-                    // half a pitch of roll away is not an interception,
-                    // it is following play, and the unbounded version of
-                    // this sent players on ten-second cross-field
-                    // sprints after balls a real player concedes —
-                    // measured at +0.54 goals/match of phantom chance
-                    // supply (3×300 fixtures against `OF_CONCEDE`, the
-                    // whole rise in shot volume, none in shot quality).
-                    // Past [`Self::COMMIT_FAR`] the law is byte-for-byte
-                    // the pre-rescue one.
-                    let commit = 1.0
-                        - ((when - Self::COMMIT_NEAR) / (Self::COMMIT_FAR - Self::COMMIT_NEAR))
-                            .clamp(0.0, 1.0);
-                    let commit = commit * commit * (3.0 - 2.0 * commit);
                     let cut = (meet - here)
                         .try_normalize(1e-4)
                         .map(|d| d * max_speed)
                         .unwrap_or(hold);
-                    hold + (cut - hold) * (lost * commit)
+                    hold + (cut - hold) * lost
                 };
 
                 // Arriving is travelling WITH it, not stopping next to
@@ -664,11 +654,16 @@ impl<'a> SteeringBehavior<'a> {
     /// Gap inside which [`Intercept`](Self::Intercept) stops trying to
     /// close and simply travels with what it is chasing.
     ///
-    /// [`CONTROL_DISTANCE`] — the range at which a player actually takes
-    /// the ball — because that is the moment the chase turns into a
-    /// first touch, and a number picked separately here would be a
-    /// second opinion about the same event.
-    const SETTLE: f32 = CONTROL_DISTANCE;
+    /// [`LOOSE_CLAIM_DISTANCE`] — the radius at which a loose ball is
+    /// actually claimed — because that is the moment the chase turns
+    /// into a first touch, and a number picked separately here would be
+    /// a second opinion about the same event. It WAS the receiver's
+    /// `CONTROL_DISTANCE`, 12 u, against a 5 u claim: the settle began
+    /// more than two strides before the ball could be taken, the
+    /// closing rate fell off linearly across that band, and a chaser
+    /// spent the last metre and a half matching pace with a ball he had
+    /// not yet reached.
+    const SETTLE: f32 = LOOSE_CLAIM_DISTANCE;
 
     /// Closing rate, as a fraction of the chaser's top speed, below which
     /// [`Intercept`](Self::Intercept) stops holding the bearing and runs
@@ -682,23 +677,6 @@ impl<'a> SteeringBehavior<'a> {
     /// speed a 20 u gap takes 170+ ticks to close, and a man who can see
     /// that reads the roll instead.
     const LOST_CAUSE: f32 = 0.25;
-
-    /// Meeting time, in ticks, inside which a lost-cause cut is attacked
-    /// at full commitment — four seconds, about the far edge of a real
-    /// interception read: the length of a hard 25-30 m run.
-    const COMMIT_NEAR: f32 = 200.0;
-    /// …and past which it is declined entirely — ten seconds out is not
-    /// an interception anybody runs, it is the ball leaving the phase of
-    /// play. Between the two the commitment fades smoothly.
-    ///
-    /// The pair is what separates the rescued population (the reported
-    /// "he could have intercepted that": balls up to ~1.3× sprint speed,
-    /// met within seconds) from the marathon population the unbounded
-    /// rescue invented (the loose-ball SPEED MEAN is 0.892 u/tick, ~2×
-    /// sprint, and such a ball crossing with any lateral offset meets a
-    /// chaser 10-18 s downstream — nobody real makes that run, and
-    /// paying it measured +0.54 goals/match of pure shot volume).
-    const COMMIT_FAR: f32 = 500.0;
 
     /// Drop a stored vector into the plane the runner moves in.
     ///

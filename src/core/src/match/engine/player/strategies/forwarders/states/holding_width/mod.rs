@@ -49,7 +49,10 @@ impl StateProcessingHandler for ForwardHoldingWidthState {
         // A ball played into his channel is his, and nothing else would
         // pick it up — the loose-ball election in the dispatcher only
         // covers a ball nobody is receiving.
-        if ctx.ball().is_towards_player() && ctx.ball().distance() < 120.0 && !ctx.ball().is_owned()
+        if ctx.ball().is_towards_player()
+            && ctx.ball().distance() < 120.0
+            && !ctx.ball().is_owned()
+            && ctx.team().is_best_player_to_chase_ball()
         {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::TakeBall,

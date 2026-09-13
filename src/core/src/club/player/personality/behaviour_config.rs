@@ -1275,10 +1275,12 @@ impl Default for PassEvaluatorConfig {
             skill_scale: 20.0,
             vision_bonus_multiplier: 1.5,
             technique_bonus_multiplier: 0.5,
-            optimal_range_multiplier: 2.5,
-            max_effective_range_multiplier: 5.0,
-            ultra_long_threshold: 200.0,
-            extreme_long_threshold: 300.0,
+            // Ranges are in game units, 8u = 1 m: a 14-rated passer with
+            // 14 vision reads ~12 m optimal and ~25 m effective.
+            optimal_range_multiplier: 6.0,
+            max_effective_range_multiplier: 12.0,
+            ultra_long_threshold: 400.0,
+            extreme_long_threshold: 560.0,
 
             risk_tolerant_min_success: 0.5,
             risk_tolerant_max_risk: 0.82,

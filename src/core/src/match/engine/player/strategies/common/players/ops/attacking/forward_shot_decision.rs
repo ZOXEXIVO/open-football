@@ -1798,6 +1798,19 @@ pub mod mid_run_diag {
     pub static CHASE_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     pub static CHASE_PARALLEL_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     pub static CHASE_AHEAD_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// What kind of ball it is: 0 genuinely loose, 1 a pass in flight
+    /// to the chaser's own side, 2 a pass in flight to the other side.
+    /// A "loose" ball in this census is any un-owned moving ball, and a
+    /// pass in the air is one — so without this split the receiver of
+    /// every pass and the defender designated against it are counted
+    /// as chasers. Indexed by [`ChaseDiag::CHASE_SITUATIONS`].
+    pub static CHASE_BY_SITUATION: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    pub static CHASE_PARALLEL_BY_SITUATION: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    pub static CHASE_AHEAD_BY_SITUATION: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    /// …and the same split for defenders only, since that is the line
+    /// the report names.
+    pub static CHASE_DEF_BY_SITUATION: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+    pub static CHASE_DEF_PARALLEL_BY_SITUATION: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
 
     /// The loose-ball chase census. See [`CHASE_SAMPLES`].
     pub struct ChaseDiag;
@@ -1810,6 +1823,12 @@ pub mod mid_run_diag {
         /// Labels for [`CHASE_BY_GAP`]'s buckets. The first is inside
         /// `CONTROL_DISTANCE` — collecting, not chasing.
         pub const CHASE_GAP_BANDS: [&'static str; 4] = ["<1.5m (on it)", "1.5-5m", "5-12m", ">12m"];
+        /// Labels for [`CHASE_BY_SITUATION`], in index order.
+        pub const CHASE_SITUATIONS: [&'static str; 3] = [
+            "genuinely loose",
+            "OUR pass in flight",
+            "THEIR pass in flight",
+        ];
 
         /// One sample of a player chasing a loose, moving ball.
         ///
@@ -1818,7 +1837,15 @@ pub mod mid_run_diag {
         /// `align` the cosine between his heading and the ball's, `gap`
         /// the separation in u, `ball_speed` in u/tick, `line` an index
         /// into [`Self::CHASE_LINES`].
-        pub fn note(rate: f32, lead: f32, align: f32, gap: f32, ball_speed: f32, line: usize) {
+        pub fn note(
+            rate: f32,
+            lead: f32,
+            align: f32,
+            gap: f32,
+            ball_speed: f32,
+            line: usize,
+            situation: usize,
+        ) {
             CHASE_SAMPLES.fetch_add(1, Ordering::Relaxed);
             CHASE_RATE_X10000.fetch_add((rate * 10_000.0) as i64, Ordering::Relaxed);
             CHASE_LEAD_X10000.fetch_add((lead * 10_000.0) as i64, Ordering::Relaxed);
@@ -1880,6 +1907,45 @@ pub mod mid_run_diag {
             if ahead {
                 CHASE_AHEAD_BY_GAP[g].fetch_add(1, Ordering::Relaxed);
             }
+
+            let k = situation.min(Self::CHASE_SITUATIONS.len() - 1);
+            CHASE_BY_SITUATION[k].fetch_add(1, Ordering::Relaxed);
+            if parallel {
+                CHASE_PARALLEL_BY_SITUATION[k].fetch_add(1, Ordering::Relaxed);
+            }
+            if ahead {
+                CHASE_AHEAD_BY_SITUATION[k].fetch_add(1, Ordering::Relaxed);
+            }
+            if l == 0 {
+                CHASE_DEF_BY_SITUATION[k].fetch_add(1, Ordering::Relaxed);
+                if parallel {
+                    CHASE_DEF_PARALLEL_BY_SITUATION[k].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        /// `(label, samples, parallel share, ahead share, defender
+        /// samples, defender parallel share)` per situation.
+        pub fn by_situation() -> Vec<(&'static str, u64, f32, f32, u64, f32)> {
+            Self::CHASE_SITUATIONS
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = CHASE_BY_SITUATION[i].load(Ordering::Relaxed);
+                    let d = n.max(1) as f32;
+                    let dn = CHASE_DEF_BY_SITUATION[i].load(Ordering::Relaxed);
+                    (
+                        *label,
+                        n,
+                        CHASE_PARALLEL_BY_SITUATION[i].load(Ordering::Relaxed) as f32 / d,
+                        CHASE_AHEAD_BY_SITUATION[i].load(Ordering::Relaxed) as f32 / d,
+                        dn,
+                        CHASE_DEF_PARALLEL_BY_SITUATION[i].load(Ordering::Relaxed) as f32
+                            / dn.max(1) as f32,
+                    )
+                })
+                .filter(|(_, n, _, _, _, _)| *n > 0)
+                .collect()
         }
 
         /// `(samples, mean closing rate, mean lead, mean alignment, mean
@@ -1967,6 +2033,11 @@ pub mod mid_run_diag {
                 .chain(CHASE_BY_GAP.iter())
                 .chain(CHASE_PARALLEL_BY_GAP.iter())
                 .chain(CHASE_AHEAD_BY_GAP.iter())
+                .chain(CHASE_BY_SITUATION.iter())
+                .chain(CHASE_PARALLEL_BY_SITUATION.iter())
+                .chain(CHASE_AHEAD_BY_SITUATION.iter())
+                .chain(CHASE_DEF_BY_SITUATION.iter())
+                .chain(CHASE_DEF_PARALLEL_BY_SITUATION.iter())
             {
                 c.store(0, Ordering::Relaxed);
             }

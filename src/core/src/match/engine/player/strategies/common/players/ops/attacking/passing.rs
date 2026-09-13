@@ -28,7 +28,7 @@ impl<'p> PassingOperationsImpl<'p> {
 
     /// Find a safe pass option when under pressure
     pub fn find_safe_pass_option(&self) -> Option<MatchPlayerLite> {
-        self.find_safe_pass_option_with_distance(50.0)
+        self.find_safe_pass_option_with_distance(120.0)
     }
 
     /// Find a safe pass option with custom max distance
@@ -80,7 +80,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 .ctx
                 .tick_context
                 .grid
-                .opponents(target.id, 10.0)
+                .opponents(target.id, 20.0)
                 .count() as f32
                 * 0.2)
                 .min(0.8);
@@ -105,7 +105,7 @@ impl<'p> PassingOperationsImpl<'p> {
         self.ctx
             .tick_context
             .grid
-            .opponents(teammate.id, 10.0)
+            .opponents(teammate.id, 16.0)
             .next()
             .is_some()
     }
@@ -156,8 +156,8 @@ impl<'p> PassingOperationsImpl<'p> {
 
     /// Check if teammate is heavily marked
     pub fn is_teammate_heavily_marked(&self, teammate: &MatchPlayerLite) -> bool {
-        let marking_distance = 8.0;
-        let close_distance = 3.0;
+        let marking_distance = 16.0;
+        let close_distance = 6.0;
 
         // Single scan at max distance, bucket by distance
         let mut markers = 0;
@@ -194,7 +194,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 .ctx
                 .tick_context
                 .grid
-                .opponents(teammate.id, 12.0)
+                .opponents(teammate.id, 24.0)
                 .count()
                 < 2;
 
@@ -204,7 +204,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 .positions
                 .players
                 .velocity(teammate.id);
-            let making_run = teammate_velocity.magnitude() > 2.0 && {
+            let making_run = teammate_velocity.magnitude() > 0.30 && {
                 let to_goal = opponent_goal_pos - teammate.position;
                 teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
             };
@@ -223,7 +223,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 .ctx
                 .tick_context
                 .grid
-                .opponents(teammate.id, 10.0)
+                .opponents(teammate.id, 20.0)
                 .count()
                 < 2;
 

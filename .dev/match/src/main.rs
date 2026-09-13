@@ -7602,6 +7602,50 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         .map(|(l, c)| format!("{l} {:.1}%", *c as f32 / ls * 100.0))
                         .collect();
                     println!("    launch apex: {}", bands.join(" | "));
+                    // ── PASS SHAPE CENSUS ────────────────────────────
+                    //
+                    // Passes only, by the distance they were struck
+                    // over: which shape the solver chose, how many of
+                    // those left the deck because of a body in the lane,
+                    // and how many actually peak at chest height — the
+                    // ball a viewer reads as lofted.
+                    {
+                        let bands = core::flight_diag::FlightDiag::pass_snapshot();
+                        let total: u64 = bands.iter().map(|b| b.0.iter().sum::<u64>()).sum();
+                        println!(
+                            "  PASS SHAPE — {} passes ({:.0}/match); ≥1m = chest height, ≥0.5m = knee",
+                            total,
+                            total as f64 / n_matches as f64
+                        );
+                        println!(
+                            "    {:<8} {:>6} {:>5} | {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} | {:>8} {:>7} {:>7} {:>7} {:>7} {:>7}",
+                            "band", "passes", "share",
+                            core::flight_diag::PASS_SHAPES[0],
+                            core::flight_diag::PASS_SHAPES[1],
+                            core::flight_diag::PASS_SHAPES[2],
+                            core::flight_diag::PASS_SHAPES[3],
+                            core::flight_diag::PASS_SHAPES[4],
+                            core::flight_diag::PASS_SHAPES[5],
+                            core::flight_diag::PASS_SHAPES[6],
+                            "traffic", "≥1m", "≥0.5m", "back", "wide", "box"
+                        );
+                        for (i, (shapes, traffic, airborne, lifted, backward, wide, into_box)) in
+                            bands.iter().enumerate()
+                        {
+                            let n: u64 = shapes.iter().sum();
+                            let pct = |c: u64| if n == 0 { 0.0 } else { c as f64 / n as f64 * 100.0 };
+                            println!(
+                                "    {:<8} {:>6} {:>4.0}% | {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>7.1}% {:>7.1}% | {:>7.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
+                                core::flight_diag::PASS_BAND_LABELS[i],
+                                n,
+                                if total == 0 { 0.0 } else { n as f64 / total as f64 * 100.0 },
+                                pct(shapes[0]), pct(shapes[1]), pct(shapes[2]), pct(shapes[3]),
+                                pct(shapes[4]), pct(shapes[5]), pct(shapes[6]),
+                                pct(*traffic), pct(*airborne), pct(*lifted), pct(*backward),
+                                pct(*wide), pct(*into_box)
+                            );
+                        }
+                    }
                     // Everything from 30 m up is beyond any football ever
                     // kicked, so it is a unit bug by construction.
                     let absurd: u64 = hist[5..].iter().sum();
@@ -11040,6 +11084,20 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     println!("    by gap: {}", gaps.join("  ·  "));
                     println!("      (the first band is inside CONTROL_DISTANCE — a man travelling");
                     println!("       with the ball there is COLLECTING it, not failing to close)");
+                    let situations: Vec<String> = ChaseDiag::by_situation()
+                        .iter()
+                        .map(|(l, c, p, a, dn, dp)| {
+                            format!(
+                                "{l} {:.0}%/{:.0}% parallel/{:.0}% ahead (DEF {:.0}% of these/{:.0}% parallel)",
+                                *c as f64 / cn as f64 * 100.0,
+                                p * 100.0,
+                                a * 100.0,
+                                *dn as f64 / (*c).max(1) as f64 * 100.0,
+                                dp * 100.0
+                            )
+                        })
+                        .collect();
+                    println!("    by situation: {}", situations.join("  ·  "));
                 }
             }
         }

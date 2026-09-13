@@ -86,7 +86,7 @@ impl PassEvaluator {
         // Floor matches the post-clamp 0.1 floor in
         // `calculate_success_probability`.
         let env_mod = ctx.context.environment.modifiers();
-        const LONG_PASS_DISTANCE: f32 = 60.0;
+        const LONG_PASS_DISTANCE: f32 = 240.0;
         let env_delta = env_mod.pass_accuracy
             + if pass_distance >= LONG_PASS_DISTANCE {
                 env_mod.long_pass_accuracy
@@ -340,10 +340,10 @@ impl PassEvaluator {
 
         // Check if receiver is moving into space or standing still
         let receiver_velocity = ctx.tick_context.positions.players.velocity(receiver.id);
-        let movement_factor = if receiver_velocity.norm() > 1.5 {
+        let movement_factor = if receiver_velocity.norm() > 0.30 {
             // Moving into space - excellent
             1.15
-        } else if receiver_velocity.norm() > 0.5 {
+        } else if receiver_velocity.norm() > 0.12 {
             // Some movement - good
             1.05
         } else {
@@ -592,7 +592,7 @@ impl PassEvaluator {
         let forward_change = side
             .forward_delta(passer_position.x, receiver_position.x)
             .abs();
-        let sideways_penalty = if forward_change < 10.0 && lateral_change > 20.0 {
+        let sideways_penalty = if forward_change < 24.0 && lateral_change > 40.0 {
             if lateral_change > field_height * 0.25 {
                 // Wide switch — this is good, no penalty
                 0.0
@@ -654,25 +654,20 @@ impl PassEvaluator {
             }
         };
 
-        // Distance bonus: prefer passes of 20-50m over very short (< 15m) or very long
+        // Distance bonus. 8u = 1 m: under 4 m is a huddle pass, 8-20 m the
+        // ball that moves a defence, past 50 m a hopeful one.
         let pass_distance = (receiver_position - passer_position).norm();
-        let distance_value = if pass_distance < 10.0 {
-            // Very short pass - only good under pressure
-            0.3
-        } else if pass_distance < 20.0 {
-            // Short pass - acceptable
-            0.6
-        } else if pass_distance < 50.0 {
-            // Ideal passing range - good progression
+        let distance_value = if pass_distance < 32.0 {
+            0.4
+        } else if pass_distance < 64.0 {
+            0.7
+        } else if pass_distance < 160.0 {
             1.0
-        } else if pass_distance < 80.0 {
-            // Long pass - still valuable
+        } else if pass_distance < 280.0 {
             0.8
-        } else if pass_distance < 120.0 {
-            // Long pass - declining value
+        } else if pass_distance < 400.0 {
             0.5
-        } else if pass_distance < 200.0 {
-            // Very long pass - risky
+        } else if pass_distance < 560.0 {
             0.3
         } else {
             // Extreme distance - rarely accurate
@@ -748,17 +743,17 @@ impl PassEvaluator {
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let technique_skill = ctx.player.skills.technical.technique / 20.0;
 
-        let long_pass_bonus = if pass_distance > 300.0 {
-            // Extreme distance (300m+) - very risky, minimal bonus
+        let long_pass_bonus = if pass_distance > 560.0 {
+            // 70 m+ — a hopeful hoof for anyone
             (vision_skill * 0.3 + technique_skill * 0.2) * 0.2
-        } else if pass_distance > 200.0 {
-            // Ultra-long diagonal (200-300m) - risky
+        } else if pass_distance > 400.0 {
+            // 50-70 m raking diagonal
             (vision_skill * 0.3 + technique_skill * 0.15) * 0.2
-        } else if pass_distance > 100.0 {
-            // Very long pass (100-200m) - small bonus for high vision
+        } else if pass_distance > 280.0 {
+            // 35-50 m switch
             vision_skill * 0.15
-        } else if pass_distance > 60.0 {
-            // Long pass (60-100m) - modest bonus
+        } else if pass_distance > 160.0 {
+            // 20-35 m ball
             vision_skill * 0.1
         } else {
             0.0
@@ -793,7 +788,7 @@ impl PassEvaluator {
             && receiver_progress > 0.78
             && receiver_y_offset < field_height * 0.15
             && passer_y_offset > field_height * 0.20
-            && pass_distance < 60.0;
+            && pass_distance < 200.0;
         let cutback_bonus = if cutback_pattern {
             // Receiver space inferred from receiver_positioning (already
             // computed above as one of the PassFactors): higher = freer.
@@ -862,8 +857,8 @@ impl PassEvaluator {
                 PlayerFieldPositionGroup::Goalkeeper
             );
         let build_up_recycle_bonus = if matches!(phase, GamePhase::BuildUp)
-            && pass_distance >= 12.0
-            && pass_distance <= 65.0
+            && pass_distance >= 24.0
+            && pass_distance <= 240.0
             && receiver_is_recycle_target
         {
             let under_press = ctx.players().opponents().nearby(12.0).next().is_some();
@@ -1269,10 +1264,10 @@ impl PassEvaluator {
         let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let min_pass_distance = if is_under_pressure {
             // Under pressure, allow shorter passes but still avoid huddle passes
-            12.0
+            16.0
         } else {
             // Not under pressure, still allow short-to-medium passes
-            20.0
+            32.0
         };
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
@@ -1387,28 +1382,33 @@ impl PassEvaluator {
 
             let interception_penalty = 1.0 - (interception_risk * risk_tolerance);
 
-            // Add distance preference bonus - widened optimal range to encourage penetration
+            // Distance preference, 8u = 1 m. Proximity-leaning, because
+            // the short feed is how the ball moves through a structure,
+            // but the fall-off with length is gentle so a 25 m ball to
+            // the flank or into the box can beat a six-metre square ball.
             let optimal_distance_bonus = if is_under_pressure {
                 // Under pressure, all safe passes are good
                 1.0
-            } else if pass_distance >= 20.0 && pass_distance <= 70.0 {
-                // Widened optimal range (was 15-40m, now 20-70m) for penetrating passes
-                1.4 // Increased from 1.3
-            } else if pass_distance >= 15.0 && pass_distance < 20.0 {
-                // Short passes - acceptable
-                1.1 // New tier
-            } else if pass_distance < 15.0 {
-                // Very short - strongly discouraged (keeps ball in huddle)
-                0.4
-            } else if pass_distance <= 100.0 {
-                // Long passes (70-100m) - moderate value
-                1.1
-            } else if pass_distance <= 150.0 {
-                // Very long passes - declining value
+            } else if pass_distance < 32.0 {
+                // Under 4 m — keeps the ball in the huddle
+                0.5
+            } else if pass_distance < 96.0 {
+                // 4-12 m
+                1.3
+            } else if pass_distance < 160.0 {
+                // 12-20 m
+                1.15
+            } else if pass_distance <= 240.0 {
+                // 20-30 m
+                1.0
+            } else if pass_distance <= 360.0 {
+                // 30-45 m switch
                 0.85
+            } else if pass_distance <= 480.0 {
+                // 45-60 m
+                0.7
             } else {
-                // Extreme long passes - discouraged
-                0.6
+                0.55
             };
 
             // Distance preference based on personality. Vision-gated
@@ -1417,18 +1417,18 @@ impl PassEvaluator {
             // a 250m switch — interpolates between the two extremes.
             let distance_preference = if is_playmaker {
                 // Playmakers prefer through balls but not unrealistic long passes
-                if pass_distance > 300.0 {
-                    // Extreme passes - very risky even for elite
+                if pass_distance > 560.0 {
+                    // 70 m+ - very risky even for elite
                     SkillCurve::new(vision_raw, 17.0, 0.6).lerp(0.6, 1.1)
-                } else if pass_distance > 200.0 {
-                    // Ultra-long switches - risky
+                } else if pass_distance > 400.0 {
+                    // 50-70 m switches - risky
                     SkillCurve::new(vision_raw, 15.0, 0.6).lerp(0.8, 1.15)
-                } else if pass_distance > 100.0 {
-                    1.2 // Long passes - moderate bonus
-                } else if pass_distance > 80.0 {
-                    1.25 // Medium-long - sweet spot for playmakers
-                } else if pass_distance > 50.0 {
-                    1.2
+                } else if pass_distance > 240.0 {
+                    1.2 // 30-50 m - moderate bonus
+                } else if pass_distance > 160.0 {
+                    1.25 // 20-30 m - sweet spot for playmakers
+                } else if pass_distance > 96.0 {
+                    1.15
                 } else {
                     1.0
                 }
@@ -1444,9 +1444,9 @@ impl PassEvaluator {
                 }
             } else if is_conservative {
                 // Conservative players prefer short, safe passes
-                if pass_distance < 30.0 {
+                if pass_distance < 96.0 {
                     1.4
-                } else if pass_distance < 50.0 {
+                } else if pass_distance < 200.0 {
                     1.0
                 } else {
                     0.7 // Avoid long passes
@@ -1759,7 +1759,7 @@ impl PassEvaluator {
                 evaluation.success_probability > 0.40 && evaluation.factors.tactical_value > 0.35
             } else if is_playmaker {
                 evaluation.success_probability > 0.45
-                    || (evaluation.factors.tactical_value > 0.60 && pass_distance > 50.0)
+                    || (evaluation.factors.tactical_value > 0.60 && pass_distance > 160.0)
             } else {
                 // Standard - more willing to pass
                 evaluation.is_recommended
