@@ -10,7 +10,7 @@
 //! them by the player's own [`Morph`].
 
 use super::canvas::PathBuilder;
-use super::identity::{Identity, Morph};
+use super::identity::{Identity, Morph, Structure};
 
 /// The head's half-widths at named heights, right side, in page units.
 #[derive(Clone, Copy, Debug)]
@@ -28,10 +28,16 @@ pub struct Skull {
     pub jaw_y: f32,
     pub chin_half: f32,
     pub chin: f32,
+    /// Crown shoulders as (fraction of parietal, y below crown), twice:
+    /// together they make the top of the head domed or flat
+    pub crown_sh: [(f32, f32); 2],
+    /// Chin curve: (extra half-width above the tip, tip width fraction) —
+    /// a pointed chin against a broad blunt one
+    pub chin_curve: (f32, f32),
 }
 
 impl Skull {
-    /// The six archetypes. Widths are half-widths.
+    /// The eight archetypes. Widths are half-widths.
     fn archetype(variant: usize) -> Skull {
         let base = |parietal, temple, zygo, sub, jaw, chin_half, jaw_y, chin, crown| Skull {
             crown,
@@ -47,25 +53,56 @@ impl Skull {
             jaw_y,
             chin_half,
             chin,
+            crown_sh: [(0.52, 4.5), (0.86, 18.0)],
+            chin_curve: (4.5, 0.72),
         };
         match variant {
             // Oval
-            0 => base(52.0, 50.5, 51.0, 46.0, 41.0, 20.0, 179.0, 205.0, 36.5),
+            0 => base(51.5, 50.0, 50.5, 45.5, 40.5, 19.5, 179.0, 205.0, 36.5),
             // Square
-            1 => base(53.0, 52.0, 52.5, 49.5, 47.0, 25.0, 182.0, 204.0, 37.0),
+            1 => base(53.5, 52.5, 53.0, 50.5, 47.5, 26.0, 183.0, 203.5, 38.0),
             // Round
-            2 => base(54.0, 52.5, 53.5, 50.5, 45.0, 23.0, 180.0, 203.0, 38.0),
+            2 => base(55.0, 53.5, 54.5, 51.5, 45.5, 23.5, 179.0, 202.5, 39.0),
             // Heart
-            3 => base(54.0, 52.0, 51.5, 45.0, 38.0, 17.0, 177.0, 206.0, 36.5),
+            3 => base(54.5, 52.5, 51.5, 44.5, 37.0, 16.0, 176.0, 206.5, 36.0),
             // Oblong
-            4 => base(50.0, 48.5, 49.0, 45.0, 41.5, 20.0, 183.0, 208.0, 34.0),
+            4 => base(48.5, 47.5, 48.0, 44.0, 40.0, 19.0, 184.0, 208.0, 32.5),
             // Diamond
-            _ => base(49.0, 48.0, 52.5, 46.0, 39.0, 18.0, 180.0, 205.0, 36.0),
+            5 => base(48.5, 48.0, 53.0, 46.0, 38.0, 17.0, 180.0, 205.5, 35.5),
+            // Triangle — narrow through the temples, all jaw
+            6 => base(47.5, 47.0, 48.5, 46.5, 44.0, 24.5, 185.0, 204.0, 34.0),
+            // Long angular — tall skull, late jaw corner
+            _ => base(50.0, 49.0, 51.5, 45.5, 42.5, 21.0, 185.0, 207.5, 33.0),
         }
     }
 
-    fn morphed(variant: usize, m: &Morph, fw: f32, heft: f32, maturity: f32) -> Skull {
+    fn morphed(
+        variant: usize,
+        m: &Morph,
+        st: &Structure,
+        fw: f32,
+        heft: f32,
+        maturity: f32,
+    ) -> Skull {
         let mut s = Skull::archetype(variant);
+
+        // Scaffolding first: where the planes of THIS skull sit. High or
+        // low cheekbones, a domed or flat crown, a forehead- or jaw-heavy
+        // width gradient — the axes that used to be constants
+        s.parietal_y += st.temple_dy * 3.0;
+        s.temple_y += st.temple_dy * 3.5;
+        s.zygo_y += st.zygo_dy * 5.0;
+        s.sub_y += st.zygo_dy * 2.5 + st.sub_dy * 3.0;
+        s.crown_sh = [
+            (0.42 + st.crown_round * 0.18, 3.2 + st.crown_round * 2.2),
+            (0.80 + st.crown_round * 0.10, 15.0 + st.crown_round * 5.0),
+        ];
+        s.chin_curve = (4.5 + st.chin_point * 1.8, 0.72 + st.chin_point * 0.12);
+        s.parietal *= 1.0 + st.taper * 0.045;
+        s.temple *= 1.0 + st.taper * 0.035;
+        s.jaw *= 1.0 - st.taper * 0.04;
+        s.chin_half *= 1.0 - st.taper * 0.03;
+
         // Bone: the skull morphs move bone; heft and age fill soft tissue.
         // A boy's jaw is still growing — it squares off through the twenties
         let grown = (maturity - 0.5) * 3.0;
@@ -80,11 +117,14 @@ impl Skull {
         s.chin += m.length * 0.9;
 
         // Keep the silhouette an actual head: it widens from the temples to
-        // the cheekbones and narrows from there to the chin, and the chin
-        // stays where the viewer expects it
-        s.temple = s.temple.min(s.parietal + 1.0);
-        s.zygo = s.zygo.clamp(s.temple - 2.5, s.parietal + 2.0);
-        s.sub = s.sub.min(s.zygo - 1.0);
+        // the cheekbones and narrows from there to the chin, and the eye
+        // line, chin and face width stay where the viewer expects them
+        s.parietal = s.parietal.clamp(44.0, 58.0);
+        s.temple = s.temple.min(s.parietal + 1.0).max(44.5);
+        s.zygo = s
+            .zygo
+            .clamp((s.temple - 2.5).max(44.5), (s.parietal + 2.0).min(59.0));
+        s.sub = s.sub.min(s.zygo - 1.0).max(34.0);
         s.jaw = s.jaw.clamp(28.0, s.sub - 2.0);
         s.chin_half = s.chin_half.clamp(11.0, s.jaw - 8.0);
         s.chin = s.chin.clamp(202.0, 208.0);
@@ -93,23 +133,38 @@ impl Skull {
         s
     }
 
+    /// The silhouette as (y, half-width) stops, crown to chin. The single
+    /// source both the outline and [`Landmarks::half_width_at`] read, so
+    /// the two can never drift apart.
+    fn stops(&self) -> [(f32, f32); 11] {
+        [
+            (self.crown, 0.0),
+            (
+                self.crown + self.crown_sh[0].1,
+                self.parietal * self.crown_sh[0].0,
+            ),
+            (
+                self.crown + self.crown_sh[1].1,
+                self.parietal * self.crown_sh[1].0,
+            ),
+            (self.parietal_y, self.parietal),
+            (self.temple_y, self.temple),
+            (self.zygo_y, self.zygo),
+            (self.sub_y, self.sub),
+            (self.jaw_y, self.jaw),
+            (self.chin - 7.5, self.chin_half + self.chin_curve.0),
+            (self.chin - 1.4, self.chin_half * self.chin_curve.1),
+            (self.chin, 0.0),
+        ]
+    }
+
     /// The right-hand outline from the crown down to the chin point. The
     /// left is the mirror, with the asymmetry the caller adds.
     fn right_side(&self, cx: f32, spread: f32) -> Vec<(f32, f32)> {
-        let w = |half: f32| cx + half * spread;
-        vec![
-            (cx, self.crown),
-            (w(self.parietal * 0.52), self.crown + 4.5),
-            (w(self.parietal * 0.86), self.crown + 18.0),
-            (w(self.parietal), self.parietal_y),
-            (w(self.temple), self.temple_y),
-            (w(self.zygo), self.zygo_y),
-            (w(self.sub), self.sub_y),
-            (w(self.jaw), self.jaw_y),
-            (w(self.chin_half + 4.5), self.chin - 7.5),
-            (w(self.chin_half * 0.72), self.chin - 1.4),
-            (cx, self.chin),
-        ]
+        self.stops()
+            .iter()
+            .map(|&(y, half)| (cx + half * spread, y))
+            .collect()
     }
 }
 
@@ -202,18 +257,19 @@ impl Landmarks {
     pub fn new(id: &Identity, age: u8, heft: f32, aggr: f32) -> Landmarks {
         let cx = 100.0f32;
         let m = &id.morph;
+        let st = &id.structure;
         let maturity = ((age as f32 - 17.0) / 19.0).clamp(0.0, 1.0);
-        let skull = Skull::morphed(id.face_var, m, id.fw, heft, maturity);
+        let skull = Skull::morphed(id.face_var, m, st, id.fw, heft, maturity);
 
         // Outline: right side as drawn, left side mirrored and nudged by the
         // asymmetry and the turn so no head is a perfect reflection
         let turn = id.turn * 0.35;
-        let right = skull.right_side(cx, 1.0 + turn * 0.06);
+        let right = skull.right_side(cx, 1.0 + turn * 0.09);
         let mut left = PathBuilder::mirrored(cx, &right);
         let left_n = left.len();
         for (i, p) in left.iter_mut().enumerate() {
             let t = i as f32 / (left_n - 1) as f32;
-            p.0 = cx - (cx - p.0) * (1.0 - turn * 0.06) + id.asym.0 * t * 1.5;
+            p.0 = cx - (cx - p.0) * (1.0 - turn * 0.09) + id.asym.0 * t * 1.5;
         }
         // The mirrored run repeats the chin point at its start and the crown
         // point at its end; both are dropped so the outline stays one loop
@@ -221,10 +277,11 @@ impl Landmarks {
         pts.extend(left.into_iter().skip(1).take(left_n - 2));
         let head_path = PathBuilder::smooth_closed(&pts, 0.05);
 
-        let eye = 118.0 + id.asym.1 * 0.6;
-        let brow = 107.5 - m.brow_gap * 1.3 + aggr * 1.8 + id.asym.1 * 0.3;
-        let nose = (156.5 + m.nose_len * 2.8 + m.length * 0.5).clamp(150.0, 163.0);
-        let mouth = nose + (skull.chin - nose) * (0.36 + m.lip * 0.01);
+        let eye = 118.0 + id.asym.1 * 0.6 + st.eye_y * 0.3;
+        let brow = 107.5 - m.brow_gap * 1.3 + aggr * 1.8 + id.asym.1 * 0.3 + st.brow_h * 1.7;
+        let nose =
+            (156.5 + m.nose_len * 2.8 + m.length * 0.5 + st.nose_y * 1.5).clamp(150.0, 163.0);
+        let mouth = nose + (skull.chin - nose) * (0.36 + st.philtrum * 0.035 + m.lip * 0.01);
         let sulcus = mouth + (skull.chin - mouth) * 0.42;
         let recession = match age {
             0..=25 => 0.0,
@@ -283,15 +340,15 @@ impl Landmarks {
 
         let (bridge, tip, nostril, ball, hump): (f32, f32, f32, f32, f32) = match id.nose_st {
             // Narrow, straight
-            0 => (3.4, 8.6, 2.6, 4.6, 0.0),
+            0 => (3.2, 8.0, 2.4, 4.4, 0.0),
             // Broad, flat bridge
-            1 => (4.6, 12.4, 3.9, 5.8, -0.5),
+            1 => (4.8, 13.2, 4.2, 6.2, -0.5),
             // Medium
             2 => (4.0, 10.2, 3.3, 5.2, 0.1),
             // Fine, slightly upturned
-            3 => (3.3, 8.2, 2.5, 4.9, -0.3),
+            3 => (3.1, 7.8, 2.4, 4.7, -0.35),
             // Aquiline — strong bridge, hump
-            4 => (4.3, 10.8, 3.4, 5.4, 0.9),
+            4 => (4.4, 10.8, 3.4, 5.4, 1.1),
             // Roman, long
             _ => (3.9, 9.4, 3.0, 5.0, 0.5),
         };
@@ -306,14 +363,18 @@ impl Landmarks {
 
         let (mh, upper, lower, bow): (f32, f32, f32, f32) = match id.mouth_st {
             0 => (19.0, 3.6, 5.4, 1.0),
-            1 => (22.0, 3.3, 5.6, 0.8),
-            2 => (17.0, 3.9, 5.0, 1.2),
-            3 => (20.0, 4.6, 6.6, 1.1),
-            _ => (18.0, 3.0, 4.6, 0.9),
+            // Wide
+            1 => (23.5, 3.2, 5.6, 0.7),
+            // Small
+            2 => (15.5, 3.9, 5.0, 1.3),
+            // Full
+            3 => (20.5, 5.2, 7.2, 1.1),
+            // Thin
+            _ => (18.0, 2.6, 4.2, 0.9),
         };
-        let lip_k = 1.0 + m.lip * 0.18 - maturity * 0.12;
+        let lip_k = 1.0 + m.lip * 0.22 - maturity * 0.12;
         let mouth_shape = MouthShape {
-            half: (mh + 1.5 + m.mouth_w * 1.4 + id.fw * 0.25).clamp(16.0, 25.0),
+            half: (mh + 1.5 + m.mouth_w * 1.4 + id.fw * 0.25).clamp(14.5, 26.5),
             upper: upper * lip_k,
             lower: lower * lip_k,
             bow,
@@ -321,11 +382,15 @@ impl Landmarks {
 
         let (blen, btilt, barch, strands): (f32, f32, f32, usize) = match id.brow_st {
             0 => (14.0, 0.0, 1.6, 34),
-            1 => (13.5, -0.4, 3.0, 34),
-            2 => (15.0, 0.5, 1.3, 42),
+            // High arch
+            1 => (13.0, -0.5, 3.4, 34),
+            // Long and flat
+            2 => (16.0, 0.6, 1.1, 46),
             3 => (13.5, -0.2, 2.5, 36),
-            4 => (15.5, 0.1, 2.0, 50),
-            _ => (13.0, -0.2, 2.8, 30),
+            // Bushy
+            4 => (16.5, 0.1, 2.0, 56),
+            // Short and sparse
+            _ => (12.2, -0.3, 3.0, 26),
         };
         let brow_shape = BrowShape {
             len: blen,
@@ -386,20 +451,7 @@ impl Landmarks {
 
     /// The head's half-width at height `y`, interpolated along the outline.
     pub fn half_width_at(&self, y: f32) -> f32 {
-        let s = &self.skull;
-        let stops = [
-            (s.crown, 0.0),
-            (s.crown + 4.5, s.parietal * 0.52),
-            (s.crown + 18.0, s.parietal * 0.86),
-            (s.parietal_y, s.parietal),
-            (s.temple_y, s.temple),
-            (s.zygo_y, s.zygo),
-            (s.sub_y, s.sub),
-            (s.jaw_y, s.jaw),
-            (s.chin - 7.5, s.chin_half + 4.5),
-            (s.chin - 1.4, s.chin_half * 0.72),
-            (s.chin, 0.0),
-        ];
+        let stops = self.skull.stops();
         if y <= stops[0].0 {
             return 0.0;
         }

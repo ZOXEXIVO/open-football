@@ -74,7 +74,39 @@ pub enum Moustache {
     Walrus,
 }
 
-/// Continuous departures from the archetype, all roughly in −1.5..1.5.
+/// The bones nobody shares: where the big planes of THIS skull sit.
+///
+/// The morphs in [`Morph`] push features around on a face whose scaffolding
+/// — cheekbone height, jaw corner, crown shape, philtrum — used to be the
+/// same for every man, which is why a squad read as one face in wigs. These
+/// axes move the scaffolding itself. All in −1..1 except where noted.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Structure {
+    /// Cheekbone height: high Slavic cheekbones vs low-slung ones
+    pub zygo_dy: f32,
+    /// Height of the hollow below the cheekbones
+    pub sub_dy: f32,
+    /// Where the skull is widest: high-crowned vs low, wide temples
+    pub temple_dy: f32,
+    /// Width gradient: forehead-dominant (+) vs jaw-dominant (−)
+    pub taper: f32,
+    /// Top of the head: 0 flat and square, 1 domed
+    pub crown_round: f32,
+    /// Chin tip: pointed (−) vs broad and blunt (+)
+    pub chin_point: f32,
+    /// Philtrum length: mouth close under the nose (−) vs low (+)
+    pub philtrum: f32,
+    /// Brow line height on the forehead
+    pub brow_h: f32,
+    /// Nose base height: short (−) vs long (+) nose
+    pub nose_y: f32,
+    /// Eye line micro-shift, within the viewer's ±1 tolerance
+    pub eye_y: f32,
+    /// Resting mouth corners: sunny (+) vs dour (−), before aggression
+    pub smile: f32,
+}
+
+/// Continuous departures from the archetype, all roughly in −2..2.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Morph {
     /// Skull breadth
@@ -126,7 +158,8 @@ pub struct Morph {
 pub struct Identity {
     pub look: Appearance,
     pub phenotype: Phenotype,
-    /// 0 oval, 1 square, 2 round, 3 heart, 4 oblong, 5 diamond
+    /// 0 oval, 1 square, 2 round, 3 heart, 4 oblong, 5 diamond,
+    /// 6 triangle (jaw-heavy), 7 long angular
     pub face_var: usize,
     pub hair: HairStyle,
     pub hairline: Hairline,
@@ -146,6 +179,7 @@ pub struct Identity {
     /// Age-driven face width
     pub fw: f32,
     pub morph: Morph,
+    pub structure: Structure,
     /// Photographic head tilt in degrees
     pub tilt: f32,
     /// Slight head turn, −1..1: the far side of the face narrows
@@ -159,7 +193,7 @@ impl Identity {
         let look = Appearance::draw(rng, dist);
         let ph = look.phenotype;
 
-        let face_var = rng.range(6);
+        let face_var = rng.range(8);
 
         // Weighted style roll — everyday cuts dominate; statement styles
         // (mohawk, afro, long hair) are rare accents like on a real pitch
@@ -282,34 +316,34 @@ impl Identity {
         };
 
         let morph = Morph {
-            width: rng.frange(-1.6, 1.6),
-            jaw: rng.frange(-1.8, 1.8),
-            chin_w: rng.frange(-1.4, 1.6),
-            length: rng.frange(-1.5, 1.8),
-            cheek: rng.frange(-1.0, 1.2),
-            round: rng.frange(-1.0, 1.4),
-            forehead: rng.frange(-1.2, 1.2),
-            nose_len: rng.frange(-1.2, 1.2),
-            nose_w: rng.frange(-1.0, 1.0),
-            mouth_w: rng.frange(-1.2, 1.2),
-            lip: rng.frange(-1.0, 1.0),
-            ear: rng.frange(-1.0, 1.0),
-            brow_thick: rng.frange(-1.0, 1.2),
-            eye_spacing: rng.frange(-1.3, 1.6),
-            eye_tilt: rng.frange(-1.2, 1.2),
+            width: rng.frange(-2.2, 2.2),
+            jaw: rng.frange(-2.4, 2.4),
+            chin_w: rng.frange(-2.0, 2.2),
+            length: rng.frange(-2.0, 2.2),
+            cheek: rng.frange(-1.5, 1.8),
+            round: rng.frange(-1.4, 1.8),
+            forehead: rng.frange(-1.7, 1.7),
+            nose_len: rng.frange(-1.6, 1.6),
+            nose_w: rng.frange(-1.5, 1.5),
+            mouth_w: rng.frange(-1.8, 1.8),
+            lip: rng.frange(-1.4, 1.4),
+            ear: rng.frange(-1.4, 1.4),
+            brow_thick: rng.frange(-1.4, 1.6),
+            eye_spacing: rng.frange(-2.0, 2.2),
+            eye_tilt: rng.frange(-1.6, 1.6),
             lid_heavy: rng.frange(0.0, 1.0),
-            eye_scale: rng.frange(0.90, 1.10),
-            brow_gap: rng.frange(-0.6, 1.4),
+            eye_scale: rng.frange(0.86, 1.14),
+            brow_gap: rng.frange(-1.0, 1.8),
             redness: rng.frange(0.0, 1.0),
             freckles: {
                 let f = rng.frange(0.0, 1.0);
                 if f > 0.8 { (f - 0.8) * 5.0 } else { 0.0 }
             },
-            jaw_angle: rng.frange(-1.0, 1.0),
+            jaw_angle: rng.frange(-1.5, 1.5),
             brow_ridge: rng.frange(-1.0, 1.0),
         };
 
-        let tilt = rng.frange(-2.2, 2.2);
+        let tilt = rng.frange(-3.0, 3.0);
         let turn = rng.frange(-1.0, 1.0);
         let hairline = match rng.range(8) {
             0..=2 => Hairline::Rounded,
@@ -333,6 +367,23 @@ impl Identity {
             _ => 0.18 + grey_roll * 0.45,
         };
 
+        // The scaffolding axes, drawn LAST off the stream: every draw above
+        // keeps the order (and so the value) it had before these existed,
+        // and the shared Appearance contract only pins the first draw.
+        let structure = Structure {
+            zygo_dy: rng.frange(-1.0, 1.0),
+            sub_dy: rng.frange(-1.0, 1.0),
+            temple_dy: rng.frange(-1.0, 1.0),
+            taper: rng.frange(-1.0, 1.0),
+            crown_round: rng.frange(0.0, 1.0),
+            chin_point: rng.frange(-1.0, 1.0),
+            philtrum: rng.frange(-1.0, 1.0),
+            brow_h: rng.frange(-1.0, 1.0),
+            nose_y: rng.frange(-1.0, 1.0),
+            eye_y: rng.frange(-1.0, 1.0),
+            smile: rng.frange(-1.0, 1.0),
+        };
+
         Identity {
             look,
             phenotype: ph,
@@ -351,6 +402,7 @@ impl Identity {
             asym,
             fw,
             morph,
+            structure,
             tilt,
             turn,
             grey,

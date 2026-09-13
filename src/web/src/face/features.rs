@@ -456,9 +456,12 @@ impl Features {
         for (bi, (ex, side)) in [(l.eye_l, -1.0f32), (l.eye_r, 1.0)].into_iter().enumerate() {
             let inner_x = ex - side * (bs.len - 5.0);
             let outer_x = ex + side * (bs.len + 3.0);
-            let y0 = l.brow + 1.6 + aggr * 2.2;
-            let yc = l.brow - bs.arch * 1.5 * (1.0 - aggr * 0.35);
-            let y1 = l.brow + 0.8 + bs.tilt * 2.4;
+            // No pair of brows sits level: one rides a little higher, and
+            // whose it is belongs to the id
+            let raise = id.jitter_signed(3, 77) * 0.9 * side;
+            let y0 = l.brow + 1.6 + aggr * 2.2 + raise;
+            let yc = l.brow - bs.arch * 1.5 * (1.0 - aggr * 0.35) + raise;
+            let y1 = l.brow + 0.8 + bs.tilt * 2.4 + raise;
             let peak_x = inner_x + (outer_x - inner_x) * 0.62;
             let along = |u: f32| -> (f32, f32) {
                 // Quadratic through head, arch, tail
@@ -605,7 +608,10 @@ impl Features {
         let my = l.mouth;
         let half = ms.half;
         let lip_top = my - ms.upper;
-        let corner_dy = aggr * 1.9 - 0.7;
+        // The resting set of the mouth is the man's own before it is the
+        // temperament's: corners lifted on a sunny face, dropped on a dour
+        // one, and aggression pulls them down on top of that
+        let corner_dy = (aggr * 1.9 - 0.7 - id.structure.smile * 1.2).clamp(-2.2, 2.4);
         let upper = format!(
             "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1}Z",
             cx - half,
