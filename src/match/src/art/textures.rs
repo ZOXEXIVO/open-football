@@ -2176,20 +2176,49 @@ impl Textures {
         /// before it is seen from the gantry at all. A pitch is cut to around
         /// 25 mm and it is cut OFTEN, which is why this is short.
         const LENGTH: f32 = 16.0;
-        const BREADTH: f32 = 3.4;
+        const BREADTH: f32 = 2.4;
         /// How far off the mow line a blade may lie, in radians. Nothing is a
-        /// carpet and a half-turn is a meadow. It is also what carries the
-        /// mowing stripes at range — the two stripe materials differ only in
-        /// tint (see `Pitch::spawn_turf`); the GRAIN that makes a stripe a
-        /// stripe is in here.
-        const SCATTER: f32 = 0.55;
-        /// What fraction of blades lie BACK toward the roller. A roller leaves
-        /// a bias, not a parting; blades that all point one way comb into
-        /// corduroy at arm's length.
-        const LAID_BACK: f32 = 0.40;
+        /// carpet and a half-turn is a meadow.
+        const SCATTER: f32 = 0.85;
+        /// What fraction of blades lie BACK toward the roller.
+        ///
+        /// **This is the mow.** A band mown the other way is drawn from this
+        /// same sheet MIRRORED down the mow line — see
+        /// [`crate::scene::pitch::Pass`] — so a seven-in-ten bias one way
+        /// becomes a seven-in-ten bias the other, and the two bands comb
+        /// visibly against each other at any range a leaf survives to. The
+        /// note here used to claim the grain carried the stripe while the two
+        /// bands in fact shared one sheet sampled identically, which made the
+        /// tint the whole of it; that is what a painted stripe is.
+        ///
+        /// Not further than this, though. A roller leaves a bias, not a
+        /// parting, and blades that all point one way comb into corduroy at
+        /// arm's length.
+        const LAID_BACK: f32 = 0.30;
         /// How far a blade curls off its own line by the tip, as a fraction of
         /// its length. A leaf bends; a straight leaf is a scratch.
         const CURL: f32 = 0.30;
+        /// What fraction of blades the cylinder went over rather than through.
+        ///
+        /// Every mow misses some. They stand half again as long as the cut,
+        /// lie much further off the mow line because nothing pressed them
+        /// down, and keep a live tip — and a sward with none of them is a
+        /// sward that was cut with scissors, which is a surface and not a
+        /// plant. One in twenty is enough to break the uniformity and few
+        /// enough that no clump of them ever forms, which is the failure
+        /// TUFTS ran into (see above: a clump is a thing, and a pitch is not
+        /// made of things).
+        const STANDING: f32 = 0.05;
+        /// How much of a cut blade is the cut itself, as a fraction of its
+        /// length.
+        ///
+        /// A cylinder shears a leaf and leaves pale, dry tissue at the end of
+        /// it. Spread over ninety thousand blades that is a fine light
+        /// speckle over the whole surface, and it is most of what says MOWN
+        /// rather than simply short: grass that grew to twenty-five
+        /// millimetres has green tips, and no pitch anywhere has ever looked
+        /// like that.
+        const CUT: f32 = 0.14;
 
         let count = (SIZE * SIZE) as usize;
         // How bright this texel is against the mown shade, and how far the leaf
@@ -2204,33 +2233,48 @@ impl Textures {
         // shadow and not as holes. This is most of the difference between a
         // uniform sward and a scratched card — the same blades over a dark
         // floor are line art, however many of them there are.
+        //
+        // Drier than what stands on it, though, and a shade under it. What
+        // shows between the leaves of a real sward is thatch: the flattened
+        // dead material last year's growth left, which is browner than
+        // anything alive and is why a pitch parted by hand is not green
+        // underneath. Far enough from the blades to read, nowhere near far
+        // enough to bring the line art back.
         for index in 0..count {
-            lit[index] = 0.52 + 0.08 * Self::hash01(index as u32);
-            dry[index] = 0.62;
+            lit[index] = 0.49 + 0.09 * Self::hash01(index as u32);
+            dry[index] = 0.70;
         }
 
         for blade in 0..BLADES {
-            let seed = blade * 8;
+            let seed = blade * 16;
             let root = Vec2::new(
                 Self::hash01(seed) * SIZE as f32,
                 Self::hash01(seed + 1) * SIZE as f32,
             );
-            // `v` runs across the pitch, which is the way the mower went — see
-            // the stripes in `Pitch::spawn_turf`, which are bands ACROSS it.
+            // `v` runs across the pitch, which is the way the mower went —
+            // see `Sward::mow`, whose stripes are bands ACROSS it. A band
+            // mown the other way samples this same sheet with `v` mirrored,
+            // so the comb below is what turns round in it.
             let laid_back = f32::from(Self::hash01(seed + 3) < LAID_BACK) * PI;
-            let angle = (Self::hash01(seed + 2) - 0.5) * 2.0 * SCATTER + laid_back;
+            // Whether the cylinder went over this one — see `STANDING`. One
+            // number rather than three tests, because everything a missed
+            // blade does differently is the same fact about it: nothing cut
+            // it and nothing pressed it down.
+            let standing = f32::from(Self::hash01(seed + 8) < STANDING);
+            let angle =
+                (Self::hash01(seed + 2) - 0.5) * 2.0 * SCATTER * (1.0 + 1.4 * standing) + laid_back;
             let (sin, cos) = angle.sin_cos();
             let along = Vec2::new(sin, cos);
             let across = Vec2::new(cos, -sin);
 
-            let length = LENGTH * (0.7 + 0.6 * Self::hash01(seed + 4));
+            let length = LENGTH * (0.7 + 0.6 * Self::hash01(seed + 4)) * (1.0 + 0.7 * standing);
             let curl = (Self::hash01(seed + 5) - 0.5) * 2.0 * CURL;
             // Leaf to leaf: one catches the light, the next is in the shadow
             // of the one above it. A WIDE spread, and over a pale floor that
             // is what reads as grass rather than as scratches — the first
             // sheet had this spread over a dark floor and was line art; a
             // narrower one over a pale floor was a felt with no grain in it.
-            let leaf = 0.72 + 0.58 * Self::hash01(seed + 6);
+            let leaf = 0.66 + 0.70 * Self::hash01(seed + 6);
             let sear = 0.25 + 0.50 * Self::hash01(seed + 7);
 
             let steps = length.ceil().max(1.0) as u32;
@@ -2242,7 +2286,13 @@ impl Textures {
                 // A blade tapers, and its tip is the part the light finds —
                 // gently, for the same reason the spread above is narrow.
                 let half = BREADTH * 0.5 * (1.0 - 0.5 * t);
-                let bright = leaf * (0.84 + 0.26 * t);
+                // …and the last seventh of a CUT blade is the cut: brighter
+                // than the leaf under it and much drier, because it is a
+                // severed end rather than a surface. A blade the cylinder
+                // missed has a live tip and none of this.
+                let cut = Self::smooth((t - (1.0 - CUT)) / CUT) * (1.0 - standing);
+                let bright = leaf * (0.84 + 0.26 * t) + 0.22 * cut;
+                let dried = sear + (0.95 - sear) * 0.55 * cut;
                 let reach = half.ceil() as i32 + 1;
                 for offset in -reach..=reach {
                     // Soft at the edge. A blade two texels wide with hard sides
@@ -2256,16 +2306,10 @@ impl Textures {
                     let x = (point.x.round() as i32).rem_euclid(SIZE as i32) as u32;
                     let y = (point.y.round() as i32).rem_euclid(SIZE as i32) as u32;
                     let index = (y * SIZE + x) as usize;
-                    // Whichever leaf is on top wins, rather than the two being
-                    // mixed. Looking down into a sward you see the nearest
-                    // blade and the shadow beside it; averaging the blades that
-                    // overlap is what fills that shadow in and takes the depth
-                    // straight back out.
-                    let value = lit[index] + (bright - lit[index]) * cover;
-                    if value > lit[index] {
-                        lit[index] = value;
-                        dry[index] += (sear - dry[index]) * cover;
-                    }
+                    // Later leaves cover earlier ones, including shaded leaves.
+                    // Keeping only brighter overlaps combs the sward into felt.
+                    lit[index] += (bright - lit[index]) * cover;
+                    dry[index] += (dried - dry[index]) * cover;
                 }
             }
         }
@@ -2360,7 +2404,10 @@ impl Textures {
         drop(lit);
 
         Turf {
-            albedo: images.add(Self::tiled(Self::mipped_grainy(SIZE, SIZE, data), ALONG_THE_PITCH)),
+            albedo: images.add(Self::tiled(
+                Self::mipped_grainy(SIZE, SIZE, data),
+                ALONG_THE_PITCH,
+            )),
             relief: images.add(Self::tiled(
                 Self::mipped_linear(SIZE, SIZE, relief),
                 ACROSS_A_LEAF,
@@ -2378,10 +2425,8 @@ impl Textures {
     /// its neighbour on the other, and that is most of what the eye reads as
     /// depth in grass at any range where it can still see leaves.
     ///
-    /// `lit` is used as a height field, which is not an approximation but the
-    /// thing itself: the rasteriser resolves overlapping blades by keeping the
-    /// brightest, so whichever leaf is ON TOP is the one that wrote each texel
-    /// — see the note there. A depth buffer arrived at from the other end.
+    /// Brightness supplies approximate relief; the low strength keeps darker
+    /// leaves from looking like deep holes in the surface.
     ///
     /// Gradients wrap, exactly as the blades did, so the relief is seamless
     /// wherever the albedo is.
@@ -2393,7 +2438,7 @@ impl Textures {
         /// the deck, which is the only place the full-resolution mip is ever
         /// seen: below about one it does not read as grass at all, and past
         /// about four the sward turns to gravel.
-        const RELIEF: f32 = 3.2;
+        const RELIEF: f32 = 1.6;
 
         let at = |x: u32, y: u32| lit[(y * size + x) as usize];
         let wrap = |value: i64| value.rem_euclid(size as i64) as u32;
@@ -2433,35 +2478,18 @@ impl Textures {
         Self::mipped_as(width, height, base, TextureFormat::Rgba8UnormSrgb)
     }
 
-
-    /// The albedo chain with its GRAIN kept alive down the levels.
-    ///
-    /// A box filter converges on the mean: by the third level a 7 mm blade is
-    /// under a texel and the sheet is a flat green — which is exactly what the
-    /// turf then looks like from the gantry, a green rectangle with stripes
-    /// on it, however much is drawn into the top level. Real turf on a
-    /// broadcast camera is not flat at that range. It has a fine, even grain
-    /// right down to the pixel — part sward, part sensor — and the eye reads
-    /// that grain as "grass" long after any single blade is resolvable.
-    ///
-    /// So each level's deviation from its own mean is scaled back up toward
-    /// the spread the full-resolution sheet had: held outright for the first
-    /// few levels, then faded out, because a level with sixteen texels to its
-    /// name is pure noise, and noise that repeats fifty times down the pitch
-    /// and re-rolls as the camera pans is the crawl the chain exists to
-    /// prevent. The mean is untouched at every level, so the tile still comes
-    /// off the end of the chain as `shade`. Built by [`Self::mipped`] first
-    /// and corrected after, so no level is filtered from an amplified parent
-    /// and the restoration cannot compound.
+    /// Modest near-field contrast recovery, faded before individual leaves
+    /// become sub-pixel. Distant variation belongs to the world-space sward,
+    /// because amplifying coarse mip noise exposes the repeating tile.
     fn mipped_grainy(width: u32, height: u32, base: Vec<u8>) -> Image {
         /// Levels that keep the full-resolution spread outright.
-        const HOLD: u32 = 3;
+        const HOLD: u32 = 0;
         /// …and the level by which the restoration has faded to nothing.
-        const GONE: u32 = 7;
+        const GONE: u32 = 5;
         /// The most a level may be amplified. A level whose spread has
         /// collapsed to nearly nothing is one with nothing left to restore,
         /// and multiplying quantisation noise by a hundred is not grass.
-        const GAIN_CAP: f32 = 5.0;
+        const GAIN_CAP: f32 = 1.6;
 
         let mut image = Self::mipped(width, height, base);
         let levels = image.texture_descriptor.mip_level_count;
@@ -2515,7 +2543,8 @@ impl Textures {
                         }
                         let gain = (target[channel] / have[channel]).min(GAIN_CAP);
                         let gain = 1.0 + (gain - 1.0) * keep;
-                        let restored = mean[channel] + (texel[channel] as f32 - mean[channel]) * gain;
+                        let restored =
+                            mean[channel] + (texel[channel] as f32 - mean[channel]) * gain;
                         texel[channel] = restored.round().clamp(0.0, 255.0) as u8;
                     }
                 }

@@ -573,6 +573,140 @@ impl Upkeep {
     }
 }
 
+/// **One pass of the mower**, and everything that tells it from the pass
+/// beside it.
+///
+/// The mow used to be a single number: a tint, per band, over one sheet
+/// sampled identically everywhere on the ground. That is not a stripe, it is
+/// a stripe PAINTED on, and it is most of what makes a pitch read as carpet —
+/// a printed band does not know where the camera is, so it stays the darker
+/// of the two from the halfway line, from behind the goal and from the deck,
+/// and real ones do not.
+///
+/// A mowing stripe is not a second green at all. It is the same grass with its
+/// leaves lying the other way: bent away from the lens a leaf shows its face
+/// and the sky on it, bent toward the lens it shows its own shadow. So the
+/// three things that differ between two bands here are three ways of saying
+/// that one fact, and only the first of them is a colour.
+#[derive(Clone, Copy)]
+struct Pass {
+    /// The multiplier this band puts on the sheet: one where the mower was
+    /// going away from the roller, [`Upkeep::mow`] where it was coming back.
+    ///
+    /// Still here, and still the calibrated 16% — see [`Pitch::MOWN`]. A
+    /// stadium is lit by a flat fill standing in for four corners of
+    /// floodlights (there is one directional light in this scene and it is
+    /// nearly overhead), so relief alone would carry a mow you had to be told
+    /// about. The tint is the contrast; everything below is what makes it
+    /// grass.
+    tint: Vec3,
+    /// Which way the leaves are lying, as a mirror of the sheet down the mow
+    /// line: `1.0` with the roller, `-1.0` against it.
+    ///
+    /// This is the half of a stripe a tint could never carry. The UVs mirror,
+    /// which turns the sheet's own comb round — and the TANGENT FRAME mirrors
+    /// with them, which turns the relief round, so the two bands present
+    /// opposite faces of every leaf to the one light in the scene. That
+    /// contrast is worked out per pixel from the geometry rather than baked
+    /// into a vertex, which is why it holds up as the rig walks round the
+    /// ground.
+    ///
+    /// Free: no second sheet, no second material, and above all no second
+    /// shader — the one thing this scene cannot afford (see
+    /// [`crate::app::bringup`], where a program the browser has not seen costs
+    /// about six seconds to link).
+    facing: f32,
+    /// Where in the sheet this pass starts, in tiles.
+    ///
+    /// The tile is two metres across a pitch that is a hundred, so one
+    /// continuous set of UVs prints the same square of grass fifty times down
+    /// the length of the ground and does it in lockstep across every band.
+    /// That is a lattice, and the eye finds a lattice at any contrast once it
+    /// repeats — the same failure [`Textures::turf`] refuses to put anything
+    /// larger than a leaf in the tile to avoid. A phase per band breaks the
+    /// columns of it; `facing` breaks the rows.
+    phase: Vec2,
+    /// The two mow lines this strip lies between.
+    ///
+    /// Held as the line's INDEX rather than as a position, because a mow line
+    /// is not straight — see [`Sward::drift`].
+    lines: [usize; 2],
+}
+
+impl Pass {
+    /// **How deep each pass was rolled**, as a multiplier on the stripe.
+    ///
+    /// A mow is not fifteen identical bands. The roller bites harder on one
+    /// pass than on the next — the operator's speed, how wet it was under him,
+    /// how much of the last pass he overlapped — and a drone shot of any real
+    /// ground shows it plainly: some stripes shout and the one beside them is
+    /// barely there. Fifteen bands laid to the same depth to four decimal
+    /// places is the most mechanical thing left on this surface once the lines
+    /// themselves have stopped being ruled, and it is the one a plan view
+    /// finds first.
+    ///
+    /// A quarter either way, hashed off the band's own index so a ground looks
+    /// the same every time it is built, and then **divided by its own mean
+    /// over the bands that carry a stripe** — which is what makes this exactly
+    /// free. However the individual passes came out, the average of the mow is
+    /// the calibrated pair and stays the calibrated pair; see
+    /// [`Pitch::MOWN`] for why nothing may move it, and
+    /// `wearing_the_grass_does_not_repaint_it` for what holds it there.
+    ///
+    /// Bands the mower left going away are untouched. There is no stripe on
+    /// them to be deeper or shallower — they are the sheet as drawn, and the
+    /// whole pair is written as a distance from it.
+    fn rolled() -> [f32; Pitch::STRIPES] {
+        /// How much deeper the deepest pass is rolled than the mean.
+        const BITE: f32 = 0.26;
+
+        let mut rolled = [1.0f32; Pitch::STRIPES];
+        let mut total = 0.0;
+        let mut passes = 0.0;
+        for line in (1..Pitch::STRIPES).step_by(2) {
+            rolled[line] = 1.0 + BITE * (Sward::hash(Vec2::new(line as f32, 17.0)) * 2.0 - 1.0);
+            total += rolled[line];
+            passes += 1.0;
+        }
+        for line in (1..Pitch::STRIPES).step_by(2) {
+            rolled[line] *= passes / total;
+        }
+        rolled
+    }
+
+    /// The band between mow line `line` and the next one.
+    ///
+    /// Odd bands are the mower coming back: dimmed by `turned` as deeply as
+    /// this pass was rolled, and mirrored — the same statement made twice, in
+    /// the two places it can be seen from.
+    fn mown(line: usize, turned: Vec3, rolled: f32) -> Pass {
+        let back = line % 2 == 1;
+        Pass {
+            tint: Vec3::ONE + (turned - Vec3::ONE) * f32::from(back) * rolled,
+            facing: if back { -1.0 } else { 1.0 },
+            phase: Vec2::new(
+                Sward::hash(Vec2::new(line as f32, 11.0)),
+                Sward::hash(Vec2::new(line as f32, 29.0)),
+            ),
+            lines: [line, line + 1],
+        }
+    }
+
+    /// Ground no mower ever went over: one strip of the sheet as drawn,
+    /// between two straight edges.
+    ///
+    /// Line `0` and line [`Pitch::STRIPES`] are the goal lines. They are where
+    /// the pitch stops rather than anything a mower left, so they are the two
+    /// lines in the set that do not wander — which is what lets the surround
+    /// go through the same mechanism as a band instead of round it.
+    const UNMOWN: Pass = Pass {
+        tint: Vec3::ONE,
+        facing: 1.0,
+        phase: Vec2::ZERO,
+        lines: [0, Pitch::STRIPES],
+    };
+}
+
 /// The playing surface as one mesh, with the state of the grass written into
 /// its vertices.
 ///
@@ -598,10 +732,6 @@ impl Upkeep {
 /// - **Unevenness.** Slow variation at ten and twenty metres — a sward is
 ///   laid, drained and shaded unevenly, and no real one is a single tone.
 ///
-/// The stripes keep a hard edge because each block gets its OWN vertices along
-/// the seam: a mown edge is far sharper than a half-metre cell could
-/// interpolate, and sharing vertices across it would smear the one boundary in
-/// here that is genuinely crisp.
 ///
 /// Cost: this replaces fifteen entities with one, and the grid is some fifty
 /// thousand triangles the GPU never notices — the frame is spent per-entity,
@@ -610,7 +740,6 @@ impl Upkeep {
 struct Sward {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
-    tangents: Vec<[f32; 4]>,
     uvs: Vec<[f32; 2]>,
     /// Which mow stripe this vertex is in, as the multiplier on the sheet.
     tints: Vec<Vec3>,
@@ -632,6 +761,9 @@ impl Sward {
     /// diamond-shaped. Halving this again quadruples a triangle count that is
     /// already free; it would not make anything look better.
     const CELL: f32 = 0.5;
+
+    /// Narrow overlap where adjacent roller passes meet.
+    const FEATHER: f32 = 0.18;
 
     /// What wearing the grass away does to its colour, per channel, at the
     /// point where it is worn through completely.
@@ -663,7 +795,6 @@ impl Sward {
         let mut sward = Sward {
             positions: Vec::new(),
             normals: Vec::new(),
-            tangents: Vec::new(),
             uvs: Vec::new(),
             tints: Vec::new(),
             ground: Vec::new(),
@@ -671,14 +802,16 @@ impl Sward {
             upkeep,
         };
         let turned = upkeep.mow();
+        let rolled = Pass::rolled();
         let stripe = Field::LENGTH / Pitch::STRIPES as f32;
-        for index in 0..Pitch::STRIPES {
-            let from = -Field::HALF_LENGTH + stripe * index as f32;
-            // White for the even bands: the sheet is already painted in
-            // `Pitch::MOWN`, so the stripe the mower left going away is the
-            // grass exactly as drawn.
-            let tint = if index % 2 == 0 { Vec3::ONE } else { turned };
-            sward.block(from, from + stripe, tint, tile);
+        for line in 0..Pitch::STRIPES {
+            let from = -Field::HALF_LENGTH + stripe * line as f32;
+            sward.block(
+                from,
+                from + stripe,
+                Pass::mown(line, turned, rolled[line]),
+                tile,
+            );
         }
         sward.build()
     }
@@ -699,7 +832,6 @@ impl Sward {
         let mut sward = Sward {
             positions: Vec::new(),
             normals: Vec::new(),
-            tangents: Vec::new(),
             uvs: Vec::new(),
             tints: Vec::new(),
             ground: Vec::new(),
@@ -710,53 +842,120 @@ impl Sward {
             Vec2::new(-size.x * 0.5, -size.y * 0.5),
             Vec2::new(size.x * 0.5, size.y * 0.5),
             Self::CELL * 8.0,
-            Vec3::ONE,
+            Pass::UNMOWN,
             tile,
             false,
         );
         sward.build()
     }
 
-    /// One mown band, with its own vertices along both seams.
-    fn block(&mut self, from: f32, to: f32, tint: Vec3, tile: f32) {
+    /// One mown band, with its own vertices along both mow lines.
+    ///
+    /// `from` and `to` are where the arithmetic puts those two lines. Where
+    /// the mower actually left them is [`Self::drift`]'s to say, and the band
+    /// is dragged onto them in [`Self::grid`] — so the nominal width is what
+    /// decides the vertex count and the real one is what decides where those
+    /// vertices land.
+    fn block(&mut self, from: f32, to: f32, pass: Pass, tile: f32) {
         self.grid(
             Vec2::new(from, -Field::HALF_WIDTH),
             Vec2::new(to, Field::HALF_WIDTH),
             Self::CELL,
-            tint,
+            pass,
             tile,
             true,
         );
     }
 
+    /// **Where a mow line actually is**, as the distance off where the
+    /// arithmetic put it, in metres.
+    ///
+    /// Fifteen bands of exactly `LENGTH / 15`, ruled dead straight from one
+    /// touchline to the other and spaced to the millimetre, is the geometry of
+    /// a printed carpet. It is not the geometry of a mown pitch, and the
+    /// regularity is legible from the gantry long before any single stripe is:
+    /// a man on a mower walking sixty-eight metres does not hold a line to the
+    /// centimetre, and he does not hold the same one on the way back.
+    ///
+    /// Two sinusoids down the width at periods with no common factor, plus a
+    /// constant for where the pass was started, all three phased off the
+    /// line's own index through the golden angle — so no two lines wander
+    /// alike and the set of them never lines up into a second pattern of its
+    /// own. Under a quarter of a metre at the very worst, against a band seven
+    /// metres wide: three per cent, which reads as a hand rather than as a
+    /// wobble.
+    ///
+    /// ⚠ **Zero-sum by construction.** A line is shared: every centimetre it
+    /// takes from the band below it, it gives to the band above. And a band's
+    /// vertex count comes off its NOMINAL width, so no band gains or loses
+    /// vertices either. Which is what keeps this out of the average colour of
+    /// the surface — the contract `wearing_the_grass_does_not_repaint_it`
+    /// holds the whole field to, and the one thing nothing in here may touch.
+    fn drift(line: usize, z: f32) -> f32 {
+        /// The most a line strays off true, in metres.
+        const WANDER: f32 = 0.19;
+
+        // The first and last are the goal lines. The grass stops there; no
+        // mower left them, and they do not move.
+        if line == 0 || line == Pitch::STRIPES {
+            return 0.0;
+        }
+        let phase = line as f32 * 2.399_963;
+        let settle = Self::hash(Vec2::new(line as f32, 5.0)) - 0.5;
+        WANDER
+            * (0.50 * settle
+                + 0.60 * (z / 21.3 + phase).sin()
+                + 0.36 * (z / 8.7 - phase * 1.7).cos())
+    }
+
     /// A rectangle of ground, with its own vertices all the way round.
-    fn grid(&mut self, from: Vec2, to: Vec2, cell: f32, tint: Vec3, tile: f32, played: bool) {
+    fn grid(&mut self, from: Vec2, to: Vec2, cell: f32, pass: Pass, tile: f32, played: bool) {
         let span = to - from;
-        let down = (span.x / cell).ceil().max(1.0) as usize;
+        let down = (span.x / cell).ceil().max(1.0) as usize + if played { 2 } else { 0 };
         let across = (span.y / cell).ceil().max(1.0) as usize;
         let base = self.positions.len() as u32;
         // Hoisted rather than asked per vertex: the pair is the same for the
         // whole ground, and this loop runs a hundred thousand times.
         let (worn, rough) = (self.upkeep.worn(), self.upkeep.rough());
+        let rolled = Pass::rolled();
+        let line = pass.lines[0];
+        let edge_tints = if played {
+            [line.saturating_sub(1), (line + 1).min(Pitch::STRIPES - 1)].map(|neighbour| {
+                (pass.tint + Pass::mown(neighbour, self.upkeep.mow(), rolled[neighbour]).tint) * 0.5
+            })
+        } else {
+            [pass.tint; 2]
+        };
 
         for row in 0..=down {
-            let x = from.x + span.x * (row as f32 / down as f32);
+            // Extra rows keep the overlap narrow without refining the whole pitch.
+            let distance = if played && row > 0 && row < down {
+                Self::FEATHER
+                    + (span.x - 2.0 * Self::FEATHER) * (row - 1) as f32 / (down - 2) as f32
+            } else {
+                span.x * row as f32 / down as f32
+            };
+            let across_the_band = distance / span.x;
+            let nominal = from.x + span.x * across_the_band;
             for column in 0..=across {
                 let z = from.y + span.y * (column as f32 / across as f32);
+                // Onto the two lines the mower actually left, and linearly
+                // between them, so the strip stays a strip and its cells stay
+                // the size they were meant to be.
+                let near = Self::drift(pass.lines[0], z);
+                let far = Self::drift(pass.lines[1], z);
+                let x = nominal + near + (far - near) * across_the_band;
                 self.positions.push([x, 0.0, z]);
                 self.normals.push([0.0, 1.0, 0.0]);
-                // The surface is flat and axis-aligned, so the tangent frame
-                // is a constant: U runs along +X with the sheet, V along +Z,
-                // and the handedness that puts the bitangent on +Z with a +Y
-                // normal is negative. Written out rather than generated
-                // because `generate_tangents` would solve a system to arrive
-                // at the same four numbers for every vertex on the pitch.
-                self.tangents.push([1.0, 0.0, 0.0, -1.0]);
-                // Straight off the world position, so one continuous sheet
-                // runs across the whole surface. The stripes used to restart
-                // the tile at every band, which was safe only as long as the
-                // sheet held nothing bigger than a leaf.
-                self.uvs.push([x / tile, z / tile]);
+                let uv = Self::grass_uv(Vec2::new(x, z), pass, tile);
+                self.uvs.push(uv.to_array());
+                let tint = if row == 0 {
+                    edge_tints[0]
+                } else if row == down {
+                    edge_tints[1]
+                } else {
+                    pass.tint
+                };
                 self.tints.push(tint);
                 self.ground
                     .push(Self::ground(Vec2::new(x, z), played, worn, rough));
@@ -777,6 +976,17 @@ impl Sward {
                 ]);
             }
         }
+    }
+
+    /// Slowly bend the sampling grid so a leaf cluster never repeats in lockstep.
+    /// The displacement changes over metres, keeping individual blades undistorted.
+    fn grass_uv(point: Vec2, pass: Pass, tile: f32) -> Vec2 {
+        let warp = Vec2::new(
+            Self::grain(point / 5.3 + Vec2::new(13.7, 41.2)),
+            Self::grain(point / 4.7 + Vec2::new(73.1, 9.4)),
+        ) * 0.55;
+        let uv = point / tile + warp;
+        Vec2::new(uv.x, pass.facing * uv.y) + pass.phase
     }
 
     /// What the grass is doing at one point, as a multiplier on the mown
@@ -807,54 +1017,89 @@ impl Sward {
         } else {
             0.0
         };
+        // Growth and moisture vary in hue as well as brightness. Keep this
+        // in world space so patches never recur with the blade texture.
+        let growth = Self::grain(point / 2.3 + Vec2::new(53.2, 19.6)) * patchy;
         Vec3::new(
             1.0 + Self::WORN.x * worn,
             1.0 + Self::WORN.y * worn,
             1.0 + Self::WORN.z * worn,
         ) * (1.0 + Self::unevenness(point) * patchy)
+            * (Vec3::ONE + Vec3::new(0.065, 0.015, -0.045) * growth)
     }
 
     /// How hard the grass here has been used, nought to one.
     ///
-    /// Three sources, and `max` rather than a sum because they overlap: the
-    /// penalty spot sits inside the goalmouth, and adding them would take that
-    /// one patch past bare earth while the rest of the pitch stayed green.
+    /// **One table, one mechanism.** Every row is somewhere a football match
+    /// is played: where the middle of it is, how far it reaches down the pitch
+    /// and across it, and how bare it gets. Each is mirrored about both axes,
+    /// because a pitch is used symmetrically and writing the far goalmouth out
+    /// by hand is how two ends of a ground drift apart.
+    ///
+    /// `max` rather than a sum, because they overlap: the penalty spot sits
+    /// inside the goalmouth, and adding them would take that one patch past
+    /// bare earth while the rest of the pitch stayed green.
+    ///
+    /// The three rows that used to be all of it — the goalmouths, the penalty
+    /// spots, the centre — are the three places a pitch wears when nobody has
+    /// run anywhere else, and a surface worn in exactly three round places is
+    /// a surface with three decals on it. The two that join them are the
+    /// traffic with no landmark to sit on: the channel a winger and a linesman
+    /// spend ninety minutes in a couple of metres inside each touchline, and
+    /// the broad middle of the ground where every phase of play that is not a
+    /// shot happens. Both are worth a fraction of a goalmouth and neither has
+    /// an edge anybody could point at, which is the whole of what they are
+    /// for.
     fn wear(point: Vec2) -> f32 {
-        // The goalmouth. An ellipse rather than a disc, and wider across than
-        // it is deep, because what wears is the ground a keeper covers and the
-        // ground defenders turn on in front of him — the goal area and a good
-        // way either side of it. Centred four metres off the line: the very
-        // back of it is behind the keeper and sees less traffic than the front
-        // edge of the six-yard box.
-        let goalmouths = [-1.0f32, 1.0]
-            .map(|side| {
-                Self::blob(
-                    point - Vec2::new(side * (Field::HALF_LENGTH - 4.0), 0.0),
-                    Vec2::new(8.0, 12.0),
-                )
+        /// Where the traffic is, how far it reaches along the pitch and across
+        /// it, and what it is worth at the middle.
+        const TRAFFIC: [(Vec2, Vec2, f32); 5] = [
+            // The goalmouth. An ellipse rather than a disc, and wider across
+            // than it is deep, because what wears is the ground a keeper
+            // covers and the ground defenders turn on in front of him — the
+            // goal area and a good way either side of it. Centred four metres
+            // off the line: the very back of it is behind the keeper and sees
+            // less traffic than the front edge of the six-yard box.
+            (
+                Vec2::new(Field::HALF_LENGTH - 4.0, 0.0),
+                Vec2::new(8.0, 12.0),
+                1.00,
+            ),
+            // The penalty spot, which is stood on, run up to and dug out of.
+            (
+                Vec2::new(Field::HALF_LENGTH - Field::PENALTY_SPOT_DISTANCE, 0.0),
+                Vec2::splat(2.6),
+                0.55,
+            ),
+            // The centre spot: every kickoff, and every restart after a goal.
+            (Vec2::ZERO, Vec2::splat(3.6), 0.45),
+            // The channel inside the touchline, which is the one piece of
+            // ground somebody is running on all afternoon whether the ball is
+            // there or not. It stops well short of the corner — a corner is
+            // the one part of a pitch nobody spends a match on.
+            (
+                Vec2::new(0.0, Field::HALF_WIDTH - 2.2),
+                Vec2::new(Field::HALF_LENGTH * 0.72, 4.5),
+                0.30,
+            ),
+            // And the middle of the ground, which is most of a match and has
+            // no shape at all: a wide, shallow patch that never reaches a
+            // quarter of what a goalmouth does.
+            (Vec2::ZERO, Vec2::new(26.0, 22.0), 0.16),
+        ];
+
+        TRAFFIC
+            .iter()
+            .flat_map(|(at, reach, weight)| {
+                [
+                    Vec2::new(-1.0, -1.0),
+                    Vec2::new(-1.0, 1.0),
+                    Vec2::new(1.0, -1.0),
+                    Vec2::new(1.0, 1.0),
+                ]
+                .map(|mirror| Self::blob(point - *at * mirror, *reach) * *weight)
             })
-            .into_iter()
-            .fold(0.0f32, f32::max);
-
-        // The penalty spots, which are stood on, run up to and dug out of.
-        let spots = [-1.0f32, 1.0]
-            .map(|side| {
-                Self::blob(
-                    point
-                        - Vec2::new(
-                            side * (Field::HALF_LENGTH - Field::PENALTY_SPOT_DISTANCE),
-                            0.0,
-                        ),
-                    Vec2::splat(2.6),
-                ) * 0.55
-            })
-            .into_iter()
-            .fold(0.0f32, f32::max);
-
-        // And the centre spot: every kickoff, and every restart after a goal.
-        let centre = Self::blob(point, Vec2::splat(3.6)) * 0.45;
-
-        goalmouths.max(spots).max(centre)
+            .fold(0.0f32, f32::max)
     }
 
     /// A soft patch: one at the middle, nought at `radius` and beyond, with no
@@ -868,34 +1113,15 @@ impl Sward {
         fade * fade * (3.0 - 2.0 * fade)
     }
 
-    /// The aimless variation of a real sward, as a fraction either way.
-    ///
-    /// Two halves, and they are doing different jobs:
-    ///
-    /// **The drift**, two sinusoid pairs at twenty and ten metres, at periods
-    /// with no common factor between them or with the seven-metre mow — so the
-    /// eye finds no grid in it, which is the entire failure this had to avoid.
-    /// This is drainage and shade: the slow business of one end of a ground
-    /// being a little greener than the other.
-    ///
-    /// **The mottle**, patchiness at two to five metres. This is the half that
-    /// actually stops the pitch reading as printed card, and the half a
-    /// texture could never have supplied: it lives at exactly the scale that
-    /// makes a two-metre tile visible as a lattice. Value noise rather than
-    /// more sinusoids, because real turf is patchy and not wavy — the sward
-    /// takes better in one place than another and the join between them is not
-    /// a smooth curve.
-    ///
-    /// Seven per cent at the very extreme and three or four typically. On a
-    /// surface this large that is the difference between ground and a sheet of
-    /// paper, and it stays under half the sixteen per cent the mow carries so
-    /// it can never be mistaken for a stripe — which
-    /// `the_sward_never_shouts_over_the_mow` holds it to.
+    /// Drainage-scale variation, metre-scale patches and fine sward density.
+    /// All are sampled in world space, independent of the repeating blade tile.
     fn unevenness(point: Vec2) -> f32 {
         let drift = 0.022 * (point.x / 23.7 + 0.6).sin() * (point.y / 17.3 - 1.1).cos()
             + 0.014 * (point.x / 9.1 - 2.2).sin() * (point.y / 11.7 + 0.4).cos();
-        let mottle = 0.026 * Self::grain(point / 4.7)
-            + 0.014 * Self::grain(point / 1.9 + Vec2::new(31.4, 17.2));
+        let mottle = 0.024 * Self::grain(point / 4.7)
+            + 0.013 * Self::grain(point / 2.9 + Vec2::new(7.7, 43.1))
+            + 0.011 * Self::grain(point / 1.9 + Vec2::new(31.4, 17.2))
+            + 0.022 * Self::grain(point / 0.73 + Vec2::new(67.2, 5.8));
         drift + mottle
     }
 
@@ -953,6 +1179,33 @@ impl Sward {
             })
             .collect();
 
+        // Derive the frame from the warped UVs. Our procedural relief encodes
+        // increasing V in green, so retain that sign when passes are mirrored.
+        let mut axes = vec![Vec3::ZERO; self.positions.len()];
+        let mut signs = vec![0.0; self.positions.len()];
+        for triangle in self.indices.chunks_exact(3) {
+            let [a, b, c] = [
+                triangle[0] as usize,
+                triangle[1] as usize,
+                triangle[2] as usize,
+            ];
+            let ab = Vec3::from(self.positions[b]) - Vec3::from(self.positions[a]);
+            let ac = Vec3::from(self.positions[c]) - Vec3::from(self.positions[a]);
+            let uv_ab = Vec2::from(self.uvs[b]) - Vec2::from(self.uvs[a]);
+            let uv_ac = Vec2::from(self.uvs[c]) - Vec2::from(self.uvs[a]);
+            let determinant = uv_ab.perp_dot(uv_ac);
+            let axis = (ab * uv_ac.y - ac * uv_ab.y) / determinant;
+            for index in [a, b, c] {
+                axes[index] += axis;
+                signs[index] = determinant.signum();
+            }
+        }
+        let tangents: Vec<[f32; 4]> = axes
+            .into_iter()
+            .zip(signs)
+            .map(|(axis, sign)| axis.normalize().extend(sign).to_array())
+            .collect();
+
         Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
@@ -962,7 +1215,7 @@ impl Sward {
             std::mem::take(&mut self.positions),
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, std::mem::take(&mut self.normals))
-        .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, std::mem::take(&mut self.tangents))
+        .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, tangents)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, std::mem::take(&mut self.uvs))
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colours)
         .with_inserted_indices(Indices::U32(std::mem::take(&mut self.indices)))
@@ -2188,6 +2441,402 @@ mod tests {
         assert!(spot > 0.2, "the penalty spot is stood on: {spot}");
         assert!(centre > 0.2, "every kickoff is here: {centre}");
         assert!(corner < 0.05, "nothing happens in the corner: {corner}");
+    }
+
+    #[test]
+    fn grass_sampling_breaks_the_tile_repeat_without_folding() {
+        let tile = Pitch::TURF_TILE;
+        let mut displacement = 0.0;
+        let mut count = 0;
+        for line in 0..2 {
+            let pass = Pass::mown(line, turned(), 1.0);
+            for x in -52..53 {
+                for z in -34..35 {
+                    let point = Vec2::new(x as f32, z as f32);
+                    let uv = Sward::grass_uv(point, pass, tile);
+                    let dx = Sward::grass_uv(point + Vec2::X * 0.1, pass, tile) - uv;
+                    let dz = Sward::grass_uv(point + Vec2::Y * 0.1, pass, tile) - uv;
+                    assert!(dx.perp_dot(dz) * pass.facing > 0.0, "folded UVs at {point}");
+                    let repeat = Sward::grass_uv(point + Vec2::X * tile, pass, tile) - uv;
+                    displacement += (repeat - Vec2::X).length();
+                    count += 1;
+                }
+            }
+        }
+        assert!(
+            displacement / count as f32 > 0.05,
+            "the tile still repeats in place"
+        );
+    }
+
+    /// **A stripe is the same grass turned round, not a second green.**
+    ///
+    /// The tint is the part that was always here and the part that, on its
+    /// own, is a band painted onto a carpet: baked into a vertex, it is the
+    /// darker of the two from every seat in the ground. The other two halves
+    /// of [`Pass`] are what make it grass — a mirrored sheet and a mirrored
+    /// tangent frame, so the renderer works the contrast out per pixel off the
+    /// relief and the mow answers to where the camera and the light are.
+    ///
+    /// Held here because both are invisible in the source of the mesh: they
+    /// are a sign on one float of a vertex attribute, and getting either
+    /// backwards is a pitch that still looks like a pitch.
+    #[test]
+    fn a_stripe_is_the_same_grass_turned_round() {
+        // The pair itself, band by band: a stripe alternates, and both halves
+        // of it alternate together.
+        let rolled = Pass::rolled();
+        let mut stripes = Vec3::ZERO;
+        let mut passes = 0.0;
+        for line in 0..Pitch::STRIPES {
+            let pass = Pass::mown(line, turned(), rolled[line]);
+            let back = line % 2 == 1;
+            assert_eq!(
+                pass.facing,
+                if back { -1.0 } else { 1.0 },
+                "band {line} is lying the wrong way"
+            );
+            if !back {
+                assert_eq!(
+                    pass.tint,
+                    Vec3::ONE,
+                    "band {line} is not the sheet as drawn"
+                );
+                continue;
+            }
+            // Deeper or shallower than the mean, but always a stripe and
+            // always in the same direction — a pass rolled the wrong way would
+            // be a band LIGHTER than the grass it was cut from.
+            for channel in 0..3 {
+                assert!(
+                    pass.tint[channel] < 1.0,
+                    "band {line} is not a stripe on channel {channel}"
+                );
+            }
+            stripes += pass.tint;
+            passes += 1.0;
+        }
+
+        // …and however deep each one came out, the pair averages to the one
+        // that was calibrated. This is the same contract
+        // `wearing_the_grass_does_not_repaint_it` holds the mesh to, stated
+        // where it is decided rather than where it shows up.
+        let mean = stripes / passes;
+        for channel in 0..3 {
+            assert!(
+                (mean[channel] - turned()[channel]).abs() < 1e-5,
+                "the mow averages {} on channel {channel} against the calibrated {}",
+                mean[channel],
+                turned()[channel]
+            );
+        }
+
+        // …and no two bands start at the same place in the sheet, which is
+        // what stops the two-metre tile printing down the pitch in lockstep.
+        for line in 0..Pitch::STRIPES {
+            for other in (line + 1)..Pitch::STRIPES {
+                let apart = Pass::mown(line, Vec3::ONE, 1.0).phase
+                    - Pass::mown(other, Vec3::ONE, 1.0).phase;
+                assert!(
+                    apart.length() > 0.02,
+                    "bands {line} and {other} start on the same texel"
+                );
+            }
+        }
+
+        let mesh = Sward::mow(Upkeep::at(1.0), Pitch::TURF_TILE);
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => values.clone(),
+            _ => panic!("the sward carries no positions"),
+        };
+        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x2(values)) => values.clone(),
+            _ => panic!("the sward carries no uvs"),
+        };
+        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x4(values)) => values.clone(),
+            _ => panic!("the sward carries no tangents"),
+        };
+
+        // Then on the mesh: every step along the mow has to move through the
+        // sheet the way that vertex's own tangent frame says it does. Read off
+        // neighbours rather than off a band index, because the wander means a
+        // vertex is no longer where the arithmetic would put it — and a step
+        // backwards across the pitch is the next band starting, so there is no
+        // pair here that straddles a mow line.
+        let mut lying = [0usize; 2];
+        for index in 1..positions.len() {
+            let reach = positions[index][2] - positions[index - 1][2];
+            if reach <= 0.0 {
+                continue;
+            }
+            let facing = -tangents[index][3];
+            let slope = uvs[index][1] - uvs[index - 1][1];
+            assert_eq!(
+                slope.signum(),
+                facing,
+                "the sheet is not mirrored with the tangent frame at x={}",
+                positions[index][0]
+            );
+            lying[usize::from(facing < 0.0)] += 1;
+        }
+
+        // And the ground is mown both ways in equal measure — an odd band
+        // count puts one more pass one way than the other, and nothing more.
+        let apart = lying[0].abs_diff(lying[1]) as f32 / lying[0].max(lying[1]) as f32;
+        assert!(
+            apart < 2.0 / Pitch::STRIPES as f32,
+            "the mow is lopsided: {lying:?}"
+        );
+    }
+
+    /// **A mow line is not a ruled line**, and the touchlines are.
+    ///
+    /// Bands of exactly `LENGTH / 15`, spaced to the millimetre and ruled
+    /// straight from one touchline to the other, is the geometry of printed
+    /// carpet — and it is legible as one from the gantry long before any
+    /// single stripe is, because regularity survives distance better than
+    /// detail does. What must NOT move with it is the pitch itself: the paint,
+    /// the goals and the run-off are all laid on a rectangle, and a touchline
+    /// that wandered would be a pitch that no longer met its own markings.
+    #[test]
+    fn a_mow_line_is_not_a_ruled_line() {
+        let mut worst = 0.0f32;
+        let mut mean = 0.0f32;
+        let mut count = 0.0f32;
+        for line in 0..=Pitch::STRIPES {
+            let mut z = -Field::HALF_WIDTH;
+            while z <= Field::HALF_WIDTH {
+                let drift = Sward::drift(line, z);
+                if line == 0 || line == Pitch::STRIPES {
+                    assert_eq!(drift, 0.0, "the goal line at {line} has wandered off");
+                } else {
+                    worst = worst.max(drift.abs());
+                    mean += drift;
+                    count += 1.0;
+                }
+                z += 0.5;
+            }
+        }
+
+        // Plainly off true — a tenth of a metre is the width of the paint, and
+        // anything under it is a line nobody would call crooked.
+        assert!(worst > 0.10, "every mow line is still ruled: {worst}");
+        // …and never so far off that a band visibly narrows. A stripe is seven
+        // metres; a twentieth of one is a hand on a mower.
+        let stripe = Field::LENGTH / Pitch::STRIPES as f32;
+        assert!(
+            worst < stripe / 20.0,
+            "the mow wanders by {worst} of a {stripe} m band"
+        );
+        // And it goes both ways. A wander with a mean would be a shear — the
+        // whole mow leaning one way down the pitch, which is a pattern again.
+        assert!(
+            (mean / count).abs() < worst * 0.25,
+            "the mow leans one way: {} against a worst of {worst}",
+            mean / count
+        );
+    }
+
+    /// **The whole surface from overhead**, as near to what the GPU lays down
+    /// as a test can get: the blade sheet sampled through each vertex's own
+    /// UVs, lit through the relief with the same tangent frame and the same
+    /// sun, and multiplied by its own colour.
+    ///
+    /// The mow is the one thing on this pitch that cannot be judged from a
+    /// texture dump. [`Textures::turf`] draws one tile, and every complaint
+    /// that ever got the word "carpet" attached to this surface was about how
+    /// that tile is LAID — the ruler-straight bands, the one grain running
+    /// under all of them, the two-metre lattice printed fifty times down the
+    /// ground in lockstep. None of that is in the tile and all of it is here.
+    ///
+    /// ```text
+    /// MATCH_PITCH_DUMP=<dir> cargo test --release --lib dump_mow -- --ignored --nocapture
+    /// ```
+    ///
+    /// Writes `pitch.rgba`, the whole playing surface, where the wander and
+    /// the wear are what there is to look at; and `mow.rgba`, a window a few
+    /// metres across straddling one line at one texel to the pixel, which is
+    /// the only scale the grain reversal is visible at.
+    ///
+    /// Both are sampled off the level of the mip chain where a texel is about
+    /// a pixel. Anything coarser is the chain resolving to the mean and
+    /// anything finer is aliasing, and either one answers a question about the
+    /// sampler rather than about the mow.
+    #[test]
+    #[ignore = "writes files; run by hand when the mow changes"]
+    fn dump_mow() {
+        let Ok(directory) = std::env::var("MATCH_PITCH_DUMP") else {
+            panic!("set MATCH_PITCH_DUMP to a directory");
+        };
+        let directory = std::path::Path::new(&directory);
+
+        let mut images = Assets::<Image>::default();
+        let upkeep = Upkeep::at(1.0);
+        let grass = Textures::turf(&mut images, upkeep.sward());
+        let mesh = Sward::mow(upkeep, Pitch::TURF_TILE);
+
+        for (name, from, to, width, level) in [
+            (
+                "pitch",
+                Vec2::new(-Field::HALF_LENGTH, -Field::HALF_WIDTH),
+                Vec2::new(Field::HALF_LENGTH, Field::HALF_WIDTH),
+                1680u32,
+                5u32,
+            ),
+            (
+                "mow",
+                Vec2::new(-47.2, -1.2),
+                Vec2::new(-43.6, 1.2),
+                1680,
+                0,
+            ),
+        ] {
+            let (across, down, pixels) = overhead(&mesh, &images, &grass, from, to, width, level);
+            std::fs::write(directory.join(format!("{name}.rgba")), &pixels).expect("wrote it");
+            println!(
+                "{across}x{down} at {}",
+                directory.join(format!("{name}.rgba")).display()
+            );
+        }
+    }
+
+    /// One texel of a packed mip chain, wrapped.
+    fn texel(image: &Image, level: u32, uv: Vec2) -> Vec3 {
+        let mut size = image.texture_descriptor.size.width;
+        let mut offset = 0usize;
+        for _ in 0..level {
+            offset += (size * size * 4) as usize;
+            size = (size / 2).max(1);
+        }
+        let data = image.data.as_ref().expect("pixels");
+        let wrap =
+            |value: f32| (((value * size as f32).floor() as i64).rem_euclid(size as i64)) as u32;
+        let at = offset + ((wrap(uv.y) * size + wrap(uv.x)) * 4) as usize;
+        Vec3::new(
+            data[at] as f32 / 255.0,
+            data[at + 1] as f32 / 255.0,
+            data[at + 2] as f32 / 255.0,
+        )
+    }
+
+    /// The sward seen from straight up, rasterised a triangle at a time.
+    ///
+    /// Not a renderer and not trying to be one — no tonemapper, no ambient
+    /// from the camera, no perspective. What it does carry is everything the
+    /// mow is made of: the sheet through the mesh's own UVs, the relief
+    /// through the mesh's own tangent frame, [`Pitch::SUN`], and the vertex
+    /// colours. Which is enough to see whether a stripe is a lit thing or a
+    /// painted one.
+    fn overhead(
+        mesh: &Mesh,
+        images: &Assets<Image>,
+        grass: &Turf,
+        from: Vec2,
+        to: Vec2,
+        width: u32,
+        level: u32,
+    ) -> (u32, u32, Vec<u8>) {
+        let span = to - from;
+        let height = (width as f32 * span.y / span.x).round() as u32;
+        let albedo = images.get(&grass.albedo).expect("just built");
+        let relief = images.get(&grass.relief).expect("just built");
+        let sun = -Pitch::SUN.normalize();
+
+        let positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => values,
+            _ => panic!("no positions"),
+        };
+        let uvs = match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x2(values)) => values,
+            _ => panic!("no uvs"),
+        };
+        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x4(values)) => values,
+            _ => panic!("no tangents"),
+        };
+        let tints = colours(mesh);
+        let indices: Vec<u32> = match mesh.indices() {
+            Some(Indices::U32(values)) => values.clone(),
+            _ => panic!("no indices"),
+        };
+
+        let mut pixels = vec![0u8; (width * height * 4) as usize];
+        let to_pixel = |point: Vec2| {
+            Vec2::new(
+                (point.x - from.x) / span.x * width as f32,
+                (point.y - from.y) / span.y * height as f32,
+            )
+        };
+
+        for triangle in indices.chunks_exact(3) {
+            let corner: Vec<usize> = triangle.iter().map(|index| *index as usize).collect();
+            let plan: Vec<Vec2> = corner
+                .iter()
+                .map(|index| to_pixel(Vec2::new(positions[*index][0], positions[*index][2])))
+                .collect();
+            let low = plan[0].min(plan[1]).min(plan[2]);
+            let high = plan[0].max(plan[1]).max(plan[2]);
+            if high.x < 0.0 || high.y < 0.0 || low.x > width as f32 || low.y > height as f32 {
+                continue;
+            }
+            let edge = |a: Vec2, b: Vec2, point: Vec2| {
+                (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+            };
+            let area = edge(plan[0], plan[1], plan[2]);
+            if area.abs() < 1e-6 {
+                continue;
+            }
+
+            for row in (low.y.floor().max(0.0) as u32)..=(high.y.ceil() as u32).min(height - 1) {
+                for column in
+                    (low.x.floor().max(0.0) as u32)..=(high.x.ceil() as u32).min(width - 1)
+                {
+                    let point = Vec2::new(column as f32 + 0.5, row as f32 + 0.5);
+                    let weight = Vec3::new(
+                        edge(plan[1], plan[2], point) / area,
+                        edge(plan[2], plan[0], point) / area,
+                        edge(plan[0], plan[1], point) / area,
+                    );
+                    if weight.min_element() < 0.0 {
+                        continue;
+                    }
+
+                    let mut uv = Vec2::ZERO;
+                    let mut tint = Vec3::ZERO;
+                    let mut tangent = Vec3::ZERO;
+                    let mut handed = 0.0f32;
+                    for (slot, index) in corner.iter().enumerate() {
+                        uv += Vec2::new(uvs[*index][0], uvs[*index][1]) * weight[slot];
+                        tint += tints[*index] * weight[slot];
+                        tangent += Vec3::from_slice(&tangents[*index][..3]) * weight[slot];
+                        handed += tangents[*index][3] * weight[slot];
+                    }
+
+                    // Use the generated frame, including the bend in the UV grid.
+                    let packed = texel(relief, level, uv) * 2.0 - Vec3::ONE;
+                    let tangent = tangent.normalize_or(Vec3::X);
+                    let bitangent = Vec3::Y.cross(tangent) * handed.signum();
+                    let normal = (tangent * packed.x + bitangent * packed.y + Vec3::Y * packed.z)
+                        .normalize_or(Vec3::Y);
+                    let lit = 0.55 + 0.45 * normal.dot(sun).max(0.0);
+
+                    let sheet = texel(albedo, level, uv);
+                    // sRGB in, sRGB out, with the tint and the light applied
+                    // in between where the shader applies them.
+                    let linear = Vec3::new(sheet.x.powf(2.2), sheet.y.powf(2.2), sheet.z.powf(2.2))
+                        * tint
+                        * lit;
+                    let at = ((row * width + column) * 4) as usize;
+                    for channel in 0..3 {
+                        pixels[at + channel] =
+                            (linear[channel].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
+                    }
+                    pixels[at + 3] = 255;
+                }
+            }
+        }
+        (width, height, pixels)
     }
 
     /// **At a ground that is mown, the mow is the loudest thing on the
