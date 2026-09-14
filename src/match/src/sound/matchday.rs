@@ -105,6 +105,10 @@ pub struct Soundtrack {
     /// within reach of it now — see [`Soundtrack::possession`] for why it has
     /// to be sticky. `None` only before anybody has touched it.
     holder: Option<u32>,
+    /// Whether the ball has already left player reach. The sticky holder
+    /// survives a dribble, but a departure is evaluated only on its first
+    /// frame, even when it was silent. Later friction or bounces are not his.
+    departed: bool,
     /// Whether the ball leaving the current holder has already been heard.
     ///
     /// The pass out is normally played off the animation rig's lookahead, on
@@ -367,9 +371,21 @@ impl Soundtrack {
         ball: &BallState,
         tracks: &mut ReplayTracks,
     ) -> Option<Cue> {
+        if !ball.on_pitch || self.netted {
+            return None;
+        }
         let impact = ball.impact?;
         let contact = impact.contact;
         let when = playback.time_ms + (contact.delay as f64) * 1000.0;
+        // The rig chooses a striker from current player positions. Verify
+        // that he can still reach the contact when the scheduled sound plays.
+        let [x, y, z] = tracks.players.get_mut(&impact.by)?.position_ahead(when)?;
+        let player = Field::to_world(x, y, z);
+        if Vec2::new(player.x - contact.at.x, player.z - contact.at.z).length()
+            > Actors::STRIKE_REACH
+        {
+            return None;
+        }
         if !self.arm(when) {
             return None;
         }
@@ -412,14 +428,24 @@ impl Soundtrack {
         // The LATCH rather than the volume, because the volume flickers as
         // the ball settles into the mesh and every flicker re-opens this for
         // whoever is standing over the dead ball — see [`Self::netted`].
-        if self.netted {
+        if self.netted || !ball.on_pitch {
             self.holder = None;
+            self.departed = true;
             return None;
         }
-        match Self::owner(ball) {
+        let owner = Self::owner(ball);
+        let was_departed = self.departed;
+        self.departed = owner.is_none();
+        match owner {
             // Nobody within reach: travelling, loose, or knocked ahead of the
             // man running with it.
             None => {
+                // Consume even a rejected departure. Without this, the
+                // sticky holder can be blamed for a change in ball velocity
+                // seconds later, with nobody anywhere near the ball.
+                if was_departed {
+                    return None;
+                }
                 let holder = self.holder?;
                 // Normally the going has already been heard — [`Self::sent`]
                 // fires a tenth of a second earlier off the lookahead — so
@@ -664,6 +690,7 @@ impl Soundtrack {
         self.taken = None;
         self.spoken = false;
         self.holder = Self::owner(ball);
+        self.departed = self.holder.is_none();
         // The SLACK volume on a seek: a ball already lying in the netting has
         // had its rustle, whether or not this playhead is the one that heard
         // it, and re-arming on a ball a centimetre outside the strict volume
@@ -679,7 +706,7 @@ impl Soundtrack {
 #[cfg(test)]
 mod possession {
     use super::*;
-    use crate::players::actors::Strike;
+    use crate::players::actors::{Contact, Impact, Strike};
     use crate::recording::replay::Sample;
 
     /// A ball on the deck, `range` metres from player 7.
@@ -1050,11 +1077,125 @@ mod possession {
             "a shot flying past him was played as him striking it"
         );
 
-        // …and the same man, having actually turned it, is heard.
+        // He must reach it again before a later turn can be his contact.
+        assert!(soundtrack.possession(30.0, &ball(0.5), &mut past).is_none());
         soundtrack.carried = Vec3::new(0.0, 0.0, 30.0);
         assert!(
-            soundtrack.possession(0.0, &away, &mut past).is_some(),
+            soundtrack.possession(60.0, &away, &mut past).is_some(),
             "a ball turned square off him is a contact"
+        );
+    }
+
+    #[test]
+    fn a_loose_ball_cannot_reconsider_a_silent_departure() {
+        for later in [
+            Vec3::new(6.0, 0.0, 0.0),  // Friction after it passed him.
+            Vec3::new(0.0, 0.0, 10.0), // A turn far from any player.
+            Vec3::new(14.0, 0.0, 0.0), // A later speed change.
+        ] {
+            let mut tracks = recording(
+                run((50.0, 30.0), (62.0, 30.0), 0.0),
+                run((50.0, 30.0), (50.0, 30.0), 0.0),
+            );
+            let mut soundtrack = Soundtrack {
+                holder: Some(7),
+                took: Vec3::new(10.0, 0.0, 0.0),
+                carried: Vec3::new(9.8, 0.0, 0.0),
+                ..default()
+            };
+            assert!(
+                soundtrack
+                    .possession(0.0, &ball(2.0), &mut tracks)
+                    .is_none()
+            );
+            soundtrack.carried = later;
+            let loose = BallState {
+                on_pitch: true,
+                nearest: None,
+                ..default()
+            };
+            assert!(
+                soundtrack.possession(200.0, &loose, &mut tracks).is_none(),
+                "a velocity change {later:?} far from a player became a kick"
+            );
+        }
+    }
+
+    #[test]
+    fn a_silent_dribble_cannot_become_a_pass_when_lookahead_runs_out() {
+        let mut tracks = recording(
+            run((50.0, 30.0), (54.0, 30.0), 0.0),
+            run((49.0, 30.0), (53.2, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            carried: Vec3::new(5.0, 0.0, 0.0),
+            ..default()
+        };
+        assert!(
+            soundtrack
+                .possession(0.0, &ball(3.0), &mut tracks)
+                .is_none()
+        );
+        assert!(Soundtrack::keeps_it(&mut tracks, 7, 1500.0).is_none());
+        assert!(
+            soundtrack
+                .possession(1500.0, &ball(3.0), &mut tracks)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_missing_ball_is_not_a_departure() {
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            carried: Vec3::new(12.0, 0.0, 0.0),
+            ..default()
+        };
+        assert!(
+            soundtrack
+                .possession(0.0, &BallState::default(), &mut ReplayTracks::default())
+                .is_none()
+        );
+        assert_eq!(soundtrack.holder, None);
+    }
+
+    #[test]
+    fn a_scheduled_strike_needs_a_player_at_the_contact_time() {
+        let at = Field::to_world(units(50.0), units(30.0), 0.2);
+        let contact = Contact {
+            at,
+            velocity: Vec3::new(12.0, 0.0, 0.0),
+            delay: 0.15,
+            kind: Strike::Boot,
+        };
+        let ball = BallState {
+            on_pitch: true,
+            impact: Some(Impact { by: 7, contact }),
+            ..default()
+        };
+        for (start, end, audible) in [
+            (50.0, 50.0, true),
+            (51.5, 57.5, false), // Near now, out of reach when it is struck.
+            (52.5, 46.5, true),  // Runs into reach before contact.
+        ] {
+            let mut tracks = recording(
+                run((50.0, 30.0), (62.0, 30.0), 0.0),
+                run((start, 30.0), (end, 30.0), 0.0),
+            );
+            let mut soundtrack = Soundtrack::default();
+            assert_eq!(
+                soundtrack
+                    .sent(&Playback::new(1000.0), &ball, &mut tracks)
+                    .is_some(),
+                audible
+            );
+            assert_eq!(soundtrack.struck.is_some(), audible);
+        }
+        assert!(
+            Soundtrack::default()
+                .sent(&Playback::new(1000.0), &ball, &mut ReplayTracks::default())
+                .is_none()
         );
     }
 
@@ -1333,6 +1474,15 @@ mod possession {
             "whoever has it where we landed already has it"
         );
         assert!(!soundtrack.netted);
+        assert!(
+            !soundtrack.departed,
+            "the ball is within reach after the seek"
+        );
+        soundtrack.resync(&ball(8.0));
+        assert!(
+            soundtrack.departed,
+            "a seek into free flight is not a departure"
+        );
     }
 
     /// The pitch's length runs across the picture, and both ends have to land

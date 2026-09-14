@@ -56,6 +56,8 @@ struct Knock {
     edge: f32,
     q: f32,
     snap: f32,
+    /// Edge gain relative to the body: soft passes have less panel slap.
+    edge_mix: f32,
     /// How loud the whole thing is.
     level: f32,
 }
@@ -70,17 +72,10 @@ impl Knock {
     /// rather than thumps. Scaling gain alone gives a quiet shot and a loud
     /// shot that are obviously the same sound twice.
     ///
-    /// **A shot has to arrive harder than a pass, and the levels alone will
-    /// not do it.** Ramped straight off `weight`, the hardest strike in
-    /// football came out about three decibels over an ordinary pass — and
-    /// then the limiter, whose threshold both of them cleared, pulled that
-    /// down to almost nothing. So two things carry it: the ramp below gets a
-    /// second term that only opens above the pace a ball is struck AT GOAL
-    /// with, and the whole table is scaled so that even the hardest one peaks
-    /// just under the limiter and is never touched by it.
-    ///
-    /// Six decibels between a pass and a shot. Plainly the same sound —
-    /// nothing about the timbre moves with it — and plainly harder.
+    /// Passes need their own useful range below `DRIVEN`. A shallow ramp
+    /// across the whole shot-speed range made ordinary passes almost equal
+    /// in level, with the same balance of thump and slap. Open that balance
+    /// through passing speeds, then retain the extra drive for hard strikes.
     fn of(meeting: Meeting, weight: f32) -> Knock {
         // How much of this was a strike at goal rather than a ball played
         // somewhere, 0..1.
@@ -100,6 +95,7 @@ impl Knock {
                     edge: 700.0,
                     q: 0.7,
                     snap: 0.030,
+                    edge_mix: 0.9,
                     level: 0.16 + 0.10 * weight,
                 };
             }
@@ -109,15 +105,20 @@ impl Knock {
             // forty are both this, and they sound nothing alike. A trap is
             // never handed here — an arrival is `Meeting::Received` — but a
             // boot is what it would be.
-            Strike::Boot | Strike::Trap => Knock {
-                from: 140.0 + 95.0 * weight,
-                to: 52.0,
-                fall: 0.05 + 0.03 * weight,
-                edge: 1300.0 + 2200.0 * weight,
-                q: 0.9,
-                snap: 0.028 + 0.032 * weight,
-                level: 0.24 + 0.14 * weight + 0.24 * driven,
-            },
+            Strike::Boot | Strike::Trap => {
+                let pass = (weight / Self::DRIVEN).clamp(0.0, 1.0);
+                let pass = pass * pass * (3.0 - 2.0 * pass);
+                Knock {
+                    from: 115.0 + 77.25 * pass + 42.75 * driven,
+                    to: 65.0 - 13.0 * pass,
+                    fall: 0.028 + 0.0385 * pass + 0.0135 * driven,
+                    edge: 600.0 + 1910.0 * pass + 990.0 * driven,
+                    q: 0.7 + 0.2 * pass,
+                    snap: 0.014 + 0.0316 * pass + 0.0144 * driven,
+                    edge_mix: 0.35 + 0.55 * pass,
+                    level: 0.21 + 0.15 * pass + 0.26 * driven,
+                }
+            }
             // Duller and lower than any boot: a head has no hard surface on
             // it, and the sound is mostly the ball rather than the contact.
             // It gets a share of the drive — a header at goal is struck — but
@@ -129,6 +130,7 @@ impl Knock {
                 edge: 640.0,
                 q: 0.6,
                 snap: 0.048,
+                edge_mix: 0.9,
                 level: 0.20 + 0.12 * weight + 0.10 * driven,
             },
             // A goalkeeper's throw and a throw-in: hands, not boots. Well
@@ -143,9 +145,24 @@ impl Knock {
                 edge: 940.0,
                 q: 0.5,
                 snap: 0.038,
+                edge_mix: 0.9,
                 level: 0.11 + 0.06 * weight,
             },
         }
+    }
+
+    /// Small differences in boot contact, independent of power. Keep gain
+    /// fixed so variation cannot turn a gentle pass into a hard strike.
+    /// Both inputs are uniform 0..1 draws, separate from the noise offset.
+    fn varied(mut self, tone: f32, texture: f32) -> Self {
+        let tone = tone * 2.0 - 1.0;
+        let texture = texture * 2.0 - 1.0;
+        self.from *= 1.0 + 0.05 * tone;
+        self.to *= 1.0 + 0.05 * tone;
+        self.fall *= 1.0 + 0.08 * texture;
+        self.edge *= 1.0 + 0.10 * texture;
+        self.snap *= 1.0 - 0.08 * tone;
+        self
     }
 
     /// Where the pace of a strike stops being a ball played somewhere and
@@ -351,6 +368,12 @@ impl Mixer {
     /// sound as a different sound.
     pub fn touch(&self, meeting: Meeting, weight: f32, pan: f32, delay: f32) {
         let knock = Knock::of(meeting, weight.clamp(0.0, 1.0));
+        let knock = match meeting {
+            Meeting::Struck(Strike::Boot | Strike::Trap) => {
+                knock.varied(self.random(), self.random())
+            }
+            _ => knock,
+        };
         let at = self.context.current_time() + (delay.max(0.0) as f64).max(Self::LOOKAHEAD);
         let Some(panner) = self.aim(pan) else {
             return;
@@ -387,7 +410,7 @@ impl Mixer {
             edge.q().set_value(knock.q);
             let param = gain.gain();
             let _ = param.set_value_at_time(0.0001, at);
-            let _ = param.linear_ramp_to_value_at_time(knock.level * 0.9, at + 0.0015);
+            let _ = param.linear_ramp_to_value_at_time(knock.level * knock.edge_mix, at + 0.0015);
             let _ = param.exponential_ramp_to_value_at_time(0.0001, at + knock.snap as f64);
             if source.connect_with_audio_node(&edge).is_ok()
                 && edge.connect_with_audio_node(&gain).is_ok()
@@ -465,14 +488,16 @@ impl Mixer {
     /// half-second short of the end so the longest grain still has buffer
     /// under it.
     fn somewhere(&self) -> f64 {
-        let next = Self::churn(self.seed.get());
-        self.seed.set(next);
-        (next >> 8) as f64 / 16_777_216.0 * (Self::NOISE_SECONDS as f64 - 0.5)
+        self.random() as f64 * (Self::NOISE_SECONDS as f64 - 0.5)
     }
 
-    /// xorshift32. The crate has no random number generator and wants one in
-    /// exactly two places, both of them here — the noise itself and the offset
-    /// a grain is cut from — and neither is asking for statistical quality.
+    fn random(&self) -> f32 {
+        let next = Self::churn(self.seed.get());
+        self.seed.set(next);
+        (next >> 8) as f32 / 16_777_216.0
+    }
+
+    /// xorshift32 for noise, grain offsets and small contact variations.
     fn churn(seed: u32) -> u32 {
         let mut seed = seed;
         seed ^= seed << 13;
@@ -488,6 +513,67 @@ impl Mixer {
 #[cfg(test)]
 mod knocks {
     use super::*;
+    use crate::players::actors::Actors;
+
+    #[test]
+    fn passing_speeds_have_audibly_different_impacts() {
+        let pass = |speed| Knock::of(Meeting::Struck(Strike::Boot), speed / Actors::HAMMERED);
+        let soft = pass(6.0);
+        let medium = pass(12.0);
+        let firm = pass(18.0);
+        for (slower, faster) in [(&soft, &medium), (&medium, &firm)] {
+            let decibels = 20.0 * (faster.level / slower.level).log10();
+            assert!(
+                decibels > 1.0,
+                "passing levels bunch together: {decibels} dB"
+            );
+            assert!(faster.edge > slower.edge * 1.25, "power changes the tone");
+            assert!(faster.edge_mix > slower.edge_mix, "harder passes slap more");
+            assert!(faster.fall > slower.fall, "soft passes have a shorter body");
+            assert!(faster.snap > slower.snap, "soft passes have a shorter edge");
+        }
+        assert!(20.0 * (firm.level / soft.level).log10() > 3.0);
+    }
+
+    #[test]
+    fn contact_variation_changes_timbre_without_hiding_pass_power() {
+        let pass = |speed, tone, texture| {
+            Knock::of(Meeting::Struck(Strike::Boot), speed / Actors::HAMMERED).varied(tone, texture)
+        };
+        let first = pass(12.0, 0.0, 0.0);
+        let next = pass(12.0, 1.0, 1.0);
+        assert_eq!(first.level, next.level, "power still controls the level");
+        assert_ne!(first.from, next.from);
+        assert_ne!(first.to, next.to);
+        assert_ne!(first.edge, next.edge);
+        assert_ne!(first.fall, next.fall);
+        assert_ne!(first.snap, next.snap);
+
+        for tone in [0.0, 0.5, 1.0] {
+            for texture in [0.0, 0.5, 1.0] {
+                let soft = pass(6.0, tone, texture);
+                let firm = pass(18.0, 1.0 - tone, 1.0 - texture);
+                assert!(firm.level > soft.level);
+                assert!(firm.from > soft.from);
+                assert!(firm.edge > soft.edge);
+                assert!(firm.snap > soft.snap);
+                assert!(firm.fall > soft.fall);
+            }
+        }
+    }
+
+    #[test]
+    fn pass_power_blends_continuously_into_shot_power() {
+        let mut last = Knock::of(Meeting::Struck(Strike::Boot), 0.0);
+        for step in 1..=1000 {
+            let next = Knock::of(Meeting::Struck(Strike::Boot), step as f32 / 1000.0);
+            assert!(next.level >= last.level && next.level - last.level < 0.002);
+            assert!(next.edge >= last.edge && next.edge - last.edge < 6.0);
+            assert!(next.fall >= last.fall && next.fall - last.fall < 0.0002);
+            assert!(next.snap >= last.snap && next.snap - last.snap < 0.0002);
+            last = next;
+        }
+    }
 
     /// A shot is not a loud pass. It is louder, and it is brighter, and it
     /// rings for longer — scaling gain alone is what makes a synthesised

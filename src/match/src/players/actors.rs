@@ -184,6 +184,10 @@ pub struct PlayerActor {
     /// — see [`Actors::DRIVE_RESPONSE`].
     drive: f32,
     drive_rate: f32,
+    /// Arm recoil across/along the chest, with its own angular momentum.
+    /// Separate from trunk lean so braking does not stop every joint at once.
+    arm_balance: Vec2,
+    arm_balance_rate: Vec2,
     /// How much the ball is at his feet, 0..1. See [`Gait::carrying`].
     carrying: f32,
     /// Smoothed pitch from his eyeline to the ball, in radians.
@@ -4480,6 +4484,8 @@ impl PlayerActor {
             accelerating: 0.0,
             drive: 0.0,
             drive_rate: 0.0,
+            arm_balance: Vec2::ZERO,
+            arm_balance_rate: Vec2::ZERO,
             carrying: 0.0,
             dive: 0.0,
             stretch: 0.0,
@@ -4731,6 +4737,7 @@ impl PlayerActor {
     /// round: the phase advances with the yaw, and [`Gait::pivot`] turns
     /// the side-step on under him for as long as he is turning.
     fn take_steps(&mut self, match_delta: f32, yaw: f32, seeked: bool) {
+        self.balance_arms(match_delta, seeked);
         let (stride, carry_ground) = Actors::stride_of(self.id, self.speed, self.underfoot);
         let was = (self.phase / PI) as u32;
         let mut advance = self.tread * match_delta * PI / stride;
@@ -4797,6 +4804,36 @@ impl PlayerActor {
             1.0 - (-match_delta / Actors::JITTER_RESPONSE).exp()
         };
         self.jitter += (wanted - self.jitter) * ease;
+    }
+
+    fn balance_arms(&mut self, delta: f32, seeked: bool) {
+        let spring = Spring {
+            period: 0.48,
+            damping: 0.72,
+        };
+        // Acceleration leaves the arms behind; a turn throws them outward.
+        // Both inputs have already been filtered against recording jitter.
+        let target = Vec2::new(
+            -0.12 * self.accelerating * self.course.x - 0.10 * self.turn,
+            0.18 * self.accelerating * self.course.y,
+        );
+        if seeked {
+            self.arm_balance = target;
+            self.arm_balance_rate = Vec2::ZERO;
+        } else {
+            spring.settle(
+                &mut self.arm_balance.x,
+                &mut self.arm_balance_rate.x,
+                target.x,
+                delta,
+            );
+            spring.settle(
+                &mut self.arm_balance.y,
+                &mut self.arm_balance_rate.y,
+                target.y,
+                delta,
+            );
+        }
     }
 
     /// **His weight coming down through his knees**: the arrival off a run
@@ -5665,6 +5702,8 @@ impl PlayerActor {
                 // however far the shuffle underneath the hop carried him.
                 * (1.0 - self.hop),
             phase: self.phase,
+            cadence: self.tread * PI / Actors::stride_of(self.id, self.speed, self.underfoot).0,
+            arm_balance: self.arm_balance * afoot,
             signature: Complexion::carriage(self.id),
             idle: self.idle,
             turn: self.turn,
@@ -10534,6 +10573,59 @@ mod arrival {
     use crate::players::body::skeleton::boot;
 
     const FRAME: f32 = 1.0 / 60.0;
+
+    #[test]
+    fn arm_recoil_retains_momentum_then_settles() {
+        let mut actor = PlayerActor::new(7, false, true);
+        actor.accelerating = 1.0;
+        actor.course = Vec2::Y;
+        for _ in 0..6 {
+            actor.balance_arms(FRAME, false);
+        }
+        let before = actor.arm_balance.y;
+        actor.accelerating = 0.0;
+        actor.balance_arms(FRAME, false);
+        assert!(
+            actor.arm_balance.y > before,
+            "the arm lost its momentum instantly"
+        );
+        for _ in 0..180 {
+            actor.balance_arms(FRAME, false);
+        }
+        assert!(actor.arm_balance.length() < 1e-4);
+        assert!(actor.arm_balance_rate.length() < 1e-4);
+        actor.turn = 1.0;
+        actor.balance_arms(FRAME, false);
+        assert!(actor.arm_balance.x < 0.0, "arms must lag outward during a right turn");
+    }
+
+    #[test]
+    fn arm_recoil_obeys_match_time_pause_and_seek() {
+        let sample = |fps: usize| {
+            let mut actor = PlayerActor::new(7, false, true);
+            actor.accelerating = -1.0;
+            actor.course = Vec2::new(0.6, 0.8);
+            actor.turn = 0.7;
+            for _ in 0..fps / 2 {
+                actor.balance_arms(1.0 / fps as f32, false);
+            }
+            actor
+        };
+        let reference = sample(60);
+        for fps in [10, 30, 120] {
+            let mut actor = sample(fps);
+            assert!(actor.arm_balance.distance(reference.arm_balance) < 1e-5);
+            assert!(actor.arm_balance_rate.distance(reference.arm_balance_rate) < 1e-5);
+            let paused = actor.arm_balance;
+            actor.balance_arms(0.0, false);
+            assert!(actor.arm_balance.distance(paused) < 1e-6);
+            actor.accelerating = 0.0;
+            actor.turn = 0.0;
+            actor.balance_arms(0.1, true);
+            assert_eq!(actor.arm_balance, Vec2::ZERO);
+            assert_eq!(actor.arm_balance_rate, Vec2::ZERO);
+        }
+    }
 
     /// One frame of an actor covering `observed` metres a second and coming
     /// `yaw` radians round, integrated as the renderer integrates it.

@@ -2820,6 +2820,11 @@ pub struct Joint {
 #[derive(Clone, Copy)]
 pub struct Gait {
     pub phase: f32,
+    /// Angular stride speed in radians per second of match time.
+    /// Limb inertia follows cadence, including each player's stride length.
+    pub cadence: f32,
+    /// Sprung arm recoil across/along the chest when changing velocity.
+    pub arm_balance: Vec2,
     /// 0 standing, 1 flat out.
     pub run: f32,
     /// −1..1, fixed for the life of a player: how he carries himself.
@@ -3300,6 +3305,8 @@ impl Gait {
     /// on a course of nowhere.
     pub fn resting() -> Gait {
         Gait {
+            cadence: 0.0,
+            arm_balance: Vec2::ZERO,
             phase: 0.0,
             run: 0.0,
             signature: 0.0,
@@ -4490,9 +4497,6 @@ impl Joint {
         // The left leg is half a cycle behind the right.
         let leg = gait.phase + if self.side < 0.0 { PI } else { 0.0 };
         let swing = leg.sin();
-        // …and the same stride as the ARMS answer it, a beat later. See
-        // [`Joint::ARM_LAG`].
-        let swing_arm = (leg - Self::ARM_LAG).sin();
 
         // Weight going from one foot to the other, and back. Half the idle
         // rate, because a shift is a whole cycle where a breath is half of
@@ -4822,6 +4826,7 @@ impl Joint {
                     )
             }
             Limb::Shoulder => {
+                let swing_arm = Self::arm_swing(gait, leg, 1);
                 // Arms swing against the leg on the same side, and are carried
                 // wider the harder the player is running — and wider again, or
                 // tighter, depending on the man.
@@ -4872,12 +4877,17 @@ impl Joint {
                     * gait.course.y
                     * asymmetry
                     + drift
-                    + counter;
+                    + counter
+                    + gait.arm_balance.y;
                 // And the counter-arm alone comes across his chest, which is
                 // the other half of paying for the turn.
                 let across = self.side * Self::KICK_ARM_SPREAD * kicking * (-striking).max(0.0);
-                let swinging = Quat::from_rotation_z(self.side * carriage - across)
-                    * Quat::from_rotation_x(arm);
+                // Leave clearance beside the shirt when inertia brings the
+                // inside arm inward. Deliberate kick poses keep their reach.
+                let balance = gait.arm_balance.x.clamp(-0.7 * carriage, 0.7 * carriage);
+                let swinging =
+                    Quat::from_rotation_z(self.side * carriage - across + balance)
+                        * Quat::from_rotation_x(arm);
                 // How he took the goal, layered straight onto the run cycle
                 // and UNDER everything else — a mood is a modification of
                 // standing about, and anything he is actually doing (a save,
@@ -5122,7 +5132,8 @@ impl Joint {
                         // the arm going BACK (positive X carries a part's far
                         // end back), and a negative elbow angle is a flexed
                         // one, so opening at the back is a positive term.
-                        + Self::ELBOW_DRIVE * gait.run * swing_arm
+                        + Self::ELBOW_DRIVE * gait.run * Self::arm_swing(gait, leg, 2)
+                        - 0.45 * gait.arm_balance.y
                         // Elbows come up over a ball he is carrying, and the
                         // counter-arm bends hard through a kick.
                         + Self::CARRY_ELBOW * gait.carrying
@@ -5206,8 +5217,13 @@ impl Joint {
             // claimed. A glove that stays in line with its forearm reads as
             // the end of a stick, however good the arm above it is.
             Limb::Wrist => {
+                // The hand yields after the forearm reverses, then settles.
+                // This sits below the contact poses so catches and throws
+                // still put the palms exactly where the ball needs them.
+                let follow =
+                    0.14 * Self::cycling(gait) * gait.course.y * Self::arm_swing(gait, leg, 3);
                 let loose = Quat::from_rotation_x(
-                    Self::WRIST_REST * (1.0 + 0.5 * gait.signature * self.side),
+                    Self::WRIST_REST * (1.0 + 0.5 * gait.signature * self.side) + follow,
                 );
                 // Palms flat on the crown. Without it the gloves point off
                 // the ends of the forearms and the pose reads as two arms
@@ -5822,16 +5838,48 @@ impl Joint {
     /// side-step, still sitting in the forward run — which is **93% of the
     /// frames an outfielder moves in**.
     ///
-    /// Blended toward a TRIANGLE, which travels at a constant rate and so
-    /// matches the turf across the whole of its descent rather than at a
-    /// point. Not all the way: the corners of a pure triangle are a foot
-    /// reversing direction instantly, which is its own artefact, and the
-    /// sinusoid rounds them off. `(2/π)·asin(sin θ)` is the triangle through
-    /// the same zeros and peaks.
+    /// Blended toward a rounded triangle, which keeps a constant rate
+    /// through stance and eases the foot's reversal at each end.
     fn striding(leg: f32) -> f32 {
         let sine = leg.sin();
-        let triangle = sine.asin() * (2.0 / PI);
+        let angle = sine.asin();
+        let distance = FRAC_PI_2 - angle.abs();
+        // Blending a sine with a triangle leaves the triangle's velocity
+        // jump intact. Round only the reversals with a C2 cap; the linear
+        // stance and its calibrated ground speed stay unchanged.
+        const ROUND: f32 = 0.35;
+        let triangle = if distance < ROUND {
+            let t = distance / ROUND;
+            let cap = t * t * (3.0 - 3.0 * t + t * t);
+            sine.signum() * (1.0 - (2.0 / PI) * ROUND * cap)
+        } else {
+            angle * (2.0 / PI)
+        };
         sine + (triangle - sine) * Self::STRIDE_SHAPE
+    }
+
+    /// Steady periodic response of a damped angular spring driven by the
+    /// stride: x'' + 2*zeta*w*x' + w*w*x = w*w*sin(cadence*t).
+    /// Evaluating its gain and phase analytically keeps replay scrubbing and
+    /// fast playback stable. Different periods let the elbow and wrist lag
+    /// the shoulder instead of moving as one rigid lever. Damping prevents
+    /// resonance; the period varies slightly with the player's carriage.
+    fn arm_response(gait: Gait, period: f32) -> (f32, f32) {
+        let ratio = gait.cadence.max(0.0) * period * (1.0 + 0.08 * gait.signature) / TAU;
+        let stiffness = 1.0 - ratio * ratio;
+        let damping = 2.0 * 0.8 * ratio;
+        (stiffness.hypot(damping).recip(), damping.atan2(stiffness))
+    }
+
+    fn arm_swing(gait: Gait, leg: f32, links: usize) -> f32 {
+        let mut gain = 1.0;
+        let mut phase = leg - Self::ARM_LAG;
+        for period in [0.18, 0.14, 0.22].into_iter().take(links) {
+            let (response, lag) = Self::arm_response(gait, period);
+            gain *= response;
+            phase -= lag;
+        }
+        gain * phase.sin()
     }
 
     /// **How far this knee is folded through the FORWARD stride**, in
@@ -7168,6 +7216,8 @@ pub(crate) mod skeleton {
         gait.phase = 1.1;
         gait.course = Vec2::new(across, ahead).normalize_or(Vec2::Y);
         gait.carry_ground = carry_ground;
+        gait.cadence =
+            run * Actors::SPRINT * PI / Actors::stride_of(7, run * Actors::SPRINT, gait.course).0;
         gait
     }
 
@@ -7243,6 +7293,8 @@ pub(crate) mod skeleton {
         gait.run = run;
         gait.phase = 1.1;
         gait.carry_ground = Actors::stride_of(7, run * Actors::SPRINT, Vec2::Y).1;
+        gait.cadence =
+            run * Actors::SPRINT * PI / Actors::stride_of(7, run * Actors::SPRINT, Vec2::Y).0;
         gait
     }
 
@@ -7821,6 +7873,54 @@ pub(crate) mod preview {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stride_reversals_have_continuous_velocity_and_acceleration() {
+        use super::*;
+        let h = 0.004;
+        for peak in [FRAC_PI_2, 3.0 * FRAC_PI_2] {
+            for phase in [peak - 0.35, peak, peak + 0.35] {
+                let at = Joint::striding(phase);
+                let before = Joint::striding(phase - h);
+                let after = Joint::striding(phase + h);
+                let incoming = (at - before) / h;
+                let outgoing = (after - at) / h;
+                assert!(
+                    (incoming - outgoing).abs() < 0.04,
+                    "foot velocity jumps at {phase}: {incoming} -> {outgoing}"
+                );
+                let a = (at - 2.0 * before + Joint::striding(phase - 2.0 * h)) / (h * h);
+                let b = (Joint::striding(phase + 2.0 * h) - 2.0 * after + at) / (h * h);
+                assert!((a - b).abs() < 0.5, "foot acceleration jumps: {a} -> {b}");
+            }
+        }
+    }
+
+    #[test]
+    fn arm_inertia_increases_with_cadence_without_resonance() {
+        use super::*;
+        let mut gait = Gait::resting();
+        for period in [0.18, 0.14, 0.22] {
+            let mut previous_lag = 0.0;
+            for sample in 0..=100 {
+                gait.cadence = sample as f32 * 0.3;
+                let (gain, lag) = Joint::arm_response(gait, period);
+                assert!(gain.is_finite() && gain > 0.0 && gain <= 1.0);
+                assert!(lag >= previous_lag);
+                previous_lag = lag;
+            }
+        }
+        gait.cadence = 12.0;
+        // At the shoulder's reversal the elbow must still be moving.
+        let shoulder_peak = FRAC_PI_2 + Joint::ARM_LAG + Joint::arm_response(gait, 0.18).1;
+        let elbow_velocity = (Joint::arm_swing(gait, shoulder_peak + 0.01, 2)
+            - Joint::arm_swing(gait, shoulder_peak - 0.01, 2))
+            / 0.02;
+        assert!(
+            elbow_velocity > 0.2,
+            "the arm still moves as one rigid lever"
+        );
+    }
+
     use super::skeleton::step as step_of;
     use super::skeleton::*;
     use super::*;
