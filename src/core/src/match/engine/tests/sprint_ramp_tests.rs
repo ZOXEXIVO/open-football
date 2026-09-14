@@ -3,11 +3,13 @@
 //! These pin the physical claims behind the `acceleration` attribute:
 //!
 //!   1. A higher-`acceleration` player reaches top speed measurably
-//!      sooner than a lower one — the attribute has a KINEMATIC channel,
-//!      not just its 0.2 weight inside the top-speed blend. Before the
-//!      ramp existed the integrator allowed a full stop-to-sprint change
-//!      in 1–2 AI ticks, so a 6 and an 18 differed by ~2 cm off a
-//!      standing start and every race was settled by top speed alone.
+//!      sooner than a lower one — and that channel is now the attribute's
+//!      ONLY one, since `max_speed` reads `pace` alone. Before the ramp
+//!      existed the integrator allowed a full stop-to-sprint change in
+//!      1–2 AI ticks, so a 6 and an 18 differed by ~2 cm off a standing
+//!      start and every race was settled by top speed alone.
+//!   6. …and top speed itself is `pace`, so the ceiling and the ramp
+//!      cannot double-count the same attribute.
 //!   2. The ramp is a BUILD, not a teleport — a standing start takes
 //!      tenths of a second to top speed, not the old 20–40 ms teleport
 //!      and not ten seconds of treacle. Bounds are deliberately loose;
@@ -105,8 +107,12 @@ fn higher_acceleration_reaches_top_speed_sooner() {
     );
     // And the race must show it: same pace, standing start, first
     // second (50 AI ticks) — the quick starter leads by a real margin
-    // (≥1.5 u ≈ a stride). Ramp + blend both contribute; the point is
-    // that the ATTRIBUTE decides the first metres.
+    // (≥1.5 u ≈ a stride). The ramp is now the ONLY thing separating
+    // them: `max_speed` reads `pace` alone, so two runners on the same
+    // pace share a ceiling and the lead below is `acceleration`'s doing
+    // and nothing else. It used to be confounded — the old top-speed
+    // blend handed `acceleration` 0.2 of the ceiling as well, so this
+    // measured a mixture of the two channels and called it one.
     let mut quick = quick;
     let mut slow = slow;
     quick.velocity = Vector3::zeros();
@@ -230,5 +236,42 @@ fn sprint_reversal_transits_brake_then_reaccelerates() {
     assert!(
         (8..=150).contains(&t),
         "sprint reversal should take 0.16–3 s, got {t} AI ticks"
+    );
+}
+
+/// Top speed is `pace`, and the other two physicals reach the player
+/// through their own channels rather than through the ceiling.
+///
+/// The blend that used to sit here (0.7 pace / 0.2 acceleration / 0.1
+/// agility) counted `acceleration` twice — once in the budget above and
+/// once in the ceiling — and counted `agility` twice for the same reason
+/// against its braking multiplier. It also diluted the one attribute
+/// whose name means top speed, and generated physicals correlate, so the
+/// blend pulled every player back toward his own squad's mean.
+#[test]
+fn top_speed_is_pace_and_nothing_else() {
+    let mut explosive = PlayerSkills::default();
+    explosive.physical.pace = 12.0;
+    explosive.physical.acceleration = 19.0;
+    explosive.physical.agility = 19.0;
+
+    let mut leaden = explosive;
+    leaden.physical.acceleration = 4.0;
+    leaden.physical.agility = 4.0;
+
+    assert_eq!(
+        explosive.max_speed(),
+        leaden.max_speed(),
+        "acceleration and agility decide how a player gets to his top \
+         speed, never what it is"
+    );
+
+    let mut flyer = leaden;
+    flyer.physical.pace = 18.0;
+    assert!(
+        flyer.max_speed() > leaden.max_speed() * 1.1,
+        "six points of pace must be worth a real gap: {} against {}",
+        flyer.max_speed(),
+        leaden.max_speed()
     );
 }

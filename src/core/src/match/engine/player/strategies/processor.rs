@@ -606,9 +606,14 @@ impl PlayerFieldPositionGroup {
         tick_context: &GameTickContext,
         my_side: PlayerSide,
     ) -> bool {
-        let Some(my_cost) = tick_context.chase.cost_of(player.id) else {
+        let Some(mine) = tick_context.chase.rows().iter().find(|r| r.id == player.id) else {
             return true;
         };
+        // Not until he has read the strike — see `LooseBallChase::update`.
+        if !mine.eligible {
+            return false;
+        }
+        let my_cost = mine.cost;
         for row in tick_context.chase.rows() {
             if row.id == player.id || row.side != my_side || !row.eligible {
                 continue;

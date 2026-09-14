@@ -125,7 +125,10 @@ impl MidfielderSwitchingPlayState {
         ctx.players()
             .teammates()
             .all()
-            .filter(|teammate| (teammate.position.y - player_position.y).abs() > field_height * 0.3)
+            .filter(|teammate| {
+                (teammate.position.y - player_position.y).abs() > field_height * 0.3
+                    && ctx.player().has_clear_pass(teammate.id)
+            })
             .max_by(|a, b| score(a).total_cmp(&score(b)))
             .map(|teammate| (teammate.id, teammate.position))
     }

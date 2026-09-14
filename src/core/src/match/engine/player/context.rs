@@ -1,5 +1,6 @@
 use crate::PlayerPositionType;
 use crate::r#match::common_states::ChasePath;
+use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
 use crate::r#match::engine::ball::ball::{
     Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, RunUpPhase,
 };
@@ -438,6 +439,19 @@ impl LooseBallChase {
 
     pub fn update(&mut self, positions: &MatchObjectsPositions, ball: &Ball) {
         let mut path = ChasePath::project(&positions.ball, ball.field_width, ball.field_height);
+        // A man has to READ the ball before he can go for it. The side it
+        // was played to knew it was coming; everybody else waits out his
+        // own read of the strike (`InterceptionContest::read_delay`) and
+        // holds no designation until then. Measured without it, 780
+        // passes a match were cut out by men who stood 3.5 m off the lane
+        // at the strike and were running for the meeting point on the
+        // next tick.
+        let since_strike = ball
+            .current_tick_cached
+            .saturating_sub(ball.last_release_tick) as f32;
+        let knowing_side = ball
+            .pass_target_player_id
+            .and_then(|id| positions.players.side(id));
         self.end = (ball.flags.in_flight_state > 0)
             .then_some(ball.pass_target_player_id)
             .flatten()
@@ -460,16 +474,22 @@ impl LooseBallChase {
         self.right = [None; 2];
         self.len = 0;
         for meta in positions.players.as_slice() {
+            let read_wait = if Some(meta.side) == knowing_side {
+                0.0
+            } else {
+                (InterceptionContest::typical_delay() - since_strike).max(0.0)
+            };
             let row = ChaseRow {
                 id: meta.player_id,
                 side: meta.side,
-                eligible: meta.chase_eligible,
-                cost: path.time_to_reach(meta.position, meta.max_speed, LOOSE_CLAIM_DISTANCE)
+                eligible: meta.chase_eligible && read_wait <= 0.0,
+                cost: (read_wait
+                    + path.time_to_reach(meta.position, meta.max_speed, LOOSE_CLAIM_DISTANCE))
                     * meta.chase_bias,
             };
             self.rows[self.len] = row;
             self.len += 1;
-            if !meta.chase_eligible {
+            if !row.eligible {
                 continue;
             }
             let slots = match meta.side {
@@ -538,18 +558,26 @@ impl LooseBallChase {
     /// which must not then turn him round and run him at his own goal.
     #[inline]
     pub fn is_designated(&self, side: PlayerSide, id: u32) -> bool {
-        let Some(cost) = self.cost_of(id) else {
+        let Some(mine) = self.rows().iter().find(|r| r.id == id) else {
             return true;
         };
+        if !mine.eligible {
+            return false;
+        }
         match self.best_other(side, id) {
-            Some(best) => !best.beats(ChaseRow {
-                id,
-                side,
-                eligible: true,
-                cost,
-            }),
+            Some(best) => !best.beats(*mine),
             None => true,
         }
+    }
+
+    /// May this man go for the ball at all — not mid-way through an
+    /// action he cannot abort, and past his read of the strike?
+    #[inline]
+    pub fn may_go(&self, id: u32) -> bool {
+        self.rows()
+            .iter()
+            .find(|r| r.id == id)
+            .is_none_or(|r| r.eligible)
     }
 
     /// Where the pass in flight, if there is one, is going to be taken.

@@ -4830,6 +4830,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::teleport::TeleportCensus::reset();
     core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
+    core::lane_diag::LaneDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
     core::mid_onball_diag::reset();
@@ -7492,7 +7493,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         // real one covers, and nothing in this harness
                         // measured it. See [`MotionCensus`].
                         use core::dead_ball_diag::{CHASE_TIER_LABELS, MotionCensus};
-                        let (outfield, keeper, still, tiers, capped, ceiling) =
+                        let (outfield, keeper, still, tiers, capped, ceiling, top, top_cv) =
                             MotionCensus::snapshot();
                         let trow = tiers
                             .iter()
@@ -7511,6 +7512,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                              his speed ceiling is {ceiling:.3} u/tick and he is AT it on \
                              {:.0}% of ticks",
                             capped * 100.0
+                        );
+                        // A pinned population only looks varied if the pins
+                        // differ: mean conditioned top speed and how much it
+                        // actually spreads across the twenty-two. Recorded
+                        // top speeds in a real top-flight squad run ~29-36
+                        // km/h about a ~32.5 mean, i.e. a CV near 5%.
+                        println!(
+                            "      conditioned top speed {top:.3} u/tick ({:.1} m/s), spread {:.1}% \
+                             (CV; real squads ~5%)",
+                            top * 12.5,
+                            top_cv * 100.0
                         );
                     }
                     {
@@ -10972,6 +10984,80 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         .map(|(l, c)| format!("{l} {:.0}%", *c as f64 / pn as f64 * 100.0))
                         .collect();
                     println!("    what the nearest man was doing: {}", rows.join("  ·  "));
+                }
+            }
+            // "Defenders fail to intercept passes, the ball simply gets
+            // past them." Every pass, booked at its next touch against the
+            // nearest any opponent came to it on the way. See `lane_diag`.
+            {
+                use core::lane_diag::LaneDiag;
+                let bands = LaneDiag::by_band();
+                let total: u64 = bands.iter().map(|b| b.1).sum();
+                if total > 0 {
+                    println!(
+                        "  PASS LANE CENSUS ({total} passes booked at their next touch, by the nearest opponent on the way)"
+                    );
+                    for (label, n, through, won) in bands {
+                        if n == 0 {
+                            continue;
+                        }
+                        println!(
+                            "    {label:<7} {n:>7} passes ({:>4.1}%)  →  got through {:>5.1}%   won by an opponent {:>5.1}%",
+                            n as f64 / total as f64 * 100.0,
+                            through as f64 / n as f64 * 100.0,
+                            won as f64 / n as f64 * 100.0,
+                        );
+                    }
+                    println!("    by what the PASSER priced the lane at when he struck it:");
+                    for (label, n, won, mean) in LaneDiag::by_prediction() {
+                        if n == 0 {
+                            continue;
+                        }
+                        println!(
+                            "    {label:<7} {n:>7} passes ({:>4.1}%) priced at {:>4.1}% on average  →  won by an opponent {:>5.1}%",
+                            n as f64 / total as f64 * 100.0,
+                            mean * 100.0,
+                            won as f64 / n as f64 * 100.0,
+                        );
+                    }
+                    for (
+                        age,
+                        (
+                            label,
+                            rolls,
+                            fired,
+                            chance,
+                            gap,
+                            to_target,
+                            travelled,
+                            man_to_target,
+                            speed,
+                            strike_perp,
+                            from_outside,
+                        ),
+                    ) in LaneDiag::rolls().into_iter().enumerate()
+                    {
+                        if rolls > 0 {
+                            let states: Vec<String> = LaneDiag::states(age)
+                                .iter()
+                                .map(|(l, n)| format!("{l} {:.0}%", *n as f64 / rolls as f64 * 100.0))
+                                .collect();
+                            println!(
+                                "    INTERCEPTION ROLLS {label:<9} {rolls:>7} ({:>6.1}/match) at mean p={chance:.3} from {:.2} m  →  {fired:>6} taken ({:>5.1}/match, {:.1}%)  ·  ball {:.1} m from its man, {:.1} m travelled, {:.2} u/tick; the man rolled stands {:.1} m from the receiver, stood {:.2} m off the lane at the strike ({:.0}% from outside reach)",
+                                rolls as f64 / n_matches.max(1) as f64,
+                                gap / 8.0,
+                                fired as f64 / n_matches.max(1) as f64,
+                                fired as f64 / rolls as f64 * 100.0,
+                                to_target / 8.0,
+                                travelled / 8.0,
+                                speed,
+                                man_to_target / 8.0,
+                                strike_perp / 8.0,
+                                from_outside * 100.0,
+                            );
+                            println!("      what he was doing: {}", states.join("  ·  "));
+                        }
+                    }
                 }
             }
             // "The goalkeeper must be involved in the defenders'

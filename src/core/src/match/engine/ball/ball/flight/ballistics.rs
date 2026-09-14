@@ -210,6 +210,19 @@ impl FlightProtection {
 }
 
 impl Ball {
+    /// The pace a pass over `distance` game units leaves the boot at,
+    /// before the passer's own power and error — the strike's model, and
+    /// the passer's when he prices a lane, so both see the same ball.
+    /// Firm enough to still be travelling on arrival against friction.
+    #[inline]
+    pub fn pass_pace(distance: f32) -> f32 {
+        const BASE_SPEED: f32 = 0.55;
+        const SPEED_PER_UNIT: f32 = 0.0028;
+        let delivery = (BASE_SPEED + distance * SPEED_PER_UNIT).clamp(0.50, 2.20);
+        let arriving = distance * GROUND_FRICTION * 1.25;
+        delivery.max(arriving)
+    }
+
     /// Vertical launch speed (m/tick) that peaks at `apex` metres.
     ///
     /// Apex is the natural way to ask for a trajectory: it is the one

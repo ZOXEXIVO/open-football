@@ -60,8 +60,20 @@ pub(super) fn squad(team_id: u32, base_id: u32) -> MatchSquad {
             let mut attributes = PlayerAttributes::default();
             attributes.condition = 9000;
             attributes.current_ability = 150;
+            // A footballer, not a default-constructed struct: every
+            // physical attribute the movement model reads is on the 1..20
+            // scale it is specified on. `PlayerSkills::default()` leaves
+            // them at 0.0, which is off the bottom of that scale — it made
+            // the shared fixture the slowest, least explosive, least
+            // durable body the engine can express, and coupled every test
+            // that flies him to whatever weight the top-speed blend
+            // happened to give `acceleration` and `agility`.
             let mut skills = PlayerSkills::default();
             skills.physical.pace = 14.0;
+            skills.physical.acceleration = 14.0;
+            skills.physical.agility = 14.0;
+            skills.physical.stamina = 14.0;
+            skills.physical.natural_fitness = 14.0;
             skills.physical.jumping = 14.0;
             let player = PlayerBuilder::new()
                 .id(base_id + index as u32)

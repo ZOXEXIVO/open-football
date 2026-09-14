@@ -1641,6 +1641,10 @@ impl ForwardRunningState {
             }
         }
 
+        if !ctx.tick_context.chase.may_go(ctx.player.id) {
+            return false;
+        }
+
         let ball_distance = ctx.ball().distance();
         let ball_speed = ctx.ball().speed();
 

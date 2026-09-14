@@ -1450,7 +1450,8 @@ impl MatchPlayer {
         // measurement anybody should pay for in a shipped season.
         #[cfg(feature = "match-logs")]
         {
-            let ceiling = self.max_speed_with_condition_cached()
+            let athletic = self.max_speed_with_condition_cached();
+            let ceiling = athletic
                 * MovementEffort::speed_fraction(
                     self.last_activity_intensity,
                     self.player_attributes.condition_percentage(),
@@ -1458,6 +1459,7 @@ impl MatchPlayer {
             MotionCensus::note(
                 self.velocity.norm(),
                 ceiling,
+                athletic,
                 self.last_activity_intensity,
                 self.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper,

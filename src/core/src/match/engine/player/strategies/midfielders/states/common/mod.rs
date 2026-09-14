@@ -72,7 +72,10 @@ pub struct Interception;
 
 impl Interception {
     pub fn is_available(ctx: &StateProcessingContext) -> bool {
-        !ctx.player.has_ball(ctx) && !ctx.ball().is_owned() && !ctx.team().is_control_ball()
+        !ctx.player.has_ball(ctx)
+            && !ctx.ball().is_owned()
+            && !ctx.team().is_control_ball()
+            && ctx.tick_context.chase.may_go(ctx.player.id)
     }
 }
 

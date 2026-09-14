@@ -329,24 +329,7 @@ impl DefenderPassingState {
         // Without this gate, the audit data showed weak-team pass
         // accuracy dropped 3% (every extra forward pass = lost ball)
         // and the counter never produced a shot.
-        let to_target = target.position - ctx.player.position;
-        let target_dir = to_target.normalize();
-        let lane_length = to_target.magnitude();
-        let opponents_in_lane = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| {
-                let rel = opp.position - ctx.player.position;
-                let along = rel.dot(&target_dir);
-                if along < 5.0 || along > lane_length - 5.0 {
-                    return false;
-                }
-                let proj = ctx.player.position + target_dir * along;
-                (opp.position - proj).magnitude() < 14.0
-            })
-            .count();
-        if opponents_in_lane > 1 {
+        if !ctx.player().has_clear_pass(target.id) {
             return None;
         }
 

@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchField, PlayerSide};
 use nalgebra::Vector3;
 
@@ -32,6 +33,9 @@ pub struct PlayerFieldMetadata {
     pub chase_bias: f32,
     /// Top speed this tick, in u/tick — what a chase is priced in.
     pub max_speed: f32,
+    /// How well he reads a pass — the interception composite, which sets
+    /// how long after a strike he can set off for the ball.
+    pub read: f32,
 }
 
 impl Default for PlayerFieldMetadata {
@@ -45,6 +49,7 @@ impl Default for PlayerFieldMetadata {
             chase_eligible: true,
             chase_bias: 1.0,
             max_speed: 0.0,
+            read: 0.5,
         }
     }
 }
@@ -180,6 +185,7 @@ impl PlayerFieldData {
 impl PlayerFieldData {
     pub fn update(&mut self, field: &MatchField) {
         let new_count = field.players.len() + field.substitutes.len();
+        let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
 
         // Full rebuild only when player count changes (substitution)
         if new_count != self.len {
@@ -200,6 +206,7 @@ impl PlayerFieldData {
                         p.tactical_position.current_position.position_group(),
                     ),
                     max_speed: p.max_speed_with_condition_cached(),
+                    read: sc::interception(p, minute),
                 };
                 self.insert_slot(p.id, idx as u8);
                 self.len += 1;
@@ -219,6 +226,7 @@ impl PlayerFieldData {
                 self.items[i].velocity = p.velocity;
                 self.items[i].chase_eligible = !p.state.is_committed_action();
                 self.items[i].max_speed = p.max_speed_with_condition_cached();
+                self.items[i].read = sc::interception(p, minute);
             }
         }
     }

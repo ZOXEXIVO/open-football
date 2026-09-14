@@ -87,8 +87,8 @@ impl Ball {
     /// Real football blocks ~6-10% of shots; we aim for that band.
     ///
     /// Distinct from `try_intercept`:
-    /// - Intercept: ≤ 2.5u radius, pass-targeted; tiny per-tick chance
-    /// - Block:     ≤ 4u radius, shot-targeted; higher per-event chance
+    /// - Intercept: pass-targeted; one roll per man at his closest approach
+    /// - Block:     shot-targeted; one roll per shot, a deflection
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
     pub fn try_block_shot(
         &mut self,

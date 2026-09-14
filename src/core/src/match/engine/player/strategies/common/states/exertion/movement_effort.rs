@@ -398,12 +398,11 @@ impl MovementEffort {
 
     /// Self-pacing: a tired player can't keep flinging themselves into
     /// top-tier efforts — they shorten the sprint and jog the recovery.
-    /// Below ~55% condition the high-effort tiers shade down toward a
-    /// sustainable cruise (to a 0.82 floor at the 15% condition floor);
-    /// the low tiers are untouched because anyone can keep walking, and
-    /// fresh players (≥55%) are unaffected. Pairs with the corrected
-    /// `is_tired` gate, which already stops an exhausted forward from
-    /// even attempting a run in behind.
+    /// Below [`Self::PACING_KNEE`] the high-effort tiers shade down toward
+    /// a sustainable cruise (to a 0.82 floor at the 15% condition floor);
+    /// the low tiers are untouched because anyone can keep walking. Pairs
+    /// with the corrected `is_tired` gate, which already stops an
+    /// exhausted forward from even attempting a run in behind.
     ///
     /// Below 20% condition a separate hobbled regime takes over: that
     /// band is only reachable by a player whose in-match injury could
@@ -419,19 +418,37 @@ impl MovementEffort {
             let hobble = (20.0 - c) / 5.0;
             return match intensity {
                 ActivityIntensity::High | ActivityIntensity::VeryHigh => {
-                    let cruise = 0.82 + 0.18 * ((c - 15.0) / 40.0);
-                    cruise * (1.0 - hobble) + 0.35 * hobble
+                    Self::cruise(c) * (1.0 - hobble) + 0.35 * hobble
                 }
                 ActivityIntensity::Moderate => 1.0 - 0.40 * hobble,
                 _ => 1.0,
             };
         }
         match intensity {
-            ActivityIntensity::High | ActivityIntensity::VeryHigh if condition_pct < 55 => {
-                let c = condition_pct.max(15) as f32;
-                0.82 + 0.18 * ((c - 15.0) / 40.0)
+            ActivityIntensity::High | ActivityIntensity::VeryHigh
+                if (condition_pct as f32) < Self::PACING_KNEE =>
+            {
+                Self::cruise(condition_pct as f32)
             }
             _ => 1.0,
         }
     }
+
+    /// Share of a high-effort band a player at `c`% condition still
+    /// commits to — 1.00 at the knee, 0.82 at the match condition floor.
+    #[inline]
+    fn cruise(c: f32) -> f32 {
+        0.82 + 0.18 * ((c - 15.0) / (Self::PACING_KNEE - 15.0))
+    }
+
+    /// Condition below which sprints and sustained runs start shortening.
+    ///
+    /// Was 55%, which is below anything a ninety minutes reaches: measured
+    /// on the harness (60 fixtures, level 14) outfielders finish the match
+    /// at 65-72% and the midfield low is ~64%, so the whole self-pacing
+    /// branch never once fired in a normal match and fatigue reached
+    /// movement through the conditioned top-speed ceiling alone. 80% puts
+    /// the knee just inside the first half, where real legs start being
+    /// chosen between rather than spent freely.
+    const PACING_KNEE: f32 = 80.0;
 }

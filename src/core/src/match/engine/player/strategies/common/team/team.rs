@@ -927,6 +927,9 @@ impl<'b> TeamOperationsImpl<'b> {
             return false;
         };
         let chase = &self.ctx.tick_context.chase;
+        if !chase.may_go(self.ctx.player.id) {
+            return false;
+        }
         let Some(my_cost) = chase.cost_of(self.ctx.player.id) else {
             return false;
         };

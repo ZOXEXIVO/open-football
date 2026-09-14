@@ -5,7 +5,7 @@ use crate::r#match::player::strategies::players::{
 };
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
-    MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    MatchPlayer, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition, PlayerSide,
     StateProcessingContext,
 };
 use crate::{PlayerAttributes, PlayerPositionType, PlayerSkills};
@@ -454,51 +454,28 @@ impl<'p> PlayerOperationsImpl<'p> {
         }
     }
 
-    /// Is the lane to this team-mate clear of opponents?
+    /// Is the lane to this team-mate one the ball gets down?
     ///
-    /// This raycast `cast_ray(.., include_players: false)`, and the only
-    /// non-player collider in the space is the BALL — a sphere of radius
-    /// 0.11u, about a centimetre and a half. So the one thing it could
-    /// ever hit was a ball that happened to lie within a centimetre of
-    /// the pass line, and it returned "clear" essentially always.
-    ///
-    /// It is used as the lane test by the cut-back finder, the
+    /// Priced by the contest the ball will actually run
+    /// (`PassEvaluator::lane_risk`): the defenders' reach, at this pass's
+    /// pace, with the time they have to read it and step in. It used to
+    /// sweep a 1.5 m corridor of standing bodies, and the man who cuts a
+    /// pass out was rarely standing in it when it was struck — booked
+    /// over 100 fixtures, the interceptor stood 3.5 m off the lane at
+    /// the strike four times in five. Asked by the cut-back finder, the
     /// better-placed-team-mate deferral, the emergency outlet and both
-    /// safe-pass searches — every one of which believed it was asking
-    /// whether the ball could actually get there, and none of which was.
-    ///
-    /// Done directly rather than through the raycaster because the
-    /// raycaster cannot exclude colliders: with `include_players: true`
-    /// the passer's OWN sphere sits on the ray origin, so every pass
-    /// would report blocked instead — the same bug with the sign
-    /// flipped. The corridor walk below is the same shape as the one
-    /// `goal_sight` uses for the shot lane.
+    /// safe-pass searches, so every one of them reads the same lane.
     pub fn has_clear_pass(&self, player_id: u32) -> bool {
-        let from = self.ctx.player.position;
+        self.lane_risk(player_id) < Self::CLEAR_LANE
+    }
+
+    /// A lane he would lose one ball in four on is not clear.
+    const CLEAR_LANE: f32 = 0.25;
+
+    /// The chance a ground ball to this team-mate is cut out on the way.
+    pub fn lane_risk(&self, player_id: u32) -> f32 {
         let to = self.ctx.tick_context.positions.players.position(player_id);
-        let delta = to - from;
-        let distance = delta.magnitude();
-        if distance < 1.0 {
-            return true;
-        }
-        let dir = delta / distance;
-
-        /// How near the line an opponent has to be to cut the pass out.
-        /// 12u = 1.5 m — a leg and a lean, not a body width.
-        const LANE_HALF_WIDTH: f32 = 12.0;
-        /// Ignored at either end: a man level with the passer has been
-        /// gone past, and one standing on the receiver is his marker,
-        /// which is a different question from whether the ball arrives.
-        const END_EXCLUSION: f32 = 8.0;
-
-        !self.ctx.players().opponents().all().any(|opp| {
-            let relative = opp.position - from;
-            let along = relative.dot(&dir);
-            if along <= END_EXCLUSION || along >= distance - END_EXCLUSION {
-                return false;
-            }
-            (relative - dir * along).magnitude() < LANE_HALF_WIDTH
-        })
+        PassEvaluator::lane_risk(self.ctx, self.ctx.player, to)
     }
 
     /// Can this player physically strike the ball right now? Gated by

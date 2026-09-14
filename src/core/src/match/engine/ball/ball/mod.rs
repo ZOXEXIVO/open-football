@@ -54,7 +54,8 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, strike_diag, teleport,
+    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag, strike_diag,
+    teleport,
 };
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
@@ -154,6 +155,10 @@ pub struct Ball {
     /// catch-all sweep books each touch once. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub knock_seen_touch: u64,
+    /// The pass currently in flight, booked against the nearest opponent
+    /// it passes — see [`lane_diag`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub lane_census: Option<lane_diag::LaneCensus>,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -186,12 +191,11 @@ pub struct Ball {
     /// Who `possession_source` describes, so a repeat event for the
     /// player who already has the ball cannot relabel their acquisition.
     pub possession_source_for: Option<u32>,
-    /// Whether the current pass has already had its one interception
-    /// attempt. Mirrors `ShotTarget::block_rolled`: without a latch the
-    /// intercept test fires every tick the ball is in flight, so its
-    /// rate is set by how long the flight window happens to be rather
-    /// than by the defending. Reset when a pass is struck.
-    pub intercept_rolled: bool,
+    /// Which men (by roster slot) have had their interception roll at
+    /// this ball — one each per pass, at the tick it draws level with
+    /// him. Without the latch a man running alongside the ball would
+    /// roll every tick. Reset when a pass is struck.
+    pub intercept_rolled: u64,
     /// The same latch for the pass-BLOCK contest — see
     /// [`contest::pass_block`]. Kept separate from `intercept_rolled`
     /// because the two are different actions on the same ball: one man
@@ -784,6 +788,8 @@ impl Ball {
             knock_chain: None,
             #[cfg(feature = "match-logs")]
             knock_seen_touch: 0,
+            #[cfg(feature = "match-logs")]
+            lane_census: None,
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -801,7 +807,7 @@ impl Ball {
             recent_passers: VecDeque::with_capacity(5),
             possession_source: PossessionSource::Unknown,
             possession_source_for: None,
-            intercept_rolled: false,
+            intercept_rolled: 0,
             pass_block_rolled: false,
             pass_blocked_by: None,
             contested_claim_count: 0,
@@ -1226,6 +1232,9 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         {
             self.last_touch_position = self.position;
+            if let Some(census) = self.lane_census.take() {
+                census.close(team_id);
+            }
             // A lofted delivery that somebody touches before the aerial
             // contest resolves it never gets contested at all — the ball
             // was reserved for one named receiver rather than fought for
@@ -1569,11 +1578,15 @@ impl Ball {
         self.clear_pass_history();
         self.possession_source = PossessionSource::Unknown;
         self.possession_source_for = None;
-        self.intercept_rolled = false;
+        self.intercept_rolled = 0;
         self.pass_block_rolled = false;
         self.pass_blocked_by = None;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
+        #[cfg(feature = "match-logs")]
+        {
+            self.lane_census = None;
+        }
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;
         self.awaiting_restart = None;

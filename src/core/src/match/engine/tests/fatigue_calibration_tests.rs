@@ -23,7 +23,7 @@
 
 use crate::PlayerSkills;
 use crate::club::player::builder::PlayerBuilder;
-use crate::r#match::MatchPlayer;
+use crate::r#match::{ActivityIntensity, MatchPlayer, MovementEffort};
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
 };
@@ -494,4 +494,81 @@ fn effective_skill_applies_to_all_three_categories() {
             cat
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fatigue reaching MOVEMENT, which is the half of it a viewer can see.
+// Every test above measures a composite; none of them can tell whether a
+// player at full time actually runs any slower, and for a long time he
+// barely did — the conditioned ceiling spread its whole response over a
+// 100%→0% condition axis a match never travels past ~65% of.
+// ---------------------------------------------------------------------------
+
+/// The condition outfielders actually finish a match on — measured over
+/// 60 harness fixtures at level 14, defenders ~71% and midfielders ~65%.
+const FULL_TIME_CONDITION: i16 = 6600;
+
+fn runner(pace: f32, stamina: f32) -> PlayerSkills {
+    let mut skills = PlayerSkills::default();
+    skills.physical.pace = pace;
+    skills.physical.acceleration = 12.0;
+    skills.physical.agility = 12.0;
+    skills.physical.stamina = stamina;
+    skills
+}
+
+#[test]
+fn fresh_legs_pay_nothing_and_full_time_legs_pay_visibly() {
+    let s = runner(14.0, 12.0);
+    assert_eq!(
+        s.max_speed_with_condition(10_000),
+        s.max_speed(),
+        "a fully fresh player runs at his own top speed exactly"
+    );
+
+    let tired = s.max_speed_with_condition(FULL_TIME_CONDITION);
+    assert!(
+        tired < s.max_speed() * 0.96,
+        "ninety minutes must cost an average-stamina player something a \
+         viewer can see: {tired} against a fresh {}",
+        s.max_speed()
+    );
+}
+
+#[test]
+fn stamina_decides_what_full_time_costs() {
+    let fit = runner(14.0, 18.0);
+    let unfit = runner(14.0, 4.0);
+    assert_eq!(
+        fit.max_speed(),
+        unfit.max_speed(),
+        "fixture check: the two differ in stamina alone"
+    );
+
+    let fit_loss = fit.max_speed() - fit.max_speed_with_condition(FULL_TIME_CONDITION);
+    let unfit_loss = unfit.max_speed() - unfit.max_speed_with_condition(FULL_TIME_CONDITION);
+    assert!(
+        unfit_loss > fit_loss * 2.0,
+        "the unfit man must give up multiples of what the fit one does, not \
+         the 1.4x the linear model managed: {unfit_loss} against {fit_loss}"
+    );
+}
+
+/// The engine's second fatigue channel: how much of a declared effort
+/// band a player still commits to. Its knee used to sit at 55% condition
+/// — below anything a ninety minutes reaches — so a full-time sprint was
+/// pursued exactly as hard as a first-minute one.
+#[test]
+fn the_effort_model_notices_a_full_time_condition() {
+    let fresh = MovementEffort::speed_fraction(ActivityIntensity::VeryHigh, 100);
+    let spent = MovementEffort::speed_fraction(ActivityIntensity::VeryHigh, 68);
+    assert!(
+        spent < fresh,
+        "a spent player must shorten his sprints: {spent} against {fresh}"
+    );
+    assert_eq!(
+        MovementEffort::speed_fraction(ActivityIntensity::Low, 68),
+        MovementEffort::speed_fraction(ActivityIntensity::Low, 100),
+        "…but anybody can keep walking, so the low bands stay untouched"
+    );
 }

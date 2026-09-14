@@ -424,6 +424,8 @@ pub use crate::r#match::engine::ball::ball::assist_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::diagnostics::block_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::diagnostics::lane_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::flight_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::frame_trace;

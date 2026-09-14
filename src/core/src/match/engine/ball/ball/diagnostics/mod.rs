@@ -19,6 +19,8 @@
 //! * [`strike_diag`] — the VERTICAL axis of a grant and of a strike:
 //!   who is given a ball at what height, who kicks one at what height,
 //!   and what a refused strike costs before it is struck for real.
+//! * [`lane_diag`] — how close the nearest opponent came to each pass
+//!   in flight, and whether it got through him anyway.
 
 #[cfg(feature = "match-logs")]
 pub mod assist_diag;
@@ -30,6 +32,8 @@ pub mod flight_diag;
 pub mod frame_trace;
 #[cfg(feature = "match-logs")]
 pub mod knock_diag;
+#[cfg(feature = "match-logs")]
+pub mod lane_diag;
 #[cfg(feature = "match-logs")]
 pub mod strike_diag;
 #[cfg(feature = "match-logs")]

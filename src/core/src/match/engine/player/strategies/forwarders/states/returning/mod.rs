@@ -90,7 +90,10 @@ impl StateProcessingHandler for ForwardReturningState {
         //
         // A ball at an opponent's feet is a PRESS. Going there directly
         // is the same destination two hops earlier.
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < InterceptionRange::COMMIT {
+        if !ctx.team().is_control_ball()
+            && ctx.ball().distance() < InterceptionRange::COMMIT
+            && (ctx.ball().is_owned() || ctx.tick_context.chase.may_go(ctx.player.id))
+        {
             return Some(StateChangeResult::with_forward_state(
                 if ctx.ball().is_owned() {
                     ForwardState::Pressing
@@ -130,6 +133,7 @@ impl StateProcessingHandler for ForwardReturningState {
             && !ctx.ball().is_owned()
             && ctx.ball().distance() < InterceptionRange::GIVE_UP
             && ctx.ball().is_towards_player_with_angle(0.9)
+            && ctx.tick_context.chase.may_go(ctx.player.id)
         {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,

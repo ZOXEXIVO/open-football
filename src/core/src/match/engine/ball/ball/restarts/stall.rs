@@ -160,7 +160,13 @@ pub mod dead_ball_diag {
         /// the hottest loop in the engine — twenty-two players a hundred
         /// times a second — and half a dozen atomics a tick is not a
         /// measurement anybody should pay for in a shipped season.
-        pub fn note(covered: f32, ceiling: f32, intensity: ActivityIntensity, keeper: bool) {
+        pub fn note(
+            covered: f32,
+            ceiling: f32,
+            athletic: f32,
+            intensity: ActivityIntensity,
+            keeper: bool,
+        ) {
             let covered = if covered.is_finite() { covered } else { 0.0 };
             if keeper {
                 MOTION_KEEPER_TICKS.fetch_add(1, Ordering::Relaxed);
@@ -179,17 +185,25 @@ pub mod dead_ball_diag {
             if ceiling > 0.0 && covered >= ceiling * Self::AT_THE_CEILING {
                 MOTION_AT_CEILING.fetch_add(1, Ordering::Relaxed);
             }
+            let top = (athletic * 1000.0) as u64;
+            MOTION_TOPSPEED_X1000.fetch_add(top, Ordering::Relaxed);
+            MOTION_TOPSPEED_SQ.fetch_add(top * top, Ordering::Relaxed);
         }
 
         /// `(km per 90 outfield, km per 90 keeper, share below a walk, tier
-        /// shares, share at the ceiling, mean ceiling in u/tick)`
-        pub fn snapshot() -> (f32, f32, f32, [f32; 5], f32, f32) {
+        /// shares, share at the ceiling, mean ceiling in u/tick, mean top
+        /// speed in u/tick, its coefficient of variation)`
+        pub fn snapshot() -> (f32, f32, f32, [f32; 5], f32, f32, f32, f32) {
             let ticks = MOTION_TICKS.load(Ordering::Relaxed).max(1);
             let keeper_ticks = MOTION_KEEPER_TICKS.load(Ordering::Relaxed).max(1);
             let mut tiers = [0f32; 5];
             for (i, share) in tiers.iter_mut().enumerate() {
                 *share = MOTION_TIER[i].load(Ordering::Relaxed) as f32 / ticks as f32;
             }
+            let n = ticks as f64;
+            let mean_top = MOTION_TOPSPEED_X1000.load(Ordering::Relaxed) as f64 / n;
+            let variance =
+                (MOTION_TOPSPEED_SQ.load(Ordering::Relaxed) as f64 / n - mean_top * mean_top).max(0.0);
             (
                 Self::per_90(MOTION_DISTANCE_X1000.load(Ordering::Relaxed), ticks),
                 Self::per_90(
@@ -200,6 +214,8 @@ pub mod dead_ball_diag {
                 tiers,
                 MOTION_AT_CEILING.load(Ordering::Relaxed) as f32 / ticks as f32,
                 MOTION_CEILING_X1000.load(Ordering::Relaxed) as f32 / (ticks as f32 * 1000.0),
+                (mean_top / 1000.0) as f32,
+                (variance.sqrt() / mean_top.max(1.0)) as f32,
             )
         }
 
@@ -249,6 +265,17 @@ pub mod dead_ball_diag {
     pub static MOTION_AT_CEILING: AtomicU64 = AtomicU64::new(0);
     /// …and the mean ceiling itself, x1000 u/tick.
     pub static MOTION_CEILING_X1000: AtomicU64 = AtomicU64::new(0);
+    /// The player's own conditioned top speed — the ceiling with the
+    /// effort tier taken back out — as a sum and a sum of squares, both
+    /// x1000 u/tick, so a mean and a spread come out of two counters.
+    ///
+    /// The spread is the whole question behind "why does everybody run at
+    /// the same speed": a population pinned against its ceiling for half
+    /// its ticks looks uniform unless the ceilings themselves differ, and
+    /// no other counter here can tell a squad of identical athletes apart
+    /// from a squad of varied ones.
+    pub static MOTION_TOPSPEED_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static MOTION_TOPSPEED_SQ: AtomicU64 = AtomicU64::new(0);
     /// Outfielders only above: a keeper's match is a different shape, and
     /// averaging him in hides both.
     pub static MOTION_KEEPER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -432,6 +459,8 @@ pub mod dead_ball_diag {
             &MOTION_STILL,
             &MOTION_AT_CEILING,
             &MOTION_CEILING_X1000,
+            &MOTION_TOPSPEED_X1000,
+            &MOTION_TOPSPEED_SQ,
             &MOTION_KEEPER_TICKS,
             &MOTION_KEEPER_DISTANCE_X1000,
             &CHASE_CARRIER_CAP_X1000,

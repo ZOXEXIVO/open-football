@@ -3,7 +3,8 @@ use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PassOriginRestart;
-use crate::r#match::engine::ball::ball::{OffsideLine, ThrowIn};
+use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
+use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE, OffsideLine, ThrowIn};
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
@@ -13,6 +14,7 @@ use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     BallSideZone, GamePhase, MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext,
 };
+use nalgebra::Vector3;
 
 /// Comprehensive pass evaluation result
 #[derive(Debug, Clone)]
@@ -42,6 +44,9 @@ pub struct PassFactors {
     pub passer_ability: f32,
     pub receiver_ability: f32,
     pub tactical_value: f32,
+    /// The chance the ball is cut out on the way — see
+    /// [`PassEvaluator::calculate_interception_risk`].
+    pub interception_risk: f32,
 }
 
 pub struct PassEvaluator;
@@ -64,6 +69,7 @@ impl PassEvaluator {
         let passer_ability = Self::calculate_passer_ability(ctx, passer, pass_distance);
         let receiver_ability = Self::calculate_receiver_ability(ctx, receiver);
         let tactical_value = Self::calculate_tactical_value(ctx, receiver);
+        let interception_risk = Self::calculate_interception_risk(ctx, passer, receiver);
 
         let factors = PassFactors {
             distance_factor,
@@ -73,6 +79,7 @@ impl PassEvaluator {
             passer_ability,
             receiver_ability,
             tactical_value,
+            interception_risk,
         };
 
         // Calculate success probability using weighted factors
@@ -119,8 +126,13 @@ impl PassEvaluator {
             .get(passer.id, receiver.id)
             .map(|chem| chemistry_modifiers(chem).one_touch_pass_bonus)
             .unwrap_or(0.0);
+        // …and then the ball has to get there. The lane is the one term
+        // here that is a probability in its own right, priced by the
+        // contest the ball will actually run, so it multiplies rather
+        // than joins the weighted sum.
         let success_probability =
-            (raw_success_probability + env_delta + psych_delta + chemistry_delta).clamp(0.1, 0.99);
+            (raw_success_probability + env_delta + psych_delta + chemistry_delta).clamp(0.1, 0.99)
+                * (1.0 - interception_risk);
 
         // Calculate risk level (inverse of some success factors)
         let risk_level = Self::calculate_risk_level(&factors);
@@ -1082,95 +1094,81 @@ impl PassEvaluator {
         risk.clamp(0.0, 1.0)
     }
 
-    /// Calculate interception risk from opponents along the pass path
+    /// **The chance the ball is cut out on the way**, priced with the
+    /// contest the ball will actually run — [`InterceptionContest`], one
+    /// roll per man it draws level with, at his reach, at the pace this
+    /// pass will be struck at, with the time he has to read it — and with
+    /// the ground he can make toward the line in that time, since the
+    /// defender who cuts a pass out was rarely standing on its line when
+    /// it was struck. So the passer's picture of a lane is what the
+    /// defenders can reach, not a narrower one of his own.
+    ///
+    /// It used to count opponents inside 3-7u of the line, ignore the
+    /// first 20u of it, and map the count to a band (1 → 0.55). Booked
+    /// over 100 fixtures at L14 once the defenders could take a ball,
+    /// 797 passes a match drew level with an opponent 0.47 m off their
+    /// line, 4.6 m short of a receiver this evaluator scored as free.
     fn calculate_interception_risk(
         ctx: &StateProcessingContext,
         passer: &MatchPlayer,
         receiver: &MatchPlayerLite,
     ) -> f32 {
-        let pass_vector = receiver.position - passer.position;
+        Self::lane_risk(ctx, passer, receiver.position)
+    }
+
+    /// The chance a ground ball from `passer` to `target` is cut out on
+    /// the way — the price every pass decision reads, through
+    /// `PlayerOps::has_clear_pass` or this evaluator's own scoring.
+    ///
+    /// The best-placed man's chance, not a product over everybody near
+    /// the line: the defence sends ONE man for a pass in flight
+    /// (`LooseBallChase`), so a lane two men could each reach is no worse
+    /// than the better of them.
+    pub fn lane_risk(
+        ctx: &StateProcessingContext,
+        passer: &MatchPlayer,
+        target: Vector3<f32>,
+    ) -> f32 {
+        let pass_vector = target - passer.position;
         let pass_distance = pass_vector.norm();
-        let pass_direction = pass_vector.normalize();
-
-        // Minimum distance along the pass line before an opponent counts as a blocker.
-        // A pressing opponent near the passer cannot intercept a driven forward pass —
-        // the ball clears them before they can react. In real football this is ~10m (~20 units).
-        // Use 25% of pass distance as alternative for short passes.
-        let min_intercept_projection = 20.0_f32.min(pass_distance * 0.25);
-
-        // Hoisted out of the per-opponent filter below — it is a match
-        // constant, and this walk runs for every pass candidate.
+        let Some(direction) = pass_vector.try_normalize(1.0e-4) else {
+            return 0.0;
+        };
+        let pace = Ball::pass_pace(pass_distance);
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let delivery = sc::passing_execution(passer, minute);
         let shift = MatchStandard::shift(ctx.context);
 
-        // Check for opponents who could intercept the pass
-        let intercepting_opponents = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                let to_opponent = opponent.position - passer.position;
-                let projection_distance = to_opponent.dot(&pass_direction);
-
-                // Ignore opponents behind passer, past receiver, or too close to passer
-                if projection_distance <= min_intercept_projection
-                    || projection_distance >= pass_distance
-                {
-                    return false;
-                }
-
-                // Calculate perpendicular distance from pass line
-                let projected_point = passer.position + pass_direction * projection_distance;
-                let perp_distance = (opponent.position - projected_point).norm();
-
-                // The skill-scaled radius below is bounded to [3.0, 7.0]
-                // (skills are non-negative and capped at 20), so outside
-                // 7.0 the predicate can never pass and strictly inside
-                // 3.0 it always does — only the band in between needs
-                // the per-opponent skill lookup. Same boolean, fewer
-                // `by_id` probes.
-                if perp_distance >= 7.0 {
-                    return false;
-                }
-                if perp_distance < 3.0 {
-                    return true;
-                }
-
-                // Consider opponent's interception ability — measured
-                // against the standard of football in this match, not
-                // against a fixed 0-20 scale. The lane he denies is
-                // compared with a raw perpendicular distance in game
-                // units, so an absolute read grows the swept area ~90%
-                // from the bottom of the pyramid to the top (4.2u to
-                // 5.8u) with nothing on the passer's side of the
-                // expression, and the count then falls into fixed risk
-                // bands (0 → 0.0, 1 → 0.55, 2 → 0.85). A forward pass
-                // that scores fine in the fourth tier is scored as
-                // suicidal in the first by nothing but the division.
-                // See `MatchStandard`; `InterceptionDuel` already
-                // resolves the interception itself as a contest.
-                let players = ctx.player();
-                let opponent_skills = players.skills(opponent.id);
-                let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
-                let interception_ability = peer(opponent_skills.technical.tackling);
-                let anticipation = peer(opponent_skills.mental.anticipation);
-
-                // Better opponents can intercept from further away
-                let effective_radius = 3.0 + (interception_ability + anticipation) * 2.0;
-
-                perp_distance < effective_radius
-            })
-            .count();
-
-        // Convert count to risk factor — aggressive penalties to prevent suicidal passes
-        if intercepting_opponents == 0 {
-            0.0 // No risk
-        } else if intercepting_opponents == 1 {
-            0.55 // Significant risk — one opponent in the lane
-        } else if intercepting_opponents == 2 {
-            0.85 // Very high risk — two opponents blocking
-        } else {
-            0.97 // Near-certain interception
+        let store = ctx.tick_context.positions.players.as_slice();
+        // The last stride and a half is the receiver's — pressure on his
+        // first touch is `receiver_positioning`'s term, not this one's.
+        let contested = pass_distance - CONTROL_DISTANCE;
+        let mut risk = 0.0_f32;
+        for opponent in ctx.players().opponents().all() {
+            let to_opponent = opponent.position - passer.position;
+            let along = to_opponent.dot(&direction);
+            if along <= 0.0 || along >= contested {
+                continue;
+            }
+            let Some(man) = store.iter().find(|m| m.player_id == opponent.id) else {
+                continue;
+            };
+            let arrives = along / pace;
+            let miss = InterceptionContest::closing_miss(
+                (to_opponent - direction * along).norm(),
+                arrives,
+                man.read,
+                man.max_speed,
+                shift,
+            );
+            if miss >= InterceptionContest::REACH {
+                continue;
+            }
+            risk = risk.max(InterceptionContest::chance(
+                miss, pace, arrives, 1.0, man.read, delivery, shift,
+            ));
         }
+        risk
     }
 
     /// Find the best pass option from available teammates with skill-based personality
@@ -1319,7 +1317,7 @@ impl PassEvaluator {
             };
 
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
-            let interception_risk = Self::calculate_interception_risk(ctx, ctx.player, &teammate);
+            let interception_risk = evaluation.factors.interception_risk;
 
             // Base positioning bonus
             let positioning_bonus = evaluation.factors.receiver_positioning * 2.0;
@@ -1701,31 +1699,25 @@ impl PassEvaluator {
                 _ => score,
             };
 
-            // Hard reject: never pass through 2+ opponents unless
-            // a playmaker rolls high vision. Vision gate smoothed
-            // (sigmoid pivot 16/20) so the "elite" tier isn't a sharp
-            // cliff — a vision-14 playmaker still occasionally tries.
-            let interception_blocked = if interception_risk >= 0.85 {
-                // 2+ opponents in the lane — almost always reject
-                if is_playmaker
-                    && ctx.context.rng.unit_f32()
-                        < SkillCurve::new(vision_raw, 16.0, 0.6).probability()
-                {
-                    false // Elite playmakers can attempt
-                } else {
-                    true
-                }
-            } else if interception_risk >= 0.55 {
-                // 1 opponent in the lane — reject for conservative, allow others with caution
-                is_conservative
-            } else {
-                false
-            };
-
-            // Personality-based acceptance threshold - more aggressive to encourage penetration
-            let is_acceptable = if interception_blocked {
-                false
-            } else if is_goalkeeper {
+            // **The lane is priced once.**
+            //
+            // There used to be a hard veto here on top of everything
+            // else — bands of "how many opponents stand in a 3-7u
+            // corridor" (2+ → reject outright, 1 → reject if
+            // conservative), with an escape hatch for a playmaker who
+            // rolled high enough vision. That was a PROXY for the
+            // chance of being cut out, and the chance is now known: it
+            // multiplies `success_probability`, which every branch
+            // below already reads. Keeping the veto priced the same
+            // lane four times over, and its escape hatch was gated on
+            // absolute vision — so at the bottom of the pyramid nobody
+            // could clear it and forward passing died, while at the top
+            // everybody could and the interception rate ran away.
+            // Measured over a level sweep, that pairing cost the fourth
+            // tier a third of its goals (3.00 → 2.08 a match) while
+            // taking the first tier's interceptions from 38 to 67 a
+            // team. A probability belongs in the probability.
+            let is_acceptable = if is_goalkeeper {
                 // Goalkeeper passes are normally rare; in build-up
                 // they're a textbook pattern (recycle through the GK to
                 // bait a press, then switch). Phase gates this:

@@ -479,7 +479,15 @@ fn a_lost_ball_is_met_where_it_slows_not_escorted_out() {
     player.position = Vector3::new(420.0, 242.0, 0.0);
     player.velocity = Vector3::zeros();
     let ball_pos = Vector3::new(420.0, 272.0, 0.0);
-    let ball_vel = Vector3::new(0.55, 0.0, 0.0);
+    // ~16% faster than the chaser — the ratio the scenario has always
+    // been about, not the absolute number. It was 0.55 against a fixture
+    // whose `acceleration` and `agility` were 0.0 and whose top speed was
+    // therefore 0.473 u/tick; with the fixture built as a footballer he
+    // sprints at 0.526 and 0.55 is a ball he simply reels in, which tests
+    // neither model. Far above the ratio is no better: the meeting point
+    // runs hundreds of units downfield and both models converge on the
+    // same straight line to it.
+    let ball_vel = Vector3::new(0.61, 0.0, 0.0);
 
     let (_, _, cut) = chase(player.clone(), ball_pos, ball_vel, 900, false);
     let (_, _, tail) = chase(player, ball_pos, ball_vel, 900, true);
@@ -621,6 +629,9 @@ fn election(
         p.position = Vector3::new(5.0, 5.0, 0.0);
         place(p);
     }
+    // A second into the flight, so everybody has read it and the election
+    // is pure geometry — see `LooseBallChase::update`.
+    field.ball.current_tick_cached = 100;
     ball(&mut field.ball);
     let context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
     let tick_context = GameTickContext::new(&field, &context.players);

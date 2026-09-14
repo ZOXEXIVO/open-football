@@ -1220,7 +1220,7 @@ impl DefenderRunningState {
                     .nearby_at(teammate.position, 20.0)
                     .next()
                     .is_none();
-                is_on_opposite_side && is_open
+                is_on_opposite_side && is_open && ctx.player().has_clear_pass(teammate.id)
             })
             .min_by(|a, b| {
                 let dist_a = (a.position - player_position).norm_squared();

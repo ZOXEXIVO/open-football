@@ -202,7 +202,12 @@ pub struct CornerDeadline;
 impl CornerDeadline {
     /// The deadline in the calibration division, in 10 ms engine ticks.
     pub const CALIBRATION_TICKS: u64 = 250;
-    const MAX_TICKS: u64 = 420;
+    /// Longest any division's deadline may be. Public so a test that has
+    /// to outwait the pin asks the ceiling rather than guessing at it —
+    /// `corner_setup_tests` waited 400 ticks against this 420 and passed
+    /// only because the divisions it happened to generate never reached
+    /// the clamp.
+    pub const MAX_TICKS: u64 = 420;
 
     /// Latched once, at the award.
     pub fn ticks(context: &MatchContext) -> u64 {

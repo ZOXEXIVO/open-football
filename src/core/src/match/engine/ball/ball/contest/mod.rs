@@ -6,7 +6,8 @@
 //! so routine possession play is never disturbed. They differ in reach
 //! and in what they are aimed at:
 //!
-//! * [`interception`] — ≤ 2.5u, pass-targeted, a tiny per-tick chance.
+//! * [`interception`] — every man a pass draws level with inside a
+//!   stride and a leg, one roll each at his closest approach.
 //! * [`block`] — ≤ 4u, shot-targeted, a higher per-event chance.
 //! * [`pass_block`] — the foot in: a defender's body in the path of a
 //!   PASS near his own goal. A DEFLECTION rather than a takeaway, which

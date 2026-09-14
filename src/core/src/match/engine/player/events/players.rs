@@ -8,8 +8,7 @@ use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
-    Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GROUND_FRICTION, PlayerReach,
-    PossessionSource,
+    Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, PlayerReach, PossessionSource,
 };
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
@@ -1444,8 +1443,60 @@ impl PlayerEventDispatcher {
                 }
                 field.ball.pending_pass_passer = Some(passer_id);
                 field.ball.pending_pass_set_tick = context.current_tick();
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+                    use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
+                    let lane = pass_target - passer_position;
+                    let length = (lane.x * lane.x + lane.y * lane.y).sqrt().max(1.0e-3);
+                    let (dx, dy) = (lane.x / length, lane.y / length);
+                    // The passer's own pricing of this lane, as
+                    // `PassEvaluator::calculate_interception_risk` does it.
+                    let minute = sc::minute_from_ticks(context.current_tick());
+                    let shift =
+                        crate::r#match::engine::teamplay::standard::MatchStandard::shift(context);
+                    let pace = Ball::pass_pace(length);
+                    let delivery = field
+                        .get_player(passer_id)
+                        .map_or(0.5, |p| sc::passing_execution(p, minute));
+                    let mut risk = 0.0_f32;
+                    let mut at_strike: Vec<(u32, f32)> = Vec::new();
+                    for p in field.players.iter().filter(|p| p.team_id != passer_team) {
+                        let ox = p.position.x - passer_position.x;
+                        let oy = p.position.y - passer_position.y;
+                        let along = ox * dx + oy * dy;
+                        let perp = if along > 0.0 && along < length {
+                            (ox - along * dx).hypot(oy - along * dy)
+                        } else {
+                            f32::MAX
+                        };
+                        at_strike.push((p.id, perp));
+                        if along <= 0.0 || along >= length - CONTROL_DISTANCE {
+                            continue;
+                        }
+                        let read = sc::interception(p, minute);
+                        let arrives = along / pace;
+                        let miss = InterceptionContest::closing_miss(
+                            perp,
+                            arrives,
+                            read,
+                            p.max_speed_with_condition_cached(),
+                            shift,
+                        );
+                        if miss < InterceptionContest::REACH {
+                            risk = risk.max(InterceptionContest::chance(
+                                miss, pace, arrives, 1.0, read, delivery, shift,
+                            ));
+                        }
+                    }
+                    let mut census = crate::lane_diag::LaneCensus::open(passer_team, risk);
+                    for (id, perp) in at_strike {
+                        census.note_at_strike(id, perp);
+                    }
+                    field.ball.lane_census = Some(census);
+                }
                 // Fresh pass, fresh interception attempt.
-                field.ball.intercept_rolled = false;
+                field.ball.intercept_rolled = 0;
                 field.ball.pass_block_rolled = false;
                 field.ball.pass_blocked_by = None;
                 field.ball.pending_pass_origin = Some(passer_position);
@@ -3321,40 +3372,13 @@ impl PlayerEventDispatcher {
             + ball_pass_vector.y * ball_pass_vector.y)
             .sqrt();
 
-        // Weight the pass to ARRIVE, at a speed its man can take.
-        //
-        // The old model inverted the friction curve to make the ball's
-        // total roll distance `distance * overshoot`, with an overshoot
-        // table of 1.79-2.57 — every pass deliberately struck 79-157%
-        // too far so it would still be moving when it got there. That was
-        // a workaround for friction ~3.7× stronger than real grass (see
-        // `GROUND_FRICTION`): with the ball dying that fast, a pass
-        // weighted to its man arrived at walking pace, so the code hit it
-        // 5-12 m past him instead. It was invisible while a reception was
-        // credited at 100u — the pass was "complete" long before the ball
-        // ran through — and it is a large part of why an honest pass
-        // accuracy measured 34% against a real 85%.
-        //
-        // With realistic friction the ball keeps its pace on its own, so
-        // the strike speed can just be the speed a real player would use.
-        // Real ground passes leave the foot at ~8 m/s for a short ball
-        // and ~25 m/s for a raking one; at 1u = 0.125 m and 10 ms a tick
-        // that band is 0.64-2.0 u/tick.
-        const BASE_SPEED: f32 = 0.55;
-        const SPEED_PER_UNIT: f32 = 0.0028;
-        let delivery_speed = (BASE_SPEED + distance * SPEED_PER_UNIT).clamp(0.50, 2.20);
-
-        // Floor: the ball stops after `v / friction` units, so a pass
-        // struck too softly for its distance never arrives at all. Keep a
-        // margin over the bare minimum.
-        let min_arriving_speed = distance * GROUND_FRICTION * 1.25;
-        let needed_velocity = delivery_speed.max(min_arriving_speed);
-
-        // pass_force (0.3-2.0) modulates: skilled players weight the pass better
-        // Normalize to 0.90-1.1 range so it fine-tunes rather than drives the physics
+        // The pace is the ball's own model — shared with the passer's lane
+        // pricing, so the two see the same delivery. `pass_force`
+        // (0.3-2.0) only fine-tunes it: skilled players weight the pass
+        // better, normalised to 0.90-1.1 so it never drives the physics.
         let skill_modifier = 0.90 + (pass_force.clamp(0.3, 2.0) - 0.3) * 0.12;
 
-        horizontal_direction * (needed_velocity * skill_modifier)
+        horizontal_direction * (Ball::pass_pace(distance) * skill_modifier)
     }
 
     /// How far down the lane a body has to be to count as stood at the

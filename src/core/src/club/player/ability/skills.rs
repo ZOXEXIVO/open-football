@@ -180,55 +180,73 @@ impl PlayerSkills {
         skills
     }
 
-    /// Calculate maximum speed without condition factor (raw speed based on skills only)
-    /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch).
-    /// At 1u = 0.125m and 100 ticks/s:
-    ///   pace=1  → 0.36 u/tick = ~4.5 m/s  (slow jog / low-pace fatigued player)
-    ///   pace=20 → 0.63 u/tick = ~7.9 m/s  (solid pro sprint)
-    /// Range trimmed ~25% from the prior 0.48–0.84 band. The higher band
-    /// was technically closer to real top-end speeds (Mbappé ~10.5 m/s),
-    /// but combined with slowed ball velocity (shots 3.2, passes 3.2)
-    /// it made outfield play feel too frantic — defenders closing down
-    /// attackers in half a second, waypoint cycles flickering. This
-    /// slower band keeps the shot/player ratio near real football's
-    /// ~3.75× (shot 3.2 / elite 0.63 ≈ 5× — still fast enough for goals)
-    /// while making player movement human-trackable.
+    /// Fresh top speed in units/tick — 1u = 0.125 m on a 100 Hz tick, so
+    /// `pace` = 1 is 0.36 u/tick (4.5 m/s) and `pace` = 20 is 0.63 (7.9 m/s).
+    ///
+    /// The band is ~0.8× real top-end speed (Mbappé ~10.5 m/s) and stays
+    /// that way deliberately: with the engine's ball velocities the wider
+    /// 0.48–0.84 band made outfield play frantic — defenders closing an
+    /// attacker down in half a second, waypoint cycles flickering.
+    ///
+    /// **`pace` alone.** `acceleration` and `agility` used to take 0.2 and
+    /// 0.1 of the blend, which counted both of them twice: since the
+    /// velocity ramp landed, `acceleration` owns the burst budget
+    /// (`MovementEffort::accel_budget`) and `agility` the braking /
+    /// change-of-direction multiplier on it. Blending them in here also
+    /// diluted the one attribute whose name means top speed — a squad's
+    /// realised spread is ~10% narrower under the blend than under `pace`,
+    /// because generated physicals correlate and the blend averages them
+    /// back toward the squad mean.
     pub fn max_speed(&self) -> f32 {
-        let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
-        let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
-        let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
-
-        // Weighted skill blend (pace dominant)
-        let skill_blend = 0.7 * pace_factor + 0.2 * acceleration_factor + 0.1 * agility_factor;
+        let pace01 = ((self.physical.pace - 1.0) / 19.0).clamp(0.0, 1.0);
 
         let min_speed = 0.36;
         let max_speed = 0.63;
 
-        min_speed + skill_blend * (max_speed - min_speed)
+        min_speed + pace01 * (max_speed - min_speed)
     }
 
-    /// Calculate maximum speed with condition factor (real-time performance)
-    /// Condition reduces speed by at most ~25% (like real football)
-    /// A tired player (30% condition) still runs at ~75-80% of max speed
+    /// Top speed as the legs are RIGHT NOW — [`Self::max_speed`] shaded by
+    /// how drained the player is, with `stamina` deciding how much of the
+    /// drain he actually pays for.
+    ///
+    /// The contract, at the ~65% condition outfielders finish a match on
+    /// (measured, 60 harness fixtures at level 14): **~3.5% off top speed
+    /// for `stamina` 20, ~7% for the population mean, ~12.5% for `stamina`
+    /// 1** — against real full-time peak-sprint losses of a few percent
+    /// for a conditioned player and about double that for an unconditioned
+    /// one. Fresh legs pay nothing, exactly.
+    ///
+    /// Two things the previous linear form got wrong:
+    ///
+    /// * it spread its whole response over 100%→0% condition, but a match
+    ///   only ever travels 100%→~65%, so barely a third of the curve was
+    ///   ever reached and full time cost 6.7% regardless of who was
+    ///   running. The `sqrt` puts the response in the band that is
+    ///   actually visited, which is also how legs really go — the first
+    ///   quarter of the tank costs more than the last;
+    /// * `stamina` moved that figure by 2.8 points across its whole 1..20
+    ///   range, i.e. the attribute did not reach movement at all. It now
+    ///   owns most of the band, so a low-stamina defender is genuinely
+    ///   walked away from late on while an elite-stamina one finishes near
+    ///   his own top speed.
+    ///
+    /// The second fatigue channel is [`MovementEffort::self_pacing`],
+    /// which shortens the efforts he is willing to make rather than the
+    /// speed he is able to reach.
+    ///
+    /// Bounded by construction in `1 - max_reduction ..= 1`, so nothing
+    /// here needs a clamp.
+    ///
+    /// [`MovementEffort::self_pacing`]: crate::r#match::MovementEffort
     pub fn max_speed_with_condition(&self, condition: i16) -> f32 {
-        let base_max_speed = self.max_speed();
-
-        // Condition percentage (0.0 to 1.0)
         let condition_pct = (condition as f32 / 10000.0).clamp(0.0, 1.0);
+        let stamina01 = (self.physical.stamina / 20.0).clamp(0.0, 1.0);
 
-        // Stamina provides fatigue resistance
-        // High stamina players lose less speed when tired
-        let stamina_normalized = (self.physical.stamina / 20.0).clamp(0.0, 1.0);
+        let max_reduction = 0.22 - stamina01 * 0.16;
+        let condition_factor = 1.0 - max_reduction * (1.0 - condition_pct).sqrt();
 
-        // Condition affects speed mildly (max ~25% reduction at 0% condition)
-        // At 100% condition: 100% speed
-        // At 50% condition: ~87-93% speed (depending on stamina)
-        // At 30% condition: ~80-88% speed (depending on stamina)
-        // At 0% condition: ~75-85% speed (depending on stamina)
-        let max_reduction = 0.25 - stamina_normalized * 0.10; // 15-25% max reduction
-        let condition_factor = 1.0 - max_reduction * (1.0 - condition_pct);
-
-        base_max_speed * condition_factor.clamp(0.75, 1.0)
+        self.max_speed() * condition_factor
     }
 
     /// Calculate maximum speed for a goalkeeper with state-dependent boost.

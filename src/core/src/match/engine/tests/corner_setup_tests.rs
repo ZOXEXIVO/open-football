@@ -25,6 +25,7 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::ball::ball::AwaitedRestart;
+use crate::r#match::engine::corner_shape::CornerDeadline;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
@@ -230,10 +231,16 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
     );
 
     // Past the hard ceiling on the pin, which runs from the KICK — so the
-    // set-up has to be walked out first or the 400 ticks below are spent
-    // on the taker's run and the deadline has not started.
+    // set-up has to be walked out first or the ticks below are spent on
+    // the taker's run and the deadline has not started.
+    //
+    // Both ceilings, read off the type rather than guessed: the deadline
+    // itself, plus the window in which a taker still standing over the
+    // ball re-stamps its origin. A flat 400 sat 20 ticks INSIDE
+    // `MAX_TICKS` and released only because the divisions this fixture
+    // generates had not been reaching the clamp.
     m.walk_the_corner_in();
-    m.tick_n(400);
+    m.tick_n((CornerDeadline::SETUP_MAX_TICKS + CornerDeadline::MAX_TICKS) as usize + 50);
 
     let held: Vec<u32> = m.pinned().iter().map(|p| p.id).collect();
     assert!(
