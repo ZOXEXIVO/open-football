@@ -6903,7 +6903,18 @@ a:active {
 .match-stage {
     position: relative;
     width: min(100%, max(420px, (100vh - var(--match-chrome) - var(--match-hints, 0px)) * 16 / 9));
-    width: min(100%, max(420px, (100dvh - var(--match-chrome) - var(--match-hints, 0px)) * 16 / 9));
+    /* `svh`, not `dvh`. The dynamic unit tracks the URL bar as it collapses,
+       and WebKit updates it CONTINUOUSLY through that animation — so a single
+       scroll on a phone resized this box, and therefore the canvas, and
+       therefore the render target, once per frame for the length of the
+       animation. Every distinct size is a distinct texture descriptor, which
+       is Bevy's texture-cache key, and the cache holds an entry for three
+       frames after its last use: a scroll left three complete generations of
+       colour, depth and resolve attachments alive at once. The small viewport
+       height is the one that does not move. It is also the conservative
+       answer, which is what this rule wanted anyway — sized for the bar being
+       present, the whole pitch is above the fold whether it is or not. */
+    width: min(100%, max(420px, (100svh - var(--match-chrome) - var(--match-hints, 0px)) * 16 / 9));
     margin: 0 auto;
     aspect-ratio: 16 / 9;
     overflow: hidden;

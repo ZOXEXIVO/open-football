@@ -17,3 +17,4 @@ publish = false
 [dependencies]
 flate2 = "1.1.9"
 wasm-bindgen-cli-support = "=0.2.127"
+wasm-opt = { version = "0.116.1", default-features = false }

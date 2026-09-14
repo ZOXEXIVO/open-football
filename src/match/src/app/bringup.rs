@@ -53,6 +53,7 @@
 use crate::app::bill::MemoryBill;
 use crate::app::config::ViewerConfig;
 use crate::app::quality::{Footprint, Quality};
+use crate::scene::pitch::Stands;
 use crate::players::actors::{PlayerActor, Undressed};
 use crate::recording::loader::ChunkLoader;
 use bevy::prelude::*;
@@ -110,28 +111,34 @@ impl Default for Bringup {
 }
 
 impl Bringup {
-    /// How many frames the stadium is spread over.
+    /// The courses that lay the ground, one per thing that brings a SHADER
+    /// with it: the playing surface (normal-mapped and vertex-coloured), the
+    /// surround (the same vertex layout WITHOUT the relief, which is a
+    /// separate program), the paint, the goals, and the ground the stands sit
+    /// on. Splitting those finer would buy nothing — a course that queues no
+    /// new pipeline costs a frame and returns a frame.
+    const STRUCTURE: usize = 5;
+
+    /// Frames spent per bank of seating: the one it is built on, and one in
+    /// which nothing is built at all.
     ///
-    /// The first five are one per thing that brings a SHADER with it, which is
-    /// what set the number originally: the playing surface (normal-mapped and
-    /// vertex-coloured), the surround (the same vertex layout WITHOUT the
-    /// relief, which is a separate program), the paint, the goals, and the
-    /// ground the stands sit on. Splitting those finer would buy nothing — a
-    /// course that queues no new pipeline costs a frame and returns a frame.
+    /// ⚠ **The idle frame is the second half of the allocation, not padding.**
+    /// A bank's upload copy is freed when a LATER submission is retired, not
+    /// on the frame that uploads it — see [`Stands`](crate::scene::pitch::Stands),
+    /// which carries the mechanism. Raised on consecutive frames, three copies
+    /// of the largest mesh in the scene are alive at once; with a frame
+    /// between them, two. On wasm32 that difference is permanent, because the
+    /// worst instant of the load is the size of the tab for the rest of the
+    /// session — see [`MemoryBill`](crate::app::bill::MemoryBill).
+    const PER_BANK: usize = 2;
+
+    /// How many frames the stadium is spread over: the structure, then two per
+    /// bank.
     ///
-    /// ⚠ **The last four are not about shaders at all, and that is why they
-    /// were added.** They raise one bank of seating each, and all four share
-    /// the material the fifth course already linked, so none of them queues a
-    /// pipeline. What they buy is MEMORY: four spectator meshes built on one
-    /// frame are four of them alive at once, and on wasm32 the worst instant of
-    /// the load is the size of the tab for the rest of the session. See
-    /// [`Stands`](crate::scene::pitch::Stands), which carries the measurement,
-    /// and [`MemoryBill`](crate::app::bill::MemoryBill) for why a peak here is
-    /// permanent.
-    ///
-    /// So a course is now "a frame the bring-up is allowed to spend", and the
-    /// two reasons to spend one are a shader link and a large allocation.
-    pub const COURSES: usize = 9;
+    /// A course is "a frame the bring-up is allowed to spend", and there are
+    /// three reasons to spend one — a shader link, a large allocation, and
+    /// letting a large allocation GO.
+    pub const COURSES: usize = Self::STRUCTURE + Stands::BANKS * Self::PER_BANK;
 
     /// Updates to let go by before the first course is laid.
     ///
@@ -181,6 +188,25 @@ impl Bringup {
     /// run conditions.
     pub fn building(bringup: Res<Bringup>) -> bool {
         bringup.course <= Self::COURSES
+    }
+
+    /// **Whether this course raises a bank**: every other one past the
+    /// structure, so no bank is ever built beside the previous bank's upload
+    /// copy. See [`Self::PER_BANK`].
+    ///
+    /// One condition rather than a registration per bank. The ladder is the
+    /// arithmetic, so a ground with a different number of banks needs nothing
+    /// changed here — and there is no list of course numbers to keep in step
+    /// with [`Self::COURSES`].
+    fn raises_a_bank(course: usize) -> bool {
+        course > Self::STRUCTURE
+            && course <= Self::COURSES
+            && (course - Self::STRUCTURE - 1) % Self::PER_BANK == 0
+    }
+
+    /// The run condition behind [`Self::raises_a_bank`].
+    pub fn raising(bringup: Res<Bringup>) -> bool {
+        bringup.warmed() && Self::raises_a_bank(bringup.course)
     }
 
     /// Whether the renderer has had time to draw a frame of its own.
@@ -377,4 +403,50 @@ impl Progress {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn dispatch(_phase: Phase, _courses: usize, _footprint: Footprint) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Every bank is raised, and no two on consecutive courses.**
+    ///
+    /// The whole point of [`Bringup::PER_BANK`] is the gap: a bank built on
+    /// the frame after another one is built beside that one's upload copy,
+    /// which is the instant that sets the tab's permanent high-water mark on
+    /// wasm32. The count and the spacing are the two halves of that, and both
+    /// fall out of arithmetic rather than a list of course numbers — so this
+    /// is what stops a change to either constant from silently dropping a
+    /// stand or putting two back together.
+    #[test]
+    fn the_banks_go_up_one_at_a_time_with_a_frame_between_them() {
+        let raising: Vec<usize> = (1..=Bringup::COURSES)
+            .filter(|course| Bringup::raises_a_bank(*course))
+            .collect();
+
+        assert_eq!(
+            raising.len(),
+            Stands::BANKS,
+            "{raising:?} does not raise every bank exactly once"
+        );
+        for pair in raising.windows(2) {
+            assert!(
+                pair[1] - pair[0] >= Bringup::PER_BANK,
+                "banks on courses {} and {} are too close together",
+                pair[0],
+                pair[1]
+            );
+        }
+        // …and the structure is laid before any of them, so no bank shares a
+        // frame with a shader link.
+        assert!(raising[0] > Bringup::STRUCTURE);
+    }
+
+    /// Nothing is raised once the stadium is up, so a long match cannot walk
+    /// off the end of the plan.
+    #[test]
+    fn no_bank_is_raised_past_the_last_course() {
+        assert!(!Bringup::raises_a_bank(Bringup::COURSES + 1));
+        assert!(!Bringup::raises_a_bank(0));
+    }
 }

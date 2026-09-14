@@ -793,11 +793,47 @@
                 config.readahead = readAhead;
             }
             MatchViewer.start(JSON.stringify(config));
+            surrenderOnLeaving();
         })
         .catch((error) => {
             console.error("match viewer failed to start", error);
             fail();
         });
+
+    // Give the GPU back when the page is left.
+    //
+    // Nothing in the viewer tears itself down, and a browser does not
+    // necessarily throw the document away when it is navigated from: WebKit
+    // holds it in the back/forward cache, whole and running, so a replay's
+    // attachments, its linear memory and its WebGL context all survive the
+    // move to the next page. Two or three match pages in a session and the
+    // tab is holding two or three complete stadiums, which is the shape of a
+    // fault that shows up on the third match rather than the first — and on
+    // the one browser whose per-tab ceiling is low enough to notice.
+    //
+    // A lost context releases the largest part of that immediately, and it is
+    // the part nothing else can reach: the colour pair, the resolve target
+    // and the depth buffer for both views live in the driver, not in any heap
+    // this page can measure. `getContext` returns the context wgpu is already
+    // holding rather than making a second one, so this is the same object the
+    // replay was being drawn with.
+    //
+    // `pagehide` rather than `unload`: `unload` is what DISQUALIFIES a page
+    // from the back/forward cache in the first place, and registering it
+    // would make every other page in the game slower to come back to. On
+    // `pagehide` the picture is already gone from the screen, and a viewer
+    // who presses Back gets the page rebuilt — which is what they would have
+    // got from any browser that declined to cache it.
+    function surrenderOnLeaving() {
+        window.addEventListener("pagehide", () => {
+            const canvas = document.getElementById("match-canvas");
+            const gl = canvas && canvas.getContext("webgl2");
+            const lose = gl && gl.getExtension("WEBGL_lose_context");
+            if (lose) {
+                lose.loseContext();
+            }
+        });
+    }
 </script>
 {% endif %}
 {% endblock %}

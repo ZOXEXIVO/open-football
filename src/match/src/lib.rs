@@ -108,7 +108,7 @@ impl MatchViewer {
         // a handheld's problem is not that the frame is late, it is that the
         // browser kills the tab for what the scene asks to hold. See
         // `Footprint`, and `?device=` for turning the guess off.
-        let quality = Quality::probe(Footprint::of(config.device.as_deref()));
+        let quality = Quality::probe(Footprint::of(config.device.as_deref()), &config.canvas);
 
         // How often the app runs at all. The browser holds the page to its
         // display, and past the cap that is only ever pictures nobody can
@@ -316,10 +316,13 @@ impl MatchViewer {
                     // them; built apart, each is freed before the next
                     // starts. See `Stands`, and `app::bill` for why a
                     // transient peak on wasm32 is a permanent bill.
-                    Pitch::raise_bank.run_if(Bringup::on(6)),
-                    Pitch::raise_bank.run_if(Bringup::on(7)),
-                    Pitch::raise_bank.run_if(Bringup::on(8)),
-                    Pitch::raise_bank.run_if(Bringup::on(9)),
+                    // One registration, not one per bank: `raise_bank` pops a
+                    // single plan per run and `Bringup::raising` is the course
+                    // ladder's own arithmetic, so the banks follow the number
+                    // of banks rather than a hand-written list of course
+                    // numbers. See `Bringup::PER_BANK` for why they are not on
+                    // consecutive courses.
+                    Pitch::raise_bank.run_if(Bringup::raising),
                 )
                     .chain()
                     .run_if(Bringup::building)

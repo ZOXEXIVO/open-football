@@ -127,8 +127,22 @@ impl BankPlan {
 /// kills the renderer. See [`MemoryBill`](crate::app::bill::MemoryBill).
 ///
 /// So the plan is laid on the course that builds the ground and the banks are
-/// raised one per course after it. Each is built, extracted and freed before
-/// the next is started, which turns one 175 MiB peak into four 40 MiB ones.
+/// raised one per course after it, which turns one 175 MiB peak into four
+/// 40 MiB ones.
+///
+/// ⚠ **"Freed before the next is started" is not true of one frame's gap on
+/// WebGL2, and that is why a bank costs two courses rather than one.** There
+/// is no `glBufferStorage` there, so wgpu's GLES backend emulates every map:
+/// the mesh is packed into a `vec![0; size]` in LINEAR MEMORY with no GL
+/// object behind it, and that Vec is held as a temporary resource of the
+/// submission that copies it — released when a LATER submit retires that
+/// submission, not on the frame that uploaded it. Raised back to back, bank
+/// N's upload copy is therefore still resident while bank N+1's attribute
+/// Vecs and bank N+1's own upload copy are being built: three copies of the
+/// largest mesh in the scene, in the one instant that sets the tab's
+/// permanent high-water mark. The idle course between them is what submits,
+/// retires and frees, so dlmalloc has the block back before the next bank
+/// asks for one — see [`Bringup::PER_BANK`](crate::app::bringup::Bringup).
 ///
 /// It costs nothing else. All four share one material and one mesh layout, so
 /// no course after the first queues a render pipeline — which is the thing
@@ -149,6 +163,11 @@ pub struct Stands {
 }
 
 impl Stands {
+    /// How many banks a ground has, which is what the bring-up spends its
+    /// courses on. Named here rather than counted there, so the two cannot
+    /// drift — see [`Self::plan`], which builds exactly this many.
+    pub const BANKS: usize = 4;
+
     /// **The four banks as the flights of steps they are**: how far round, how
     /// far back off the paint, how many rows at a GREAT ground, and how high
     /// one step is. What `stature` does to the row count is the whole

@@ -481,11 +481,12 @@ mod tests {
 
             // …and the attachments, at the canvas an iPad shows in landscape.
             let window = UVec2::new(2360, 1328);
-            let target = Stage::measured(window, Stage::budget(footprint, None));
-            let samples = match footprint {
-                Footprint::Roomy => 4,
-                Footprint::Handheld => 1,
-            };
+            // The sample count is no longer a property of the enclosure: it
+            // is what this canvas can pay for. See
+            // `Stage::affords_multisampling` — an iPad's canvas cannot, which
+            // is the answer the pixel budget could not give.
+            let samples = if Stage::affords_multisampling(window) { 4 } else { 1 };
+            let target = Stage::measured(window, samples);
             MemoryBill::hold(Held::Stage, Stage::attachments(target, window, samples));
 
             println!(

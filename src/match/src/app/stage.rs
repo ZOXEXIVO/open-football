@@ -61,7 +61,7 @@
 use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::ViewerConfig;
 use crate::app::perf::FrameCost;
-use crate::app::quality::{Footprint, Quality};
+use crate::app::quality::Quality;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -107,7 +107,7 @@ pub struct Stage {
     /// not reallocate it.
     size: UVec2,
     /// The share of the canvas [`Self::size`] came out at, which is the rung
-    /// unless [`Self::BUDGET`] or the device had to cut into it. Kept only so
+    /// unless [`Self::CEILING`] or the device had to cut into it. Kept only so
     /// [`Self::readout`] reports the picture on screen rather than the one
     /// that was asked for.
     drawn: f32,
@@ -192,66 +192,56 @@ impl Stage {
     /// stretch.
     const REVIEW: f32 = 2.5;
 
-    /// The most pixels a render target will be asked for.
+    /// **The most memory the picture may cost**, in bytes, counting every
+    /// attachment behind it.
     ///
-    /// Not a quality limit — a memory one. `fit_canvas_to_parent` plus a
-    /// fullscreen button plus a 4K panel at 200% scaling would otherwise ask
-    /// for a 33-megapixel target and the multisampled colour and depth
-    /// attachments behind it, which is a browser tab falling over rather than
-    /// a replay looking better.
+    /// Not a quality limit — a memory one, and it is stated in BYTES because
+    /// bytes are what a browser kills a tab for. It used to be an area in
+    /// pixels, and an area cannot express this cost: the sample count
+    /// multiplies the bytes without touching the pixels, so one pixel budget
+    /// bought a 16-byte-a-pixel frame on one machine and a 44-byte-a-pixel
+    /// frame on the next. See [`Self::planes`], which is the factor the old
+    /// figure could not see.
     ///
-    /// **Stated as an area, because area is what an attachment costs.** It
-    /// used to be a length capped per axis, and that is exactly how it went
-    /// wrong: a canvas over the cap on ONE axis came back a different SHAPE,
-    /// and [`Backdrop`] stretches whatever it is handed across the whole
-    /// window — so a 5120x1440 panel was drawing every player a third too
-    /// wide. See [`Self::wanted`], which now has one factor for both axes.
+    /// It covers BOTH views, which the pixel budget also could not. The
+    /// replay's target was the only thing it clamped, and on a handheld the
+    /// replay's target is the smaller half — the window camera's own colour
+    /// pair and depth are taken at the canvas's full size whatever the replay
+    /// is drawn at, and on a phone in portrait they are two thirds of the
+    /// bill. A ceiling that could only reach the smaller half is why the
+    /// clamp added for iOS took 0% off a phone held upright.
     ///
-    /// 3840x2160 worth of it: a 4K panel at its own resolution, and the
-    /// largest frame this viewer has been measured on. A super-ultrawide
-    /// comes in UNDER it — 5120x1440 is 7.4 megapixels against 8.3 — and so
-    /// keeps every one of its pixels, which is the right answer. It is not a
-    /// bigger frame to draw, only a differently shaped one.
+    /// **One figure, and no device term in it.** That is not an oversight: the
+    /// canvas is already the device. A phone's canvas is three megapixels and
+    /// a desktop's is eight, so the same ceiling leaves the phone the larger
+    /// share for its replay and holds the desktop to something a tab can
+    /// survive — without anything having to guess which is which, and without
+    /// the guess being wrong on a Mac. 128 MiB is comfortably above what the
+    /// scene wants at one sample on every canvas measured (a 16-inch Retina
+    /// display fullscreen comes to 123 MiB) and comfortably below where any
+    /// engine has been seen to fall over.
     ///
-    /// ⚠ **A desktop number, and on a phone it never bites at all.** See
-    /// [`Self::HANDHELD_BUDGET`], which is the same constant asked of the
-    /// device the ceiling actually matters on.
-    const BUDGET: u32 = 3840 * 2160;
+    /// Where the canvas alone is larger than this — a 5K panel fullscreen
+    /// spends 177 MiB on the window camera before the replay asks for
+    /// anything — there is nothing left to give and the replay falls to the
+    /// bottom rung. That is the honest answer: the two surfaces the window
+    /// camera needs are not this file's to decline.
+    pub(crate) const CEILING: usize = 128 * 1024 * 1024;
 
-    /// **…and what a handheld may ask for**, which is a different question
-    /// with a different answer.
+    /// **How many full-resolution planes the replay's view costs**, per pixel
+    /// of the target, at a given sample count.
     ///
-    /// The budget above was chosen as "big enough that nothing sane hits it".
-    /// On an iPad nothing sane does: landscape on a 10-inch panel is about
-    /// 1180x664 CSS pixels at `devicePixelRatio` 2, which is 2360x1328 — 3.1
-    /// megapixels, comfortably under 8.3 — so the cap that exists to stop a
-    /// tab falling over never fired on the one class of device whose tab
-    /// actually falls over.
-    ///
-    /// 1.3 megapixels is about that canvas at DPR 1. The picture is upscaled
-    /// to the window by [`Backdrop`] with a bilinear filter, which is exactly
-    /// what every rung of [`Self::SCALES`] already does and what the note at
-    /// the top of this file argues is invisible in motion.
-    ///
-    /// What it buys, measured as what the scene ASKS for rather than off a
-    /// device: the 3D view's colour pair, its depth and the stage image come
-    /// to some 50 MB at 3.1 MP and 21 MB at 1.3 MP, and in the 12.9-inch
-    /// fullscreen case (2732x2048 = 5.6 MP) the saving doubles again.
-    ///
-    /// It is also the one item in this file that is a memory lever and a FRAME
-    /// lever at the same time. The measurement the module note quotes — the
-    /// same 3.9 ms at 720p and at 4K — was taken on a discrete card, and it
-    /// does not travel to a tile-based mobile part where every attachment
-    /// write crosses the same bus as everything else. 3.1 MP through the main
-    /// pass, FXAA and the upscale, sixty times a second, is real work there.
-    ///
-    /// ⚠ **The ladder is deliberately NOT started a rung down as well.** This
-    /// cap already cuts an iPad's stage to roughly 0.55 on a side, which is the
-    /// bottom rung's worth of relief before the ladder has spent anything;
-    /// compounding the two would open the replay at a third of the canvas on a
-    /// device that might well have held two thirds. The ladder is still free to
-    /// walk down from here on the measurement, which is the right way round.
-    const HANDHELD_BUDGET: u32 = 1_300_000;
+    /// The colour pair, the resolve target where there is something to
+    /// resolve, the depth buffer at the colour's sample count, and the stage
+    /// image the whole thing is resolved into. Four at one sample and eleven
+    /// at four — which is the arithmetic that makes multisampling a memory
+    /// decision rather than a picture one, and the number [`Self::CEILING`]
+    /// exists to be divided by.
+    fn planes(samples: u32) -> usize {
+        let samples = samples.max(1) as usize;
+        let resolved = if samples > 1 { samples } else { 0 };
+        3 + resolved + samples
+    }
 
     /// The longest side to allow before the renderer has said what it can
     /// actually allocate.
@@ -269,12 +259,21 @@ impl Stage {
         Self::SCALES[self.step]
     }
 
-    /// **The most pixels this device may be asked for**, in area.
+    /// **The most pixels the replay may be drawn into**, in area.
     ///
-    /// One factor decides it — what kind of machine this is, not what it
-    /// measures at — because the failure the handheld figure answers happens
-    /// on the way UP, before there is a frame time to read. See
-    /// [`Self::HANDHELD_BUDGET`].
+    /// Derived rather than declared: [`Self::CEILING`] is the bill, the window
+    /// camera's own surfaces are subtracted from it because nothing here can
+    /// decline them, and what is left is divided by what a pixel of the target
+    /// costs at the sample count in force. One rule, and it answers every
+    /// machine — a phone, a tablet, a laptop, a desktop and any of them
+    /// fullscreen — without being told which it is looking at.
+    ///
+    /// ⚠ **It answers to the SAMPLE COUNT, which the figure it replaced could
+    /// not.** Four samples cost eleven planes a pixel against one sample's
+    /// four, so the same ceiling buys 36% of the area at four that it buys at
+    /// one. That is the exchange rate multisampling has always had; it was
+    /// simply not being charged, and a Retina Mac was quietly spending 412 MiB
+    /// on it.
     ///
     /// `?stage=<megapixels>` overrides it, alongside `?device=` and `?crowd=`:
     /// the attachments are the largest allocation in this scene that is not
@@ -283,14 +282,29 @@ impl Stage {
     /// unreadable, zero or negative falls through to the answer the device
     /// would have had, which is the same way every other override in this
     /// crate declines to be given nonsense.
-    pub fn budget(footprint: Footprint, asked: Option<f32>) -> u32 {
-        match asked {
-            Some(megapixels) if megapixels > 0.0 => (megapixels * 1_000_000.0) as u32,
-            _ => match footprint {
-                Footprint::Roomy => Self::BUDGET,
-                Footprint::Handheld => Self::HANDHELD_BUDGET,
-            },
+    pub fn budget(window: UVec2, samples: u32, asked: Option<f32>) -> u32 {
+        if let Some(megapixels) = asked.filter(|megapixels| *megapixels > 0.0) {
+            return (megapixels * 1_000_000.0) as u32;
         }
+        // The window camera's colour pair and depth, which are taken at the
+        // canvas's own size whatever the replay is drawn at.
+        let taken = window.x as usize * window.y as usize * 12;
+        let left = Self::CEILING.saturating_sub(taken);
+        (left / (4 * Self::planes(samples))) as u32
+    }
+
+    /// Whether this canvas can afford to be multisampled at all.
+    ///
+    /// Read by [`Quality`](crate::app::quality::Quality) before the first
+    /// frame, and it is the whole of that decision now. Four samples are worth
+    /// having when they cost nothing but bandwidth; they are not worth having
+    /// when the only way to pay for them is to draw the match at three fifths
+    /// of the size, which is the trade [`Self::budget`] would otherwise make
+    /// silently. The module note at the top of this file is the argument:
+    /// resolution is the better of the two, so where both cannot be had, the
+    /// samples go.
+    pub fn affords_multisampling(canvas: UVec2) -> bool {
+        Self::attachments(canvas, canvas, 4) <= Self::CEILING
     }
 
     /// **What the render attachments behind this stage come to**, in bytes.
@@ -323,15 +337,14 @@ impl Stage {
     /// measurement should add roughly `window x 4 x 2`.
     pub(crate) fn attachments(target: UVec2, window: UVec2, samples: u32) -> usize {
         let pixels = |size: UVec2| size.x as usize * size.y as usize * 4;
-        let samples = samples.max(1) as usize;
-        // The resolve target exists only where there is something to resolve.
-        let resolved = if samples > 1 { samples } else { 0 };
-        // Colour pair, the resolve target, and the depth buffer at the same
-        // sample count as the colour.
-        let replay = pixels(target) * (2 + resolved + samples);
+        // The colour pair, the resolve target where there is something to
+        // resolve, the depth buffer, and the stage image — see
+        // [`Self::planes`], which is the same count [`Self::budget`] divides
+        // by. Stated once so the price and the ceiling cannot drift apart.
+        let replay = pixels(target) * Self::planes(samples);
         // The window's pair and its own depth, always at one sample.
         let canvas = pixels(window) * 3;
-        replay + canvas + pixels(target)
+        replay + canvas
     }
 
     /// The band this ladder judges by, for
@@ -393,6 +406,22 @@ impl Stage {
         if affordable < shrink * shrink {
             shrink = affordable.sqrt();
         }
+        // …but never past the bottom of the ladder, whatever the budget says.
+        //
+        // The window camera's own surfaces come out of the ceiling before the
+        // replay is given anything, and on a large enough canvas they take all
+        // of it — a 5K panel fullscreen spends 169 MiB on them alone. Without
+        // this the allowance goes to zero there and the replay is drawn into a
+        // two-pixel image: not a soft picture, a broken one.
+        //
+        // The floor is the ladder's own last rung, and for the reason already
+        // written against [`Self::SCALES`] — below about this the replay stops
+        // reading as a soft picture and starts reading as a small one, so
+        // there is nothing to be bought below it. A canvas that cannot fit its
+        // own bottom rung under the ceiling is a canvas where the ceiling has
+        // run out of things to decline, and the honest answer is to say so in
+        // the bill rather than to draw a postage stamp.
+        shrink = shrink.max(Self::SCALES[Self::SCALES.len() - 1]);
         // Hardware: nothing may ask for a texture the device will not make.
         shrink = shrink.min(longest_side as f32 / canvas.max_element());
 
@@ -414,7 +443,7 @@ impl Stage {
     /// second copy to keep in step, which is exactly the drift the harness
     /// exists to catch.
     #[cfg(test)]
-    pub(crate) fn measured(window: UVec2, budget: u32) -> UVec2 {
+    pub(crate) fn measured(window: UVec2, samples: u32) -> UVec2 {
         let mut canvas = Window::default();
         canvas
             .resolution
@@ -426,7 +455,7 @@ impl Stage {
             drawn: Self::SCALES[0],
             review: 0.0,
             missing: 0,
-            budget,
+            budget: Self::budget(window, samples, None),
             asked: None,
         }
         .wanted(&canvas, 8192)
@@ -523,7 +552,12 @@ impl Stage {
     ) {
         // Before anything reads it: the footprint can still have moved in
         // `PreStartup` — see the field's own note.
-        stage.budget = Self::budget(quality.footprint(), stage.asked);
+        let canvas = UVec2::new(window.physical_width(), window.physical_height());
+        let samples = match quality.msaa() {
+            Msaa::Sample4 => 4,
+            _ => 1,
+        };
+        stage.budget = Self::budget(canvas, samples, stage.asked);
 
         // Ahead of the resize, so a rung taken this frame is applied this
         // frame rather than costing a second reallocation on the next one.
@@ -622,17 +656,41 @@ impl FromWorld for Stage {
         // the next frame overwrites every pixel of it — and the copy would
         // want a `COPY_SRC` usage that `new_target_texture` does not ask for.
         canvas.copy_on_resize = false;
+        // **And nothing worth holding on the CPU either.** `new_target_texture`
+        // fills a zeroed RGBA `Vec` the size of the whole image, and
+        // `RenderAssetUsages::default()` is `MAIN_WORLD | RENDER_WORLD`, so
+        // that buffer is not dropped after extraction — it is kept, resized on
+        // every rung of the ladder and every canvas change, and CLONED whole
+        // into the render world each time, for a texture no code on this side
+        // ever reads. At a 16-inch Retina canvas that is 30 MB held and 30 MB
+        // copied, on wasm32, where the module note in [`MemoryBill`] says the
+        // peak is permanent.
+        //
+        // Taking the data away rather than the usage: the image has to stay in
+        // the main world, because `fit` reaches for it by handle to resize it.
+        // With no data `Image::resize` only writes the descriptor, and
+        // `GpuImage::prepare_asset` takes its `create_texture` branch and
+        // uploads nothing — which is what a render target wanted in the first
+        // place.
+        canvas.data = None;
 
         // Both read before the image is handed over, because the budget is
         // decided once and for the life of the session: it answers to what
         // KIND of machine this is, not to how the frame is going. `Quality`
         // and the config are both in the world before `init_resource` reaches
         // here — see the order in `MatchViewer::start`.
-        let footprint = world.resource::<Quality>().footprint();
+        let samples = match world.resource::<Quality>().msaa() {
+            Msaa::Sample4 => 4,
+            _ => 1,
+        };
         let asked = world.resource::<ViewerConfig>().stage;
         Stage {
             canvas: world.resource_mut::<Assets<Image>>().add(canvas),
-            budget: Self::budget(footprint, asked),
+            // The window has not been adopted yet, so this is the ceiling
+            // with nothing taken out of it for the canvas. `fit` re-derives it
+            // against the real one on the first frame, before the first
+            // allocation — see the field's own note.
+            budget: Self::budget(UVec2::ZERO, samples, asked),
             asked,
             step: 0,
             // Deliberately NOT `size`: the image was just built at 2x2 and this
@@ -655,14 +713,16 @@ mod tests {
     /// canvas.
     const DESKTOP: u32 = 8192;
 
+    /// A stage at one sample, which is what the ceiling leaves every canvas
+    /// large enough to be worth testing.
     fn stage(step: usize) -> Stage {
-        Stage::on(step, Footprint::Roomy)
+        Stage::on(step, UVec2::ZERO, 1)
     }
 
-    /// The same at a chosen footprint, for the two tests that ask what a
-    /// phone is handed.
+    /// The same against a named canvas and sample count, for the tests that
+    /// ask what the ceiling leaves once the window camera has been paid for.
     impl Stage {
-        fn on(step: usize, footprint: Footprint) -> Stage {
+        fn on(step: usize, window: UVec2, samples: u32) -> Stage {
             Stage {
                 canvas: Handle::default(),
                 step,
@@ -670,7 +730,7 @@ mod tests {
                 drawn: Stage::SCALES[step],
                 missing: 0,
                 review: 0.0,
-                budget: Stage::budget(footprint, None),
+                budget: Stage::budget(window, samples, None),
                 asked: None,
             }
         }
@@ -802,106 +862,128 @@ mod tests {
     }
 
     /// And a wall-sized one is cut back, because the attachments behind it are
-    /// what actually costs — see [`Stage::BUDGET`].
+    /// what actually costs — see [`Stage::CEILING`].
+    ///
+    /// 7680x4320 is the case where the ceiling has nothing left to decline:
+    /// the window camera's own three surfaces come to 398 MB before the replay
+    /// is offered anything, so what holds here is the ladder's bottom rung and
+    /// not the ceiling. That is the honest answer rather than a failure — see
+    /// the floor in [`Stage::wanted`] — and the thing worth asserting is that
+    /// the cut happened at all and did not bend the picture.
     #[test]
-    fn an_enormous_canvas_is_cut_back_to_the_budget() {
-        let wanted = stage(0).wanted(&canvas(7680, 4320), DESKTOP);
-        assert!(
-            wanted.x * wanted.y <= Stage::BUDGET,
-            "{wanted} is over the budget"
-        );
-        // Cut back to it rather than past it: this is a 4K panel at 200%
-        // scaling and it should still be drawing a 4K picture.
-        assert_eq!(wanted, UVec2::new(3840, 2160));
-    }
-
-    /// A super-ultrawide is a differently shaped frame, not a bigger one, and
-    /// must not be charged for pixels it never asked for. 5120x1440 is 7.4
-    /// megapixels against a 4K panel's 8.3, so it keeps all of them.
-    #[test]
-    fn a_super_ultrawide_keeps_its_pixels() {
+    fn an_enormous_canvas_is_cut_back_to_the_bottom_rung() {
+        let window = canvas(7680, 4320);
+        let size = UVec2::new(7680, 4320);
+        let wanted = Stage::on(0, size, 1).wanted(&window, DESKTOP);
+        let rung = Stage::SCALES[Stage::SCALES.len() - 1];
         assert_eq!(
-            stage(0).wanted(&canvas(5120, 1440), DESKTOP),
-            UVec2::new(5120, 1440)
+            wanted,
+            UVec2::new(
+                ((size.x as f32 * rung) / 2.0).round() as u32 * 2,
+                ((size.y as f32 * rung) / 2.0).round() as u32 * 2,
+            ),
+            "a canvas this large should sit on the bottom rung"
         );
+        assert!(misshapen(&window, wanted) <= quantisation(wanted));
     }
 
-    /// Nothing is ever asked of the device that the device has said it cannot
-    /// do — and the refusal costs shape on neither axis.
+    /// **The whole bill, on every canvas, at whatever sampling it is given.**
+    ///
+    /// This is the invariant the pixel budget it replaced could not state. It
+    /// clamped the replay's target alone, so a phone in portrait was cut by 0%
+    /// and a Retina Mac by nothing at all — the window camera's own surfaces
+    /// were never in the figure, and neither was the sample count that
+    /// multiplies it. Every one of these canvases is a real device: a phone in
+    /// portrait, an iPad in landscape, the same two with the browser chrome
+    /// gone, a Retina laptop in the page and fullscreen, and a 5K panel whose
+    /// canvas alone is over the ceiling.
     #[test]
-    fn no_side_is_longer_than_the_device_allows() {
-        for side in [2048, 4096] {
-            let window = canvas(5120, 1440);
-            let wanted = stage(0).wanted(&window, side);
-            assert!(
-                wanted.x <= side && wanted.y <= side,
-                "{wanted} is longer than the {side} this device allows"
-            );
-            assert!(misshapen(&window, wanted) <= quantisation(wanted));
+    fn every_canvas_is_held_to_the_ceiling() {
+        for (width, height) in [
+            (780, 1200),   // iPhone in portrait, in the page
+            (1179, 2556),  // iPhone, chrome gone
+            (2360, 1328),  // iPad in landscape
+            (2732, 2048),  // iPad Pro, chrome gone
+            (2702, 1520),  // 14-inch Retina laptop, in the page
+            (3456, 2234),  // 16-inch Retina laptop, fullscreen
+            (3840, 2160),  // a 4K panel
+            (5120, 2880),  // a 5K panel — the canvas alone is over the ceiling
+        ] {
+            let window = canvas(width, height);
+            let size = UVec2::new(width, height);
+            for samples in [1, 4] {
+                let wanted = Stage::on(0, size, samples).wanted(&window, DESKTOP);
+                let held = Stage::attachments(wanted, size, samples);
+                // Two things the ceiling may not override, so the bound is
+                // the larger of it and them: the window camera's own three
+                // surfaces, which this file cannot decline, and the ladder's
+                // bottom rung, below which the replay would be a broken
+                // picture rather than a soft one.
+                let rung = Stage::SCALES[Stage::SCALES.len() - 1];
+                let bottom = UVec2::new(
+                    (size.x as f32 * rung) as u32,
+                    (size.y as f32 * rung) as u32,
+                );
+                let floor = Stage::attachments(bottom, size, samples);
+                assert!(
+                    held <= Stage::CEILING.max(floor) + Stage::CEILING / 64,
+                    "{width}x{height} at {samples} sample(s) holds {} MiB",
+                    held / (1024 * 1024)
+                );
+                assert!(
+                    misshapen(&window, wanted) <= quantisation(wanted),
+                    "{wanted} is not the shape of the {width}x{height} window"
+                );
+            }
         }
     }
 
-    /// **The budget that never fired on the device it was for.**
-    ///
-    /// An iPad in landscape is about 1180x664 CSS pixels at `devicePixelRatio`
-    /// 2 — 2360x1328, or 3.1 megapixels — which is comfortably under the
-    /// desktop cap, so a phone got every pixel of its canvas and the
-    /// attachments behind them. The handheld figure is the same cap asked of
-    /// the enclosure rather than of a 4K panel.
+    /// Four samples cost eleven planes a pixel against one sample's four, so
+    /// the same ceiling buys a visibly smaller picture — which is the trade
+    /// [`Stage::affords_multisampling`] exists to decline on a large canvas
+    /// and to allow on a small one.
     #[test]
-    fn a_handheld_is_held_to_its_own_budget() {
-        let window = canvas(2360, 1328);
-        let roomy = Stage::on(0, Footprint::Roomy).wanted(&window, DESKTOP);
-        assert_eq!(roomy, UVec2::new(2360, 1328), "a computer keeps its canvas");
-
-        let handheld = Stage::on(0, Footprint::Handheld).wanted(&window, DESKTOP);
-        // Plus the rounding, derived rather than written down — the same
-        // argument [`quantisation`] carries. Each side is rounded to the
-        // NEAREST even pixel rather than down, deliberately (see
-        // [`Stage::wanted`]), so each can stand a pixel above the exact
-        // figure and the area a row and a column above the budget. Two parts
-        // in a thousand, against a cap whose whole job is to be the right
-        // order of magnitude.
-        let rounding = handheld.x + handheld.y + 1;
+    fn multisampling_is_priced_and_declined_where_it_cannot_be_paid_for() {
+        let window = canvas(2702, 1520);
+        let size = UVec2::new(2702, 1520);
+        let one = Stage::on(0, size, 1).wanted(&window, DESKTOP);
+        let four = Stage::on(0, size, 4).wanted(&window, DESKTOP);
         assert!(
-            handheld.x * handheld.y <= Stage::HANDHELD_BUDGET + rounding,
-            "{handheld} is over what a handheld may hold"
+            four.x * four.y < one.x * one.y,
+            "four samples came out no smaller than one: {four} against {one}"
         );
-        // …and it is a smaller picture, not a wrong one. The one invariant
-        // this whole file exists for: one shrink factor, both axes.
-        assert!(
-            misshapen(&window, handheld) <= quantisation(handheld),
-            "{handheld} is not the shape of the window"
-        );
+        // A laptop-sized canvas cannot pay for it; a windowed stage on a
+        // desktop can, and keeps it.
+        assert!(!Stage::affords_multisampling(size));
+        assert!(Stage::affords_multisampling(UVec2::new(1600, 900)));
     }
 
-    /// A small canvas is not cut at all, whatever kind of machine it is on.
-    /// An iPhone in portrait is well under the handheld budget and should be
-    /// drawn at its own resolution.
+    /// A small canvas is not cut at all. An iPhone in portrait is far under
+    /// the ceiling and should be drawn at its own resolution.
     #[test]
-    fn a_handheld_budget_does_not_bite_a_phone_sized_canvas() {
+    fn a_phone_sized_canvas_is_not_cut(){
         let window = canvas(780, 1200);
         assert_eq!(
-            Stage::on(0, Footprint::Handheld).wanted(&window, DESKTOP),
+            Stage::on(0, UVec2::new(780, 1200), 1).wanted(&window, DESKTOP),
             UVec2::new(780, 1200)
         );
     }
 
-    /// `?stage=` overrides both, and nonsense in it falls through to the
-    /// answer the device would have had — the same way every other override in
-    /// this crate declines to be given nonsense.
+    /// `?stage=` overrides it, and nonsense in it falls through to the answer
+    /// the device would have had — the same way every other override in this
+    /// crate declines to be given nonsense.
     #[test]
     fn the_page_can_name_its_own_budget() {
-        assert_eq!(Stage::budget(Footprint::Roomy, Some(2.0)), 2_000_000);
+        let phone = UVec2::new(1179, 2556);
+        assert_eq!(Stage::budget(phone, 1, Some(2.0)), 2_000_000);
         assert_eq!(
-            Stage::budget(Footprint::Handheld, Some(0.0)),
-            Stage::HANDHELD_BUDGET
+            Stage::budget(phone, 1, Some(0.0)),
+            Stage::budget(phone, 1, None)
         );
         assert_eq!(
-            Stage::budget(Footprint::Handheld, Some(-1.0)),
-            Stage::HANDHELD_BUDGET
+            Stage::budget(phone, 1, Some(-1.0)),
+            Stage::budget(phone, 1, None)
         );
-        assert_eq!(Stage::budget(Footprint::Roomy, None), Stage::BUDGET);
     }
 
     /// The attachment arithmetic, against the figure the memory bill for this

@@ -22,10 +22,55 @@
 #   Firefox since 89 (both mid-2021) and Safari since 16.4 (early 2023). It
 #   is baseline in every browser that can run a Bevy application at all — the
 #   WebGL2 and `SharedArrayBuffer` floors are both higher.
+#
+# `--initial-memory` is where the linear memory STARTS, and left alone wasm-ld
+# starts it at whatever the static data rounds up to — 83 pages, 5.2 MB. Every
+# byte the viewer goes on to need above that is taken by `memory.grow`, and
+# what a grow costs is not the same question on every engine.
+#
+# V8 reserves guard-backed address space for a wasm32 memory when it creates
+# it and grows by mapping pages into a reservation it already holds, so a grow
+# is a page-table edit. JavaScriptCore has two modes for the same thing, and
+# only one of them behaves that way. `Wasm::Memory::grow` in the Signaling
+# mode protects pre-reserved pages; in BoundsChecking mode it allocates a whole
+# new buffer of the new size and `memcpy`s the old heap into it. So each grow
+# is a transient 2x of everything held so far, and the total volume copied on
+# the way up is QUADRATIC in the final heap.
+#
+# Which mode a page gets is not this file's to choose. Fast memory is a
+# process-wide pool of three slots on iOS and eight on macOS, each reserving
+# 4 GB of the same cage that serves every ArrayBuffer in the process, and it is
+# switched off entirely whenever the JIT is — which Lockdown Mode does, on both
+# platforms. A page that loses that race falls into BoundsChecking with no
+# diagnostic. **Declaring a maximum does not help**: the mode is chosen without
+# consulting it.
+#
+# What does help is not growing. `initial` is allocated once when the memory is
+# created and is never copied, so every byte below this line is a byte no grow
+# can ever have to carry. 64 MB covers the part of the load that is thousands
+# of small allocations — `DefaultPlugins`, the shader libraries it copies into
+# `Assets<Shader>`, the painted sheets, the first chunk of the recording — and
+# it is those, not the handful of large ones above, that made the ramp
+# quadratic.
+#
+# Sized against the bill rather than guessed: `app::bill` prints the heap and
+# its high-water mark at every phase, and `?perf=1` puts both on the transport
+# strip. If that peak moves, this number should move with it — too low and the
+# ramp comes back, too high and the memory is charged up front on a device
+# whose whole budget is a few hundred megabytes.
+#
+# The ceiling is declared for the engines that DO read it — it bounds the
+# address space V8 reserves — and as a statement of what this viewer will
+# never ask for. 1 GB is far above any bill this scene has run up and far
+# below the 4 GB that declaring nothing implies.
 [target.wasm32-unknown-unknown]
 rustflags = [
     "--cfg",
     "getrandom_backend=\"wasm_js\"",
     "-C",
     "target-feature=+simd128",
+    "-C",
+    "link-arg=--initial-memory=67108864",
+    "-C",
+    "link-arg=--max-memory=1073741824",
 ]

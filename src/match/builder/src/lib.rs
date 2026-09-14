@@ -82,8 +82,54 @@ impl MatchViewer {
         }
 
         Self::bindgen(&wasm, staging)?;
+        Self::optimize(staging)?;
         Self::compress(staging, assets_dir)?;
         Self::stamp_write(staging, &fingerprint)
+    }
+
+    /// Runs binaryen over the bindgen output, in place.
+    ///
+    /// **The pass that matters is inlining, and what it buys is not bytes.**
+    /// The module leaves LLVM with 167,840 function bodies whose median length
+    /// is 57 bytes — better than half of them fit in a cache line — because
+    /// `opt-level = "z"` is under instruction to outline rather than inline,
+    /// and fat LTO does not merge across the final link the way binaryen does.
+    /// A JavaScript engine is billed per FUNCTION at `WebAssembly.Module`
+    /// construction, not per byte: it materialises a callee and a metadata
+    /// vector for each one. V8 defers that until a function is first called and
+    /// so never pays for most of them; JavaScriptCore does it eagerly for the
+    /// whole module, which is why a module this shape opens in Chrome and
+    /// kills the tab in Safari on both macOS and iOS. Collapsing tens of
+    /// thousands of 57-byte bodies into their callers is the only lever in this
+    /// pipeline that moves that count.
+    ///
+    /// Measured on the artefact this replaced: 25,573,425 bytes to 20,815,970,
+    /// a fifth of the module, in about two minutes.
+    ///
+    /// ⚠ **The feature set has to be named.** `Bindgen` strips every custom
+    /// section, `target_features` included, so nothing in the artefact records
+    /// that `.cargo/config.toml` built it with `+simd128` — and binaryen
+    /// refuses to parse a `v128` opcode it was not told to expect. These are
+    /// the features LLVM emits for this target, not a wish list; dropping one
+    /// that is actually present fails the parse rather than degrading.
+    fn optimize(staging: &Path) -> Result<(), String> {
+        let wasm = staging.join(format!("{}_bg.wasm", Self::OUT_NAME));
+        let optimized = wasm.with_extension("opt.wasm");
+
+        wasm_opt::OptimizationOptions::new_optimize_for_size_aggressively()
+            .enable_feature(wasm_opt::Feature::Simd)
+            .enable_feature(wasm_opt::Feature::BulkMemory)
+            .enable_feature(wasm_opt::Feature::TruncSat)
+            .enable_feature(wasm_opt::Feature::SignExt)
+            .enable_feature(wasm_opt::Feature::MutableGlobals)
+            .enable_feature(wasm_opt::Feature::ReferenceTypes)
+            .enable_feature(wasm_opt::Feature::Multivalue)
+            .debug_info(false)
+            .run(&wasm, &optimized)
+            .map_err(|error| format!("wasm-opt: {}", error))?;
+
+        fs::rename(&optimized, &wasm)
+            .map_err(|error| format!("could not replace {}: {}", wasm.display(), error))
     }
 
     /// Content hash of the compiled wasm, used as the staging cache key.

@@ -52,6 +52,7 @@
 //! controller that hunts between two tiers is worse than either of them.
 
 use crate::app::perf::FrameCost;
+use crate::app::stage::Stage;
 use bevy::anti_alias::fxaa::{Fxaa, Sensitivity};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -370,7 +371,7 @@ impl Quality {
     /// Called before the app is built rather than from a system, so the camera
     /// can be spawned already carrying the answer — a tier decided on the first
     /// frame is a tier that costs nothing to adopt.
-    pub fn probe(footprint: Footprint) -> Self {
+    pub fn probe(footprint: Footprint, canvas: &str) -> Self {
         let named = match Self::renderer() {
             Some(name) => {
                 let integrated = Self::is_integrated(&name);
@@ -396,8 +397,26 @@ impl Quality {
         // said or failed to say. The attachments are the largest single thing
         // this file can decline to allocate, and on a device whose tab is
         // killed for asking they are not a picture-quality decision at all.
-        let handheld = footprint == Footprint::Handheld;
-        let tier = if named || handheld {
+        // **Four samples are taken when the canvas can pay for them, and not
+        // otherwise.** The renderer string above is an optimisation and the
+        // footprint is a guess; this is neither. Multisampling is eleven
+        // full-resolution planes a pixel against one sample's four, so what
+        // decides whether it is affordable is how many pixels there are — a
+        // number every browser reports, on every machine, before anything is
+        // drawn. See [`Stage::affords_multisampling`].
+        //
+        // ⚠ **This is the half of the bug the handheld ladder could not
+        // reach.** Safari removed `WEBGL_debug_renderer_info`, so `named` is
+        // false on every Apple device; a Mac has no touch panel, so the
+        // footprint is `Roomy`; and `is_integrated` deliberately does not name
+        // Apple parts, so `confirm` does not correct it either. Three tests
+        // that each answer "no" left a Retina Mac at four samples over a
+        // four-megapixel canvas — 412 MiB of attachments on a laptop
+        // fullscreen — and there was no fourth test. Asking the canvas what it
+        // costs needs none of the three.
+        let canvas = Self::canvas(canvas);
+        let affordable = Stage::affords_multisampling(canvas);
+        let tier = if named || footprint == Footprint::Handheld || !affordable {
             Tier::PostProcessed
         } else {
             Tier::Multisampled
@@ -412,6 +431,12 @@ impl Quality {
                 Tier::PostProcessed => "one sample + FXAA",
                 Tier::Multisampled => "four samples",
             },
+        )));
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+            "match viewer — canvas {}x{}; the picture may hold {} MiB",
+            canvas.x,
+            canvas.y,
+            Stage::CEILING / (1024 * 1024),
         )));
 
         Quality {
@@ -636,6 +661,46 @@ impl Quality {
         )));
     }
 
+    /// **How many pixels the replay is about to be asked for**, off the
+    /// element the page named.
+    ///
+    /// Asked here rather than taken from the window, because the window does
+    /// not exist yet: this runs before `App::new`, and the tier has to be
+    /// settled before [`TvCamera::spawn`](crate::broadcast::camera::TvCamera)
+    /// reads it — a tier changed later re-specialises every pipeline in the
+    /// scene, which on WebGL2 is the four-second shader link
+    /// [`bringup`](crate::app::bringup) exists to keep off the football.
+    ///
+    /// `clientWidth` is CSS pixels and the attachments are physical ones, so
+    /// the ratio is the factor between them — and it is the factor that makes
+    /// this worth asking at all, since it is 3 on a phone and 2 on every
+    /// Retina panel. Zero when the element cannot be found or has not been
+    /// laid out, which reads as "no canvas to pay for" and leaves the tier to
+    /// the two tests above.
+    #[cfg(target_arch = "wasm32")]
+    fn canvas(selector: &str) -> UVec2 {
+        let Some(window) = web_sys::window() else {
+            return UVec2::ZERO;
+        };
+        let ratio = window.device_pixel_ratio().max(1.0) as f32;
+        let element = window
+            .document()
+            .and_then(|document| document.query_selector(selector).ok().flatten())
+            .and_then(|element| element.dyn_into::<HtmlCanvasElement>().ok());
+        let Some(canvas) = element else {
+            return UVec2::ZERO;
+        };
+        let physical =
+            Vec2::new(canvas.client_width() as f32, canvas.client_height() as f32) * ratio;
+        UVec2::new(physical.x as u32, physical.y as u32)
+    }
+
+    /// There is no DOM to measure off.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn canvas(_selector: &str) -> UVec2 {
+        UVec2::ZERO
+    }
+
     /// What the browser says it is drawing with, where it will say.
     ///
     /// A throwaway canvas rather than the viewer's own: this runs before winit
@@ -677,11 +742,36 @@ impl Quality {
         // The extension has to be asked for before the parameter it defines can
         // be read, and asking for it is where a browser that declines to answer
         // declines.
-        context.get_extension("WEBGL_debug_renderer_info").ok()??;
-        context
-            .get_parameter(WebglDebugRendererInfo::UNMASKED_RENDERER_WEBGL)
-            .ok()?
-            .as_string()
+        let named = context
+            .get_extension("WEBGL_debug_renderer_info")
+            .ok()
+            .flatten()
+            .and_then(|_| {
+                context
+                    .get_parameter(WebglDebugRendererInfo::UNMASKED_RENDERER_WEBGL)
+                    .ok()
+            })
+            .and_then(|renderer| renderer.as_string());
+
+        // **Given back rather than dropped.** Letting the Rust handle fall out
+        // of scope releases a wasm-bindgen slot; the context behind it lives
+        // until the JS engine collects the canvas, and nothing here makes that
+        // happen. wgpu takes the real context a few hundred milliseconds
+        // later, so the two are co-resident across the whole bring-up — on a
+        // device where a live WebGL context is a Metal device, a command queue
+        // and the GPU process's state for both.
+        //
+        // It costs most where it buys least: on Safari the extension above is
+        // absent, so this context is created, asked a question it cannot
+        // answer, and abandoned, on precisely the browser that cannot afford
+        // to hold it.
+        if let Some(Some(lose)) = context.get_extension("WEBGL_lose_context").ok() {
+            let _ = js_sys::Reflect::get(&lose, &wasm_bindgen::JsValue::from_str("loseContext"))
+                .ok()
+                .and_then(|method| method.dyn_into::<js_sys::Function>().ok())
+                .map(|method| method.call0(&lose));
+        }
+        named
     }
 
     /// Whether a renderer string names a part that shares its memory with the
