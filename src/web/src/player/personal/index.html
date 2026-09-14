@@ -12,39 +12,55 @@
                     <h3>{{ i18n.t("player_profile") }}</h3>
                 </div>
                 <div class="fm-personal-section">
-                    <dl class="fm-pp-kv">
-                        <div class="fm-pp-row">
+                    <dl class="fm-pp-facts">
+                        <div class="fm-pp-fact">
+                            <dt>{{ i18n.t("age") }}</dt>
+                            <dd>{{ player_info.age }}</dd>
+                        </div>
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("date_of_birth") }}</dt>
                             <dd>{{ player_info.birth_date }}</dd>
                         </div>
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("preferred_foot") }}</dt>
                             <dd>{{ player_info.preferred_foot }}</dd>
                         </div>
                         {% if !player_info.squad_status.is_empty() %}
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("squad") }}</dt>
                             <dd>{{ player_info.squad_status }}</dd>
                         </div>
                         {% endif %}
                         {% if !player_info.salary.is_empty() %}
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("wage") }}</dt>
                             <dd>{{ player_info.salary }}</dd>
                         </div>
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("contract") }}</dt>
                             <dd>{{ i18n.t("salary_until") }} {{ player_info.contract_expiry }}</dd>
                         </div>
                         {% endif %}
                         {% if player_info.international_apps > 0 %}
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("int_apps") }}</dt>
                             <dd>{{ player_info.international_apps }}</dd>
                         </div>
-                        <div class="fm-pp-row">
+                        <div class="fm-pp-fact">
                             <dt>{{ i18n.t("int_goals") }}</dt>
                             <dd>{{ player_info.international_goals }}</dd>
+                        </div>
+                        {% endif %}
+                        {% if !player_info.languages.is_empty() %}
+                        <div class="fm-pp-fact">
+                            <dt>{{ i18n.t("languages") }}</dt>
+                            <dd>{% for language in player_info.languages %}{{ language.name }} <span class="fm-pp-sub">{{ language.level }}</span>{% if !loop.last %}, {% endif %}{% endfor %}</dd>
+                        </div>
+                        {% endif %}
+                        {% if !favorite_clubs.is_empty() %}
+                        <div class="fm-pp-fact">
+                            <dt>{{ i18n.t("favoured_clubs") }}</dt>
+                            <dd>{% for club in favorite_clubs %}<a href="/{{ lang }}/teams/{{ club.slug }}">{{ club.name }}</a>{% if !loop.last %}, {% endif %}{% endfor %}</dd>
                         </div>
                         {% endif %}
                     </dl>
@@ -66,51 +82,15 @@
                 <div class="fm-personal-section">
                     <h4 class="fm-section-subtitle">{{ i18n.t("reputation") }}</h4>
                     <div class="fm-pp-rep">
-                        <div class="fm-pp-rep-tile">
-                            <span class="fm-pp-rep-name">{{ i18n.t("rep_current") }}</span>
-                            <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{{ reputation.current }}%"></span></span>
-                            <span class="fm-pp-rep-word">{{ reputation.current_label }}</span>
+                        {% for row in reputation.rows %}
+                        <div class="fm-pp-rep-row">
+                            <span class="fm-pp-rep-name">{{ row.name }}</span>
+                            <span class="fm-pp-rep-track"><span class="fm-pp-rep-fill" style="width:{{ row.fill }}%"></span></span>
+                            <span class="fm-pp-rep-word">{{ row.label }}</span>
                         </div>
-                        <div class="fm-pp-rep-tile">
-                            <span class="fm-pp-rep-name">{{ i18n.t("rep_home") }}</span>
-                            <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{{ reputation.home }}%"></span></span>
-                            <span class="fm-pp-rep-word">{{ reputation.home_label }}</span>
-                        </div>
-                        <div class="fm-pp-rep-tile">
-                            <span class="fm-pp-rep-name">{{ i18n.t("rep_world") }}</span>
-                            <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{{ reputation.world }}%"></span></span>
-                            <span class="fm-pp-rep-word">{{ reputation.world_label }}</span>
-                        </div>
+                        {% endfor %}
                     </div>
                 </div>
-                {% if !player_info.languages.is_empty() || !favorite_clubs.is_empty() %}
-                <div class="fm-personal-section">
-                    <div class="fm-pp-duo">
-                        {% if !player_info.languages.is_empty() %}
-                        <div class="fm-pp-duo-col">
-                            <h4 class="fm-section-subtitle">{{ i18n.t("languages") }}</h4>
-                            {% for language in player_info.languages %}
-                            <div class="fm-pp-bar-row">
-                                <span class="fm-pp-label">{{ language.name }}</span>
-                                <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{% if language.is_native %}100{% else %}{{ language.proficiency }}{% endif %}%"></span></span>
-                                <span class="fm-pp-num fm-pp-num-wide">{{ language.level }}</span>
-                            </div>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                        {% if !favorite_clubs.is_empty() %}
-                        <div class="fm-pp-duo-col">
-                            <h4 class="fm-section-subtitle">{{ i18n.t("favoured_clubs") }}</h4>
-                            <ul class="fm-pp-clubs">
-                                {% for club in favorite_clubs %}
-                                <li><a href="/{{ lang }}/teams/{{ club.slug }}">{{ club.name }}</a></li>
-                                {% endfor %}
-                            </ul>
-                        </div>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endif %}
             </section>
         </div>
 
@@ -166,11 +146,14 @@
             <h3>{{ i18n.t("morale_and_happiness") }}</h3>
         </div>
         <div class="fm-mh-hero">
-            <div class="fm-mh-morale">
-                <h4 class="fm-section-subtitle">{{ i18n.t("morale") }}</h4>
-                <div class="fm-mh-morale-line">
-                    <span class="fm-mh-word{% if morale.value >= 65 %} is-good{% elif morale.value >= 45 %} is-okay{% else %} is-poor{% endif %}">{{ morale.label }}</span>
-                    <span class="fm-mh-track"><span class="fm-mh-fill{% if morale.value >= 65 %} is-good{% elif morale.value >= 45 %} is-okay{% else %} is-poor{% endif %}" style="width:{{ morale.value }}%"></span></span>
+            <div class="fm-mh-verdict">
+                <p class="fm-mh-word {{ morale.tone }}">{{ morale.label }}</p>
+                <p class="fm-mh-summary">{{ morale.summary }}</p>
+                <div class="fm-mh-scale" style="grid-template-columns:{% for band in morale.bands %} {{ band.weight }}fr{% endfor %}">
+                    <div class="fm-mh-scale-track"><span class="fm-mh-scale-fill {{ morale.tone }}" style="width:{{ morale.value }}%"></span></div>
+                    {% for band in morale.bands %}
+                    <span class="fm-mh-band{% if band.active %} is-active{% endif %}">{{ band.label }}</span>
+                    {% endfor %}
                 </div>
             </div>
             {% if !concerns.is_empty() %}
@@ -182,26 +165,45 @@
             {% endif %}
         </div>
         <div class="fm-mh-grid">
-            {% if !happiness_factors.is_empty() %}
             <div class="fm-mh-cell">
-                <h4 class="fm-section-subtitle">{{ i18n.t("happiness_factors") }}</h4>
-                <ul class="fm-mh-ledger">
-                    {% for factor in happiness_factors %}
-                    <li class="fm-mh-ledger-row">
-                        <span class="fm-mh-ledger-name">{{ factor.name }}</span>
-                        <span class="fm-mh-ledger-bar"><span class="fm-mh-ledger-fill{% if factor.value < 0 %} is-neg{% else %} is-pos{% endif %}" style="width:{{ factor.bar }}%"></span></span>
-                        <span class="fm-mh-ledger-val{% if factor.value > 0 %} is-pos{% elif factor.value < 0 %} is-neg{% endif %}">{{ factor.label }}</span>
+                <h4 class="fm-section-subtitle">{{ i18n.t("mh_weighing") }}</h4>
+                {% if weighing.is_empty() %}
+                <p class="fm-mh-empty">{{ i18n.t("mh_nothing_weighing") }}</p>
+                {% else %}
+                <ul class="fm-mh-rows">
+                    {% for factor in weighing %}
+                    <li class="fm-mh-row">
+                        <span class="fm-mh-row-name">{{ factor.name }}</span>
+                        <span class="fm-mh-row-bar"><span class="fm-mh-row-fill is-neg" style="width:{{ factor.bar }}%"></span></span>
+                        <span class="fm-mh-row-word is-neg">{{ factor.label }}</span>
                     </li>
                     {% endfor %}
                 </ul>
+                {% endif %}
             </div>
-            {% endif %}
-            {% if let Some(m) = mind %}
-            {% if !m.wants.is_empty() %}
+            <div class="fm-mh-cell">
+                <h4 class="fm-section-subtitle">{{ i18n.t("mh_lifting") }}</h4>
+                {% if lifting.is_empty() %}
+                <p class="fm-mh-empty">{{ i18n.t("mh_nothing_lifting") }}</p>
+                {% else %}
+                <ul class="fm-mh-rows">
+                    {% for factor in lifting %}
+                    <li class="fm-mh-row">
+                        <span class="fm-mh-row-name">{{ factor.name }}</span>
+                        <span class="fm-mh-row-bar"><span class="fm-mh-row-fill is-pos" style="width:{{ factor.bar }}%"></span></span>
+                        <span class="fm-mh-row-word is-pos">{{ factor.label }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
+            </div>
             <div class="fm-mh-cell">
                 <h4 class="fm-section-subtitle">{{ i18n.t("mind_what_he_wants") }}</h4>
+                {% if wants.is_empty() %}
+                <p class="fm-mh-empty">{{ i18n.t("mind_no_wants") }}</p>
+                {% else %}
                 <ul class="fm-mh-wants">
-                    {% for want in m.wants %}
+                    {% for want in wants %}
                     <li class="fm-mh-want{% if want.unspoken %} is-unspoken{% endif %}">
                         <div class="fm-mh-want-body">
                             <span class="fm-mh-want-name">{{ want.name }}</span>{% if want.unspoken %}<span class="fm-mh-want-tag">{{ i18n.t("mind_unspoken") }}</span>{% endif %}
@@ -212,41 +214,45 @@
                             <div class="fm-mh-want-note is-blocked">{{ blocked }}</div>
                             {% endif %}
                         </div>
-                        <span class="fm-mh-want-bar"><span class="fm-mh-want-fill" style="width:{{ want.pressure }}%"></span></span>
                         <span class="fm-mh-want-status">{{ want.status }}</span>
                     </li>
                     {% endfor %}
                 </ul>
+                {% endif %}
             </div>
-            {% endif %}
-            {% endif %}
-            {% if has_club_ties %}
+            {% if let Some(rel) = manager_relationship %}
             <div class="fm-mh-cell">
-                {% if let Some(rel) = manager_relationship %}
                 <h4 class="fm-section-subtitle">{{ i18n.t("manager_relationship") }}</h4>
                 <div class="fm-mh-manager">
                     <span class="fm-mh-manager-name">{{ rel.manager_name }}</span>
-                    <span class="fm-mh-manager-rel{% if rel.level > 20 %} is-good{% elif rel.level < -20 %} is-poor{% endif %}">{{ rel.label }}</span>
+                    {% if let Some(bond) = rel.bond %}
+                    <span class="fm-mh-manager-rel {{ bond.tone }}">{{ bond.label }}</span>
+                    {% else %}
+                    <span class="fm-mh-manager-rel">{{ i18n.t("rel_not_formed") }}</span>
+                    {% endif %}
                 </div>
-                <div class="fm-pp-bar-row">
-                    <span class="fm-pp-label">{{ i18n.t("trust") }}</span>
-                    <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{{ rel.trust }}%"></span></span>
-                </div>
-                <div class="fm-pp-bar-row">
-                    <span class="fm-pp-label">{{ i18n.t("respect") }}</span>
-                    <span class="fm-pp-track"><span class="fm-pp-fill" style="width:{{ rel.respect }}%"></span></span>
-                </div>
+                {% if let Some(bond) = rel.bond %}
+                <ul class="fm-mh-rows">
+                    <li class="fm-mh-row">
+                        <span class="fm-mh-row-name">{{ i18n.t("trust") }}</span>
+                        <span class="fm-mh-row-bar"><span class="fm-mh-row-fill is-level" style="width:{{ bond.trust }}%"></span></span>
+                        <span class="fm-mh-row-word">{{ bond.trust }}%</span>
+                    </li>
+                    <li class="fm-mh-row">
+                        <span class="fm-mh-row-name">{{ i18n.t("respect") }}</span>
+                        <span class="fm-mh-row-bar"><span class="fm-mh-row-fill is-level" style="width:{{ bond.respect }}%"></span></span>
+                        <span class="fm-mh-row-word">{{ bond.respect }}%</span>
+                    </li>
+                </ul>
                 {% endif %}
                 {% if let Some(m) = mind %}
-                {% if !m.memories.is_empty() %}
-                <h4 class="fm-section-subtitle{% if manager_relationship.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("mind_what_he_remembers") }}</h4>
+                <h4 class="fm-section-subtitle fm-mh-eyebrow-gap">{{ i18n.t("mind_what_he_remembers") }}</h4>
                 <div class="fm-mh-sentiment{% if m.sentiment > 10 %} is-good{% elif m.sentiment < -10 %} is-poor{% endif %}">{{ m.sentiment_label }}</div>
                 <ul class="fm-mh-memories">
                     {% for memory in m.memories %}
                     <li class="{% if memory.warm %}is-warm{% else %}is-sour{% endif %}">{{ memory.text }}</li>
                     {% endfor %}
                 </ul>
-                {% endif %}
                 {% endif %}
             </div>
             {% endif %}

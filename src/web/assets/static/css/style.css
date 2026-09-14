@@ -3029,32 +3029,32 @@ a:active {
 }
 
 /* ── Personal tab: profile ────────────────────────────────────────
-   The profile is a fact sheet, so it is set as a two-column
-   definition list that folds to one column when the panel is narrow
-   (the 1200–1280px sidebar band included — the columns are auto-fit,
-   not keyed to the viewport). Every bar on the page shares one track
-   (.fm-pp-track). A health — condition — is painted traffic-light; a
-   level — reputation, language, trust — is plain blue, so a regional
-   reputation is never shown as if it were an injury. */
+   The profile is a fact sheet. It is set as multi-column text rather
+   than a grid so the column rule comes free and the whole thing folds
+   to one column the moment the panel cannot hold two — the 1200–1280px
+   sidebar band included, which no viewport query would have caught.
+   Only two things in the panel are drawn: a health (condition, painted
+   traffic-light) and a stature (reputation, drawn as a ladder). Facts
+   are text. */
 
-.fm-pp-kv {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(max(210px, calc(50% - 14px)), 1fr));
-    column-gap: 28px;
+.fm-pp-facts {
+    columns: 210px 2;
+    column-gap: 32px;
+    column-rule: 1px solid #24343f;
     margin: 0;
 }
 
-.fm-pp-row {
+.fm-pp-fact {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 12px;
-    min-width: 0;
+    break-inside: avoid;
     padding: 5px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
-.fm-pp-row dt {
+.fm-pp-fact dt {
     flex-shrink: 0;
     font-size: 12px;
     font-weight: 400;
@@ -3062,12 +3062,26 @@ a:active {
     white-space: nowrap;
 }
 
-.fm-pp-row dd {
+.fm-pp-fact dd {
     margin: 0;
     min-width: 0;
     font-size: 13px;
     color: #c8d4de;
     text-align: right;
+}
+
+.fm-pp-fact dd a {
+    color: #5ba3d9;
+    text-decoration: none;
+}
+
+.fm-pp-fact dd a:hover {
+    text-decoration: underline;
+}
+
+/* The qualifier inside a fact — a language level, not the language. */
+.fm-pp-sub {
+    color: #546a78;
 }
 
 .fm-pp-bars {
@@ -3129,71 +3143,71 @@ a:active {
     text-align: right;
 }
 
-.fm-pp-num-wide {
-    width: auto;
-    min-width: 48px;
-}
-
+/* Reputation: three meters cut into the same six tiers, so "where he
+   plays" and "worldwide" can be compared by counting slots — the part a
+   percentage of an invisible 0–10000 scale never told anyone. The track
+   is lighter than the rest of the page's because the empty slots are
+   half the information: how far he still has to go. */
 .fm-pp-rep {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 16px;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    column-gap: 16px;
 }
 
-.fm-pp-rep-tile {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    min-width: 0;
+.fm-pp-rep-row {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    grid-template-columns: subgrid;
+    align-items: center;
+    padding: 7px 0;
 }
 
 .fm-pp-rep-name {
-    font-size: 11px;
-    color: #546a78;
-}
-
-.fm-pp-rep-tile .fm-pp-track {
-    flex: none;
-    width: 100%;
-}
-
-.fm-pp-rep-word {
     font-size: 12px;
-    font-weight: 500;
-    color: #c8d4de;
+    color: #546a78;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.fm-pp-duo {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 12px 28px;
+.fm-pp-rep-track {
+    position: relative;
+    display: block;
+    height: 4px;
+    background: #22303a;
+    border-radius: 2px;
+    overflow: hidden;
 }
 
-.fm-pp-duo-col {
-    min-width: 0;
+/* The seams sit at the rounded percentages `ReputationLadder::fill`
+   produces, so a fill always stops on one instead of a hair past it. */
+.fm-pp-rep-track::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(#0f171c, #0f171c) 17% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 33% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 50% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 67% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 83% 0 / 2px 100% no-repeat;
 }
 
-.fm-pp-clubs {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+.fm-pp-rep-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #437fa2;
 }
 
-.fm-pp-clubs li {
-    padding: 5px 0;
+.fm-pp-rep-word {
+    min-width: 80px;
     font-size: 13px;
-}
-
-.fm-pp-clubs a {
-    color: #5ba3d9;
-    text-decoration: none;
-}
-
-.fm-pp-clubs a:hover {
-    text-decoration: underline;
+    color: #c8d4de;
+    text-align: right;
+    white-space: nowrap;
 }
 
 /* Personality: the radar carries the hidden attributes; the tiles
@@ -3268,44 +3282,36 @@ a:active {
 }
 
 /* ── Morale & happiness ───────────────────────────────────────────
-   One panel, read top to bottom: the verdict (the morale word on its
-   five-band bar, with any flags the club has raised beside it), then
-   the columns that explain it — a ledger of what is pulling him each
-   way, what he wants, and where he stands with this club. The
-   columns are auto-fit, so a narrow content column folds them
-   without a viewport query. */
+   The verdict first, in words: how he is, and which way the ledger is
+   pulling him. Under it the bar, with the five bands named beneath
+   their own stretch of track — the scale is its own legend, so nobody
+   has to be told what 50 means. Then four cells that back the verdict
+   up: what is dragging him down, what is holding him up, what he is
+   after, and where he stands with the man picking the side. Every cell
+   answers with a sentence when it has nothing to report; an empty
+   column tells a reader less than a stated absence. */
 
 .fm-mh-hero {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: 12px 32px;
-    padding: 14px 16px;
+    align-items: flex-start;
+    gap: 16px 40px;
+    padding: 16px 16px 18px;
 }
 
-.fm-mh-morale {
-    flex: 1 1 300px;
+.fm-mh-verdict {
+    flex: 1 1 380px;
     min-width: 0;
-    max-width: 480px;
-}
-
-.fm-mh-morale .fm-section-subtitle {
-    margin-bottom: 4px;
-}
-
-.fm-mh-morale-line {
-    display: flex;
-    align-items: center;
-    gap: 14px;
+    max-width: 660px;
 }
 
 .fm-mh-word {
-    font-size: 22px;
+    margin: 0;
+    font-size: 30px;
     font-weight: 600;
-    line-height: 1.1;
-    letter-spacing: -0.2px;
+    line-height: 1.05;
+    letter-spacing: -0.4px;
     color: #94a3af;
-    white-space: nowrap;
 }
 
 .fm-mh-word.is-good {
@@ -3320,19 +3326,33 @@ a:active {
     color: #ef5350;
 }
 
-/* The four ticks sit where the morale label changes — 25, 45, 65,
-   80 — so the bar reads as the scale the word came from. */
-.fm-mh-track {
+.fm-mh-summary {
+    margin: 6px 0 0;
+    max-width: 58ch;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #94a3af;
+}
+
+/* The columns are written inline, from the band widths the morale word
+   actually changes at, so a band name always sits over its own stretch
+   of track. */
+.fm-mh-scale {
+    display: grid;
+    row-gap: 8px;
+    margin-top: 16px;
+}
+
+.fm-mh-scale-track {
     position: relative;
-    flex: 1 1 120px;
-    min-width: 0;
+    grid-column: 1 / -1;
     height: 8px;
     background: #1a2a34;
     border-radius: 4px;
     overflow: hidden;
 }
 
-.fm-mh-track::after {
+.fm-mh-scale-track::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -3344,28 +3364,41 @@ a:active {
         linear-gradient(#0f171c, #0f171c) 80% 0 / 2px 100% no-repeat;
 }
 
-.fm-mh-fill {
+.fm-mh-scale-fill {
     display: block;
     height: 100%;
     border-radius: 4px;
     background: #5a7080;
 }
 
-.fm-mh-fill.is-good {
+.fm-mh-scale-fill.is-good {
     background: #4caf50;
 }
 
-.fm-mh-fill.is-okay {
+.fm-mh-scale-fill.is-okay {
     background: #ff9800;
 }
 
-.fm-mh-fill.is-poor {
+.fm-mh-scale-fill.is-poor {
     background: #e53935;
+}
+
+.fm-mh-band {
+    font-size: 10px;
+    color: #5d7280;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.fm-mh-band.is-active {
+    font-weight: 600;
+    color: #c8d4de;
 }
 
 .fm-mh-flags {
     display: flex;
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: flex-start;
     gap: 6px;
     list-style: none;
     margin: 0;
@@ -3383,7 +3416,6 @@ a:active {
     background: rgba(229, 57, 53, 0.1);
     border: 1px solid rgba(229, 57, 53, 0.28);
     border-radius: 3px;
-    white-space: nowrap;
 }
 
 .fm-mh-flag::before {
@@ -3400,9 +3432,15 @@ a:active {
    whichever way the columns wrap. */
 .fm-mh-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: calc(100% + 1px);
     margin-left: -1px;
+}
+
+@media (max-width: 900px) {
+    .fm-mh-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .fm-mh-cell {
@@ -3412,135 +3450,103 @@ a:active {
     border-left: 1px solid #1a2a34;
 }
 
-/* The ledger: one diverging bar per factor, worst at the top. Half
-   the track is a full-strength factor, so the spine is the zero. */
-.fm-mh-ledger {
+.fm-mh-empty {
+    margin: 0;
+    font-size: 12px;
+    color: #546a78;
+}
+
+/* One row shape for every named 0–100 measure in the panel — a
+   happiness factor either way, the manager's trust, his respect. The
+   list owns the columns and each row borrows them back with `subgrid`,
+   which is what holds the bars in line: the verdict phrase is written
+   by the sim, "Concern" runs far shorter than "Strong positive", and
+   while each row sized its own tracks that difference paid out
+   sideways. Sized once on the list, the widest phrase sets the column.
+   Where subgrid is unsupported the second declaration drops and the
+   row sizes its own tracks again — ragged, not broken. */
+.fm-mh-rows {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px auto;
-    column-gap: 12px;
+    grid-template-columns: minmax(0, max-content) minmax(72px, 1fr) max-content;
+    column-gap: 14px;
     list-style: none;
     margin: 0;
     padding: 0;
 }
 
-/* Columns on the list, borrowed back per row — the same arrangement
-   `.fm-mh-wants` uses, and for the same reason: a track sized per row
-   moves the bar with the verdict beside it. The fixed 96px this replaces
-   held the desktop line but was a guess at the longest verdict, and it
-   held nothing at all under the 480px rule below, where the third track
-   went `auto` and the bars went with it. `auto` on the list measures the
-   widest verdict once, in whatever language is printing. */
-.fm-mh-ledger-row {
+.fm-mh-row {
     display: grid;
     grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) 112px auto;
+    grid-template-columns: minmax(0, max-content) minmax(72px, 1fr) max-content;
     grid-template-columns: subgrid;
     align-items: center;
-    column-gap: 12px;
     padding: 4px 0;
 }
 
-.fm-mh-ledger-name {
+.fm-mh-row-name {
     font-size: 12px;
-    color: #94a3af;
+    color: #c8d4de;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.fm-mh-ledger-bar {
-    position: relative;
+.fm-mh-row-bar {
     height: 6px;
     background: #1a2a34;
     border-radius: 3px;
+    overflow: hidden;
 }
 
-.fm-mh-ledger-bar::before {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: -3px;
-    bottom: -3px;
-    width: 1px;
-    background: #3a4c5a;
+.fm-mh-row-fill {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
 }
 
-.fm-mh-ledger-fill {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    max-width: 50%;
-}
-
-.fm-mh-ledger-fill.is-pos {
-    left: 50%;
+.fm-mh-row-fill.is-pos {
     background: #4caf50;
-    border-radius: 0 3px 3px 0;
 }
 
-.fm-mh-ledger-fill.is-neg {
-    right: 50%;
+.fm-mh-row-fill.is-neg {
     background: #e53935;
-    border-radius: 3px 0 0 3px;
 }
 
-.fm-mh-ledger-val {
+.fm-mh-row-fill.is-level {
+    background: #437fa2;
+}
+
+.fm-mh-row-word {
     font-size: 11px;
-    color: #6d8290;
+    color: #94a3af;
     text-align: right;
     white-space: nowrap;
 }
 
-.fm-mh-ledger-val.is-pos {
+.fm-mh-row-word.is-pos {
     color: #5cb86c;
 }
 
-.fm-mh-ledger-val.is-neg {
+.fm-mh-row-word.is-neg {
     color: #ef5350;
 }
 
-/* What he wants: one line per want, loudest first. The 'unspoken'
+/* What he wants: one line per want, loudest first, and the phrase on
+   the right says how far up the ladder it has climbed. The 'unspoken'
    tag is load-bearing rather than decorative — the Latent and Active
    rungs are the ones nobody has heard him say, and a manager reading
    this needs to tell a private want from a public one at a glance. */
-/* A want reads as the thing he wants on the left and how it is showing
-   on the right, with the strength of it drawn under the phrase that
-   names it — the bar measures the want, so it sits with the words for
-   the want rather than in a lane of its own.
-
-   The list owns the two columns and each row borrows them back with
-   `subgrid`. That is what holds the bars in line: the status phrase is
-   the one part of a want whose width the sim writes, "Has said so" runs
-   53px shorter than "Shapes every decision", and while each row sized
-   its own track that difference paid out sideways — three bars at three
-   different offsets down a column three rows long. Sized once on the
-   list, the widest phrase sets the column and every bar is the same
-   length in the same place. Where subgrid is unsupported the second
-   declaration drops and the row sizes its own tracks again — ragged, as
-   before, not broken. */
 .fm-mh-wants {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    column-gap: 12px;
     list-style: none;
     margin: 0;
     padding: 0;
 }
 
-/* Placed rather than flowed: the markup runs name, bar, status, and the
-   bar belongs on the second line under the status. */
 .fm-mh-want {
-    display: grid;
-    grid-column: 1 / -1;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-columns: subgrid;
-    /* Baseline, not centre: a name that takes two lines — the Russian
-       'unspoken' tag wraps under its name — would otherwise float the
-       status phrase down between them instead of setting it against the
-       line the name starts on. */
+    display: flex;
     align-items: baseline;
-    column-gap: 12px;
-    row-gap: 5px;
+    justify-content: space-between;
+    gap: 14px;
     padding: 5px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
@@ -3550,8 +3556,6 @@ a:active {
 }
 
 .fm-mh-want-body {
-    grid-column: 1;
-    grid-row: 1;
     min-width: 0;
 }
 
@@ -3588,35 +3592,11 @@ a:active {
     color: #ef5350;
 }
 
-.fm-mh-want-bar {
-    position: relative;
-    display: block;
-    grid-column: 2;
-    grid-row: 2;
-    height: 4px;
-    background: #1a2a34;
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.fm-mh-want-fill {
-    display: block;
-    height: 100%;
-    border-radius: 2px;
-    background: #5c6bc0;
-}
-
-.fm-mh-want.is-unspoken .fm-mh-want-fill {
-    opacity: 0.55;
-}
-
 .fm-mh-want-status {
-    grid-column: 2;
-    grid-row: 1;
+    flex-shrink: 0;
     font-size: 11px;
     color: #6d8290;
     text-align: right;
-    white-space: nowrap;
 }
 
 /* Where he stands with this club: the manager, then what he
@@ -3626,7 +3606,7 @@ a:active {
     justify-content: space-between;
     align-items: baseline;
     gap: 12px;
-    padding: 1px 0 3px;
+    padding: 1px 0 5px;
 }
 
 .fm-mh-manager-name {
@@ -3703,12 +3683,20 @@ a:active {
 @media (max-width: 480px) {
     /* The list, not the row: the row is a subgrid now and re-declaring
        its tracks here would take the columns back off the list. */
-    .fm-mh-ledger {
-        grid-template-columns: minmax(0, 1fr) 80px auto;
+    .fm-mh-rows {
+        grid-template-columns: minmax(0, 1fr) 64px max-content;
     }
 
-    .fm-mh-ledger-name {
+    .fm-mh-row-name {
         white-space: normal;
+    }
+
+    /* Five band names cannot share a phone's width; the word above the
+       bar is still saying which one he is in. */
+    .fm-mh-band {
+        font-size: 9px;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 }
 

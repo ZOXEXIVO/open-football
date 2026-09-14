@@ -10,6 +10,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use chrono::NaiveDate;
+use core::Person;
 use core::Player;
 use core::PlayerPreferredFoot;
 use core::PlayerSquadStatus;
@@ -60,22 +61,22 @@ pub struct PlayerPersonalTemplate {
     pub news_count: usize,
     pub personality: PersonalityDto,
     pub morale: MoraleDto,
-    pub happiness_factors: Vec<HappinessFactorDto>,
+    /// The two halves of the happiness ledger, each sorted loudest first.
+    /// Split rather than diverging: a reader should not have to decode a
+    /// centre line to learn which way a factor pulls.
+    pub weighing: Vec<HappinessFactorDto>,
+    pub lifting: Vec<HappinessFactorDto>,
     pub concerns: Vec<String>,
     pub behaviour: String,
     pub manager_relationship: Option<ManagerRelationshipDto>,
     pub favorite_clubs: Vec<FavoriteClubDto>,
     pub player_info: PlayerInfoDto,
     pub reputation: ReputationDto,
-    /// What he wants, and what he remembers about this club. `None` for
-    /// a mind with nothing in it yet — a fresh save, or a player whose
-    /// side has not ticked since he arrived.
+    /// What he is after, loudest first.
+    pub wants: Vec<MindWantDto>,
+    /// What he remembers about this club. `None` for a player who has
+    /// nothing to remember of the place yet.
     pub mind: Option<MindDto>,
-    /// Whether the club column of the morale panel has anything to
-    /// say — a manager he has a relationship with, or memories of
-    /// this club. Both are optional; the column is skipped when
-    /// neither is there.
-    pub has_club_ties: bool,
 }
 
 pub struct FavoriteClubDto {
@@ -112,35 +113,60 @@ pub struct RadarLabelDto {
 pub struct MoraleDto {
     pub value: u8,
     pub label: String,
+    /// Colour class shared by the word and the bar.
+    pub tone: &'static str,
+    /// The ledger balance said as a sentence — the one part of the panel
+    /// that reads without decoding anything.
+    pub summary: String,
+    /// The five named bands, in order, so the bar carries its own legend.
+    pub bands: Vec<MoraleBandDto>,
+}
+
+pub struct MoraleBandDto {
+    pub label: String,
+    /// Share of the track this band covers, in grid `fr` units.
+    pub weight: u8,
+    pub active: bool,
 }
 
 pub struct HappinessFactorDto {
     pub name: String,
     pub value: i8,
     pub label: String,
-    /// Bar length in percent of the whole ledger track, 0..=50 — see
+    /// Bar length in percent of the row track, 0..=100 — see
     /// `HappinessLedger::bar`.
     pub bar: u8,
 }
 
 pub struct ManagerRelationshipDto {
     pub manager_name: String,
-    pub level: i8,
+    /// `None` until the two of them have worked together long enough for a
+    /// relation to exist. The manager is still named — an absent column
+    /// tells the reader less than a stated absence.
+    pub bond: Option<ManagerBondDto>,
+}
+
+pub struct ManagerBondDto {
     pub label: String,
+    pub tone: &'static str,
     pub trust: u8,
     pub respect: u8,
 }
 
 pub struct ReputationDto {
-    pub current: u8,
-    pub current_label: String,
-    pub home: u8,
-    pub home_label: String,
-    pub world: u8,
-    pub world_label: String,
+    pub rows: Vec<ReputationRowDto>,
+}
+
+pub struct ReputationRowDto {
+    pub name: String,
+    /// How much of the six-tier track he has filled, in percent — see
+    /// `ReputationLadder::fill`.
+    pub fill: u8,
+    pub label: String,
 }
 
 pub struct PlayerInfoDto {
+    pub age: u8,
     pub birth_date: String,
     pub preferred_foot: String,
     pub leadership: u8,
@@ -158,9 +184,7 @@ pub struct PlayerInfoDto {
 
 pub struct PlayerLanguageDto {
     pub name: String,
-    pub proficiency: u8,
     pub level: String,
-    pub is_native: bool,
 }
 
 pub async fn player_personal_action(
@@ -208,9 +232,11 @@ pub async fn player_personal_action(
         player.full_name.display_last_name()
     );
 
+    let today = simulator_data.date.date();
+
     let personality = get_personality(player);
-    let morale = get_morale(player, &i18n);
-    let happiness_factors = get_happiness_factors(player, &i18n);
+    let (weighing, lifting) = get_happiness_factors(player, &i18n);
+    let morale = MoraleScale::read(player.happiness.morale, &weighing, &lifting, &i18n);
     let concerns = get_concerns(player, &i18n);
     let behaviour = i18n
         .t(&format!(
@@ -226,7 +252,7 @@ pub async fn player_personal_action(
                     .find_by_position(StaffPosition::AssistantManager)
             })
         })
-        .and_then(|staff| get_manager_relationship(player, staff, &i18n));
+        .map(|staff| ManagerBond::of(player, staff, &i18n));
 
     let favorite_clubs: Vec<FavoriteClubDto> = player
         .favorite_clubs
@@ -248,18 +274,15 @@ pub async fn player_personal_action(
         })
         .collect();
 
-    let mind = get_mind(
+    let (wants, mind) = PlayerMindView::of(
         player,
         team_opt.map(|t| t.club_id).unwrap_or(0),
-        simulator_data.date.date(),
+        today,
         &i18n,
     );
 
-    let has_club_ties =
-        manager_relationship.is_some() || mind.as_ref().is_some_and(|m| !m.memories.is_empty());
-
-    let player_info = get_player_info(player, &i18n);
-    let reputation = get_reputation(player, &i18n);
+    let player_info = get_player_info(player, today, &i18n);
+    let reputation = ReputationLadder::rows(player, &i18n);
 
     Ok(PlayerPersonalTemplate {
         css_version: CSS_VERSION,
@@ -325,15 +348,16 @@ pub async fn player_personal_action(
         news_count: PlayerNewsCounter::count(simulator_data, player),
         personality,
         morale,
-        happiness_factors,
+        weighing,
+        lifting,
         concerns,
         behaviour,
         manager_relationship,
         favorite_clubs,
         player_info,
         reputation,
+        wants,
         mind,
-        has_club_ties,
     }
     .into_response())
 }
@@ -446,7 +470,7 @@ impl PersonalityRadar {
     }
 }
 
-fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
+fn get_player_info(player: &Player, today: NaiveDate, i18n: &I18n) -> PlayerInfoDto {
     let preferred_foot = match player.preferred_foot {
         PlayerPreferredFoot::Left => i18n.t("foot_left"),
         PlayerPreferredFoot::Right => i18n.t("foot_right"),
@@ -490,13 +514,12 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
         .filter(|l| l.proficiency >= 5 || l.is_native)
         .map(|l| PlayerLanguageDto {
             name: i18n.t(l.language.i18n_key()).to_string(),
-            proficiency: l.proficiency,
             level: i18n.t(l.level_key()).to_string(),
-            is_native: l.is_native,
         })
         .collect();
 
     PlayerInfoDto {
+        age: player.age(today),
         birth_date: i18n.format_date(player.birth_date),
         preferred_foot: preferred_foot.to_string(),
         leadership,
@@ -513,22 +536,95 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
     }
 }
 
-fn get_morale(player: &Player, i18n: &I18n) -> MoraleDto {
-    let m = player.happiness.morale;
-    let label = if m >= 80.0 {
-        i18n.t("morale_superb")
-    } else if m >= 65.0 {
-        i18n.t("morale_good")
-    } else if m >= 45.0 {
-        i18n.t("morale_okay")
-    } else if m >= 25.0 {
-        i18n.t("morale_poor")
-    } else {
-        i18n.t("morale_very_poor")
-    };
-    MoraleDto {
-        value: m.round().clamp(0.0, 100.0) as u8,
-        label: label.to_string(),
+/// The morale bar and the word above it, read off one table of bands.
+///
+/// The bands are the widths the word actually changes at, so printing
+/// their names under the track turns the bar into its own legend — a
+/// reader can see where "Okay" ends instead of being told a number.
+struct MoraleScale;
+
+impl MoraleScale {
+    /// `(floor, width, label key, colour)`, lowest first. The widths are
+    /// the gaps between the floors, so they sum to the whole track.
+    const BANDS: [(f32, u8, &'static str, &'static str); 5] = [
+        (0.0, 25, "morale_very_poor", "is-poor"),
+        (25.0, 20, "morale_poor", "is-poor"),
+        (45.0, 20, "morale_okay", "is-okay"),
+        (65.0, 15, "morale_good", "is-good"),
+        (80.0, 20, "morale_superb", "is-good"),
+    ];
+
+    fn band_of(morale: f32) -> usize {
+        Self::BANDS
+            .iter()
+            .rposition(|(floor, ..)| morale >= *floor)
+            .unwrap_or(0)
+    }
+
+    fn read(
+        morale: f32,
+        weighing: &[HappinessFactorDto],
+        lifting: &[HappinessFactorDto],
+        i18n: &I18n,
+    ) -> MoraleDto {
+        let active = Self::band_of(morale);
+        let (_, _, label, tone) = Self::BANDS[active];
+
+        MoraleDto {
+            value: morale.round().clamp(0.0, 100.0) as u8,
+            label: i18n.t(label).to_string(),
+            tone,
+            summary: MoraleVerdict::summary(weighing, lifting, i18n),
+            bands: Self::BANDS
+                .iter()
+                .enumerate()
+                .map(|(i, (_, weight, key, _))| MoraleBandDto {
+                    label: i18n.t(key).to_string(),
+                    weight: *weight,
+                    active: i == active,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Says in one sentence which way the ledger is pulling.
+///
+/// Deliberately about the balance rather than about any one factor: the
+/// columns underneath already name the factors, and a sentence built by
+/// splicing a factor name into a template breaks in every language that
+/// declines nouns.
+struct MoraleVerdict;
+
+impl MoraleVerdict {
+    /// Above this share of the total pull, one side is doing the talking.
+    const DOMINANT: f32 = 0.65;
+
+    fn summary(
+        weighing: &[HappinessFactorDto],
+        lifting: &[HappinessFactorDto],
+        i18n: &I18n,
+    ) -> String {
+        let down: i32 = weighing.iter().map(|f| f.value.unsigned_abs() as i32).sum();
+        let up: i32 = lifting.iter().map(|f| f.value as i32).sum();
+
+        let key = match (down, up) {
+            (0, 0) => "morale_summary_none",
+            (0, _) => "morale_summary_all_good",
+            (_, 0) => "morale_summary_all_bad",
+            _ => {
+                let share = up as f32 / (up + down) as f32;
+                if share > Self::DOMINANT {
+                    "morale_summary_mostly_good"
+                } else if share < 1.0 - Self::DOMINANT {
+                    "morale_summary_mostly_bad"
+                } else {
+                    "morale_summary_mixed"
+                }
+            }
+        };
+
+        i18n.t(key).to_string()
     }
 }
 
@@ -558,12 +654,15 @@ impl FactorSentiment {
     }
 }
 
-fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto> {
+fn get_happiness_factors(
+    player: &Player,
+    i18n: &I18n,
+) -> (Vec<HappinessFactorDto>, Vec<HappinessFactorDto>) {
     let f = &player.happiness.factors;
     // Core seven factors (existing) plus the six derived "life in the
     // team" factors. Surface them all so the user can answer "why is
     // Messi unhappy at this club?" without guessing.
-    HappinessLedger::rows(
+    HappinessLedger::split(
         &[
             ("factor_playing_time", f.playing_time),
             ("factor_salary", f.salary_satisfaction),
@@ -581,23 +680,42 @@ fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto
     )
 }
 
-/// The happiness factors as the morale panel lists them: a ledger of
-/// what is pulling him each way, worst first.
+/// The happiness factors as the morale panel lists them: two columns,
+/// what is dragging him down and what is holding him up, each strongest
+/// first.
 struct HappinessLedger;
 
 impl HappinessLedger {
-    /// A factor this close to zero says nothing and is left off.
-    const SILENT: f32 = 0.5;
+    /// A factor this close to zero says nothing and is left off. It is
+    /// `FactorSentiment`'s neutral band rather than a threshold of its
+    /// own — a row reading "Neutral" under "Weighing on him" is the sign
+    /// the two had drifted apart.
+    const SILENT: f32 = 1.0;
+
+    fn split(
+        factors: &[(&str, f32)],
+        i18n: &I18n,
+    ) -> (Vec<HappinessFactorDto>, Vec<HappinessFactorDto>) {
+        let mut weighing: Vec<(&str, f32)> = factors
+            .iter()
+            .copied()
+            .filter(|(_, val)| *val < -Self::SILENT)
+            .collect();
+        weighing.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        let mut lifting: Vec<(&str, f32)> = factors
+            .iter()
+            .copied()
+            .filter(|(_, val)| *val > Self::SILENT)
+            .collect();
+        lifting.sort_by(|a, b| b.1.total_cmp(&a.1));
+
+        (Self::rows(&weighing, i18n), Self::rows(&lifting, i18n))
+    }
 
     fn rows(factors: &[(&str, f32)], i18n: &I18n) -> Vec<HappinessFactorDto> {
-        let mut factors = factors.to_vec();
-        // Worst first: the panel exists to answer "why is he unhappy",
-        // so the reader meets the cause before the consolation.
-        factors.sort_by(|a, b| a.1.total_cmp(&b.1));
-
         factors
             .iter()
-            .filter(|(_, val)| val.abs() > Self::SILENT)
             .map(|(key, val)| HappinessFactorDto {
                 name: i18n.t(key).to_string(),
                 value: val.round().clamp(-10.0, 10.0) as i8,
@@ -607,10 +725,11 @@ impl HappinessLedger {
             .collect()
     }
 
-    /// Bar length in percent of the whole track. Half the track is a
-    /// full-strength factor, so a bar never crosses the centre line.
+    /// Bar length in percent of the row track. The columns are already
+    /// signed by which one a factor is in, so the whole track is
+    /// available to show strength.
     fn bar(value: f32) -> u8 {
-        (value.abs() * 5.0).round().clamp(0.0, 50.0) as u8
+        (value.abs() * 10.0).round().clamp(0.0, 100.0) as u8
     }
 }
 
@@ -656,75 +775,92 @@ fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
     concerns
 }
 
-fn get_manager_relationship(
-    player: &Player,
-    head_coach: &core::Staff,
-    i18n: &I18n,
-) -> Option<ManagerRelationshipDto> {
-    let rel = player.relations.get_staff(head_coach.id)?;
-    let level = rel.level.round().clamp(-100.0, 100.0) as i8;
-    let label = if level > 50 {
-        i18n.t("rel_excellent")
-    } else if level > 20 {
-        i18n.t("rel_good")
-    } else if level > -20 {
-        i18n.t("rel_neutral")
-    } else if level > -50 {
-        i18n.t("rel_poor")
-    } else {
-        i18n.t("rel_very_poor")
-    };
+/// Where the player stands with the man picking the side.
+struct ManagerBond;
 
-    Some(ManagerRelationshipDto {
-        manager_name: format!(
-            "{} {}",
-            head_coach.full_name.display_first_name(),
-            head_coach.full_name.display_last_name()
-        ),
-        level,
-        label: label.to_string(),
-        trust: (rel.trust_in_abilities.round().clamp(0.0, 100.0)) as u8,
-        respect: (rel.authority_respect.round().clamp(0.0, 100.0)) as u8,
-    })
-}
+impl ManagerBond {
+    fn of(player: &Player, head_coach: &core::Staff, i18n: &I18n) -> ManagerRelationshipDto {
+        ManagerRelationshipDto {
+            manager_name: format!(
+                "{} {}",
+                head_coach.full_name.display_first_name(),
+                head_coach.full_name.display_last_name()
+            ),
+            bond: player.relations.get_staff(head_coach.id).map(|rel| {
+                let (label, tone) = if rel.level > 50.0 {
+                    ("rel_excellent", "is-good")
+                } else if rel.level > 20.0 {
+                    ("rel_good", "is-good")
+                } else if rel.level > -20.0 {
+                    ("rel_neutral", "")
+                } else if rel.level > -50.0 {
+                    ("rel_poor", "is-poor")
+                } else {
+                    ("rel_very_poor", "is-poor")
+                };
 
-fn reputation_label(value: i16, i18n: &I18n) -> String {
-    if value >= 8000 {
-        i18n.t("rep_world_class")
-    } else if value >= 6000 {
-        i18n.t("rep_continental")
-    } else if value >= 4000 {
-        i18n.t("rep_national")
-    } else if value >= 2000 {
-        i18n.t("rep_regional")
-    } else if value >= 500 {
-        i18n.t("rep_local")
-    } else {
-        i18n.t("rep_unknown")
+                ManagerBondDto {
+                    label: i18n.t(label).to_string(),
+                    tone,
+                    trust: (rel.trust_in_abilities.round().clamp(0.0, 100.0)) as u8,
+                    respect: (rel.authority_respect.round().clamp(0.0, 100.0)) as u8,
+                }
+            }),
+        }
     }
-    .to_string()
 }
 
-fn get_reputation(player: &Player, i18n: &I18n) -> ReputationDto {
-    let pa = &player.player_attributes;
-    // Scale 0-10000 to 0-100 for progress bar percentage
-    let current_pct = (pa.current_reputation as f32 / 100.0)
-        .round()
-        .clamp(0.0, 100.0) as u8;
-    let home_pct = (pa.home_reputation as f32 / 100.0)
-        .round()
-        .clamp(0.0, 100.0) as u8;
-    let world_pct = (pa.world_reputation as f32 / 100.0)
-        .round()
-        .clamp(0.0, 100.0) as u8;
+/// How big a name he is, on a ladder of six tiers.
+///
+/// Three reputations on the same six rungs: a reader can compare them by
+/// counting, which a percentage of an invisible 0–10000 scale never
+/// allowed.
+struct ReputationLadder;
 
-    ReputationDto {
-        current: current_pct,
-        current_label: reputation_label(pa.current_reputation, i18n),
-        home: home_pct,
-        home_label: reputation_label(pa.home_reputation, i18n),
-        world: world_pct,
-        world_label: reputation_label(pa.world_reputation, i18n),
+impl ReputationLadder {
+    /// `(floor, label key)`, highest tier first.
+    const TIERS: [(i16, &'static str); 6] = [
+        (8000, "rep_world_class"),
+        (6000, "rep_continental"),
+        (4000, "rep_national"),
+        (2000, "rep_regional"),
+        (500, "rep_local"),
+        (i16::MIN, "rep_unknown"),
+    ];
+
+    fn rows(player: &Player, i18n: &I18n) -> ReputationDto {
+        let pa = &player.player_attributes;
+        ReputationDto {
+            rows: [
+                ("rep_current", pa.current_reputation),
+                ("rep_home", pa.home_reputation),
+                ("rep_world", pa.world_reputation),
+            ]
+            .into_iter()
+            .map(|(name, value)| Self::row(name, value, i18n))
+            .collect(),
+        }
+    }
+
+    fn row(name_key: &str, value: i16, i18n: &I18n) -> ReputationRowDto {
+        let tier = Self::TIERS
+            .iter()
+            .position(|(floor, _)| value >= *floor)
+            .unwrap_or(Self::TIERS.len() - 1);
+        let reached = Self::TIERS.len() - tier;
+
+        ReputationRowDto {
+            name: i18n.t(name_key).to_string(),
+            fill: Self::fill(reached),
+            label: i18n.t(Self::TIERS[tier].1).to_string(),
+        }
+    }
+
+    /// The track is cut into one slot per tier, so a fill has to land on
+    /// a seam rather than a hair past it. The seams in `.fm-pp-rep-track`
+    /// are drawn at these same rounded percentages.
+    fn fill(reached: usize) -> u8 {
+        (reached as f32 / Self::TIERS.len() as f32 * 100.0).round() as u8
     }
 }
 
@@ -815,7 +951,8 @@ pub struct MindWantDto {
     pub deadline: Option<String>,
     /// Something is stopping him acting on it at all.
     pub blocked: Option<String>,
-    /// 0..100 — how hard it presses, for the bar.
+    /// 0..100 — how hard it presses. Orders the list; the status
+    /// phrase beside each want is what the reader sees of it.
     pub pressure: u8,
 }
 
@@ -826,97 +963,102 @@ pub struct MindMemoryDto {
     pub warm: bool,
 }
 
-/// What a player wants, and what he remembers about the place he is at.
-///
-/// The two halves of `PlayerMind` that are worth a reader's time: the
-/// goal stack, and a club-cued look at memory. Deliberately built with
-/// `PlayerMind::inspect` rather than `recall` — reading a man's memory
-/// on a web page must not rehearse it, or a player who happens to be
-/// popular would never forget anything.
+/// What a player remembers about the place he is at.
 pub struct MindDto {
-    pub wants: Vec<MindWantDto>,
     pub memories: Vec<MindMemoryDto>,
     /// −100..100, how he feels about this club overall.
     pub sentiment: i8,
     pub sentiment_label: String,
 }
 
-fn get_mind(player: &Player, club_id: u32, today: NaiveDate, i18n: &I18n) -> Option<MindDto> {
-    let ctx = player.mind_context(today, Some(club_id).filter(|id| *id != 0));
+/// The two halves of `PlayerMind` that are worth a reader's time: the
+/// goal stack, and a club-cued look at memory.
+///
+/// Deliberately built with `PlayerMind::inspect` rather than `recall` —
+/// reading a man's memory on a web page must not rehearse it, or a
+/// player who happens to be popular would never forget anything.
+struct PlayerMindView;
 
-    let mut wants: Vec<MindWantDto> = player
-        .mind
-        .goals()
-        .live()
-        .filter(|goal| goal.kind != mind::GoalKind::None)
-        .map(|goal| MindWantDto {
-            name: i18n.t(goal.kind.as_i18n_key()).to_string(),
-            status: i18n.t(goal.status.as_i18n_key()).to_string(),
-            unspoken: matches!(
-                goal.status,
-                mind::GoalStatus::Latent | mind::GoalStatus::Active
-            ),
-            deadline: (goal.deadline > 0).then(|| {
-                i18n.t("mind_deadline").replace(
-                    "{date}",
-                    &mind::MindClock::date(goal.deadline)
-                        .format("%d.%m.%Y")
-                        .to_string(),
-                )
-            }),
-            blocked: goal
-                .blocked_by
-                .is_blocked()
-                .then(|| i18n.t(goal.blocked_by.as_i18n_key()).to_string()),
-            pressure: (goal.pressure() * 100.0).clamp(0.0, 100.0) as u8,
-        })
-        .collect();
-    // Loudest first — the want that is actually driving him leads.
-    wants.sort_by(|a, b| b.pressure.cmp(&a.pressure));
+impl PlayerMindView {
+    fn of(
+        player: &Player,
+        club_id: u32,
+        today: NaiveDate,
+        i18n: &I18n,
+    ) -> (Vec<MindWantDto>, Option<MindDto>) {
+        let ctx = player.mind_context(today, Some(club_id).filter(|id| *id != 0));
 
-    // Club 0 is not a club. Cueing on it would match every episode
-    // recorded while he had no club at all and present them as things he
-    // remembers about *this* place, which for a free agent is the whole
-    // set. He has no "here" to remember.
-    let recalled = if club_id == 0 {
-        Default::default()
-    } else {
-        player.mind.inspect(mind::RecallCue::Club(club_id), &ctx)
-    };
-    let memories: Vec<MindMemoryDto> = recalled
-        .facts
-        .iter()
-        .filter(|fact| fact.claim != mind::FactClaim::None)
-        .take(6)
-        .map(|fact| MindMemoryDto {
-            text: i18n.t(fact.claim.as_i18n_key()).to_string(),
-            warm: fact.claim.valence() >= 0.0,
-        })
-        .collect();
+        let mut wants: Vec<MindWantDto> = player
+            .mind
+            .goals()
+            .live()
+            .filter(|goal| goal.kind != mind::GoalKind::None)
+            .map(|goal| MindWantDto {
+                name: i18n.t(goal.kind.as_i18n_key()).to_string(),
+                status: i18n.t(goal.status.as_i18n_key()).to_string(),
+                unspoken: matches!(
+                    goal.status,
+                    mind::GoalStatus::Latent | mind::GoalStatus::Active
+                ),
+                deadline: (goal.deadline > 0).then(|| {
+                    i18n.t("mind_deadline").replace(
+                        "{date}",
+                        &mind::MindClock::date(goal.deadline)
+                            .format("%d.%m.%Y")
+                            .to_string(),
+                    )
+                }),
+                blocked: goal
+                    .blocked_by
+                    .is_blocked()
+                    .then(|| i18n.t(goal.blocked_by.as_i18n_key()).to_string()),
+                pressure: (goal.pressure() * 100.0).clamp(0.0, 100.0) as u8,
+            })
+            .collect();
+        // Loudest first — the want that is actually driving him leads.
+        wants.sort_by(|a, b| b.pressure.cmp(&a.pressure));
 
-    if wants.is_empty() && memories.is_empty() {
-        return None;
+        // Club 0 is not a club. Cueing on it would match every episode
+        // recorded while he had no club at all and present them as things he
+        // remembers about *this* place, which for a free agent is the whole
+        // set. He has no "here" to remember.
+        let recalled = if club_id == 0 {
+            Default::default()
+        } else {
+            player.mind.inspect(mind::RecallCue::Club(club_id), &ctx)
+        };
+        let memories: Vec<MindMemoryDto> = recalled
+            .facts
+            .iter()
+            .filter(|fact| fact.claim != mind::FactClaim::None)
+            .take(6)
+            .map(|fact| MindMemoryDto {
+                text: i18n.t(fact.claim.as_i18n_key()).to_string(),
+                warm: fact.claim.valence() >= 0.0,
+            })
+            .collect();
+
+        let sentiment = recalled.sentiment();
+        let sentiment_label = if sentiment > 0.35 {
+            "mind_sentiment_fond"
+        } else if sentiment > 0.1 {
+            "mind_sentiment_warm"
+        } else if sentiment < -0.35 {
+            "mind_sentiment_bitter"
+        } else if sentiment < -0.1 {
+            "mind_sentiment_cool"
+        } else {
+            "mind_sentiment_neutral"
+        };
+
+        let mind = (!memories.is_empty()).then(|| MindDto {
+            memories,
+            sentiment: (sentiment * 100.0).clamp(-100.0, 100.0) as i8,
+            sentiment_label: i18n.t(sentiment_label).to_string(),
+        });
+
+        (wants, mind)
     }
-
-    let sentiment = recalled.sentiment();
-    let sentiment_label = if sentiment > 0.35 {
-        "mind_sentiment_fond"
-    } else if sentiment > 0.1 {
-        "mind_sentiment_warm"
-    } else if sentiment < -0.35 {
-        "mind_sentiment_bitter"
-    } else if sentiment < -0.1 {
-        "mind_sentiment_cool"
-    } else {
-        "mind_sentiment_neutral"
-    };
-
-    Some(MindDto {
-        wants,
-        memories,
-        sentiment: (sentiment * 100.0).clamp(-100.0, 100.0) as i8,
-        sentiment_label: i18n.t(sentiment_label).to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -950,7 +1092,7 @@ mod page_tests {
 
         fn template() -> PlayerPersonalTemplate {
             let i18n = Self::i18n();
-            let happiness_factors = HappinessLedger::rows(
+            let (weighing, lifting) = HappinessLedger::split(
                 &[
                     ("factor_playing_time", -7.0),
                     ("factor_salary", 7.0),
@@ -1007,11 +1149,9 @@ mod page_tests {
                 awards_count: 1,
                 news_count: 8,
                 personality: PersonalityRadar::plot([2, 3, 19, 18, 19, 6, 3, 2]),
-                morale: MoraleDto {
-                    value: 14,
-                    label: i18n.t("morale_very_poor").to_string(),
-                },
-                happiness_factors,
+                morale: MoraleScale::read(14.0, &weighing, &lifting, &i18n),
+                weighing,
+                lifting,
                 concerns: vec![
                     i18n.t("concern_unhappy").to_string(),
                     i18n.t("concern_transfer_request").to_string(),
@@ -1019,16 +1159,19 @@ mod page_tests {
                 behaviour: i18n.t("behaviour_good").to_string(),
                 manager_relationship: Some(ManagerRelationshipDto {
                     manager_name: "Riccardo Greco".to_string(),
-                    level: 4,
-                    label: i18n.t("rel_neutral").to_string(),
-                    trust: 100,
-                    respect: 40,
+                    bond: Some(ManagerBondDto {
+                        label: i18n.t("rel_neutral").to_string(),
+                        tone: "",
+                        trust: 100,
+                        respect: 40,
+                    }),
                 }),
                 favorite_clubs: vec![FavoriteClubDto {
                     name: "Belgrano".to_string(),
                     slug: "belgrano".to_string(),
                 }],
                 player_info: PlayerInfoDto {
+                    age: 30,
                     birth_date: "2 Jan 2004".to_string(),
                     preferred_foot: i18n.t("foot_right").to_string(),
                     leadership: 10,
@@ -1044,28 +1187,23 @@ mod page_tests {
                     languages: vec![
                         PlayerLanguageDto {
                             name: "Spanish".to_string(),
-                            proficiency: 100,
                             level: i18n.t("lang_level_native").to_string(),
-                            is_native: true,
                         },
                         PlayerLanguageDto {
                             name: "Italian".to_string(),
-                            proficiency: 32,
                             level: i18n.t("lang_level_basic").to_string(),
-                            is_native: false,
                         },
                     ],
                 },
                 reputation: ReputationDto {
-                    current: 45,
-                    current_label: i18n.t("rep_national").to_string(),
-                    home: 47,
-                    home_label: i18n.t("rep_national").to_string(),
-                    world: 18,
-                    world_label: i18n.t("rep_regional").to_string(),
+                    rows: vec![
+                        ReputationLadder::row("rep_current", 4500, &i18n),
+                        ReputationLadder::row("rep_home", 4700, &i18n),
+                        ReputationLadder::row("rep_world", 1800, &i18n),
+                    ],
                 },
+                wants,
                 mind: Some(MindDto {
-                    wants,
                     memories: vec![MindMemoryDto {
                         text: "He won everything here".to_string(),
                         warm: true,
@@ -1073,67 +1211,190 @@ mod page_tests {
                     sentiment: 40,
                     sentiment_label: i18n.t("mind_sentiment_fond").to_string(),
                 }),
-                has_club_ties: true,
                 i18n,
             }
         }
     }
 
-    /// The ledger is read worst first, and a factor that says nothing
-    /// is not on it.
+    /// Nothing listed is labelled "Neutral": the cut-off for listing a
+    /// factor is the same band `FactorSentiment` calls neutral.
     #[test]
-    fn ledger_lists_worst_first_and_drops_the_silent() {
+    fn a_listed_factor_is_never_a_neutral_one() {
         let i18n = Fixture::i18n();
-        let rows = HappinessLedger::rows(
+        let neutral = i18n.t("factor_neutral").to_string();
+
+        for tenth in -20_i32..=20 {
+            let value = tenth as f32 / 10.0;
+            let (weighing, lifting) = HappinessLedger::split(&[("factor_salary", value)], &i18n);
+            for row in weighing.iter().chain(lifting.iter()) {
+                assert_ne!(row.label, neutral, "at {value}");
+            }
+        }
+    }
+
+    /// Each column is read strongest first, and a factor that says
+    /// nothing is on neither.
+    #[test]
+    fn each_column_leads_with_its_strongest_and_drops_the_silent() {
+        let i18n = Fixture::i18n();
+        let (weighing, lifting) = HappinessLedger::split(
             &[
                 ("factor_salary", 7.0),
-                ("factor_injury", 0.2),
+                ("factor_injury", 0.8),
                 ("factor_playing_time", -7.0),
                 ("factor_manager", -3.0),
+                ("factor_club_fit", 2.0),
             ],
             &i18n,
         );
 
-        let values: Vec<i8> = rows.iter().map(|r| r.value).collect();
-        assert_eq!(values, vec![-7, -3, 7]);
-        assert_eq!(rows[0].name, "Playing Time");
+        assert_eq!(
+            weighing.iter().map(|r| r.value).collect::<Vec<_>>(),
+            vec![-7, -3]
+        );
+        assert_eq!(
+            lifting.iter().map(|r| r.value).collect::<Vec<_>>(),
+            vec![7, 2]
+        );
+        assert_eq!(weighing[0].name, "Playing Time");
     }
 
-    /// Half the track is a full-strength factor; nothing crosses the
-    /// centre line however far the value is clamped from.
+    /// The column a factor is in carries its sign, so the whole track
+    /// is available to show how strongly it pulls.
     #[test]
-    fn a_full_strength_factor_reaches_the_centre_line_and_no_further() {
-        assert_eq!(HappinessLedger::bar(7.0), 35);
-        assert_eq!(HappinessLedger::bar(-10.0), 50);
-        assert_eq!(HappinessLedger::bar(-14.0), 50);
+    fn a_full_strength_factor_fills_the_track_and_no_further() {
+        assert_eq!(HappinessLedger::bar(7.0), 70);
+        assert_eq!(HappinessLedger::bar(-10.0), 100);
+        assert_eq!(HappinessLedger::bar(-14.0), 100);
         assert_eq!(HappinessLedger::bar(0.0), 0);
     }
 
+    /// The bar carries its own legend: the band the morale word came
+    /// from is the one lit under the track.
+    #[test]
+    fn the_scale_lights_the_band_the_word_came_from() {
+        let i18n = Fixture::i18n();
+        for (morale, word) in [
+            (0.0, "Very Poor"),
+            (24.9, "Very Poor"),
+            (25.0, "Poor"),
+            (50.0, "Okay"),
+            (65.0, "Good"),
+            (100.0, "Superb"),
+        ] {
+            let scale = MoraleScale::read(morale, &[], &[], &i18n);
+            assert_eq!(scale.label, word, "at {morale}");
+            let lit: Vec<&str> = scale
+                .bands
+                .iter()
+                .filter(|b| b.active)
+                .map(|b| b.label.as_str())
+                .collect();
+            assert_eq!(lit, vec![word], "at {morale}");
+        }
+    }
+
+    /// The verdict reads the balance of the two columns, and says so
+    /// even when both are empty — which is every player on day one.
+    #[test]
+    fn the_verdict_reads_the_balance_of_the_ledger() {
+        let i18n = Fixture::i18n();
+        let rows = |factors: &[(&str, f32)]| HappinessLedger::split(factors, &i18n);
+
+        let (none_w, none_l) = rows(&[]);
+        assert_eq!(
+            MoraleVerdict::summary(&none_w, &none_l, &i18n),
+            i18n.t("morale_summary_none")
+        );
+
+        let (w, l) = rows(&[("factor_salary", 6.0)]);
+        assert_eq!(
+            MoraleVerdict::summary(&w, &l, &i18n),
+            i18n.t("morale_summary_all_good")
+        );
+
+        let (w, l) = rows(&[("factor_playing_time", -6.0)]);
+        assert_eq!(
+            MoraleVerdict::summary(&w, &l, &i18n),
+            i18n.t("morale_summary_all_bad")
+        );
+
+        let (w, l) = rows(&[("factor_playing_time", -8.0), ("factor_salary", 1.5)]);
+        assert_eq!(
+            MoraleVerdict::summary(&w, &l, &i18n),
+            i18n.t("morale_summary_mostly_bad")
+        );
+
+        let (w, l) = rows(&[("factor_playing_time", -4.0), ("factor_salary", 5.0)]);
+        assert_eq!(
+            MoraleVerdict::summary(&w, &l, &i18n),
+            i18n.t("morale_summary_mixed")
+        );
+    }
+
+    /// Three reputations, one six-slot meter: the fill stops on the seam
+    /// of the tier the word names, and the top tier fills the track.
+    #[test]
+    fn the_reputation_meter_fills_to_the_tier_reached() {
+        let i18n = Fixture::i18n();
+        for (value, fill, word) in [
+            (0_i16, 17, "Unknown"),
+            (500, 33, "Local"),
+            (2000, 50, "Regional"),
+            (4500, 67, "National"),
+            (6000, 83, "Continental"),
+            (9000, 100, "World Class"),
+        ] {
+            let row = ReputationLadder::row("rep_world", value, &i18n);
+            assert_eq!(row.fill, fill, "at {value}");
+            assert_eq!(row.label, word);
+        }
+    }
+
+    /// Every fill lands on a seam the stylesheet actually draws.
+    #[test]
+    fn every_fill_lands_on_a_drawn_seam() {
+        let seams = [17, 33, 50, 67, 83, 100];
+        for reached in 1..=6 {
+            assert!(seams.contains(&ReputationLadder::fill(reached)));
+        }
+    }
+
     /// Every block of the page renders from the fixture — the flags,
-    /// the ledger, the wants with their tag, and the club column —
-    /// and the ledger opens on the worst factor.
+    /// the named bands, both halves of the ledger, the wants with their
+    /// tag, and the club column — and each ledger column opens on its
+    /// strongest factor.
     #[test]
     fn every_block_of_the_page_renders() {
         let html = Fixture::template().render().expect("render");
 
         for marker in [
             "fm-mh-flag\"",
-            "fm-mh-ledger-row",
+            "fm-mh-summary",
+            "fm-mh-band is-active",
+            "fm-mh-row-fill is-neg",
+            "fm-mh-row-fill is-pos",
+            "fm-mh-row-fill is-level",
             "fm-mh-want is-unspoken",
             "fm-mh-want-tag",
             "fm-mh-want-note is-blocked",
             "fm-mh-manager-name",
             "fm-mh-memories",
-            "fm-pp-rep-tile",
+            "fm-pp-rep-fill",
             "fm-pp-trait-val td_10",
             "fm-radar-val",
         ] {
             assert!(html.contains(marker), "missing {marker}");
         }
 
-        let ledger = html.find("fm-mh-ledger-row").expect("ledger");
-        let after = &html[ledger..];
-        assert!(after.find("Playing Time").unwrap() < after.find("Salary Satisfaction").unwrap());
+        let at = |needle: &str| {
+            html.find(needle)
+                .unwrap_or_else(|| panic!("missing {needle}"))
+        };
+
+        assert!(at("Playing Time") < at("Promise Trust"));
+        assert!(at("Salary Satisfaction") < at("Role Clarity"));
+        assert!(at("Promise Trust") < at("Salary Satisfaction"));
     }
 
     /// Writes a self-contained copy of the page so the layout can be
