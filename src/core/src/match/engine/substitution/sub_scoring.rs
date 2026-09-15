@@ -258,6 +258,10 @@ impl SubScoring {
     ///
     /// Result can go negative, signalling "this player is a net asset on
     /// the pitch right now" — discretionary subs should pass them over.
+    ///
+    /// The case is faded in across the man's stint by [`Self::stint_settled`]
+    /// — see there for why a score read at the start of one is not a score
+    /// at all.
     pub fn sub_off_score_protected(
         player: &MatchPlayer,
         live: &LiveSubstitutionStats,
@@ -266,8 +270,47 @@ impl SubScoring {
     ) -> f32 {
         let raw = Self::sub_off_score(player, live, need);
         let protection = Self::star_protection(live) * protection_dampening.clamp(0.0, 1.0);
-        raw - protection
+        let settled = Self::stint_settled(live);
+        (raw - protection) * settled - Self::UNSETTLED_FLOOR * (1.0 - settled)
     }
+
+    /// How much of a case the match has had time to build against this man,
+    /// from nothing at the start of his stint to all of it once the stint is
+    /// a real one.
+    ///
+    /// Everything [`Self::sub_off_score`] reads — the legs, the rating, the
+    /// booking, the error — is something that happened to him *while he was
+    /// on the pitch*, so none of it can be true of a man who walked on two
+    /// minutes ago. Reading his absolute condition instead says "he was tired
+    /// when he was picked", which is a selection problem and not a reason to
+    /// take him off again; left unfaded it made the freshest man on the pitch
+    /// the best candidate to remove, and a side with a thin bench spent two of
+    /// its five changes putting one extra player on the field.
+    ///
+    /// The same quantity answers it for a starter, because it is the same
+    /// question: nobody is hooked on twelve minutes either, and the bench
+    /// pressure model has not started climbing by then
+    /// ([`SubstitutionUrgency`](super::urgency::SubstitutionUrgency)).
+    ///
+    /// Squared, so the opening of a stint is held hardest and the last
+    /// minutes of the ramp barely differ from a settled player.
+    #[inline]
+    fn stint_settled(live: &LiveSubstitutionStats) -> f32 {
+        let t = (live.minutes_played as f32 / Self::STINT_SETTLES_BY).clamp(0.0, 1.0);
+        t * t
+    }
+
+    /// Minutes of a stint after which a man is judged on his football rather
+    /// than protected by having only just started it.
+    const STINT_SETTLES_BY: f32 = 15.0;
+
+    /// Where the sub-off score sits for a man who has just come on. Deeper
+    /// than any case the scorer can build and any pair bonus that can be
+    /// added to it, because taking off the substitute you sent on a moment
+    /// ago is not a decision a manager makes — short of an injury, which
+    /// never reaches this scorer (see
+    /// [`force_critical_subs`](super::substitutions::Substitutions)).
+    const UNSETTLED_FLOOR: f32 = 2.0;
 
     /// Score a substitute as a sub-in candidate for the given tactical need.
     /// `position_fit` is in [0.0, 1.0] (1.0 = exact position match).

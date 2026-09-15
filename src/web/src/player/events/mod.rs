@@ -781,7 +781,7 @@ fn build_events(
             .mind
             .journal()
             .iter()
-            .map(|note| MindRender::to_event(note, i18n, today)),
+            .map(|note| MindRender::to_event(note, simulator_data, i18n, lang, today)),
     );
 
     // Stable sort, so a decision, a happiness event and a note stamped the
@@ -807,13 +807,29 @@ fn build_events(
 struct MindRender;
 
 impl MindRender {
-    fn to_event(note: &mind::MindNote, i18n: &I18n, today: NaiveDate) -> PlayerEventDto {
+    fn to_event(
+        note: &mind::MindNote,
+        data: &SimulatorData,
+        i18n: &I18n,
+        lang: &str,
+        today: NaiveDate,
+    ) -> PlayerEventDto {
         // The subject line: the want, or the belief.
-        let subject = if note.kind.is_about_a_want() {
+        let mut subject = if note.kind.is_about_a_want() {
             i18n.t(note.goal.as_i18n_key()).to_string()
         } else {
             i18n.t(note.claim.as_i18n_key()).to_string()
         };
+        // A belief is held *about* someone, and the claim alone never
+        // names them: four convictions of bad blood with four teammates
+        // render as the same sentence four times unless the subject is
+        // spelled out.
+        if let Some(actor) = Self::about(note.subject, data, lang) {
+            subject = i18n
+                .t("mind_note_about")
+                .replace("{subject}", &subject)
+                .replace("{actor}", &actor);
+        }
         let description = i18n
             .t(note.kind.as_i18n_key())
             .replace("{subject}", &subject);
@@ -837,8 +853,9 @@ impl MindRender {
         let date = mind::MindClock::date(note.day);
 
         PlayerEventDto {
-            // Composed from two closed-vocabulary i18n keys, so the
-            // template's `|safe` on this field stays sound.
+            // Closed-vocabulary i18n keys plus the subject's own link,
+            // built the same way the happiness feed builds its partner
+            // links — so the template's `|safe` on this field stays sound.
             description,
             is_positive: valence > 0,
             is_negative: valence < 0,
@@ -860,6 +877,48 @@ impl MindRender {
             is_decision: false,
             is_mind: true,
         }
+    }
+
+    /// The linked name of whoever a note is held about, `None` for the
+    /// notes with no subject and for a subject that can no longer be
+    /// located.
+    ///
+    /// Every actor kind resolves through the same call: a player, a
+    /// coach, a country and the three club-side actors — the institution,
+    /// its board and its supporters — each land on the page that is
+    /// actually about them, and the claim supplies the rest of the
+    /// sentence.
+    fn about(subject: mind::ActorRef, data: &SimulatorData, lang: &str) -> Option<String> {
+        let (name, path) = match subject.kind {
+            mind::ActorKind::None => return None,
+            mind::ActorKind::Player => {
+                let (name, slug) = resolve_partner(data, subject.id)?;
+                (name, format!("players/{}", slug))
+            }
+            mind::ActorKind::Staff => {
+                let (staff, _) = data.staff_with_team(subject.id)?;
+                let name = format!(
+                    "{} {}",
+                    staff.full_name.display_first_name(),
+                    staff.full_name.display_last_name()
+                );
+                (name, format!("staff/{}", staff.id))
+            }
+            mind::ActorKind::Club | mind::ActorKind::Board | mind::ActorKind::Fans => {
+                let club = data.club(subject.id)?;
+                let team = club.teams.teams.first()?;
+                (club.name.clone(), format!("teams/{}", team.slug))
+            }
+            mind::ActorKind::Country => {
+                let country = data.country(subject.id)?;
+                (country.name.clone(), format!("countries/{}", country.slug))
+            }
+        };
+
+        Some(format!(
+            r#"<a class="fm-evt-partner" href="/{}/{}">{}</a>"#,
+            lang, path, name
+        ))
     }
 }
 
@@ -3712,6 +3771,20 @@ fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveTime;
+    use core::club::ClubAcademy;
+    use core::club::player::builder::PlayerBuilder;
+    use core::competitions::global::GlobalCompetitions;
+    use core::continent::Continent;
+    use core::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use core::shared::Location;
+    use core::shared::fullname::FullName;
+    use core::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
+        Player, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
+    };
 
     /// The English event bundle, verbatim — for the audits that assert on
     /// the file's text rather than on a resolved key.
@@ -3730,6 +3803,109 @@ mod tests {
         let mut map = parse("chrome", include_str!("../../../assets/i18n/en.json"));
         map.extend(parse("events", EN_EVENTS));
         map
+    }
+
+    /// The smallest world a mind note can be rendered against: one club
+    /// with one team, rostering the two teammates a belief can be held
+    /// about.
+    struct MindWorld;
+
+    impl MindWorld {
+        const CLUB: u32 = 100;
+        const TEAMMATE_A: u32 = 1;
+        const TEAMMATE_B: u32 = 2;
+
+        fn player(id: u32, first: &str, last: &str) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new(first.to_string(), last.to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(1996, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+
+        fn sim() -> SimulatorData {
+            let team = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(Self::CLUB)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(vec![
+                    Self::player(Self::TEAMMATE_A, "Ivan", "Rival"),
+                    Self::player(Self::TEAMMATE_B, "Petr", "Foe"),
+                ]))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 4_000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            let club = Club::new(
+                Self::CLUB,
+                "Real Test".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            );
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                500,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                false,
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("EN".to_string())
+                .slug("en".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![club])
+                .build()
+                .unwrap();
+            SimulatorData::new(
+                NaiveDate::from_ymd_opt(2026, 8, 26)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap(),
+                vec![Continent::new(
+                    1,
+                    "Europe".to_string(),
+                    vec![country],
+                    Vec::new(),
+                )],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
     }
 
     #[test]
@@ -4758,6 +4934,7 @@ mod tests {
 
     #[test]
     fn a_mind_note_renders_as_a_finished_sentence() {
+        let data = MindWorld::sim();
         let i18n = crate::I18nManager::new().for_lang("en");
         let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
         let note = mind::MindNote::want(
@@ -4766,7 +4943,7 @@ mod tests {
             mind::MindClock::day(NaiveDate::from_ymd_opt(2026, 8, 19).unwrap()),
         );
 
-        let row = MindRender::to_event(&note, &i18n, today);
+        let row = MindRender::to_event(&note, &data, &i18n, "en", today);
 
         assert!(row.is_mind, "the row is chipped as coming from his head");
         assert!(!row.is_decision);
@@ -4786,13 +4963,16 @@ mod tests {
 
     #[test]
     fn a_conviction_takes_its_valence_from_the_belief_not_the_note() {
+        let data = MindWorld::sim();
         let i18n = crate::I18nManager::new().for_lang("en");
         let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
         let day = mind::MindClock::day(today);
 
         let sour = MindRender::to_event(
             &mind::MindNote::conviction(mind::FactClaim::DiscardedMe, mind::ActorRef::club(7), day),
+            &data,
             &i18n,
+            "en",
             today,
         );
         let warm = MindRender::to_event(
@@ -4801,7 +4981,9 @@ mod tests {
                 mind::ActorRef::club(7),
                 day,
             ),
+            &data,
             &i18n,
+            "en",
             today,
         );
 
@@ -4814,10 +4996,111 @@ mod tests {
                 mind::GoalKind::LeaveThisClub,
                 day,
             ),
+            &data,
             &i18n,
+            "en",
             today,
         );
         assert!(!formed.is_positive && !formed.is_negative);
+    }
+
+    #[test]
+    fn two_convictions_of_the_same_claim_name_the_two_people_they_are_about() {
+        // The bug this guards: a player who falls out with four teammates
+        // forms four `BadBlood` convictions, and the claim copy alone
+        // ("Bad blood between them") is the same sentence every time, so
+        // the feed printed one line four times over.
+        let data = MindWorld::sim();
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
+        let day = mind::MindClock::day(today);
+
+        let about = |player_id: u32| {
+            MindRender::to_event(
+                &mind::MindNote::conviction(
+                    mind::FactClaim::BadBlood,
+                    mind::ActorRef::player(player_id),
+                    day,
+                ),
+                &data,
+                &i18n,
+                "en",
+                today,
+            )
+            .description
+        };
+
+        let first = about(MindWorld::TEAMMATE_A);
+        let second = about(MindWorld::TEAMMATE_B);
+
+        assert!(
+            first.contains("Ivan Rival"),
+            "first names its subject: {first}"
+        );
+        assert!(
+            first.contains(&format!("/en/players/{}-ivan-rival", MindWorld::TEAMMATE_A)),
+            "and links to him: {first}"
+        );
+        assert!(
+            second.contains("Petr Foe"),
+            "second names its subject: {second}"
+        );
+        assert_ne!(
+            first, second,
+            "two beliefs about two teammates must not render as the same line"
+        );
+    }
+
+    #[test]
+    fn a_conviction_about_a_club_links_to_the_club() {
+        // Same mechanism as the teammate case — a belief about the
+        // institution lands on the institution's page, not a dead link.
+        let data = MindWorld::sim();
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
+
+        let row = MindRender::to_event(
+            &mind::MindNote::conviction(
+                mind::FactClaim::DiscardedMe,
+                mind::ActorRef::club(MindWorld::CLUB),
+                mind::MindClock::day(today),
+            ),
+            &data,
+            &i18n,
+            "en",
+            today,
+        );
+
+        assert!(
+            row.description.contains(r#"href="/en/teams/main""#),
+            "the club subject links to its main team page: {}",
+            row.description
+        );
+        assert!(row.description.contains("Real Test"));
+    }
+
+    #[test]
+    fn a_subject_that_cannot_be_located_leaves_the_line_unnamed() {
+        // A retired-and-aged-out teammate must not leave a raw `{actor}`
+        // token or a dangling link in the headline.
+        let data = MindWorld::sim();
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
+
+        let row = MindRender::to_event(
+            &mind::MindNote::conviction(
+                mind::FactClaim::BadBlood,
+                mind::ActorRef::player(999_999),
+                mind::MindClock::day(today),
+            ),
+            &data,
+            &i18n,
+            "en",
+            today,
+        );
+
+        assert!(!row.description.contains("{actor}"), "{}", row.description);
+        assert!(!row.description.contains("<a"), "{}", row.description);
     }
 
     #[test]

@@ -280,6 +280,7 @@
   "mind_goal_win_something_here": "To win something here",
   "mind_goal_win_trophy": "To win something",
   "mind_no_wants": "Content where he is",
+  "mind_note_about": "{subject} — {actor}",
   "mind_note_chip": "Mind",
   "mind_note_conviction_formed": "He has come to believe: {subject}",
   "mind_note_none": "Nothing of note",

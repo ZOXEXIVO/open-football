@@ -3205,6 +3205,12 @@ impl SubstitutionCensus {
             /// substitution model that reads the game should scatter these, and one
             /// that reads a clock should stack them on a handful of values.
             events: Vec<(u32, u32, usize, bool)>,
+            /// Changes that take off a man who came on earlier in the same match,
+            /// as `(minutes he had been on, discretionary?)`. A real one is rare
+            /// and is injury; the sub-count is the whole cost of one, because the
+            /// side spends two of its five changes to field one extra player. A
+            /// discretionary one on a short stint is the churn bug.
+            recycled: Vec<(u64, bool)>,
         }
 
         // Production-like squad: XI at `level`, bench 3 levels weaker
@@ -3293,12 +3299,24 @@ impl SubstitutionCensus {
                         )
                     })
                     .collect();
+                let mut came_on = std::collections::HashMap::<u32, u64>::new();
+                let mut recycled: Vec<(u64, bool)> = Vec::new();
+                for s in result.substitutions.iter() {
+                    if let Some(&on_at) = came_on.get(&s.player_out_id) {
+                        recycled.push((
+                            s.match_time_ms.saturating_sub(on_at) / 60_000,
+                            matches!(s.reason, core::r#match::SubstitutionReason::Discretionary),
+                        ));
+                    }
+                    came_on.insert(s.player_in_id, s.match_time_ms);
+                }
                 SubsRow {
                     home_goals: score.home_team.get(),
                     away_goals: score.away_team.get(),
                     home_subs,
                     away_subs,
                     events,
+                    recycled,
                 }
             })
             .collect();
@@ -3342,6 +3360,32 @@ impl SubstitutionCensus {
             total_subs as f32 / total_teams.max(1) as f32,
             total_goals as f32 / rows.len().max(1) as f32
         );
+        let recycled: Vec<(u64, bool)> =
+            rows.iter().flat_map(|r| r.recycled.iter().copied()).collect();
+        let instant = recycled.iter().filter(|&&(m, _)| m == 0).count();
+        let short_discretionary = recycled.iter().filter(|&&(m, d)| d && m < 15).count();
+        println!(
+            "
+substitutes taken back off: {} ({:.2}% of changes)",
+            recycled.len(),
+            recycled.len() as f32 / total_subs.max(1) as f32 * 100.0,
+        );
+        println!(
+            "  at the very tick they came on: {}   discretionary on a stint under 15': {}",
+            instant, short_discretionary
+        );
+        if !recycled.is_empty() {
+            let mut stints: Vec<u64> = recycled.iter().map(|&(m, _)| m).collect();
+            stints.sort_unstable();
+            println!(
+                "  their stints: min {}'  median {}'  max {}'   ({} discretionary, {} forced)",
+                stints[0],
+                stints[stints.len() / 2],
+                stints[stints.len() - 1],
+                recycled.iter().filter(|&&(_, d)| d).count(),
+                recycled.iter().filter(|&&(_, d)| !d).count()
+            );
+        }
         println!("subs-count distribution (per team-match):");
         for (k, v) in dist.iter().enumerate() {
             let label = if k == 6 {

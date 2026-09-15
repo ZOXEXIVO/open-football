@@ -443,11 +443,14 @@ mod tests {
         ("zh", include_bytes!("../../assets/i18n/zh.json")),
     ];
 
-    /// Prose-length values that are proper nouns: competition brands,
-    /// coaching-licence tiers and the author's own name, all written the
-    /// same way in every language that uses the Latin alphabet.
+    /// Prose-length values with nothing in them to translate: proper
+    /// nouns — competition brands, coaching-licence tiers, the author's
+    /// own name — and the punctuation-only templates that join two
+    /// already-localised fragments. Latin-alphabet locales write all of
+    /// them the way English does.
     const PROSE_EXEMPT: &[&str] = &[
         "about_me_name",
+        "mind_note_about",
         "supporters_shield",
         "champions_league",
         "europa_league",

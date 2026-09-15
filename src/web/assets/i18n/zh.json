@@ -280,6 +280,7 @@
   "mind_goal_win_something_here": "在这里赢下点什么",
   "mind_goal_win_trophy": "拿到一座奖杯",
   "mind_no_wants": "他对现状满意",
+  "mind_note_about": "{subject}（{actor}）",
   "mind_note_chip": "心境",
   "mind_note_conviction_formed": "他开始这样认为：{subject}",
   "mind_note_none": "没有值得一提的事",

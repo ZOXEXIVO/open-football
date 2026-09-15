@@ -344,12 +344,10 @@ pub struct Grain {
     /// …and around a head, which is not the same question — see
     /// [`Self::FULL`].
     head_sides: usize,
-    /// …and around the small round parts, the joint balls and the digits.
+    /// …and around the small round parts, such as fingers.
     blob_sides: usize,
     /// Rings lathed between each pair a profile is authored with.
     curve: usize,
-    /// Rings from pole to pole on a blob.
-    stacks: usize,
     /// **How large a sheet a man's PHOTOGRAPH is painted onto**, in texels a
     /// side.
     ///
@@ -386,7 +384,7 @@ impl Grain {
     ///   fine round and coarse along looks worse than one evenly coarse,
     ///   because the crease runs the other way and a ribbed limb reads as
     ///   readily as a faceted one.
-    /// - **`blob_sides` 48 / `stacks` 28** for the joint balls and a keeper's
+    /// - **`blob_sides` 48** for a keeper's
     ///   digits, which are centimetres across.
     /// - **`face` 256**, which is the sheet a photograph needs to still be a
     ///   picture of a particular man rather than a tinted smudge — the whole
@@ -397,7 +395,6 @@ impl Grain {
         head_sides: 128,
         blob_sides: 48,
         curve: 8,
-        stacks: 28,
         face: 256,
     };
 
@@ -440,7 +437,6 @@ impl Grain {
         head_sides: 64,
         blob_sides: 16,
         curve: 4,
-        stacks: 14,
         face: 128,
     };
 
@@ -653,39 +649,6 @@ impl Sculptor {
                 .expect("every sculpted part carries position, normal and UV");
         }
         whole
-    }
-
-    /// A rounded lump — a hand, a boot, the ball of a joint — sized on each
-    /// axis.
-    ///
-    /// Coarser than the lathed parts on purpose: there are ten of these on a
-    /// footballer and none of them is more than six centimetres across, where
-    /// twenty-four sides put the silhouette error under half a millimetre.
-    fn ellipsoid(grain: Grain, radii: Vec3) -> Mesh {
-        Self::ellipsoid_at(grain, radii, Vec3::ZERO)
-    }
-
-    /// The same, carried off the origin it is modelled about.
-    fn ellipsoid_at(grain: Grain, radii: Vec3, at: Vec3) -> Mesh {
-        let mut sculptor = Sculptor::new(grain.blob_sides, Relief::SMOOTH);
-        sculptor.loft(&Self::sphere(grain, radii), at);
-        sculptor.build()
-    }
-
-    /// Sphere profile, bottom pole to top pole.
-    fn sphere(grain: Grain, radii: Vec3) -> Vec<Ring> {
-        (0..=grain.stacks)
-            .map(|stack| {
-                let angle = PI * (1.0 - stack as f32 / grain.stacks as f32);
-                Ring {
-                    y: radii.y * angle.cos(),
-                    x: radii.x * angle.sin(),
-                    z: radii.z * angle.sin(),
-                    offset: 0.0,
-                    edge: Ring::ROUNDED,
-                }
-            })
-            .collect()
     }
 
     /// The cross-section a profile has at `y`, interpolated between the two
@@ -980,21 +943,11 @@ impl Physique {
     pub const LEG: f32 = Self::THIGH + Self::SHIN - 0.005 + 0.038;
     /// Hip to the base of the neck.
     pub const TORSO: f32 = 0.58;
-    /// Shoulder joints, in the torso's own space.
-    ///
-    /// Deliberately sunk BENEATH and INSIDE the torso's shoulder crest
-    /// (which peaks 0.203 wide at y=0.514). An arm socket level with the
-    /// crest, as this was, leaves the top cap of the upper arm standing
-    /// proud of the shirt as a separate rounded lump — the single thing
-    /// that made the figures read as assembled out of parts. Buried, the
-    /// only bit of arm you see above the armpit is the deltoid, which is
-    /// how a shoulder actually looks.
-    ///
-    /// It is also the only spread the SLEEVE has to work with, and the two
-    /// are 2.7 cm apart: everything the sleeve does over the top of the
-    /// shoulder happens in that gap.
+    /// Shoulder sockets sit inside the chest, beneath the sloping shoulder.
+    /// Together with the sleeve cap this gives a 46 cm shoulder span without
+    /// making the deltoids look like separate pads.
     pub const SHOULDER: f32 = 0.470;
-    pub const SHOULDER_SPREAD: f32 = 0.176;
+    pub const SHOULDER_SPREAD: f32 = 0.164;
     pub const UPPER_ARM: f32 = 0.30;
     pub const FOREARM: f32 = 0.26;
     /// Crown to turf. Only the name plates want this, to size themselves
@@ -1292,67 +1245,9 @@ pub(crate) struct Cuts {
 }
 
 impl BodyParts {
-    /// Hips, waist, chest, shoulders — the shirt. A footballer's torso is a V:
-    /// the waist is the narrowest point and the shoulders carry most of the
-    /// width, which is most of what reads as "athlete" in a silhouette this
-    /// size.
-    ///
-    /// A constant rather than an argument to one call, because four other
-    /// things are derived from it: the collar, the two printed panels, and
-    /// nothing may be allowed to drift out of step with the cloth it sits on.
-    ///
-    /// **The waist and the hips are what tell a man from a woman**, and this
-    /// had them the wrong way round. The shoulder crest was 0.209 and the seat
-    /// of the shorts 0.192 — a ratio of 1.09, which is the FEMALE figure
-    /// almost exactly (biacromial over bi-iliac runs 1.03-1.10 on women and
-    /// 1.35-1.50 on men). Worked as circumferences it was worse: a 70 cm waist
-    /// under a 100 cm hip is a waist-to-hip of 0.70, and 0.70 is the number
-    /// quoted for a woman's figure in every textbook that quotes one. A man's
-    /// is 0.85-0.95. So the waist came up and out and the seat came in: 82 cm
-    /// over 95, and a shoulder — measured where the eye measures it, across
-    /// the sleeves — of 52 cm over a 35 cm hip.
-    ///
-    /// The other half of it is the HEM, which used to stop at 0.050 — world
-    /// 1.00 m, above the navel — with the shorts' waistband standing five
-    /// centimetres higher still. High-waisted, tucked in and nipped: three
-    /// separate reasons for the same complaint. The shirt now hangs OVER the
-    /// shorts and ends at the hip joint, with the roll of the hem standing
-    /// clear of the seat inside it, which is where a footballer's shirt ends
-    /// and is also the one horizontal cloth edge on the whole figure.
-    ///
-    /// The offsets are the profile, and they are an S: the chest stands 13 cm
-    /// in front of the hip axis and the small of the back only 9.8 behind it,
-    /// while the seat under the hem goes back 14. A chest is not centred on
-    /// the spine and neither is a seat; lathed on the axis — which is what a
-    /// symmetric `z` amounts to — the same widths describe a slab, and a slab
-    /// in profile is the other half of what read as a toy.
-    ///
-    /// The shoulder CREST is deliberately narrower than the sleeve that
-    /// crosses it. Two surfaces that meet tangentially draw a long crease and
-    /// no depth buffer can help, and at 0.221 the crest was tangent to the
-    /// sleeve within half a millimetre for the whole width of the shoulder —
-    /// which is what put a rounded pad on each side of every player, with a
-    /// valley between it and the neck. At 0.203 the sleeve is decisively
-    /// outside from world 1.47 down, the two cross at fifty degrees, and what
-    /// is left of the join is a seam over the top of the arm, which is where a
-    /// shirt has one. The shoulder the eye measures is the sleeve's own
-    /// 52 cm, not the crest.
-    ///
-    /// **The TRAPEZIUS is the eight rings at the top**, and it is the one
-    /// stretch of this profile whose spacing matters more than its numbers.
-    /// The sleeve's cap covers everything wider than about 0.19, so the whole
-    /// of what the eye sees between the neck and the arm is the four
-    /// centimetres from world 1.49 to 1.53 — and taking that in two spans it
-    /// came out flat for the first twenty-five millimetres and then fell off a
-    /// cliff, which is a head standing on a mound rather than a neck coming
-    /// out of a pair of shoulders. Sampled every ten millimetres instead, it
-    /// holds nineteen degrees from the collar the whole way out to the
-    /// crossing. The two ends are fixed and only the shape between them is
-    /// free: the collar has to close on 0.0745, and the cap's pole sits at
-    /// 0.176 out and 0.544 up, so the cloth passing 0.1844 there — measured on
-    /// the curve the mesh is lathed from, not on the polyline between these
-    /// rings, which reads a millimetre and a half narrower — is the 8.4 mm of
-    /// burial [`Self::SHOULDER_CAP`] is priced against.
+    /// The shirt hangs over the waistband and tapers from chest to waist.
+    /// The upper rings slope into the sleeve caps; a broad, level crest here
+    /// leaves a shelf above each arm. Collar and print derive from this profile.
     const SHIRT: [Ring; 18] = [
         Ring::squared(-0.014, 0.1660, 0.1240, -0.016, 2.45),
         Ring::squared(0.000, 0.1745, 0.1260, -0.014, 2.45),
@@ -1363,13 +1258,13 @@ impl BodyParts {
         Ring::squared(0.315, 0.1690, 0.1175, 0.0095, 2.50),
         Ring::squared(0.382, 0.1820, 0.1230, 0.007, 2.40),
         Ring::squared(0.442, 0.1935, 0.1220, 0.000, 2.30),
-        Ring::squared(0.484, 0.2000, 0.1140, -0.006, 2.15),
-        Ring::squared(0.512, 0.2030, 0.1075, -0.007, 2.05),
-        Ring::squared(0.528, 0.2012, 0.1032, -0.007, 2.02),
-        Ring::squared(0.540, 0.1938, 0.0992, -0.007, 2.00),
-        Ring::squared(0.550, 0.1665, 0.0952, -0.007, 2.00),
-        Ring::squared(0.560, 0.1372, 0.0900, -0.008, 2.00),
-        Ring::squared(0.570, 0.1080, 0.0832, -0.009, 2.00),
+        Ring::squared(0.484, 0.1940, 0.1140, -0.006, 2.15),
+        Ring::squared(0.512, 0.1880, 0.1075, -0.007, 2.05),
+        Ring::squared(0.528, 0.1770, 0.1032, -0.007, 2.02),
+        Ring::squared(0.540, 0.1640, 0.0992, -0.007, 2.00),
+        Ring::squared(0.550, 0.1490, 0.0952, -0.007, 2.00),
+        Ring::squared(0.560, 0.1300, 0.0900, -0.008, 2.00),
+        Ring::squared(0.570, 0.1040, 0.0832, -0.009, 2.00),
         Ring::squared(0.578, 0.0862, 0.0755, -0.010, 2.00),
         Ring::squared(0.582, 0.0745, 0.0690, -0.011, 2.00),
     ];
@@ -1474,11 +1369,11 @@ impl BodyParts {
         Ring::set(-0.455, 0.033, 0.035, 0.003),
         Ring::set(-0.440, 0.034, 0.036, 0.002),
         Ring::set(-0.390, 0.036, 0.038, 0.000),
-        Ring::set(-0.300, 0.042, 0.044, -0.002),
-        Ring::set(-0.200, 0.050, 0.053, -0.004),
-        Ring::set(-0.110, 0.059, 0.063, -0.006),
-        Ring::set(-0.040, 0.062, 0.064, -0.004),
-        Ring::set(0.020, 0.060, 0.060, 0.000),
+        Ring::set(-0.300, 0.044, 0.047, -0.003),
+        Ring::set(-0.200, 0.057, 0.062, -0.009),
+        Ring::set(-0.110, 0.060, 0.064, -0.008),
+        Ring::set(-0.040, 0.054, 0.055, -0.002),
+        Ring::set(0.020, 0.047, 0.047, 0.000),
     ];
 
     /// The two heads of a calf, and the hollows either side of the Achilles
@@ -1516,41 +1411,15 @@ impl BodyParts {
     /// mirrored on one of the two.
     const QUADS: Relief = Relief(&[Swell::over(FRAC_PI_2, 0.22, -0.380, -0.190, -0.0016)]);
 
-    /// The seat of the shorts, bottom-up, in the pelvis's own space.
-    ///
-    /// A constant for the same reason [`Self::SHIRT`] is one: the shirt hangs
-    /// over it, and the ONE thing that arrangement can get wrong — the seat
-    /// coming out through the cloth when a player leans — is only checkable if
-    /// both profiles can be read rather than looked at. See
-    /// `the_shirt_hangs_clear_of_the_shorts`.
-    /// The ACROSS is the hip `he_is_built_like_a_man` prices the shoulders
-    /// against and does not move; the DEPTH is eight millimetres less than it
-    /// was, and pays for the shirt's hem coming in over it. A seat is the part
-    /// of a footballer that swings furthest through the cloth when he leans —
-    /// the shirt turns at the hip and the pelvis does not — and fore-aft is
-    /// the axis that lean travels on: at the run cycle's own lean the seat
-    /// reaches 0.94 of the way out through the shirt where it used to reach
-    /// 0.97, which is what buys the tighter hem.
-    ///
-    /// **The bottom ring is priced against the LEG, not against the lean.**
-    /// The two legs of the shorts hang off the thighs and this hangs off the
-    /// pelvis, so where the seat ends is a rim standing over a tube — and a
-    /// rim a long way outside the tube it covers is a horizontal ledge with a
-    /// shadow under it, drawn straight across the back of both thighs. The
-    /// leg reaches 0.0825 behind the hip axis at that height; a rim reaching
-    /// 0.102 hung nineteen millimetres proud of it. It reaches 0.0905 now,
-    /// eight millimetres out, which is enough that the two never fight for
-    /// depth and little enough that the join reads as the fold it is. The
-    /// tuck it takes to get there is the gluteal fold, which a seat has.
-    ///
-    /// That ring is BELOW the shirt's hem, so none of this is spent out of
-    /// the lean budget above — which lives on the upper three rings, the ones
-    /// still inside the cloth when he leans.
+    /// The seat of the shorts, bottom-up, in the pelvis frame.
+    /// Keep the rear contour close to the upper thighs: a low, backward bulb
+    /// creates a separate shelf beneath the shirt. Most of the depth belongs
+    /// at the waistband, with a shallow taper down to the crotch.
     const SEAT: [Ring; 5] = [
-        Ring::squared(-0.152, 0.1300, 0.0785, -0.012, 2.25),
-        Ring::squared(-0.118, 0.1640, 0.1010, -0.022, 2.35),
-        Ring::squared(-0.075, 0.1745, 0.1110, -0.024, 2.40),
-        Ring::squared(-0.030, 0.1600, 0.1045, -0.019, 2.45),
+        Ring::squared(-0.152, 0.1300, 0.0770, -0.003, 2.25),
+        Ring::squared(-0.118, 0.1620, 0.0880, -0.005, 2.35),
+        Ring::squared(-0.075, 0.1700, 0.0980, -0.008, 2.40),
+        Ring::squared(-0.030, 0.1600, 0.1010, -0.010, 2.45),
         Ring::squared(0.020, 0.1420, 0.0965, -0.012, 2.50),
     ];
 
@@ -1949,21 +1818,9 @@ impl BodyParts {
                 Some(meshes.add(Self::cap(grain, 0.092, 0.009, 0.0586))),
                 Some(meshes.add(Self::cap(grain, 0.084, 0.017, 0.0790))),
             ],
-            // Deltoid, bicep, taper to the elbow.
-            //
-            // The top ring is now narrow (0.030) and sits high, so it ends up
-            // inside the torso and its cap is never seen; the deltoid swells
-            // 20 mm BELOW the socket, which is where a shoulder muscle
-            // actually sits. Previously the widest ring was 5 mm below the
-            // top, so the arm's broadest point was level with its own
-            // socket and the join showed as a seam.
-            //
-            // It also does NOT pinch into the elbow any more. An arm that
-            // narrows by a fifth at the joint and swells again below it is a
-            // hinge with a bead on it, which is the single thing anybody
-            // notices about a limb at close range; a real arm loses about a
-            // tenth between the bicep and the elbow and the forearm's belly
-            // picks straight up from there.
+            // Deltoid and biceps taper into a rounded elbow centred on the
+            // pivot. Extending the surface beyond the pivot hides the cut end
+            // during flexion without a separate joint ball.
             upper_arm: meshes.add(Sculptor::part(grain, &[
                 Ring::oval(0.050, 0.0195, 0.0192),
                 Ring::oval(0.026, 0.0400, 0.0388),
@@ -1971,42 +1828,18 @@ impl BodyParts {
                 Ring::oval(-0.060, 0.0568, 0.0532),
                 Ring::oval(-0.130, 0.0522, 0.0488),
                 Ring::oval(-0.205, 0.0472, 0.0448),
-                Ring::oval(-0.268, 0.0448, 0.0432),
-                Ring::oval(-0.300, 0.0396, 0.0384),
+                Ring::oval(-0.268, 0.0430, 0.0420),
+                Ring::oval(-0.300, 0.0420, 0.0420),
+                Ring::oval(-0.316, 0.0388, 0.0388),
+                Ring::oval(-0.332, 0.0272, 0.0272),
+                Ring::oval(-0.342, 0.0000, 0.0000),
             ])),
-            // A short sleeve, riding on the shoulder joint so it swings with
-            // it. Dropped to sit over the deltoid rather than above it —
-            // level with the socket it stood off the shoulder like a pad.
-            //
-            // Cut four millimetres looser than it was, all round. At its old
-            // size the top of it ran within a millimetre of the shirt at the
-            // shoulder and the two z-fought along the seam; a sleeve is a
-            // separate piece of cloth OVER a body, and it has to be drawn
-            // outside everything it covers rather than level with it.
-            // It also has to CLOSE over the top of the shoulder rather than
-            // stopping at its widest ring. Ending flat, its top cap was a
-            // horizontal disc four centimetres wider than the torso beneath
-            // it — a hard rectangular tab standing off each shoulder, which is
-            // the single most robotic thing on the whole figure and the first
-            // thing anybody looking at one saw.
-            //
-            // **The top of it is a SPHERE on the joint** — see
-            // [`Self::SHOULDER_CAP`], which is the whole of why an arm stops
-            // reading as a hinge.
-            //
-            // Below the cap it CONVERGES, which is the difference between a
-            // sleeve and a balloon. A short sleeve is four or five millimetres
-            // of cloth over a bicep, not nine: it comes off the ball of the
-            // shoulder, crosses the deltoid at its widest and is nearly on the
-            // arm by the time it ends, so its outer edge carries on down the
-            // line the trapezius started rather than standing off the man as a
-            // pod. The hem sits at −0.132 with four millimetres in hand, which
-            // is as close as it can be taken before the two lathes start
-            // fighting for depth.
+            // Close-fitting cloth over the deltoid, with the cap buried in
+            // the sloping shirt shoulder. Shared with the keeper's sleeve.
             sleeve: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
-                Ring::squared(-0.018, 0.0758, 0.0648, 0.001, 2.28),
-                Ring::squared(-0.050, 0.0700, 0.0612, 0.002, 2.26),
-                Ring::squared(-0.085, 0.0636, 0.0572, 0.003, 2.22),
+                Ring::squared(-0.018, 0.0650, 0.0608, 0.001, 2.16),
+                Ring::squared(-0.050, 0.0630, 0.0592, 0.002, 2.18),
+                Ring::squared(-0.085, 0.0610, 0.0562, 0.003, 2.20),
                 Ring::squared(-0.112, 0.0592, 0.0542, 0.004, 2.20),
                 Ring::squared(-0.132, 0.0560, 0.0520, 0.004, 2.18),
             ]))),
@@ -2035,62 +1868,20 @@ impl BodyParts {
                 Ring::squared(-0.138, 0.0578, 0.0534, 0.0040, 2.19),
                 Ring::squared(-0.144, 0.0552, 0.0512, 0.0040, 2.18),
             ])),
-            // The elbow is the NARROW point of an arm and the forearm's belly
-            // sits below it. Started at its widest, as this did, the forearm
-            // was wider than the arm it hangs off and the join showed as a
-            // step right round the elbow — a hinge, on every player, at the
-            // one place a limb is supposed to look continuous.
-            // The forearm, with the ball of the elbow already in it.
-            //
-            // A ball at each of the two joints that bend, filling the gap the
-            // two tapers leave between them when they do. Without it an arm
-            // bent through a right angle opens a wedge at the outside of the
-            // elbow, and a knee lifted into a stride opens the same wedge in
-            // front of the kneecap.
-            // Sized to sit just inside the two tapers when the limb is
-            // straight — the thigh is 0.056 across two centimetres above the
-            // knee and the sock 0.060 — so a standing player never shows one,
-            // and a bent one shows nothing else.
-            //
-            // Both used to be entities of their own, hung off the limb they
-            // fill at an identity transform and painted out of the same
-            // material — which is four entities a player, eighty-eight over a
-            // match, bought for nothing. See [`Sculptor::joined`].
-            forearm: meshes.add(Sculptor::joined(
-                // The top ring starts NARROW and well up inside the upper arm,
-                // and the forearm's own surface comes out through it lower
-                // down. Two lathes carry their own smooth normals, so wherever
-                // they cross, the shading breaks — the trick is to cross where
-                // both are running the same way, rather than at a rim where
-                // one is 2 mm proud of the other and the break is a ring right
-                // round the elbow.
-                Sculptor::part(grain, &[
-                    // The offsets tilt the curve those two surfaces cross on
-                    // so that it is not a ring ruled level round the arm: the
-                    // shading break falls a few millimetres lower at the back
-                    // than at the front, which is where the crease of an elbow
-                    // actually runs.
-                    Ring::set(0.046, 0.0250, 0.0245, -0.0055),
-                    Ring::set(0.018, 0.0405, 0.0392, -0.0030),
-                    Ring::set(-0.006, 0.0455, 0.0435, -0.0010),
-                    Ring::oval(-0.052, 0.0470, 0.0445),
-                    Ring::oval(-0.115, 0.0420, 0.0378),
-                    Ring::oval(-0.180, 0.0350, 0.0310),
-                    Ring::oval(-0.225, 0.0292, 0.0258),
-                    Ring::oval(-0.252, 0.0268, 0.0240),
-                ]),
-                // Set back and down off the joint, because an olecranon is —
-                // the point of an elbow is behind the hinge, not on it.
-                // Sized to sit CLEAR inside both tapers when the arm is
-                // straight, not flush with them: two surfaces a fraction of a
-                // millimetre apart over a band do not draw as one surface,
-                // they draw as a dotted line of z-fighting right round the
-                // joint, which is worse than the bead it replaced.
-                Sculptor::ellipsoid_at(grain, 
-                    Vec3::new(0.0400, 0.0420, 0.0378),
-                    Vec3::new(0.0, -0.006, -0.001),
-                ),
-            )),
+            // The proximal forearm stays inside the rounded upper-arm end.
+            // Its radius grows below the elbow instead of stepping out at the
+            // pivot, so the join reads as a crease when bent.
+            forearm: meshes.add(Sculptor::part(grain, &[
+                Ring::oval(0.040, 0.0090, 0.0090),
+                Ring::oval(0.026, 0.0310, 0.0310),
+                Ring::oval(0.000, 0.0405, 0.0405),
+                Ring::oval(-0.028, 0.0430, 0.0415),
+                Ring::oval(-0.065, 0.0445, 0.0420),
+                Ring::oval(-0.115, 0.0420, 0.0378),
+                Ring::oval(-0.180, 0.0350, 0.0310),
+                Ring::oval(-0.225, 0.0292, 0.0258),
+                Ring::oval(-0.252, 0.0268, 0.0240),
+            ])),
             hand: [Self::hand(grain, -1.0), Self::hand(grain, 1.0)].map(|mesh| meshes.add(mesh)),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
@@ -2157,16 +1948,20 @@ impl BodyParts {
             // that the short one is — two nearly tangent surfaces crossing
             // each other draw as a ragged sawtooth no depth buffer can fix.
             sleeve_long: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
-                Ring::squared(-0.018, 0.0758, 0.0648, 0.001, 2.28),
-                Ring::squared(-0.050, 0.0700, 0.0612, 0.002, 2.26),
+                Ring::squared(-0.018, 0.0650, 0.0608, 0.001, 2.16),
+                Ring::squared(-0.050, 0.0630, 0.0592, 0.002, 2.18),
                 Ring::squared(-0.090, 0.0592, 0.0556, 0.002, 2.20),
                 Ring::squared(-0.155, 0.0546, 0.0516, 0.002, 2.15),
                 Ring::squared(-0.228, 0.0518, 0.0496, 0.002, 2.10),
-                Ring::squared(-0.292, 0.0468, 0.0452, 0.002, 2.10),
+                Ring::oval(-0.300, 0.0470, 0.0470),
+                Ring::oval(-0.318, 0.0434, 0.0434),
+                Ring::oval(-0.336, 0.0302, 0.0302),
+                Ring::oval(-0.347, 0.0000, 0.0000),
             ]))),
             sleeve_forearm: meshes.add(Sculptor::part(grain, &[
-                Ring::squared(0.050, 0.0432, 0.0418, 0.000, 2.10),
-                Ring::squared(0.008, 0.0492, 0.0464, 0.000, 2.15),
+                Ring::oval(0.044, 0.0090, 0.0090),
+                Ring::oval(0.029, 0.0340, 0.0340),
+                Ring::oval(0.000, 0.0455, 0.0455),
                 Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
                 Ring::squared(-0.120, 0.0464, 0.0422, 0.002, 2.10),
                 Ring::squared(-0.185, 0.0394, 0.0354, 0.002, 2.10),
@@ -2247,17 +2042,17 @@ impl BodyParts {
                     Ring::set(-0.150, 0.0812, 0.0805, 0.002),
                     Ring::set(-0.245, 0.0770, 0.0748, 0.003),
                     Ring::set(-0.340, 0.0685, 0.0672, 0.002),
-                    Ring::set(-0.420, 0.0590, 0.0585, 0.000),
-                    Ring::set(-0.455, 0.0530, 0.0530, 0.000),
+                    Ring::set(-0.420, 0.0550, 0.0550, 0.000),
+                    Ring::set(-0.455, 0.0520, 0.0520, 0.000),
+                    Ring::set(-0.475, 0.0480, 0.0480, 0.000),
+                    Ring::set(-0.495, 0.0332, 0.0332, 0.000),
+                    Ring::set(-0.507, 0.0000, 0.0000, 0.000),
                 ],
                 grain.sides,
                 Self::QUADS,
             )),
-            // The shin, with the ball of the knee in it — see `forearm` above.
-            shin: meshes.add(Sculptor::joined(
-                Sculptor::modelled(grain, &Self::SHIN, grain.sides, Self::CALF),
-                Sculptor::ellipsoid(grain, Vec3::splat(0.048)),
-            )),
+            // The rounded end of the thigh fills the knee as the shin bends.
+            shin: meshes.add(Sculptor::modelled(grain, &Self::SHIN, grain.sides, Self::CALF)),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
             //
@@ -2269,7 +2064,7 @@ impl BodyParts {
             // camera got the worse it looked.
             sock_top: meshes.add(Sculptor::lathe(
                 &{
-                    let mut band = Sculptor::band(&Self::shin(grain), -0.078, 0.012, 4, 0.0038);
+                    let mut band = Sculptor::band(&Self::shin(grain), -0.078, -0.024, 4, 0.0020);
                     // Rolled under at the bottom edge, where a turnover is turned
                     // over.
                     band.insert(0, Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012));
@@ -2464,65 +2259,10 @@ impl BodyParts {
         Sculptor::curved(grain, &Self::SEAT)
     }
 
-    /// **The shoulder is a BALL on the joint**, and the sleeve is that ball
-    /// with an arm hanging out of the bottom of it.
-    ///
-    /// The one thing a lathe about the arm's own axis cannot draw is a
-    /// shoulder. A tube — which is what every sleeve here was — is wide at the
-    /// joint and stays wide going up, so it has to be cut off somewhere, and
-    /// wherever it is cut off it drives into the side of the shirt as a wall.
-    /// Reported 2026-08-28 off the live renderer: *"the arms are attached to
-    /// the body like hinges"*. That is exactly what it was — a rounded pod
-    /// bolted onto each side of the chest, with a hard dark groove between the
-    /// pod and the cloth running from the collar down to the armpit, because
-    /// at the join the sleeve's surface faced INWARD and the shirt's faced out
-    /// and the two met at something near a hundred and fifty degrees.
-    ///
-    /// A sphere centred on the joint fixes it for two separate reasons:
-    ///
-    /// * It is the only shape that is wide at the joint and narrows BOTH ways,
-    ///   so it can be buried in the shirt at the top and take over from it
-    ///   further out. Near its pole the surface is nearly horizontal, which is
-    ///   what the top of a shoulder is — so it comes out of the cloth at about
-    ///   twenty-five degrees instead of a hundred and fifty, and what is left
-    ///   of the join is a soft crease over the top of the arm running down
-    ///   into the armpit. Which is where a shirt has a sleeve seam.
-    /// * A sphere about the pivot is **invariant under the joint it hangs
-    ///   from**. The arm swings, the ball does not move, and the shoulder
-    ///   stays filled at every angle — including the ones that used to open
-    ///   the armpit, a man with both arms over his head.
-    ///
-    /// **The three axes are priced against three different things**, which is
-    /// why this is a near-sphere and not a sphere.
-    ///
-    /// The HEIGHT is priced against BURIAL. The pole sits that far above the
-    /// joint on the arm's own axis, which is [`Physique::SHOULDER_SPREAD`]
-    /// out from the middle, and it has to stay inside the shirt or it draws a
-    /// pimple on the top of the shoulder. Measured through the cloth the mesh
-    /// actually has — [`Sculptor::curved`] then [`Sculptor::section`], because
-    /// a Catmull-Rom span does not pass through the straight line between its
-    /// control points and reading the polyline is a millimetre and a half out
-    /// — the shirt is exactly 0.176 wide at 0.0770 above the joint, and that
-    /// is the ceiling. 0.074 leaves 8.4 mm of cloth across the pole, which
-    /// sits at 0.957 of the section it is buried in.
-    ///
-    /// ACROSS, it can afford six millimetres more than the height and takes
-    /// them — 0.256 out from the middle, which is 51 cm over the pair and the
-    /// figure a man's shoulders are actually measured by. It costs nothing,
-    /// because the axis it is stretched on is the one the arm's SWING leaves
-    /// alone: a rotation about x mixes the other two. Only the spread turns
-    /// it, and the spread is small.
-    ///
-    /// FORE-AFT is priced against the SLEEVE HANGING OFF IT, and it is the
-    /// one of the three that has nothing to do with the shoulder. 0.076 is
-    /// 152 mm of ball front to back over a 109 mm arm, and the sleeve below
-    /// is cut to four millimetres of cloth — so the cap's last ring came down
-    /// to the first sleeve ring in a 10.8 mm step over 26 mm of height, drawn
-    /// from the side as a spherical pad sitting on the arm with a crease
-    /// round its lower edge. Which is the balloon, in the one place slimming
-    /// the sleeve alone could not reach. At 0.066 the equator lands 0.0656
-    /// against the sleeve's 0.0648 and the two are one surface.
-    const SHOULDER_CAP: Vec3 = Vec3::new(0.0800, 0.0740, 0.0660);
+    /// Slim deltoid cap. Equal vertical and depth radii keep its surface in
+    /// place as the arm swings about X. The pole sits under the shirt; the
+    /// outer edge continues into the sleeve without a swollen shoulder pad.
+    const SHOULDER_CAP: Vec3 = Vec3::new(0.0680, 0.0630, 0.0630);
 
     /// **A hand with fingers on it**, which is the only version of a hand that
     /// survives a camera at arm's length.
@@ -10094,7 +9834,7 @@ mod tests {
         // The widest of the seat, and the shoulder as the sleeve leaves it —
         // the crest of the shirt is INSIDE that and is not what anybody sees.
         let hip = seat.iter().fold(0.0f32, |widest, ring| widest.max(ring.x));
-        let shoulder = Physique::SHOULDER_SPREAD + 0.0862;
+        let shoulder = Physique::SHOULDER_SPREAD + BodyParts::SHOULDER_CAP.x;
         let across = shoulder / hip;
         assert!(
             (1.35..1.65).contains(&across),

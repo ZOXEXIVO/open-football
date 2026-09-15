@@ -1,2 +1,2 @@
-mod matchday;
+pub(crate) mod matchday;
 mod processing;

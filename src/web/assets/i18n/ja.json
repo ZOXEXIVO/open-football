@@ -280,6 +280,7 @@
   "mind_goal_win_something_here": "ここで何かを勝ち取ること",
   "mind_goal_win_trophy": "タイトルを獲りたい",
   "mind_no_wants": "現状に満足している",
+  "mind_note_about": "{subject}（{actor}）",
   "mind_note_chip": "心境",
   "mind_note_conviction_formed": "こう思うようになった：{subject}",
   "mind_note_none": "特筆すべきことはない",

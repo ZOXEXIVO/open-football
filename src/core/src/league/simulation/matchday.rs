@@ -2,6 +2,7 @@ use crate::club::staff::perception::{AbilityEstimator, DevelopmentFormEvidence};
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::MatchSquad;
+use crate::r#match::squad::selection::helpers::PlayerAvailability;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use crate::{
@@ -10,7 +11,7 @@ use crate::{
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Per-matchday snapshot of clubs and teams indexed by id. Built once
 /// at the top of `play_scheduled_matches` so `build_match` and friends
@@ -481,22 +482,7 @@ impl League {
         }
     }
 
-    /// Collect available reserve players from the same club.
-    ///
-    /// Sweeps the senior reserves and older youth sides (B / Second / Reserve /
-    /// U21 / U23) in full — the pool a manager raids for matchday cover.
-    /// Force-selected players from anywhere in the club are added only when the
-    /// assembling team is the Main team — the pin is a senior-XI override, so a
-    /// U18 starlet flagged for the first team must not also be pulled into the
-    /// B-team's reserve pool.
-    ///
-    /// Outfield borrowing stops there, but a final step guarantees a realistic
-    /// backup-goalkeeper candidate: if the assembling team plus the swept
-    /// reserves can't field a second available keeper, the deeper academy sides
-    /// (U20 → U19 → U18, in that borrowing order) are tapped so the selector can
-    /// always name a substitute keeper. Only the keeper gets this deep-squad
-    /// rescue — clubs reliably promote a youth keeper for the bench rather than
-    /// play an outfielder in goal.
+    /// Resolve the club and hand the fixture to [`MatchdayPool`].
     fn collect_reserve_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
@@ -508,56 +494,7 @@ impl League {
         let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
             return Vec::new();
         };
-
-        let mut reserves: Vec<&'a Player> = if for_main_team {
-            club.get_force_selected_players()
-                .into_iter()
-                .filter(|p| Self::is_player_available(p, is_friendly))
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        for p in club
-            .teams
-            .teams
-            .iter()
-            .filter(|t| {
-                t.id != team_id
-                    && matches!(
-                        t.team_type,
-                        TeamType::B
-                            | TeamType::Second
-                            | TeamType::Reserve
-                            | TeamType::U21
-                            | TeamType::U23
-                    )
-            })
-            .flat_map(|t| t.players.iter())
-            .filter(|p| Self::is_player_available(p, is_friendly))
-        {
-            if reserves.iter().any(|r| r.id == p.id) {
-                continue;
-            }
-            reserves.push(p);
-        }
-
-        // Academy call-ups: U18-U20 outfielders who have earned a place
-        // in the senior matchday pool (near-senior observable level, or
-        // breakout youth-league form).
-        if for_main_team {
-            YouthSeniorCallUp::sweep(club, team_id, is_friendly, &mut reserves);
-            // Keepers come up a different way, because the judgement is a
-            // different one: not "is he as good as the man ahead of him"
-            // — he never is — but "is he ready to be around it". That is
-            // the goalkeeping coach's call, and the sweep above stays
-            // outfield-only precisely so it does not have to make it.
-            KeeperCallUp::sweep(club, team_id, is_friendly, date, &mut reserves);
-        }
-
-        Self::ensure_backup_goalkeeper_candidate(club, team_id, is_friendly, &mut reserves);
-
-        reserves
+        MatchdayPool::offer(club, team_id, is_friendly, for_main_team, date)
     }
 
     /// Ensure the reserve pool offers a backup goalkeeper when the assembling
@@ -972,6 +909,87 @@ impl League {
     }
 }
 
+/// Everyone a club may name for one fixture beyond the assembling team's own
+/// roster.
+///
+/// Sweeps the senior reserves and older youth sides (B / Second / Reserve /
+/// U21 / U23) in full — the pool a manager raids for matchday cover.
+/// Force-selected players from anywhere in the club are added only when the
+/// assembling team is the Main team — the pin is a senior-XI override, so a
+/// U18 starlet flagged for the first team must not also be pulled into the
+/// B-team's reserve pool.
+///
+/// On top of that sit the three narrower sweeps, each owning one question:
+/// [`YouthSeniorCallUp`] (who has earned a look), [`KeeperCallUp`] and
+/// [`League::ensure_backup_goalkeeper_candidate`] (the keeper room), and
+/// [`MatchdayShortfall`] (can the selector name eighteen at all).
+///
+/// Every competition that puts a club on a pitch reads this — the league
+/// matchday and the four continental brackets — so a club in an injury crisis
+/// gets the same bench in Europe that it gets on a Saturday.
+pub(crate) struct MatchdayPool;
+
+impl MatchdayPool {
+    pub(crate) fn offer<'a>(
+        club: &'a Club,
+        team_id: u32,
+        is_friendly: bool,
+        for_main_team: bool,
+        date: NaiveDate,
+    ) -> Vec<&'a Player> {
+        let mut reserves: Vec<&'a Player> = if for_main_team {
+            club.get_force_selected_players()
+                .into_iter()
+                .filter(|p| League::is_player_available(p, is_friendly))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        for p in club
+            .teams
+            .teams
+            .iter()
+            .filter(|t| {
+                t.id != team_id
+                    && matches!(
+                        t.team_type,
+                        TeamType::B
+                            | TeamType::Second
+                            | TeamType::Reserve
+                            | TeamType::U21
+                            | TeamType::U23
+                    )
+            })
+            .flat_map(|t| t.players.iter())
+            .filter(|p| League::is_player_available(p, is_friendly))
+        {
+            if reserves.iter().any(|r| r.id == p.id) {
+                continue;
+            }
+            reserves.push(p);
+        }
+
+        // Academy call-ups: U18-U20 outfielders who have earned a place
+        // in the senior matchday pool (near-senior observable level, or
+        // breakout youth-league form).
+        if for_main_team {
+            YouthSeniorCallUp::sweep(club, team_id, is_friendly, &mut reserves);
+            // Keepers come up a different way, because the judgement is a
+            // different one: not "is he as good as the man ahead of him"
+            // — he never is — but "is he ready to be around it". That is
+            // the goalkeeping coach's call, and the sweep above stays
+            // outfield-only precisely so it does not have to make it.
+            KeeperCallUp::sweep(club, team_id, is_friendly, date, &mut reserves);
+        }
+
+        League::ensure_backup_goalkeeper_candidate(club, team_id, is_friendly, &mut reserves);
+        MatchdayShortfall::sweep(club, team_id, is_friendly, &mut reserves);
+
+        reserves
+    }
+}
+
 /// Gated senior call-up sweep: the U18-U20 academy players good enough to
 /// train and travel with the first team join the Main matchday reserve
 /// pool, where the competitive selector's future-pathway layer decides
@@ -1064,6 +1082,102 @@ impl YouthSeniorCallUp {
             return false;
         }
         DevelopmentFormEvidence::regressed_rating(player) >= Self::FORM_MIN_RATING
+    }
+}
+
+/// Fill the matchday pool before optimising it.
+///
+/// [`YouthSeniorCallUp`] is an *opportunity* mechanism — two academy players
+/// a matchday, the ones who have earned a look at the first team. For a club
+/// whose only other sides are U18/U20 it is also the only route into a senior
+/// matchday squad that exists, and those are not the same job. A first team
+/// missing half its squad to injury and international duty does not go out
+/// with three substitutes because only two boys were call-up ready; it names
+/// whoever is fit and worries about who deserved it afterwards.
+///
+/// So once every other sweep has run, whatever the pool is still short of a
+/// full eighteen is borrowed from the academy, oldest tier first and best
+/// first inside a tier — and only the shortfall, so a well-stocked senior
+/// squad borrows nobody and a thin one never takes more from the academy side
+/// than it actually needs. Same shape as
+/// [`ensure_backup_goalkeeper_candidate`](League::ensure_backup_goalkeeper_candidate),
+/// which has always done exactly this for the one position where going short
+/// was unmissable — and which keeps the keeper question, so this sweep is
+/// outfield-only for the same reason [`YouthSeniorCallUp`] is.
+struct MatchdayShortfall;
+
+impl MatchdayShortfall {
+    /// A starting eleven plus a full bench — what the selector is asked for
+    /// and what it silently gave up on when the pool could not reach it.
+    const MATCHDAY_SQUAD: usize = 18;
+
+    /// The selector's own availability read, not the matchday one.
+    ///
+    /// This sweep exists to answer "will the selector be able to name
+    /// eighteen", so it has to count the players the selector will count:
+    /// [`League::is_player_available`] knows nothing about the hard condition
+    /// floor that drops a man on an empty tank, and counting him would leave
+    /// the bench short by exactly the number of walking wounded on the
+    /// roster.
+    fn fit(player: &Player, is_friendly: bool) -> bool {
+        PlayerAvailability::is_available(player, is_friendly)
+    }
+
+    /// Borrowing order: the oldest academy tier first, U18 last.
+    const TIERS: [TeamType; 5] = [
+        TeamType::U23,
+        TeamType::U21,
+        TeamType::U20,
+        TeamType::U19,
+        TeamType::U18,
+    ];
+
+    fn sweep<'a>(club: &'a Club, team_id: u32, is_friendly: bool, reserves: &mut Vec<&'a Player>) {
+        let mut offered: HashSet<u32> = reserves.iter().map(|p| p.id).collect();
+        let own = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.id == team_id)
+            .map(|t| {
+                t.players
+                    .iter()
+                    .filter(|p| Self::fit(p, is_friendly))
+                    .filter(|p| !offered.contains(&p.id))
+                    .count()
+            })
+            .unwrap_or(0);
+
+        let mut have = own + offered.len();
+        if have >= Self::MATCHDAY_SQUAD {
+            return;
+        }
+
+        for tier in Self::TIERS {
+            let mut pool: Vec<&'a Player> = club
+                .teams
+                .teams
+                .iter()
+                .filter(|t| t.id != team_id && t.team_type == tier)
+                .flat_map(|t| t.players.iter())
+                .filter(|p| !p.positions.is_goalkeeper())
+                .filter(|p| Self::fit(p, is_friendly))
+                .filter(|p| !offered.contains(&p.id))
+                .collect();
+            pool.sort_by(|a, b| {
+                b.player_attributes
+                    .current_ability
+                    .cmp(&a.player_attributes.current_ability)
+            });
+            for player in pool {
+                if have >= Self::MATCHDAY_SQUAD {
+                    return;
+                }
+                offered.insert(player.id);
+                reserves.push(player);
+                have += 1;
+            }
+        }
     }
 }
 
@@ -1492,8 +1606,9 @@ mod tests {
     fn ready_youth_outfielder_joins_main_reserve_pool() {
         // A U19 midfielder within the observable band of the weakest senior
         // peer is called into the senior matchday pool; a clearly-below kid
-        // with no form case is not.
-        let main_players: Vec<Player> = (1..=4)
+        // with no form case is not. The first team is a full eighteen so the
+        // shortfall sweep stays out of it and the gate is what is measured.
+        let main_players: Vec<Player> = (1..=18)
             .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 100))
             .collect();
         let main = md_team(1, 100, TeamType::Main, main_players);
@@ -1521,7 +1636,9 @@ mod tests {
 
     #[test]
     fn youth_call_ups_are_capped_per_matchday() {
-        let main_players: Vec<Player> = (1..=4)
+        // A full first team: nothing is short, so the only thing bringing
+        // academy players in is the opportunity cap this test is about.
+        let main_players: Vec<Player> = (1..=18)
             .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 100))
             .collect();
         let main = md_team(1, 100, TeamType::Main, main_players);
@@ -1552,7 +1669,7 @@ mod tests {
     fn breakout_youth_form_earns_call_up() {
         // Observable level far below the seniors, but a breakout
         // youth-league season (friendly bucket) makes the case instead.
-        let main_players: Vec<Player> = (1..=4)
+        let main_players: Vec<Player> = (1..=18)
             .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 130))
             .collect();
         let main = md_team(1, 100, TeamType::Main, main_players);
@@ -1575,6 +1692,52 @@ mod tests {
         assert!(
             !reserve_has(&reserves, 41),
             "the same level without the form case does not"
+        );
+    }
+
+    #[test]
+    fn a_short_first_team_calls_up_past_the_opportunity_cap() {
+        // The reported bench: a first team with twelve fit bodies and an
+        // academy that only produced two "ready" boys went out with three
+        // substitutes and could make two changes all afternoon. The cap is an
+        // opportunity rule, not a rule about how many players a club may name.
+        let main_players: Vec<Player> = (1..=12)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u20_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 60))
+            .collect();
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![main, u20])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true, md_date());
+        assert_eq!(
+            reserves.len(),
+            6,
+            "twelve fit seniors plus the borrowed shortfall make an eighteen"
+        );
+    }
+
+    #[test]
+    fn a_full_first_team_borrows_nobody() {
+        // The other side of the same rule: a club that can name eighteen of
+        // its own takes nothing from the academy beyond the two who earned it.
+        let main_players: Vec<Player> = (1..=20)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 150))
+            .collect();
+        let main = md_team(1, 100, TeamType::Main, main_players);
+        let u20_players: Vec<Player> = (20..=30)
+            .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 60))
+            .collect();
+        let u20 = md_team(2, 100, TeamType::U20, u20_players);
+        let clubs = vec![md_club(100, vec![main, u20])];
+
+        let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true, md_date());
+        assert!(
+            reserves.is_empty(),
+            "a stocked first team borrows nobody; got {}",
+            reserves.len()
         );
     }
 

@@ -1308,25 +1308,44 @@ impl Substitutions {
             return None;
         }
 
+        let best = |pool: &mut dyn Iterator<Item = &&MatchPlayer>| -> Option<u32> {
+            pool.max_by(|a, b| {
+                Self::substitute_readiness(a)
+                    .partial_cmp(&Self::substitute_readiness(b))
+                    .unwrap_or(Ordering::Equal)
+            })
+            .map(|p| p.id)
+        };
+
         // Try to find a sub with matching position group
-        let position_match = team_subs
-            .iter()
-            .filter(|p| p.tactical_position.current_position.position_group() == position_group)
-            .max_by_key(|p| p.player_attributes.current_ability);
+        let position_match =
+            best(&mut team_subs.iter().filter(|p| {
+                p.tactical_position.current_position.position_group() == position_group
+            }));
 
         if let Some(sub) = position_match {
-            return Some(sub.id);
+            return Some(sub);
         }
 
         // Fallback: best available outfield sub (never use GK as outfield replacement)
-        team_subs
-            .iter()
-            .filter(|p| {
-                p.tactical_position.current_position.position_group()
-                    != PlayerFieldPositionGroup::Goalkeeper
-            })
-            .max_by_key(|p| p.player_attributes.current_ability)
-            .map(|p| p.id)
+        best(&mut team_subs.iter().filter(|p| {
+            p.tactical_position.current_position.position_group()
+                != PlayerFieldPositionGroup::Goalkeeper
+        }))
+    }
+
+    /// Ability as the man can actually deliver it this afternoon.
+    ///
+    /// The forced paths used to reach for the highest-rated body on the
+    /// bench and nothing else, so a better player with an empty tank beat a
+    /// fit one — and a bench player below the critical line walked on and
+    /// was pulled straight back off by the same pass that had just sent him
+    /// there. Pricing the tank into the choice settles both without a
+    /// threshold anywhere: a man who cannot run is not the best option on
+    /// the bench, however good he is when fresh.
+    fn substitute_readiness(sub: &MatchPlayer) -> f32 {
+        let condition = (sub.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        sub.player_attributes.current_ability as f32 * condition
     }
 }
 
@@ -1933,6 +1952,173 @@ mod tests {
             in_id, bench_fwd_id,
             "chasing a goal should bring on the bench forward; got {}",
             in_id
+        );
+    }
+
+    #[test]
+    fn a_substitute_is_not_taken_back_off_in_the_pass_that_sent_him_on() {
+        // The reported bug, at its smallest: a side makes a change, the man
+        // who walks on is the emptiest tank on the pitch (a bench player who
+        // was tired when he was picked), and the very next look at the same
+        // stoppage reads that tank as the strongest case on the field and
+        // takes him straight back off. Two of five changes spent to put one
+        // extra player on the pitch.
+        let mut home = build_roster(1, 100, adult_birth());
+        let bench = build_bench(1, 200, adult_birth());
+        let away = build_roster(2, 300, adult_birth());
+
+        let total_ms = 61 * 60_000;
+
+        // Everybody else has run an hour and is tired with it.
+        for p in home.iter_mut() {
+            p.player_attributes.condition = 6000;
+        }
+
+        // The man who came on a moment ago, on an emptier tank than anyone.
+        let arrival_idx = home
+            .iter()
+            .position(|p| {
+                p.tactical_position.current_position == PlayerPositionType::MidfielderCenterLeft
+            })
+            .unwrap();
+        home[arrival_idx].player_attributes.condition = 2500;
+        home[arrival_idx].starting_condition = 2500;
+        home[arrival_idx].entry_match_time_ms = total_ms;
+        let arrival_id = home[arrival_idx].id;
+
+        let field = make_test_field(home, bench, away, vec![]);
+
+        let pair = Substitutions::best_discretionary_pair(
+            &field,
+            1,
+            TacticalNeed::Fatigue,
+            1,
+            0,
+            total_ms,
+            d(2025, 1, 1),
+            1.0,
+            0.85,
+        );
+
+        if let Some((out_id, _)) = pair {
+            assert_ne!(
+                out_id, arrival_id,
+                "the engine hooked the substitute it had just sent on"
+            );
+        }
+    }
+
+    #[test]
+    fn a_substitutes_case_builds_across_his_stint() {
+        // The same man, the same tank, judged twice: once the minute he walks
+        // on and once a quarter of an hour later. The first reading is not a
+        // reading at all; the second is his football.
+        let mut home = build_roster(1, 100, adult_birth());
+        let bench = build_bench(1, 200, adult_birth());
+        let away = build_roster(2, 300, adult_birth());
+
+        let arrival_idx = home
+            .iter()
+            .position(|p| {
+                p.tactical_position.current_position == PlayerPositionType::MidfielderCenterLeft
+            })
+            .unwrap();
+        home[arrival_idx].player_attributes.condition = 3000;
+        home[arrival_idx].starting_condition = 3000;
+        home[arrival_idx].entry_match_time_ms = 61 * 60_000;
+        let arrival = home[arrival_idx].clone();
+
+        let _ = make_test_field(home, bench, away, vec![]);
+
+        let score_at = |now: u64| {
+            let live = LiveSubstitutionStats::from_player(&arrival, now, 1, 0);
+            SubScoring::sub_off_score_protected(&arrival, &live, TacticalNeed::Fatigue, 1.0)
+        };
+
+        let on_arrival = score_at(61 * 60_000);
+        let settled = score_at(80 * 60_000);
+        assert!(
+            on_arrival < -1.0,
+            "a man who has just walked on is not a candidate: {on_arrival}"
+        );
+        assert!(
+            settled > 0.0,
+            "nineteen minutes later the empty tank is his own: {settled}"
+        );
+    }
+
+    #[test]
+    fn a_starter_is_judged_on_his_football_once_the_match_is_under_way() {
+        // The settling ramp is the man's stint, not a gate on the match, so a
+        // starter carries no protection from it by the time anybody would
+        // consider changing him.
+        let mut home = build_roster(1, 100, adult_birth());
+        let bench = build_bench(1, 200, adult_birth());
+        let away = build_roster(2, 300, adult_birth());
+
+        let tired_idx = home
+            .iter()
+            .position(|p| {
+                p.tactical_position.current_position == PlayerPositionType::MidfielderCenterLeft
+            })
+            .unwrap();
+        home[tired_idx].player_attributes.condition = 3000;
+        let tired_id = home[tired_idx].id;
+
+        let field = make_test_field(home, bench, away, vec![]);
+
+        let total_ms = 70 * 60_000;
+        let pair = Substitutions::best_discretionary_pair(
+            &field,
+            1,
+            TacticalNeed::Fatigue,
+            1,
+            0,
+            total_ms,
+            d(2025, 1, 1),
+            1.0,
+            0.85,
+        );
+
+        let (out_id, _) = pair.expect("a spent starter on 70' is a change worth making");
+        assert_eq!(
+            out_id, tired_id,
+            "the emptiest tank among the settled players should come off"
+        );
+    }
+
+    #[test]
+    fn a_forced_replacement_picks_the_man_who_can_play() {
+        // The forced paths used to reach for the best body on the bench and
+        // nothing else, so an exhausted star beat a fit squad player — and
+        // walked on already below the line the same pass pulls men off at.
+        let home = build_roster(1, 100, adult_birth());
+        let away = build_roster(2, 300, adult_birth());
+        let mut bench = build_bench(1, 200, adult_birth());
+
+        let spent = bench
+            .iter_mut()
+            .find(|p| p.tactical_position.current_position == PlayerPositionType::MidfielderCenter)
+            .unwrap();
+        spent.player_attributes.current_ability = 190;
+        spent.player_attributes.condition = 1500;
+
+        let fit = bench
+            .iter_mut()
+            .find(|p| p.tactical_position.current_position == PlayerPositionType::ForwardCenter)
+            .unwrap();
+        fit.player_attributes.current_ability = 120;
+        fit.player_attributes.condition = 9500;
+        let fit_id = fit.id;
+
+        let field = make_test_field(home, bench, away, vec![]);
+
+        let chosen =
+            Substitutions::find_best_substitute(&field, 1, PlayerFieldPositionGroup::Forward)
+                .expect("the bench has an outfield option");
+        assert_eq!(
+            chosen, fit_id,
+            "a 190-rated player on an empty tank is not the best option on the bench"
         );
     }
 

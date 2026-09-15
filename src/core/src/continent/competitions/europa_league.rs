@@ -3,9 +3,10 @@ use super::{
     GroupTable, KnockoutTie,
 };
 use crate::continent::ContinentalRankings;
+use crate::league::simulation::matchday::MatchdayPool;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
-use crate::{Club, MatchRuntime};
+use crate::{Club, MatchRuntime, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
@@ -211,8 +212,24 @@ impl EuropaLeague {
                 let home_team = home_club.teams.teams.first()?;
                 let away_team = away_club.teams.teams.first()?;
 
-                let home_force = home_club.get_force_selected_players();
-                let away_force = away_club.get_force_selected_players();
+                // Same matchday pool the league builds — reserves, earned
+                // academy call-ups, the keeper room and the shortfall borrow.
+                // A club in a crisis names the same eighteen in Europe that it
+                // names on a Saturday.
+                let home_force = MatchdayPool::offer(
+                    home_club,
+                    home_team.id,
+                    false,
+                    home_team.team_type == TeamType::Main,
+                    date,
+                );
+                let away_force = MatchdayPool::offer(
+                    away_club,
+                    away_team.id,
+                    false,
+                    away_team.team_type == TeamType::Main,
+                    date,
+                );
 
                 let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
                 let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
