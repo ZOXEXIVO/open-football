@@ -14,6 +14,20 @@ pub struct ViewerConfig {
     pub match_time_ms: f64,
     pub home: TeamColors,
     pub away: TeamColors,
+    /// **What the two sides are called**, already resolved by the page — a
+    /// club's name for a league fixture, a country's for an international one.
+    ///
+    /// The men on the pitch are named off [`Self::players`]; these are the only
+    /// thing in the document that names the TEAMS, and until they existed the
+    /// viewer could only say which side something belonged to in shirt colour.
+    ///
+    /// Empty on a document written before there was one, which reads as the two
+    /// colours on their own: the score bug and the full-time card simply have
+    /// no name to set.
+    #[serde(default)]
+    pub home_name: String,
+    #[serde(default)]
+    pub away_name: String,
     pub players: Vec<PlayerInfo>,
     #[serde(default)]
     pub goals: Vec<GoalInfo>,
@@ -167,6 +181,15 @@ pub struct ViewerLabels {
     pub second_half: String,
     pub loading: String,
     pub no_recording: String,
+    /// What the card the replay ends on is headed with — see
+    /// [`FullTime`](crate::ui::scoreboard::FullTime). The same string the page
+    /// above the canvas puts over its own result, so the two read as one
+    /// scoreboard rather than as two.
+    pub full_time: String,
+    /// …and what the bench is headed with on the team sheet the walk-out is
+    /// watched over — see [`TeamSheet`](crate::ui::teamsheet::TeamSheet). The
+    /// eleven above it need no heading: the club's own name is theirs.
+    pub substitutes: String,
 }
 
 impl Default for ViewerLabels {
@@ -176,6 +199,8 @@ impl Default for ViewerLabels {
             second_half: "2nd".to_string(),
             loading: "Loading match…".to_string(),
             no_recording: "Nothing was recorded in this match".to_string(),
+            full_time: "Full Time".to_string(),
+            substitutes: "Substitutes".to_string(),
         }
     }
 }
@@ -434,6 +459,8 @@ impl ViewerConfig {
                 background: "#000000".to_string(),
                 foreground: "#ffffff".to_string(),
             },
+            home_name: String::new(),
+            away_name: String::new(),
             players,
             goals: Vec::new(),
             chances: Vec::new(),

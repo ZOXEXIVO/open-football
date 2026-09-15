@@ -3,6 +3,7 @@ use crate::app::quality::Quality;
 use crate::app::stage::Stage;
 use crate::broadcast::changeover::ChangeoverShot;
 use crate::broadcast::focus::CameraSubject;
+use crate::broadcast::goal::GoalShot;
 use crate::broadcast::lineup::Lineup;
 use crate::players::actors::BallState;
 use crate::recording::playback::Playback;
@@ -712,9 +713,19 @@ impl TvCamera {
     /// a tighter frame needs a quicker operator.
     const RESPONSE: f32 = 0.30;
 
-    /// What the four constants above become when the rig is following one
-    /// player rather than the ball — see [`CameraSubject`], whose grip blends
-    /// each of them in and back out again.
+    /// What the four constants above become when the rig is following a
+    /// subject of its own rather than the ball — one player picked out of the
+    /// crowd ([`CameraSubject`]), or the knot of them a goal has just produced
+    /// ([`GoalShot`]). Whichever of the two has the shot blends each of them
+    /// in and back out again.
+    ///
+    /// The celebration wants them for a reason of its own and it is the same
+    /// reason: a pile-on forms at the corner flag, five metres off the FAR
+    /// touchline, and `AIM_ACROSS` is a gentle lead across the pitch rather
+    /// than a chase. Held at 0.30 the aim lands twenty metres short of the
+    /// men it has been pointed at and they sit on the edge of the frame —
+    /// which is the goal shot moving the camera and still not showing the
+    /// celebration.
     ///
     /// They have to move together with the lens, and that is the whole reason
     /// they exist. Everything above frames the PLAY: the rig slides only four
@@ -829,16 +840,23 @@ impl TvCamera {
         flight: Res<CameraFlight>,
         subject: Res<CameraSubject>,
         changeover: Res<ChangeoverShot>,
+        goal: Res<GoalShot>,
         lineup: Res<Lineup>,
         mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
     ) {
         let (rig, transform, projection) = &mut *camera;
 
-        // How far the shot has closed onto one player, 0..1. Every framing
-        // constant below that a follow changes is blended by it, so picking a
-        // man out of the crowd is one continuous move of the camera rather
-        // than a cut to a second one.
-        let grip = subject.grip();
+        // How far the shot has closed onto a subject of its own rather than
+        // onto the play, 0..1. Every framing constant below that a follow
+        // changes is blended by it, so picking a man out of the crowd is one
+        // continuous move of the camera rather than a cut to a second one.
+        //
+        // Whichever of the two subjects has more of the shot. They never
+        // overlap in practice — a goal stands the celebration down while a man
+        // is being followed by hand ([`GoalShot::settle`]) — but their ramps
+        // do, at the ends, and the framing has to be whichever is tighter
+        // rather than the sum or the last one written.
+        let grip = subject.grip().max(goal.grip());
         let close = |wide: f32, tight: f32| wide + (tight - wide) * grip;
 
         // The lens. `FOV` is the framing at 1.0; zooming in narrows it. The
@@ -849,6 +867,7 @@ impl TvCamera {
                 / (zoom.factor
                     * subject.magnification()
                     * changeover.magnification()
+                    * goal.magnification()
                     * lineup.magnification())
                 .max(0.01);
             if (perspective.fov - wanted).abs() > 1e-4 {
@@ -859,10 +878,15 @@ impl TvCamera {
         // A followed player outranks the ball, which is the whole point of
         // him: the shot he is in is the one the viewer asked for, wherever the
         // football has got to.
+        //
+        // …and a goal outranks the ball for as long as one is being
+        // celebrated, because for those few seconds the ball is a dead object
+        // in a net and then a thing an opponent is carrying back to the middle.
+        // Blended rather than switched — see [`GoalShot`].
         let target = match (subject.target(), ball.on_pitch) {
             (Some(at), _) => Vec3::new(at.x, 0.0, at.z),
-            (None, true) => Vec3::new(ball.position.x, 0.0, ball.position.z),
-            (None, false) => Vec3::ZERO,
+            (None, true) => goal.blend(Vec3::new(ball.position.x, 0.0, ball.position.z)),
+            (None, false) => goal.blend(Vec3::ZERO),
         };
 
         if playback.seeked {

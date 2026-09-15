@@ -73,6 +73,12 @@ pub struct SpeedButton;
 pub struct SpeedLabel;
 
 #[derive(Component)]
+pub struct ControlHint(&'static str);
+
+#[derive(Component)]
+pub struct HintLabel;
+
+#[derive(Component)]
 pub struct StatesButton;
 
 #[derive(Component)]
@@ -134,12 +140,11 @@ impl Timeline {
     /// Read next door as well: [`crate::ui::touch`] lays its controls out clear
     /// of the bar, and cuts this band out of the canvas so that a finger
     /// reaching for the scrub rail does not also swing the camera.
-    pub const BAR_HEIGHT: f32 = 48.0;
+    pub const BAR_HEIGHT: f32 = 56.0;
     const TRACK_HEIGHT: f32 = 8.0;
     /// Height of the invisible band around the rail that actually takes the
-    /// clicks. Tall enough to hit without looking, and exactly as tall as a
-    /// goal marker so nothing pokes out of it.
-    const TRACK_BAND: f32 = 20.0;
+    /// clicks. A full touch target surrounds the thin visual rail.
+    const TRACK_BAND: f32 = 44.0;
     const KNOB_SIZE: f32 = 13.0;
     /// A goal's pin on the rail, and a chance's. Both stay inside
     /// [`Self::TRACK_BAND`], which is the click target and is not allowed to
@@ -162,8 +167,8 @@ impl Timeline {
     /// baseline, wider than any of them so it still reads as the lead control
     /// — it earns that by being the only solid fill on the bar rather than by
     /// being a different shape or size.
-    const PLAY_WIDTH: f32 = 40.0;
-    const CHIP_HEIGHT: f32 = 24.0;
+    const PLAY_WIDTH: f32 = 44.0;
+    const CHIP_HEIGHT: f32 = 44.0;
 
     /// Progress along the rail.
     const ACCENT: Color = Color::srgb(0.29, 0.68, 0.98);
@@ -258,6 +263,7 @@ impl Timeline {
                     // rounding to speak of.
                     bar.spawn((
                         PlayToggle,
+                        ControlHint("Space: play / pause   |   [ / ]: slower / faster"),
                         Interaction::default(),
                         Node {
                             width: px(Self::PLAY_WIDTH),
@@ -446,6 +452,7 @@ impl Timeline {
                     // different jobs.
                     bar.spawn((
                         SpeedButton,
+                        ControlHint("Click: faster   |   Shift + click: slower   |   [ / ]: slower / faster"),
                         Chip::default(),
                         Interaction::default(),
                         // Wide enough for the longest label the cycle can
@@ -472,6 +479,7 @@ impl Timeline {
                     // eleven-pixel capitals are the more legible of the two.
                     bar.spawn((
                         SoundButton,
+                        ControlHint("Toggle stadium sound"),
                         // Lit from the first frame: the sound is on unless
                         // somebody turns it off. Nothing is audible until the
                         // replay is running, so this can never be a page that
@@ -508,6 +516,7 @@ impl Timeline {
                     // eleven pixels.
                     bar.spawn((
                         CameraResetButton,
+                        ControlHint("Return to the broadcast camera and follow the ball"),
                         Chip::default(),
                         Interaction::default(),
                         Self::chip(60.0),
@@ -515,7 +524,7 @@ impl Timeline {
                         BorderColor::all(Self::CHIP_EDGE),
                     ))
                     .with_child((
-                        Text::new("RESET"),
+                        Text::new("TV"),
                         Self::chip_font(),
                         TextColor(Self::INK),
                         TextLayout {
@@ -640,13 +649,43 @@ impl Timeline {
 
         commands.insert_resource(icons);
 
+        commands.spawn((
+            HintLabel,
+            Text::new(""),
+            TextFont {
+                font_size: FontSize::Px(12.0),
+                ..default()
+            },
+            TextColor(Self::INK),
+            BackgroundColor(Self::BAR),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: px(Self::BAR_HEIGHT + 8.0),
+                left: px(16),
+                max_width: percent(90),
+                padding: UiRect::axes(px(10), px(6)),
+                border_radius: BorderRadius::all(px(4)),
+                ..default()
+            },
+        ));
+
         // The corner frame counter. Furniture, so it takes the default depth
         // with the bar — over the picture, never dimmed by a cut — and the
-        // same shadow recipe as the name plates, because the top-left of the
-        // frame is sky and stand: the two brightest things a white figure can
-        // land on.
+        // same shadow recipe as the name plates, because the top of the frame
+        // is sky and stand: the two brightest things a white figure can land
+        // on.
+        //
+        // Top RIGHT, because the other corner is the score plate's and a debug
+        // session is the one time both are on the screen at once. See
+        // [`Scoreboard`](crate::ui::scoreboard::Scoreboard).
         commands.spawn((
             FpsBadge,
+            if config.instrumented() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             Text::new(""),
             TextFont {
                 font: FontSource::Handle(faces.face_for("120 fps")),
@@ -660,7 +699,7 @@ impl Timeline {
             },
             Node {
                 position_type: PositionType::Absolute,
-                left: px(8),
+                right: px(8),
                 top: px(6),
                 ..default()
             },
@@ -988,9 +1027,34 @@ impl Timeline {
     pub fn handle_speed(
         speed: Query<&Interaction, (Changed<Interaction>, With<SpeedButton>)>,
         mut playback: ResMut<Playback>,
+        keys: Res<ButtonInput<KeyCode>>,
     ) {
         if speed.iter().any(|i| *i == Interaction::Pressed) {
-            playback.cycle_speed();
+            if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+                playback.adjust_speed(false);
+            } else {
+                playback.cycle_speed();
+            }
+        }
+    }
+
+    pub fn refresh_hints(
+        controls: Query<(&Interaction, &ControlHint)>,
+        mut label: Query<(&mut Text, &mut Visibility), With<HintLabel>>,
+    ) {
+        let Ok((mut text, mut visibility)) = label.single_mut() else {
+            return;
+        };
+        if let Some((_, hint)) = controls
+            .iter()
+            .find(|(state, _)| **state != Interaction::None)
+        {
+            if text.as_str() != hint.0 {
+                **text = hint.0.into();
+            }
+            *visibility = Visibility::Inherited;
+        } else {
+            *visibility = Visibility::Hidden;
         }
     }
 

@@ -4438,7 +4438,7 @@ impl Joint {
                 let compress =
                     Self::FLIGHT_LIFT * stepping * gait.spring * (1.0 - stance) * loading
                         - Self::sink(gait) * stance;
-                let bob = vault + compress;
+                let bob = vault + compress + Self::sole_settle(gait) * stance;
                 // Breathing, for a player who is not running. Fades out as he
                 // does, where the stride bob takes over.
                 let breathe =
@@ -4496,7 +4496,6 @@ impl Joint {
     pub fn pose(&self, gait: Gait) -> Quat {
         // The left leg is half a cycle behind the right.
         let leg = gait.phase + if self.side < 0.0 { PI } else { 0.0 };
-        let swing = leg.sin();
 
         // Weight going from one foot to the other, and back. Half the idle
         // rate, because a shift is a whole cycle where a breath is half of
@@ -4835,6 +4834,7 @@ impl Joint {
                 let carriage = 0.15
                     + 0.07 * gait.run
                     + 0.055 * gait.signature
+                    + 0.045 * Self::cycling(gait) * Self::arm_swing(gait, leg + FRAC_PI_2, 1)
                     + Self::CARRY_SPREAD * gait.carrying
                     // …and out for balance over a leg that is out to a
                     // ball.
@@ -4885,9 +4885,15 @@ impl Joint {
                 // Leave clearance beside the shirt when inertia brings the
                 // inside arm inward. Deliberate kick poses keep their reach.
                 let balance = gait.arm_balance.x.clamp(-0.7 * carriage, 0.7 * carriage);
-                let swinging =
-                    Quat::from_rotation_z(self.side * carriage - across + balance)
-                        * Quat::from_rotation_x(arm);
+                let swinging = Quat::from_rotation_z(self.side * carriage - across + balance)
+                        * Quat::from_rotation_x(arm)
+                        // Rotate in the socket as the hand comes forward.
+                        // The elbow stays outside the shirt while the forearm
+                        // travels toward the centreline instead of on rails.
+                        * Quat::from_rotation_y(
+                            -self.side * 0.22 * Self::cycling(gait)
+                                * gait.course.y.max(0.0) * (0.5 - 0.5 * swing_arm),
+                        );
                 // How he took the goal, layered straight onto the run cycle
                 // and UNDER everything else — a mood is a modification of
                 // standing about, and anything he is actually doing (a save,
@@ -5617,8 +5623,6 @@ impl Joint {
             // standing poses — the set, the slump, the cradle — has to know
             // this joint exists.
             Limb::Ankle => {
-                let middle = (Self::ANKLE_PLANTAR - Self::ANKLE_DORSI) * 0.5;
-                let reach = (Self::ANKLE_PLANTAR + Self::ANKLE_DORSI) * 0.5;
                 // Off `stepping` rather than `run` for the same reason the
                 // hip is: the roll belongs to the step, and at a walk the
                 // step is bigger than the effort. Signed with the stride, so
@@ -5650,7 +5654,7 @@ impl Joint {
                 ) * Quat::from_rotation_z(
                     Self::FOOT_ROLL * gait.course.x * across * tread,
                 ) * Quat::from_rotation_x(
-                    (middle - reach * swing * gait.course.y) * Self::stepping(gait)
+                    Self::ankle_pitch(gait, leg)
                             + Self::BACKPEDAL_ANKLE * Self::backing(gait)
                             + Self::ANKLE_PLANTAR * 0.5 * lift * across
                             // …and up onto his toes for a ball above him,
@@ -5879,7 +5883,64 @@ impl Joint {
             gain *= response;
             phase -= lag;
         }
-        gain * phase.sin()
+        let drive = 0.12 * Self::loading(gait);
+        if drive <= 0.0 {
+            return gain * phase.sin();
+        }
+        // A short drive and a softer return. Filter the second harmonic at
+        // its own frequency so the wrist does not inherit a sharp twitch.
+        let mut harmonic = gait;
+        harmonic.cadence *= 2.0;
+        let mut second_gain = 1.0;
+        let mut second_phase = 2.0 * (leg - Self::ARM_LAG);
+        for period in [0.18, 0.14, 0.22].into_iter().take(links) {
+            let (response, lag) = Self::arm_response(harmonic, period);
+            second_gain *= response;
+            second_phase -= lag;
+        }
+        (gain * phase.sin() + drive * second_gain * second_phase.sin()) / (1.0 + drive)
+    }
+
+    /// During support the sole follows the turf, not the shin. Blend out
+    /// before toe-off so the ankle can push and recover freely. This is a
+    /// local ankle correction; saves and strikes still layer over it.
+    fn ankle_pitch(gait: Gait, leg: f32) -> f32 {
+        let stepping = Self::stepping(gait);
+        let middle = (Self::ANKLE_PLANTAR - Self::ANKLE_DORSI) * 0.5;
+        let reach = (Self::ANKLE_PLANTAR + Self::ANKLE_DORSI) * 0.5;
+        let free = (middle - reach * leg.sin() * gait.course.y) * stepping;
+        let support = Actors::ease((-leg.cos() - 0.25) / 0.55)
+            * Actors::ease(stepping / Self::STRIDE_SETTLE)
+            * gait.course.y.max(0.0)
+            * (1.0 - Self::crouched(gait))
+            * (1.0 - gait.land)
+            * (1.0 - gait.despair);
+        if support <= 0.0 {
+            return free;
+        }
+        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * stepping + gait.stance;
+        let shin = (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.drive)
+            * gait.course.y
+            + Self::tucking(gait, leg)
+            + Self::CARRY_KNEE * gait.carrying;
+        // A small heel-to-toe roll remains; cancel the much larger pitch
+        // inherited from the knee so a loaded boot does not spear the turf.
+        let planted = -shin - 0.12 * leg.sin();
+        free + (planted - free) * support
+    }
+
+    /// Flattening the boot increases its vertical reach below the ankle.
+    /// Pay for that height at support, using the same sole as the rig's
+    /// ground-contact landmarks, so the new roll cannot bury the foot.
+    fn sole_settle(gait: Gait) -> f32 {
+        let stepping = Self::stepping(gait);
+        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * stepping + gait.stance;
+        let shin = (Self::swinging(gait, PI, amplitude) + Self::DRIVE_HIP * gait.drive)
+            * gait.course.y
+            + Self::tucking(gait, PI)
+            + Self::CARRY_KNEE * gait.carrying;
+        let free = (Self::ANKLE_PLANTAR - Self::ANKLE_DORSI) * 0.5 * stepping;
+        0.038 * ((shin + Self::ankle_pitch(gait, PI)).cos() - (shin + free).cos())
     }
 
     /// **How far this knee is folded through the FORWARD stride**, in
@@ -5915,7 +5976,12 @@ impl Joint {
     /// the ground the same, and the whole of the extra depth goes where a
     /// runner's does: into the heel coming up behind him.
     fn tucked(leg: f32, stepping: f32, jitter: f32) -> f32 {
-        let tuck = (0.5 + 0.5 * (leg - Self::TUCK_LEAD).cos()).powi(3);
+        // Fold quickly after push-off, then let the lower leg unfold later
+        // than the thigh. A symmetric fold makes both links reverse as a
+        // pair. The periodic warp keeps velocity continuous at cycle wrap.
+        let recovery = leg - Self::TUCK_LEAD;
+        let recovery = recovery - 0.22 * stepping * (1.0 - recovery.cos());
+        let tuck = (0.5 + 0.5 * recovery.cos()).powi(3);
         Self::KNEE_REST
             + (Self::KNEE_FLEX.0 + Self::KNEE_FLEX.1 * stepping)
                 * (1.0 + Self::KNEE_JITTER * jitter)
@@ -7873,6 +7939,47 @@ pub(crate) mod preview {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn supporting_sole_stays_level_as_the_shin_moves_over_it() {
+        for speed in [1.4, 3.0, 6.0, 7.5] {
+            for side in [-1.0, 1.0] {
+                for offset in [-0.4, 0.0, 0.4] {
+                    let phase = PI + offset + if side < 0.0 { PI } else { 0.0 };
+                    let gait = striding_at(speed, phase);
+                    let hip = step_of(Limb::Hip, side, Vec3::ZERO, gait);
+                    let knee = step_of(Limb::Knee, side, Vec3::ZERO, gait);
+                    let ankle = step_of(Limb::Ankle, side, Vec3::ZERO, gait);
+                    let toe = (hip.rotation * knee.rotation * ankle.rotation) * Vec3::Z;
+                    assert!(
+                        toe.y.abs() < 0.08,
+                        "sole tilted during support at {speed} m/s: {toe:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn recovery_and_ankle_motion_are_continuous_through_the_cycle() {
+        let h = 0.002;
+        for speed in [1.4, 3.0, 6.0, 7.5] {
+            let gait = striding_at(speed, 0.0);
+            for index in 0..720 {
+                let phase = index as f32 * TAU / 720.0;
+                for sample in [Joint::tucking, Joint::ankle_pitch] {
+                    let at = sample(gait, phase);
+                    let before = sample(gait, phase - h);
+                    let after = sample(gait, phase + h);
+                    assert!(at.is_finite());
+                    assert!(
+                        ((after - at) - (at - before)).abs() / h < 0.12,
+                        "joint velocity jumps at {speed} m/s, phase {phase}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn stride_reversals_have_continuous_velocity_and_acceleration() {
         use super::*;

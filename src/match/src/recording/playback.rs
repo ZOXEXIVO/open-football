@@ -156,6 +156,20 @@ impl Playback {
         self.speed = Self::SPEEDS[next];
     }
 
+    /// One step toward slow motion or fast forward, stopping at either end.
+    pub fn adjust_speed(&mut self, faster: bool) {
+        let index = Self::SPEEDS
+            .iter()
+            .position(|speed| (*speed - self.speed).abs() < f32::EPSILON)
+            .unwrap_or(Self::DEFAULT_INDEX);
+        let next = if faster {
+            (index + 1).min(Self::SPEEDS.len() - 1)
+        } else {
+            index.saturating_sub(1)
+        };
+        self.speed = Self::SPEEDS[next];
+    }
+
     /// Index of 1x in [`Self::SPEEDS`].
     const DEFAULT_INDEX: usize = 2;
 
@@ -170,6 +184,17 @@ impl Playback {
         } else {
             format!("{}x", self.speed)
         }
+    }
+
+    /// Whether the playhead has run out of match.
+    ///
+    /// [`Self::advance`] parks it exactly on the duration and stops, and a
+    /// scrub to the end of the rail lands on the same number, so this is the
+    /// one question both routes into full time answer the same way. A document
+    /// that claims no duration at all never reaches it — the same guard the
+    /// seek rail puts on the field before it lays anything out along it.
+    pub fn at_full_time(&self) -> bool {
+        self.duration_ms > 0.0 && self.time_ms >= self.duration_ms
     }
 
     pub fn progress(&self) -> f32 {
@@ -239,7 +264,7 @@ impl Playback {
         playback.cut = false;
     }
 
-    /// Space bar toggles playback — the one keyboard shortcut worth having.
+    /// Replay controls do not share the arrow keys with camera flight.
     pub fn handle_keyboard(mut playback: ResMut<Playback>, keys: Res<ButtonInput<KeyCode>>) {
         if keys.just_pressed(KeyCode::Space) {
             let restart = playback.time_ms >= playback.duration_ms;
@@ -248,6 +273,36 @@ impl Playback {
             }
             playback.playing = !playback.playing || restart;
         }
+        if keys.just_pressed(KeyCode::BracketLeft) {
+            playback.adjust_speed(false);
+        } else if keys.just_pressed(KeyCode::BracketRight) {
+            playback.adjust_speed(true);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Full time is the end of the rail and nowhere else.** The card the
+    /// replay finishes on hangs off this, and a document that claims no
+    /// duration would otherwise be at full time from the first frame — which
+    /// is a card over the whole of a match rather than after it.
+    #[test]
+    fn the_playhead_is_only_at_full_time_at_the_end_of_a_match_that_has_one() {
+        let mut playback = Playback::new(5_400_000.0);
+        assert!(!playback.at_full_time());
+        playback.seek_to(0.999);
+        assert!(!playback.at_full_time());
+        playback.seek_to(1.0);
+        assert!(playback.at_full_time());
+
+        let nothing = Playback::new(0.0);
+        assert!(
+            !nothing.at_full_time(),
+            "a document with no duration was over before it started"
+        );
     }
 }
 

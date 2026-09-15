@@ -4594,6 +4594,18 @@ impl PlayerActor {
         self.at_attention = None;
     }
 
+    /// How delighted he is, 0..1 — the DRAWN figure rather than the one
+    /// [`Aftermath`] resolved, since it is a frame or two behind through its
+    /// own ramp and the shot should follow the bodies on the screen.
+    ///
+    /// Non-zero for exactly the eleven who are celebrating and for exactly
+    /// the seconds they are, which is the whole of what
+    /// [`GoalShot`](crate::broadcast::goal::GoalShot) needs to pick its
+    /// subject out of the twenty-two.
+    pub fn elation(&self) -> f32 {
+        self.elation
+    }
+
     /// How far off the turf he is, in metres, straight off the recording —
     /// plus the one thing the recording cannot say.
     ///

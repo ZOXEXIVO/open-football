@@ -9,6 +9,7 @@
 //! says any of it out loud: a replay that quietly stops framing the ball and
 //! gives no reason for it reads as a broken camera.
 
+use crate::broadcast::Grip;
 use crate::broadcast::camera::CameraFlight;
 use crate::players::actors::PlayerActor;
 use crate::players::body::Physique;
@@ -296,12 +297,7 @@ impl CameraSubject {
         // and the name plates keep about writes that change nothing.
         let wanted = if subject.locked() { 1.0 } else { 0.0 };
         if subject.grip != wanted {
-            let step = time.delta_secs() / Self::CLOSE_TIME;
-            subject.grip = if subject.grip < wanted {
-                (subject.grip + step).min(wanted)
-            } else {
-                (subject.grip - step).max(wanted)
-            };
+            subject.grip = Grip::toward(subject.grip, wanted, Self::CLOSE_TIME, &time);
         }
     }
 }

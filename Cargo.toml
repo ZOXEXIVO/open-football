@@ -14,7 +14,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.7.790"
+version = "1.7.800"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
@@ -65,6 +65,27 @@ opt-level = 1
 inherits = "release"
 debug = true
 strip = false
+
+# The profile to ITERATE in — `cargo run --profile fast`. Same `opt-level`, so
+# the simulator and the match engine still run at a usable speed; what it gives
+# up is the whole-program link.
+#
+# Fat LTO is not incremental. It re-optimizes the entire program on every link,
+# `core`'s half-million lines included, and `codegen-units = 1` denies it every
+# core but one — so a one-line edit anywhere in `web` cost 176s on a 32-thread
+# machine (58s to compile the crate, 118s in the link) with 31 threads idle.
+# Worse, `web` embeds `assets/`, so a one-BYTE stylesheet or translation edit
+# cost the same 176s. ThinLTO parallelises and caches across the codegen units
+# it keeps: the same edit measures 48s, a 3.7x turnaround, for a binary 3.3%
+# larger (42.46 MB against 41.09 MB).
+#
+# `release` stays exactly as it was — the 3% the fat link buys on the match
+# engine is worth having in the artefact people download, and nothing here
+# changes what CI ships.
+[profile.fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
 
 [dependencies]
 simulator_core = { path = "src/core", package = "core" }

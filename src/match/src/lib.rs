@@ -48,6 +48,7 @@ use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::broadcast::changeover::ChangeoverShot;
 use crate::broadcast::cut::CutFade;
 use crate::broadcast::focus::{CameraSubject, FocusRing};
+use crate::broadcast::goal::GoalShot;
 use crate::broadcast::lineup::Lineup;
 use crate::players::actors::{Actors, BallState};
 use crate::players::aftermath::Aftermath;
@@ -59,9 +60,13 @@ use crate::scene::net::Netting;
 use crate::scene::pitch::{Bank, Pitch};
 use crate::scene::sky::Sky;
 use crate::sound::matchday::{Soundtrack, Speakers};
+use crate::ui::scoreboard::{FullTime, Scoreboard};
+use crate::ui::teamsheet::TeamSheet;
 use crate::ui::timeline::{DebugOverlay, Timeline};
 use crate::ui::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
+use crate::ui::watermark::Watermark;
 use bevy::asset::AssetMetaCheck;
+use bevy::light::{DirectionalLightShadowMap, PointLightShadowMap};
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -148,6 +153,7 @@ impl MatchViewer {
                 DefaultPlugins
                     .set(WindowPlugin {
                         primary_window: Some(Window {
+                            resolution: Stage::initial_resolution(&config.canvas),
                             canvas: Some(config.canvas.clone()),
                             fit_canvas_to_parent: true,
                             // The page owns the keyboard: swallowing F5 and
@@ -172,6 +178,11 @@ impl MatchViewer {
             // After `DefaultPlugins`, which is what creates `Assets<Font>`, and
             // before any of the spawns below put text on the screen.
             .add_plugins(Typeface)
+            // Bevy allocates shadow textures even with every shadow map disabled:
+            // a 1024-square cubemap and a 2048-square layer cost 40 MiB. The
+            // viewer uses contact discs, so only the shader bindings need backing.
+            .insert_resource(PointLightShadowMap { size: 1 })
+            .insert_resource(DirectionalLightShadowMap { size: 1 })
             // Only ever seen if the dome somehow is not: `Sky` is carried by
             // the lens and covers the frame. Held at the gradient's zenith so
             // that if it ever does show, it shows as more sky.
@@ -218,6 +229,15 @@ impl MatchViewer {
             // `TvCamera::follow_play` on every frame, so it exists from the
             // first one whether or not the match had a change in it.
             .init_resource::<ChangeoverShot>()
+            // The shot a goal gets. Nothing to fill at startup — it measures
+            // its subject off the bodies every frame — but `TvCamera::
+            // follow_play` reads it on every one of them, including the
+            // eighty-odd minutes with no goal behind them. See `broadcast::goal`.
+            .init_resource::<GoalShot>()
+            // …and how far the card the replay ends on has come up. Read every
+            // frame by the corner bug, which stands down for it, so it exists
+            // from the first one. See `ui::scoreboard::FullTime`.
+            .init_resource::<FullTime>()
             // The two teams walked out before the first whistle. Registered
             // here as well as filled by `Lineup::arm` at startup, because
             // `TvCamera::follow_play` and `Actors::take_the_field` both take
@@ -279,6 +299,19 @@ impl MatchViewer {
                     // time the page hands the document over.
                     Lineup::arm,
                     Timeline::spawn,
+                    Scoreboard::spawn,
+                    // The two team sheets, built once from the squads the page
+                    // handed over and shown for the walk-out only.
+                    TeamSheet::spawn,
+                    // The one label on the screen that is about the project
+                    // rather than the match. Nothing drives it afterwards.
+                    Watermark::spawn,
+                    // The card the replay ends on, built here rather than at
+                    // the final whistle for the reason the dip's veil is: a
+                    // panel assembled on the frame it is first wanted is a
+                    // dozen lines of text shaped in the middle of the moment
+                    // it exists to cover. See `ui::scoreboard::FullTime`.
+                    FullTime::spawn,
                     // Hidden until the replay first cuts, and built here for
                     // the reason the flight stick is: a sheet assembled on the
                     // frame it is first wanted is a texture uploaded in the
@@ -369,6 +402,9 @@ impl MatchViewer {
                     Lineup::hold
                         .after(Playback::handle_keyboard)
                         .before(Playback::advance),
+                    // Behind the act it reads, so the sheet leaves on the frame
+                    // the camera turns rather than the one after it.
+                    TeamSheet::follow_ceremony.after(Lineup::hold),
                     Lineup::pose
                         .after(Actors::take_the_field)
                         .before(Actors::animate),
@@ -532,7 +568,7 @@ impl MatchViewer {
                         // tells us where its holes are.
                         Timeline::refresh_gaps,
                         Timeline::refresh_camera_reset,
-                        Timeline::refresh_speed,
+                        (Timeline::refresh_speed, Timeline::refresh_hints),
                         // After `handle_touch`, so the knob is drawn where the
                         // thumb has just put it rather than where it was.
                         FlightPad::refresh,
@@ -574,6 +610,30 @@ impl MatchViewer {
             // deliberately unordered against it: the badge paces itself and
             // reads a median that is always a frame stale anyway.
             .add_systems(Update, Timeline::refresh_fps)
+            // The score's own three: the shot a goal gets, the bug that counts
+            // them and the card they add up to. Registered apart from the
+            // chain for the same reason as the badge and ordered by hand,
+            // because unlike the badge none of them may be a frame late. The
+            // shot is measured off bodies that have just been placed and is
+            // read by the camera in the same frame; the bug is drawn off the
+            // window `Aftermath` has just resolved and off whether the card
+            // has the screen; and a frame's lag on any of them shows as the
+            // picture disagreeing with itself at the one moment anybody is
+            // watching closely.
+            .add_systems(
+                Update,
+                (
+                    GoalShot::settle
+                        .after(ChangeoverShot::settle)
+                        .before(TvCamera::follow_play),
+                    FullTime::follow_playhead
+                        .after(Playback::advance)
+                        .before(Playback::end_frame),
+                    Scoreboard::refresh
+                        .after(Aftermath::follow_playhead)
+                        .after(FullTime::follow_playhead),
+                ),
+            )
             // The engine-facing overlays only exist when the page asked for
             // them, so their systems are only registered then.
             .add_systems(

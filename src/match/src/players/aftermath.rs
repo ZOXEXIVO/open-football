@@ -46,6 +46,15 @@ pub struct Aftermath {
     scored_by_home: Option<bool>,
     /// Strength of the reaction, 0..1, fading out at the end of the window.
     weight: f32,
+    /// How long ago the ball crossed the line, in ms of match clock. `None`
+    /// outside the window, like [`Self::scored_by_home`].
+    ///
+    /// The playhead against the goal list is this type's question and is
+    /// answered here once a frame; the shot a goal gets
+    /// ([`GoalShot`](crate::broadcast::goal::GoalShot)) needs the same number
+    /// to know whether the ball is still the picture, and a second scan of the
+    /// same list would be a second opinion about when a goal was scored.
+    since: Option<f64>,
 }
 
 impl Aftermath {
@@ -93,6 +102,7 @@ impl Aftermath {
         let Some((time, home)) = latest else {
             aftermath.scored_by_home = None;
             aftermath.weight = 0.0;
+            aftermath.since = None;
             return;
         };
         let since = now - time;
@@ -103,6 +113,12 @@ impl Aftermath {
         };
         aftermath.scored_by_home = (weight > 0.0).then_some(home);
         aftermath.weight = weight as f32;
+        aftermath.since = (weight > 0.0).then_some(since);
+    }
+
+    /// How long ago the goal being reacted to went in, in ms of match clock.
+    pub fn since(&self) -> Option<f64> {
+        self.since
     }
 
     /// How sick this side is, 0..1.
@@ -130,6 +146,7 @@ mod tests {
         Aftermath {
             scored_by_home,
             weight,
+            since: scored_by_home.map(|_| 0.0),
         }
     }
 

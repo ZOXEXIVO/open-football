@@ -48,6 +48,7 @@
 //! the change did and not a constant somebody guessed at.
 
 use crate::app::config::ViewerConfig;
+use crate::broadcast::Grip;
 use crate::broadcast::camera::{CameraFlight, CameraOrbit};
 use crate::broadcast::focus::CameraSubject;
 use crate::players::actors::PlayerActor;
@@ -606,7 +607,7 @@ impl ChangeoverShot {
         let grip = if portrait.is_some() {
             1.0
         } else {
-            Self::stepped(shot.grip, f32::from(anybody), Self::CLOSE_TIME, &time)
+            Grip::toward(shot.grip, f32::from(anybody), Self::CLOSE_TIME, &time)
         };
 
         // Same rule the name plates and the contact shadows keep: write
@@ -620,19 +621,6 @@ impl ChangeoverShot {
         }
         if shot.plant.is_some() || plant.is_some() {
             shot.plant = plant;
-        }
-    }
-
-    /// One frame of a ramp from `from` towards `to`, `seconds` long end to end.
-    fn stepped(from: f32, to: f32, seconds: f32, time: &Time) -> f32 {
-        if from == to {
-            return to;
-        }
-        let step = time.delta_secs() / seconds;
-        if from < to {
-            (from + step).min(to)
-        } else {
-            (from - step).max(to)
         }
     }
 

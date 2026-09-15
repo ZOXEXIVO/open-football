@@ -63,9 +63,6 @@ impl MatchViewer {
     /// Builds the viewer and writes `match_viewer.js.gz` and
     /// `match_viewer_bg.wasm.gz` into `assets_dir`.
     ///
-    /// `staging` is scratch space for the raw wasm-bindgen output — put it
-    /// under `OUT_DIR`.
-    ///
     /// Cheap when nothing moved. The nested cargo build settles in well under a
     /// second once its target dir is warm, but wasm-bindgen and a level-9 gzip
     /// over ~30 MB of Bevy cost seconds every time, and the build script re-runs
@@ -73,18 +70,45 @@ impl MatchViewer {
     /// is enough. So the compiled wasm is fingerprinted and the rest of the
     /// pipeline is skipped whole when that fingerprint matches what is already
     /// staged.
-    pub fn stage(crate_dir: &Path, staging: &Path, assets_dir: &Path) -> Result<(), String> {
+    pub fn stage(crate_dir: &Path, assets_dir: &Path) -> Result<(), String> {
         let wasm = Self::compile(crate_dir)?;
         let fingerprint = Self::fingerprint(&wasm)?;
+        let staging = Self::staging(crate_dir, assets_dir);
 
-        if Self::staged(assets_dir) && Self::stamp(staging).as_deref() == Some(&fingerprint) {
+        if Self::staged(assets_dir) && Self::stamp(&staging).as_deref() == Some(&fingerprint) {
             return Ok(());
         }
 
-        Self::bindgen(&wasm, staging)?;
-        Self::optimize(staging)?;
-        Self::compress(staging, assets_dir)?;
-        Self::stamp_write(staging, &fingerprint)
+        Self::bindgen(&wasm, &staging)?;
+        Self::optimize(&staging)?;
+        Self::compress(&staging, assets_dir)?;
+        Self::stamp_write(&staging, &fingerprint)
+    }
+
+    /// Scratch space for the raw wasm-bindgen output, and the fingerprint that
+    /// decides whether any of it has to be produced again.
+    ///
+    /// Deliberately NOT `OUT_DIR`. The stamp is only worth keeping if it
+    /// outlives the thing it describes, and `OUT_DIR` moves whenever cargo
+    /// re-fingerprints the build script — a different profile, a feature
+    /// change, a bumped dependency. Under `OUT_DIR` the cache was missed on
+    /// every debug/release switch and left 42 staging directories holding 32
+    /// distinct fingerprints: ten full wasm-opt runs to arrive at bytes that
+    /// were already on disk. Rooted here it survives all of that, and CI keeps
+    /// it because `src/match/target` is already a cache mount.
+    ///
+    /// Keyed by `assets_dir` so two consumers — the server and the dev match
+    /// harness — never share a scratch directory. Their nested cargo builds are
+    /// serialised by cargo's lock on `src/match/target`; the pipeline that runs
+    /// after it is not, and interleaved wasm-bindgen output would stage a
+    /// corrupt viewer under a stamp claiming it was good.
+    fn staging(crate_dir: &Path, assets_dir: &Path) -> PathBuf {
+        let mut hasher = DefaultHasher::new();
+        assets_dir.hash(&mut hasher);
+        crate_dir
+            .join("target")
+            .join("viewer-staging")
+            .join(format!("{:x}", hasher.finish()))
     }
 
     /// Runs binaryen over the bindgen output, in place.

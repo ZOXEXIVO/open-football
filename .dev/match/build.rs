@@ -16,9 +16,7 @@ fn main() {
     MatchViewer::watch(&crate_dir);
 
     if !MatchViewer::skipped() {
-        if let Err(reason) =
-            MatchViewer::stage(&crate_dir, &out_dir.join("viewer-staging"), &viewer_dir)
-        {
+        if let Err(reason) = MatchViewer::stage(&crate_dir, &viewer_dir) {
             println!("cargo:warning=match viewer not rebuilt: {}", reason);
         }
     }

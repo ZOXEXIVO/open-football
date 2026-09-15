@@ -827,6 +827,29 @@ impl Lineup {
         along * along * (3.0 - 2.0 * along)
     }
 
+    /// **How much of the team sheet belongs on the screen**, 0..1.
+    ///
+    /// Up while the squad is being dressed and while the camera is still
+    /// flying in at the line — from [`Self::OVERHEAD`] metres nobody down
+    /// there is legible, and a sheet is what a broadcast fills that with. Gone
+    /// by the time the shot comes round onto the faces, because from then on
+    /// the ceremony IS the answer and a card over it would be covering the
+    /// thing it was standing in for.
+    ///
+    /// It holds through the corner and goes out at the end of it — the beat
+    /// that joins the two — so the sheet is gone on the frame the pass along
+    /// the faces opens and the first man arrives on a clear picture. Stated
+    /// here rather than in [`TeamSheet`](crate::ui::teamsheet::TeamSheet)
+    /// because the beats are this type's and nothing else should be timing
+    /// itself against them.
+    pub fn presenting(&self) -> bool {
+        match self.act {
+            Act::Assembling => true,
+            Act::Running(into) => into < self.approach_seconds() + self.swing_seconds(),
+            _ => false,
+        }
+    }
+
     /// True while the ceremony owns the picture.
     pub fn on(&self) -> bool {
         self.shot.is_some()

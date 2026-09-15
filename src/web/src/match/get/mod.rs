@@ -100,6 +100,12 @@ struct ViewerConfigJson {
     match_time_ms: u64,
     home: TeamColorsJson,
     away: TeamColorsJson,
+    /// What the two sides are called. The replay names them on its score bug
+    /// and on the card it ends with; resolved here because an international
+    /// fixture carries country IDs rather than team ones and only this side
+    /// knows the difference.
+    home_name: String,
+    away_name: String,
     players: Vec<PlayerJson>,
     goals: Vec<GoalEventJson>,
     chances: Vec<ChanceEventJson>,
@@ -223,6 +229,13 @@ struct ViewerLabelsJson {
     /// Shown in place of the loading notice when the recording turns out to
     /// hold nothing — a match that finished goalless has no clips in it.
     no_recording: String,
+    /// What the card the replay ends on is headed with. The same string this
+    /// page sets over its own result, so the scoreboard above the canvas and
+    /// the one the replay finishes on read as one thing.
+    full_time: String,
+    /// …and what the bench is headed with on the team sheet the replay opens
+    /// its walk-out over.
+    substitutes: String,
 }
 
 #[derive(Serialize)]
@@ -649,6 +662,8 @@ pub async fn match_get_action(
         match_time_ms: result_details.match_time_ms,
         home: TeamColorsJson::for_club(simulator_data, home_club_id, "#00307d"),
         away: TeamColorsJson::for_club(simulator_data, away_club_id, "#b33f00"),
+        home_name: home_team_name.clone(),
+        away_name: away_team_name.clone(),
         players: viewer_players,
         goals: viewer_goals,
         chances: viewer_chances,
@@ -658,6 +673,8 @@ pub async fn match_get_action(
             second_half: i18n.t("second_half").to_string(),
             loading: i18n.t("loading_match").to_string(),
             no_recording: i18n.t("match_no_recording").to_string(),
+            full_time: i18n.t("full_time").to_string(),
+            substitutes: i18n.t("substitutes").to_string(),
         },
         venue: if is_international {
             VenueJson::default()

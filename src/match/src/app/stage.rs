@@ -68,7 +68,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
 use bevy::render::renderer::RenderDevice;
 use bevy::render::view::Msaa;
-use bevy::window::PrimaryWindow;
+use bevy::window::{PrimaryWindow, WindowResolution};
 
 /// The full-screen node the replay is shown in, behind the transport bar.
 #[derive(Component)]
@@ -77,22 +77,28 @@ pub struct Backdrop;
 impl Backdrop {
     /// **Below zero is the picture; zero and above is the interface.**
     ///
-    /// Three roots share the window and the order between them is not
+    /// Four roots share the window and the order between them is not
     /// negotiable, so it is written down here rather than left to the order
     /// their `Startup` systems happen to run in — which Bevy does not promise.
     ///
     /// The replay is the floor. The name plates over the players' heads are
     /// part of the football, so they sit on it and go dark with it. The dip
-    /// between two clips ([`crate::broadcast::cut`]) covers both. And
-    /// everything at the default zero — the transport bar, the flight stick,
-    /// the altitude buttons — is furniture laid over the lot of it, which
-    /// never dims, because a control that went dark at every cut would read as
-    /// a fault.
-    pub const PICTURE: i32 = -3;
+    /// between two clips ([`crate::broadcast::cut`]) covers both, and the
+    /// full-time card ([`crate::ui::scoreboard::FullTime`]) covers the dip —
+    /// it is a caption laid over the picture rather than part of it, and it
+    /// comes up on a frozen frame nothing is fading any more. And everything
+    /// at the default zero — the transport bar, the flight stick, the
+    /// altitude buttons — is furniture laid over the lot of it, which never
+    /// dims, because a control that went dark at every cut would read as a
+    /// fault, and because the card must not take the rail away from somebody
+    /// who wants to watch the match again.
+    pub const PICTURE: i32 = -4;
     /// The plates, over the picture and under the dip. See [`Self::PICTURE`].
-    pub const PLATES: i32 = -2;
+    pub const PLATES: i32 = -3;
     /// The cut's own veil, over both. See [`Self::PICTURE`].
-    pub const DIP: i32 = -1;
+    pub const DIP: i32 = -2;
+    /// The full-time card, over all three. See [`Self::PICTURE`].
+    pub const CAPTION: i32 = -1;
 }
 
 /// The image the replay is drawn into, and how large it is being kept.
@@ -132,6 +138,30 @@ pub struct Stage {
 }
 
 impl Stage {
+    /// Start at the canvas's CSS size; winit applies the device pixel ratio.
+    /// Its default 1280x720 window otherwise allocates a 4K surface at 3x DPR
+    /// before the browser's first resize notification can correct it.
+    pub fn initial_resolution(selector: &str) -> WindowResolution {
+        #[cfg(target_arch = "wasm32")]
+        let size = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.query_selector(selector).ok().flatten())
+            .map(|canvas| {
+                UVec2::new(
+                    canvas.client_width().max(1) as u32,
+                    canvas.client_height().max(1) as u32,
+                )
+            })
+            .unwrap_or(UVec2::ONE);
+        #[cfg(not(target_arch = "wasm32"))]
+        let size = {
+            let _ = selector;
+            UVec2::ONE
+        };
+
+        WindowResolution::new(size.x, size.y)
+    }
+
     /// The rungs, sharpest first.
     ///
     /// Five of them across a range of about three to one in fill cost —

@@ -187,9 +187,7 @@ impl MatchViewerAsset {
         MatchViewer::watch(&crate_dir);
 
         if !MatchViewer::skipped() {
-            if let Err(reason) =
-                MatchViewer::stage(&crate_dir, &out_dir.join("match-viewer"), &assets_dir)
-            {
+            if let Err(reason) = MatchViewer::stage(&crate_dir, &assets_dir) {
                 println!("cargo:warning=match viewer not rebuilt: {}", reason);
             }
         }

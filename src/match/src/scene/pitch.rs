@@ -433,7 +433,7 @@ impl Upkeep {
     /// visible surface rather than that note's four patches — the code path at
     /// `kept` 1.00 is provably the old one, and the test named above is what
     /// says so.)
-    const TIRED: Color = Color::srgb(0.234, 0.324, 0.197);
+    const TIRED: Color = Color::srgb(0.260, 0.312, 0.240);
 
     /// How much harder a neglected pitch wears, and how much rougher its sward
     /// is, against a great ground's.
@@ -445,18 +445,10 @@ impl Upkeep {
     /// husbandry**: drainage, feed and the patches that never took, which is
     /// not about where the game was played at all.
     ///
-    /// The roughness is the more delicate of the two, and it is set against
-    /// the mow — the one contrast on this surface that is known to read
-    /// correctly. A great ground's stripe is 29% in the LINEAR space the
-    /// shader multiplies in (the famous 16% is that same ratio written in
-    /// sRGB), and its sward wanders 5.5% at the very worst point on the pitch,
-    /// which is 38% of the stripe and is why `the_sward_never_shouts_over_the_mow`
-    /// passes with room. At `MOTTLE` a park pitch wanders 16%, or **about
-    /// three fifths of what a stripe is worth** — plainly uneven ground, still
-    /// short of the contrast the eye has been taught to read as a deliberate
-    /// band. Past a whole stripe's worth it stops reading as ground at all and
-    /// starts reading as camouflage, which is a different and much worse
-    /// picture than the one this is for; the same test holds that ceiling.
+    /// Keep surface roughness below the mowing contrast so the lanes remain
+    /// readable. `the_sward_never_shouts_over_the_mow` checks the ratio in
+    /// linear colour space, where the shader applies it, and also keeps a
+    /// park pitch visibly rougher than a well-maintained ground.
     const WORN: f32 = 2.4;
     const MOTTLE: f32 = 3.0;
 
@@ -510,7 +502,7 @@ impl Upkeep {
     ///
     /// Two things are kept apart in here and they are easy to run together.
     ///
-    /// **The RATIO never changes.** 0.796 / 0.845 / 0.920 in sRGB is what leaf
+    /// **The RATIO never changes.** 0.743 / 0.786 / 0.867 in sRGB is what leaf
     /// bent away from the lens does against leaf bent toward it — a fact about
     /// grass and light, not about this ground — so it is read off the
     /// calibrated pair and applied to whatever green the upkeep asked for,
@@ -781,8 +773,9 @@ impl Sward {
     /// already free; it would not make anything look better.
     const CELL: f32 = 0.5;
 
-    /// Narrow overlap where adjacent roller passes meet.
-    const FEATHER: f32 = 0.18;
+    /// Five centimetres of blending on each side keeps the mowing boundary
+    /// crisp while retaining a small transition between the roller passes.
+    const FEATHER: f32 = 0.05;
 
     /// What wearing the grass away does to its colour, per channel, at the
     /// point where it is worn through completely.
@@ -1335,84 +1328,16 @@ impl Pitch {
     /// daylight between them.
     pub(crate) const SLAB: f32 = 1.9;
 
-    /// The pitch as the mower left it: the shade the grass lies in going away
-    /// from the roller, and the shade of the same grass lying back toward it.
+    /// Muted grass greens for the floodlit match view. Lower green-channel
+    /// brightness and saturation, with a subtle blue bias, give the turf depth.
+    /// The material stays matte; blade relief and wear supply surface detail.
     ///
-    /// **A game's green rather than a broadcast one.** The pair this replaces
-    /// (#325223 / #284620) was sampled off televised football and was a
-    /// faithful sample: a stadium is lit flat, the camera is looking at dust,
-    /// wear and seed heads as much as at leaf, and real grass on camera comes
-    /// out a dark, desaturated YELLOW-green with barely half as much green
-    /// again as red. It rendered at about rgb(94, 127, 83), which is exactly
-    /// what a pitch looks like on television — and is not what a football
-    /// GAME looks like. The turf is the background nine tenths of every frame
-    /// is drawn against, and twenty-two shirts have to be told apart on it
-    /// from the height a wide shot watches from.
-    ///
-    /// So the pair is aimed at the picture rather than at the camera: a lush,
-    /// natural green with nearly two and a half times as much green in it as
-    /// red, a hue of about 128° where the broadcast pair sat at 105°, and
-    /// two thirds again its saturation. It renders **rgb(52, 124, 62)** —
-    /// 11% less light than the broadcast pitch, and 29% less than the
-    /// mobile-game screenshot it was first set against.
-    ///
-    /// Every direction off this point was tried on the way to it, and each
-    /// has a name for what goes wrong. The screenshot renders rgb(65, 176, 57):
-    /// on a phone that is the look, on a monitor filling most of the frame it
-    /// GLARES, and taking the light out while keeping the saturation
-    /// (rgb(42, 138, 38)) still did. Further down, at rgb(45, 108, 43), the
-    /// green was calm but read as yellow; pushing the hue to 144° to cure
-    /// that — rgb(36, 103, 63) — read as CHEAP, because a dark teal is what
-    /// synthetic turf and a twenty-year-old game both look like. What reads
-    /// as expensive is what a good pitch under good light actually is: a
-    /// mid-tone, a little cool of pure green and no further, with its depth
-    /// coming from the stripe contrast and the sward's own variation rather
-    /// than from saturation. The old pitch failed the same test from the
-    /// other side — dark AND grey, which reads as a surface rather than as
-    /// grass.
-    ///
-    /// ⚠ **Neither number can be read on its own.** See the material in
-    /// `Self::spawn_playing_surface`, which turns the turf's specular OFF.
-    /// That sheen is a constant added after the albedo has had its say, so it
-    /// costs the darkest channels most: on one and the same sheet it was
-    /// worth 34 units of red and 38 of blue against only 14 of green, which
-    /// is desaturation by another name — most of the distance between the old
-    /// pitch and this one on red, and more than all of it on blue. With it on,
-    /// the floor it puts under red and blue sits at or above where this pair
-    /// renders them, so no green writable here arrives at all. The two changes
-    /// are one decision, and moving either alone undoes it.
-    ///
-    /// The two shades are the same grass mown in opposite directions and NOT
-    /// two different greens. Leaf bent away from you reflects more sky and
-    /// looks lighter and slightly cooler; leaf bent toward you shows its
-    /// shadowed side and looks darker and a touch greyer. So the pair differs
-    /// by about 16% in value — the real figure for mowing stripes — and only
-    /// slightly in hue. Making them differ by brightness alone is what makes
-    /// stripes look painted on. That 16% is a per-channel RATIO
-    /// (0.796 / 0.845 / 0.920 of the mown shade), so it rides through a change
-    /// of green untouched and never has to be re-derived.
-    ///
-    /// A change written here is nothing like the same change on screen, and
-    /// the gap is worth knowing before reaching in: the scene is tonemapped,
-    /// and the tonemapper spends most of an albedo change compressing it. How
-    /// much depends entirely on where the pitch is standing — a third off the
-    /// OLD, dark albedo moved the rendered turf by 19%, while halving the
-    /// green from the bright pass this pair came down from took 44% off it.
-    /// So measure on RENDERED frames, with the upper stand and the hoarding as
-    /// controls; a control that moves is a framing difference or an exposure
-    /// shift, not a result.
-    ///
-    ///   mown  #1D5126    against  #174523   (16% darker, a shade greyer)
-    ///
-    /// **This pair is now the TOP of a ladder rather than the whole of it.**
-    /// A great ground gets exactly what is written here and every other ground
-    /// gets a walk away from it — see [`Upkeep`], which owns the far end and
-    /// the four things that go wrong on the way to it. Nothing about the
-    /// calibration changes: `Upkeep::at(1.0)` reproduces this pair and this
-    /// ratio to the bit, which is what
-    /// `a_great_ground_is_the_pitch_that_was_calibrated` is for.
-    pub(crate) const MOWN: Color = Color::srgb(0.113, 0.318, 0.150);
-    const AGAINST: Color = Color::srgb(0.090, 0.269, 0.138);
+    /// Both mowing shades move together, preserving the roughly 21% value
+    /// contrast and the slight hue shift between adjacent roller passes.
+    /// These are texture colours before lighting and tone mapping, rather
+    /// than final screen colours. Upkeep derives every ground from this pair.
+    pub(crate) const MOWN: Color = Color::srgb(0.118, 0.250, 0.152);
+    const AGAINST: Color = Color::srgb(0.0877, 0.1965, 0.1317);
 
     /// How much pitch one tile of [`Textures::turf`] covers, in metres.
     ///
