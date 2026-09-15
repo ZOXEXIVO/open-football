@@ -45,35 +45,33 @@ impl TeamSheet {
     const SCRIM: Color = Color::srgba(0.031, 0.047, 0.071, 0.62);
     const PANEL: Color = Color::srgba(1.0, 1.0, 1.0, 0.92);
 
-    const PANEL_WIDTH: f32 = 728.0;
+    const PANEL_WIDTH: f32 = 510.0;
     const GUTTER: f32 = 18.0;
 
-    /// **Set to be read at a glance**, and the panel widened to match so the
+    /// **Set to be read at a glance**, with the panel sized to match so the
     /// names keep their room.
     ///
-    /// Far larger than the other two cards, and deliberately. Those are read at
+    /// A size up from the other two cards, and deliberately. Those are read at
     /// leisure: the score plate sits still in the corner all match and the
     /// full-time card comes up on a stopped picture. This one is over a camera
     /// flying at the line and it is gone inside fifteen seconds, so it has to
     /// be taken in rather than studied — which is a bigger face, not a longer
     /// read.
-    const CLUB: f32 = 20.3;
-    const NAME: f32 = 18.6;
-    const NUMBER: f32 = 16.9;
+    const CLUB: f32 = 14.2;
+    const NAME: f32 = 13.0;
+    const NUMBER: f32 = 11.8;
     /// Room for two figures, because shirt numbers run past ninety.
-    const NUMBERS: f32 = 27.0;
-    const LABEL: f32 = 15.2;
+    const NUMBERS: f32 = 19.0;
+    const LABEL: f32 = 10.6;
 
     /// The most substitutes listed under one side.
     ///
-    /// ⚠ **This is what the type size costs.** A bench is seven in most
-    /// competitions and nine in some, and a document is free to carry more —
-    /// but the card is centred over a moving camera with nowhere to scroll,
-    /// and at this size a ninth row runs it off the bottom of the picture.
-    /// Measured against the canvas: eleven and seven comes to about 645 px of
-    /// a 682 px frame, and every further man is another 29. The eleven above
-    /// them are what a walk-out is about anyway.
-    const MOST_SUBS: usize = 7;
+    /// A bench is seven in most competitions and nine in some, and a document
+    /// is free to carry more — but the card is centred over a moving camera
+    /// with nowhere to scroll, so it stops at the deepest bench a competition
+    /// actually names. Measured against the canvas: eleven and nine comes to
+    /// about 510 px of a 682 px frame, and every further man is another 20.
+    const MOST_SUBS: usize = 9;
 
     /// Builds the card, hidden, at startup.
     ///
@@ -240,7 +238,7 @@ impl TeamSheet {
                 width: percent(100),
                 flex_direction: FlexDirection::Row,
                 column_gap: px(7),
-                margin: UiRect::bottom(px(5)),
+                margin: UiRect::bottom(px(4)),
                 ..default()
             })
             .with_children(|row| {
