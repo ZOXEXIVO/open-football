@@ -485,8 +485,12 @@ mod tests {
             // is what this canvas can pay for. See
             // `Stage::affords_multisampling` — an iPad's canvas cannot, which
             // is the answer the pixel budget could not give.
-            let samples = if Stage::affords_multisampling(window) { 4 } else { 1 };
-            let target = Stage::measured(window, samples);
+            let samples = if footprint == Footprint::Roomy && Stage::affords_multisampling(window) {
+                4
+            } else {
+                1
+            };
+            let target = Stage::measured(window, samples, footprint);
             MemoryBill::hold(Held::Stage, Stage::attachments(target, window, samples));
 
             println!(

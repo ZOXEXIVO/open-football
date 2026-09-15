@@ -1,7 +1,8 @@
 [package]
 name = "match_viewer_build"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 publish = false
 
 # Host-side build helper for the WebAssembly viewer that lives one directory

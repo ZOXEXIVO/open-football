@@ -525,6 +525,8 @@ pub struct Throng {
     body_sides: usize,
     skull_sides: usize,
     limb_sides: usize,
+    /// Sample the torso and skull profiles more sparsely on small devices.
+    ring_step: usize,
     /// Metres between one seat and the next.
     spacing: f32,
 }
@@ -536,25 +538,20 @@ impl Throng {
         body_sides: Crowd::BODY_SIDES,
         skull_sides: Crowd::SKULL_SIDES,
         limb_sides: Crowd::LIMB_SIDES,
+        ring_step: 1,
         spacing: Crowd::SPACING,
     };
 
     /// …and what a phone builds.
     ///
-    /// Five sides round a torso and a head rather than eight, three round a
-    /// limb rather than four, and a metre between seats rather than seventy
-    /// centimetres. Together that is a spectator worth 87 vertices instead of
-    /// 128, and a third fewer of them: **about 45% of the geometry**, which
-    /// takes the ceiling from ~125 MB to ~55.
-    ///
-    /// The head keeps the most of what it had, for the reason it had eight in
-    /// the first place: it is the one part of a spectator with a picture on it
-    /// and the one a lens is ever walked up to. Five still reads as an oval;
-    /// four is the barrel the count was raised from.
+    /// Keep the same seats, poses and face textures, but use three profile
+    /// rings for torsos and heads. The endpoints and widest ring stay, while
+    /// intermediate curves are omitted to reduce construction and upload peaks.
     pub const HANDHELD: Throng = Throng {
         body_sides: 5,
         skull_sides: 5,
         limb_sides: 3,
+        ring_step: 2,
         spacing: Crowd::HANDHELD_SPACING,
     };
 
@@ -926,7 +923,9 @@ impl Crowd {
                         Self::CHEST * 0.5 * deep,
                     )
                 });
-                figures.tube(&body, throng.body_sides, false, |_, _| clothing);
+                figures.tube(&body, throng.body_sides, throng.ring_step, false, |_, _| {
+                    clothing
+                });
 
                 // The head on top of it, turned on [`Self::SKULL`] and skinned
                 // with his own tile the whole way round — hair at the back, an
@@ -941,9 +940,13 @@ impl Crowd {
                         Self::HEAD.z * 0.5 * deep,
                     )
                 });
-                figures.tube(&skull, throng.skull_sides, true, |turn, course| {
-                    palette.head_uv(head, turn, Self::SKULL[course].3)
-                });
+                figures.tube(
+                    &skull,
+                    throng.skull_sides,
+                    throng.ring_step,
+                    true,
+                    |turn, course| palette.head_uv(head, turn, Self::SKULL[course].3),
+                );
                 figures.cap(skull[Self::SKULL.len() - 1], throng.skull_sides, |turn| {
                     palette.head_uv(head, turn, 0.0)
                 });
@@ -965,7 +968,7 @@ impl Crowd {
                         seat.limb(elbow, wrist - top, Self::ARM),
                         seat.limb(wrist, wrist - elbow, Self::ARM * 0.78),
                     ];
-                    figures.tube(&limb, throng.limb_sides, false, |_, _| clothing);
+                    figures.tube(&limb, throng.limb_sides, 1, false, |_, _| clothing);
                     // The back of his hand, which is the one end of an arm
                     // that is out in the open air.
                     figures.cap(limb[2], throng.limb_sides, |_| skin);
@@ -986,7 +989,7 @@ impl Crowd {
                             seat.limb(knee, ankle - top, Self::LEG * 0.86),
                             seat.limb(ankle, ankle - knee, Self::LEG * 0.74),
                         ];
-                        figures.tube(&limb, throng.limb_sides, false, |_, _| trousers);
+                        figures.tube(&limb, throng.limb_sides, 1, false, |_, _| trousers);
                     }
                 }
             }
@@ -1419,8 +1422,8 @@ impl Figures {
     /// are the same place with different tile coordinates — the crown that
     /// closes it, and two arms with the back of a hand on the end of each.
     fn vertices(throng: Throng) -> usize {
-        Crowd::BODY.len() * throng.body_sides
-            + Crowd::SKULL.len() * (throng.skull_sides + 1)
+        Crowd::BODY.len().div_ceil(throng.ring_step) * throng.body_sides
+            + Crowd::SKULL.len().div_ceil(throng.ring_step) * (throng.skull_sides + 1)
             + (throng.skull_sides + 1)
             + 2 * (3 * throng.limb_sides + throng.limb_sides + 1)
     }
@@ -1430,8 +1433,8 @@ impl Figures {
     /// vertex, which is a shade under and so bought a re-allocation of a
     /// forty-megabyte buffer per bank.
     fn indices(throng: Throng) -> usize {
-        3 * (2 * (Crowd::BODY.len() - 1) * throng.body_sides
-            + 2 * (Crowd::SKULL.len() - 1) * throng.skull_sides
+        3 * (2 * (Crowd::BODY.len().div_ceil(throng.ring_step) - 1) * throng.body_sides
+            + 2 * (Crowd::SKULL.len().div_ceil(throng.ring_step) - 1) * throng.skull_sides
             + throng.skull_sides
             + 2 * (2 * 2 * throng.limb_sides + throng.limb_sides))
     }
@@ -1495,18 +1498,19 @@ impl Figures {
         &mut self,
         rings: &[Ring],
         sides: usize,
+        ring_step: usize,
         seam: bool,
         uv: impl Fn(f32, usize) -> Vec2,
     ) {
         let points = if seam { sides + 1 } else { sides };
         let base = self.positions.len() as u32;
-        for (course, ring) in rings.iter().enumerate() {
+        for (course, ring) in rings.iter().enumerate().step_by(ring_step) {
             for point in 0..points {
                 let turn = -1.0 + 2.0 * point as f32 / sides as f32;
                 self.vertex(ring.point(turn), uv(turn, course));
             }
         }
-        for course in 1..rings.len() {
+        for course in 1..rings.len().div_ceil(ring_step) {
             let (under, over) = (
                 base + ((course - 1) * points) as u32,
                 base + (course * points) as u32,
@@ -1529,7 +1533,11 @@ impl Figures {
             self.vertex(ring.point(turn), uv(turn));
         }
         for point in 0..sides as u32 {
-            self.triangle(base, base + 1 + point, base + 1 + (point + 1) % sides as u32);
+            self.triangle(
+                base,
+                base + 1 + point,
+                base + 1 + (point + 1) % sides as u32,
+            );
         }
     }
 
@@ -1883,9 +1891,8 @@ mod tests {
     /// whatever the constants still say.
     #[test]
     fn the_colours_belong_in_the_ends() {
-        let ground = |gate: u32, reputation: u16| {
-            Stature::of(&venue(gate * 4 / 3, gate, reputation, false))
-        };
+        let ground =
+            |gate: u32, reputation: u16| Stature::of(&venue(gate * 4 / 3, gate, reputation, false));
         let great = ground(40_000, 9_500);
         let village = ground(900, 4_100);
 
@@ -2037,8 +2044,15 @@ mod tests {
             ..terrace(14)
         };
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
-        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::Side, &palette, 3, Throng::FULL)
-            .expect("a bank one place wide still holds a crowd");
+        let mesh = Crowd::fill(
+            &terrace,
+            Stature::of(&VenueInfo::default()),
+            Stand::Side,
+            &palette,
+            3,
+            Throng::FULL,
+        )
+        .expect("a bank one place wide still holds a crowd");
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
@@ -2410,7 +2424,7 @@ mod tests {
         // 8/8/4, so cutting its sides alone is worth about a third and the
         // rest has to come from seating fewer people.
         assert!(
-            (handheld as f32) < full as f32 * 0.55,
+            (handheld as f32) < full as f32 * 0.40,
             "a handheld builds {handheld} vertices against a computer's {full}, \n             which is {:.0}% and not the cut this exists to make",
             handheld as f32 / full as f32 * 100.0
         );
@@ -2437,14 +2451,11 @@ mod tests {
         // written here, so a change to the vertex format moves this figure
         // instead of quietly invalidating it.
         //
-        // 15 MiB for the largest bank a great ground builds, against the
-        // 12.6 MiB it comes to today. Four banks and a phone is holding some
-        // 50 MiB of spectators, which is what the whole 3-4 GB device has been
-        // measured to survive alongside the module, the attachments and the
-        // squad. See the bill in `docs/match_viewer_handheld_memory_prompt.md`.
+        // Bound the largest bank independently of desktop detail: the CPU
+        // geometry and upload copies coexist while this buffer is prepared.
         let bytes = MemoryBill::mesh_bytes(&handheld_bank);
         assert!(
-            bytes < 15 * 1024 * 1024,
+            bytes < 11 * 1024 * 1024,
             "a handheld bank holds {:.1} MiB of spectators",
             bytes as f32 / (1024.0 * 1024.0),
         );
@@ -2484,8 +2495,15 @@ mod tests {
     fn every_spectator_is_sitting_on_a_step() {
         let terrace = terrace(9);
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
-        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::HomeEnd, &palette, 7, Throng::FULL)
-            .expect("a nine-step bank forty metres long holds a crowd");
+        let mesh = Crowd::fill(
+            &terrace,
+            Stature::of(&VenueInfo::default()),
+            Stand::HomeEnd,
+            &palette,
+            7,
+            Throng::FULL,
+        )
+        .expect("a nine-step bank forty metres long holds a crowd");
 
         let surfaces: Vec<f32> = (0..terrace.rows).map(|row| terrace.step(row).y).collect();
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =

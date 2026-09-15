@@ -1,5 +1,15 @@
 [workspace]
-members = ["src/shared", "src/core", "src/database", "src/web"]
+members = [
+    "src/shared",
+    "src/core",
+    "src/database",
+    "src/web",
+    # `src/match/builder` is a plain HOST crate that every consumer of the
+    # viewer already compiles, so it joins the workspace and carries the
+    # workspace version — only its wasm-only parent below is excluded. An
+    # explicit member wins over the `exclude` entry it sits under.
+    "src/match/builder",
+]
 # `src/match` is the Bevy/WebAssembly replay viewer. It only ever builds for
 # `wasm32-unknown-unknown` under its own profile, driven by `src/web/build.rs`,
 # so it stays out of the host workspace. It shares `src/shared` with the
