@@ -1,12 +1,9 @@
 //! **The white plate the viewer's cards are cut from.**
 //!
-//! Three pieces of furniture wear it now — the score in the corner
-//! ([`Scoreboard`](crate::ui::scoreboard::Scoreboard)), the team sheet the
-//! ceremony opens on ([`TeamSheet`](crate::ui::teamsheet::TeamSheet)) and the
-//! card the replay ends with ([`FullTime`](crate::ui::scoreboard::FullTime)) —
-//! and they have to be ONE plate rather than three that nearly agree. Three
-//! copies of a palette is three places to miss when the plate is asked to be a
-//! shade lighter, and the plate has already been asked twice.
+//! The score in the corner ([`Scoreboard`](crate::ui::scoreboard::Scoreboard))
+//! and the card the replay ends with ([`FullTime`](crate::ui::scoreboard::FullTime))
+//! share this palette with the ceremony's white team sheet and its
+//! club-coloured name banners.
 //!
 //! Only what is genuinely common lives here. How opaque a given plate is and
 //! how far its corners are rounded are its own business: the score bug is a
@@ -40,10 +37,4 @@ impl Plate {
     /// the same reason the pins on the seek rail wear theirs: the shape
     /// survives whatever the kit is.
     pub const EDGE: Color = Color::srgba(0.063, 0.086, 0.114, 0.14);
-    /// The colour band across the top of a card, one half per side. The crest
-    /// this crate does not have: it says whose card this is in the two colours
-    /// everything else in the viewer says it in.
-    pub const BAND: f32 = 3.0;
-    /// How far a card's corners are rounded — the big panels, not the bug.
-    pub const CORNER: f32 = 14.0;
 }

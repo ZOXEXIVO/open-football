@@ -326,6 +326,12 @@ impl HarnessTactic {
     }
 }
 
+const FIRST_NAMES: [&str; 22] = [
+    "Lucas", "Diego", "Thomas", "Marco", "Antoine", "Oliver", "Michael", "Pablo", "Mateo", "Luka",
+    "Nikolai", "Erik", "Hiroshi", "Min-jun", "Gabriel", "Rafael", "Felix", "Alexandre", "Lorenzo",
+    "Jakub", "Ivan", "Jonas",
+];
+
 const LAST_NAMES: &[&str] = &[
     "Silva",
     "Martinez",
@@ -389,6 +395,7 @@ const HOMELANDS: [SkinDist; 22] = [
 struct PlayerJson {
     id: u32,
     shirt_number: u8,
+    first_name: String,
     last_name: String,
     position: String,
     is_home: bool,
@@ -416,6 +423,7 @@ impl PlayerJson {
         PlayerJson {
             id,
             shirt_number,
+            first_name: FIRST_NAMES[name].to_string(),
             last_name: LAST_NAMES[name].to_string(),
             position: position.to_string(),
             is_home,
@@ -3147,7 +3155,7 @@ fn print_usage() {
         "Random level range: {}–{} inclusive.",
         RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX
     );
-    eprintln!("Viewer serves at http://localhost:18001");
+    eprintln!("Viewer serves at http://localhost:18002");
 }
 
 // ── subs: substitution-usage diagnostic ────────────────────────────────
@@ -13194,24 +13202,25 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         );
     }
 
-    println!("\nStarting viewer at http://localhost:18001");
+    println!("\nStarting viewer at http://localhost:18002");
 
     #[cfg(target_os = "windows")]
     {
         let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "http://localhost:18001"])
+            .args(["/C", "start", "http://localhost:18002"])
             .spawn();
     }
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open")
-            .arg("http://localhost:18001")
+
+            .arg("http://localhost:18002")
             .spawn();
     }
     #[cfg(target_os = "linux")]
     {
         let _ = std::process::Command::new("xdg-open")
-            .arg("http://localhost:18001")
+            .arg("http://localhost:18002")
             .spawn();
     }
 
@@ -13237,7 +13246,7 @@ async fn serve() {
             get(viewer_wasm_handler),
         );
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:18001")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:18002")
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();

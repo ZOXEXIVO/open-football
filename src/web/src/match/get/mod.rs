@@ -276,6 +276,7 @@ struct SubstitutionEventJson {
 struct PlayerJson {
     id: u32,
     shirt_number: u8,
+    first_name: String,
     last_name: String,
     position: String,
     is_home: bool,
@@ -345,6 +346,7 @@ impl PlayerJson {
             } else {
                 shirt_number
             },
+            first_name: player.full_name.display_first_name().to_string(),
             last_name: player.full_name.display_last_name().to_string(),
             position: player.position().get_short_name().to_string(),
             is_home,

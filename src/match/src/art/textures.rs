@@ -4386,6 +4386,7 @@ mod tests {
                 Complexion::face(&PlayerInfo {
                     id: 1000 + index as u32,
                     shirt_number: 1 + index as u8,
+                    first_name: String::new(),
                     last_name: String::new(),
                     position: "ST".to_string(),
                     is_home: true,
@@ -4802,4 +4803,3 @@ mod tests {
         }
     }
 }
-

@@ -897,6 +897,7 @@ mod tests {
             .map(|id| PlayerInfo {
                 id: *id,
                 shirt_number: 1,
+                first_name: "Jay-Jay".to_string(),
                 last_name: "Okocha".to_string(),
                 position: "MC".to_string(),
                 is_home: home,

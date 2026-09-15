@@ -344,6 +344,9 @@ impl TeamColors {
 pub struct PlayerInfo {
     pub id: u32,
     pub shirt_number: u8,
+    /// Older match documents only supplied the surname.
+    #[serde(default)]
+    pub first_name: String,
     pub last_name: String,
     pub position: String,
     pub is_home: bool,

@@ -996,6 +996,7 @@ mod tests {
         PlayerInfo {
             id,
             shirt_number: 9,
+            first_name: "Jay-Jay".to_string(),
             last_name: "Okocha".to_string(),
             position: "ST".to_string(),
             is_home,

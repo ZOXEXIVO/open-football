@@ -1328,16 +1328,17 @@ impl Pitch {
     /// daylight between them.
     pub(crate) const SLAB: f32 = 1.9;
 
-    /// Muted grass greens for the floodlit match view. Lower green-channel
-    /// brightness and saturation, with a subtle blue bias, give the turf depth.
+    /// Deep, muted forest greens for the floodlit match view. A warmer balance
+    /// and less green-channel brightness keep vivid TV displays from making
+    /// the well-kept turf look fluorescent.
     /// The material stays matte; blade relief and wear supply surface detail.
     ///
     /// Both mowing shades move together, preserving the roughly 21% value
     /// contrast and the slight hue shift between adjacent roller passes.
     /// These are texture colours before lighting and tone mapping, rather
     /// than final screen colours. Upkeep derives every ground from this pair.
-    pub(crate) const MOWN: Color = Color::srgb(0.118, 0.250, 0.152);
-    const AGAINST: Color = Color::srgb(0.0877, 0.1965, 0.1317);
+    pub(crate) const MOWN: Color = Color::srgb(0.140, 0.210, 0.145);
+    const AGAINST: Color = Color::srgb(0.1041, 0.1651, 0.1256);
 
     /// How much pitch one tile of [`Textures::turf`] covers, in metres.
     ///
