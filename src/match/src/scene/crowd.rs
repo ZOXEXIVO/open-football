@@ -555,27 +555,18 @@ impl Throng {
         spacing: Crowd::HANDHELD_SPACING,
     };
 
-    /// Which one this device gets. One decision, taken from the same
-    /// [`Footprint`] that decides the sampling and the squad's grain, so a
-    /// scene cannot come out thinned in one place and not in another.
-    ///
-    /// **`None` is an empty ground**, and it is reachable only from the
-    /// address bar (`?crowd=off`). It is not a quality setting — no fixture
-    /// ever gets it — it is a bisection knob, and it exists for the same
-    /// reason [`Footprint::of`] takes an override: the failure this file was
-    /// written for happens on somebody else's phone, produces no console and
-    /// no error page, and the only way to find out whether the crowd is what
-    /// is too big is to be able to take it out from the device that is
-    /// failing.
+    /// Handhelds omit spectator meshes to leave room for browser and upload
+    /// memory during startup. The stadium itself is still built. Explicit
+    /// `?crowd=handheld|full|off` overrides remain available for diagnostics.
     pub fn of(footprint: Footprint, asked: Option<&str>) -> Option<Throng> {
         match asked {
             Some("off") => None,
             Some("full") => Some(Self::FULL),
             Some("handheld") => Some(Self::HANDHELD),
-            _ => Some(match footprint {
-                Footprint::Roomy => Self::FULL,
-                Footprint::Handheld => Self::HANDHELD,
-            }),
+            _ => match footprint {
+                Footprint::Roomy => Some(Self::FULL),
+                Footprint::Handheld => None,
+            },
         }
     }
 }
@@ -2461,14 +2452,7 @@ mod tests {
         );
     }
 
-    /// **The address bar can take the crowd out**, and cannot be given
-    /// nonsense.
-    ///
-    /// The bisection knob — see [`Throng::of`]. It matters that a typo falls
-    /// through to the device's own answer rather than to an empty ground: the
-    /// person typing it is on a phone that will not open a match, and a
-    /// stadium with nobody in it looks exactly like a stadium with nobody in
-    /// it whether that was asked for or not.
+    /// Missing or invalid overrides retain the device's safe startup default.
     #[test]
     fn the_page_can_empty_the_ground_and_cannot_be_given_nonsense() {
         assert_eq!(Throng::of(Footprint::Roomy, Some("off")), None);
@@ -2481,10 +2465,13 @@ mod tests {
             Some(Throng::FULL)
         );
         // Anything else is the device's own answer.
+        assert_eq!(Throng::of(Footprint::Handheld, Some("of")), None);
+        assert_eq!(Throng::of(Footprint::Handheld, None), None);
         assert_eq!(
-            Throng::of(Footprint::Handheld, Some("of")),
+            Throng::of(Footprint::Handheld, Some("handheld")),
             Some(Throng::HANDHELD)
         );
+        assert_eq!(Throng::of(Footprint::Roomy, Some("of")), Some(Throng::FULL));
         assert_eq!(Throng::of(Footprint::Roomy, None), Some(Throng::FULL));
     }
 

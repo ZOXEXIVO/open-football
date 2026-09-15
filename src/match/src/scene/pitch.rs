@@ -2087,10 +2087,8 @@ impl Pitch {
             // bank rather than a thing of its own, so `Bank::cull` takes the
             // people out with the structure they are sitting on.
             //
-            // No throng at all is `?crowd=off` — a bisection knob and never a
-            // fixture, see [`Throng::of`]. The concrete still goes up, which is
-            // the point of it: an empty ground says whether the SPECTATORS are
-            // what the device could not hold.
+            // Handhelds and `?crowd=off` omit spectator meshes while retaining
+            // the stadium structure. See [`Throng::of`].
             if let Some(crowd) = throng
                 .and_then(|throng| spectators.seat(meshes, terrace, stature, stand, seed, throng))
             {
