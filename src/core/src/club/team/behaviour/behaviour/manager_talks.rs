@@ -626,7 +626,14 @@ impl TeamBehaviour {
                     .as_ref()
                     .map(|c| c.league_matches_played > 0)
                     .unwrap_or(false);
-                let long_idle = opp.days_since_join >= 60 && season_active && had_opportunity;
+                // The idle branch is the one that must NOT read
+                // `had_opportunity`: a player registered below the first
+                // team is never eligible for its official fixtures, and a
+                // youth side's own games are friendly-classified, so his
+                // opportunity count stays zero for as long as he is
+                // parked. Anding it in here made the fallback written for
+                // the man who never plays require that he had played.
+                let long_idle = opp.days_since_join >= 60 && season_active;
 
                 if (desire > threshold && had_opportunity)
                     || (age >= 21 && had_opportunity && gate.is_some())

@@ -3361,6 +3361,14 @@ struct TrapRow {
     level: u8,
     floor: u8,
     days_clear: u32,
+    /// The gates `rebalance_squads` reads on the promotion branch. `Lst`
+    /// closes it outright; `Loa` only closes it when the margin is not
+    /// cleared, which by this census's own definition it always is. Held
+    /// here so the census says WHICH gate held each man rather than
+    /// leaving it to be re-derived from file:line.
+    listed: bool,
+    loan_intent: bool,
+    age: u8,
 }
 
 #[derive(Debug, Default)]
@@ -3482,6 +3490,9 @@ impl LoanAssetCensus {
                                 player_name: player.full_name.to_string(),
                                 club_name: club.name.clone(),
                                 squad: format!("{:?}", team.team_type),
+                                listed: player.statuses.has(PlayerStatusType::Lst),
+                                loan_intent: player.statuses.has(PlayerStatusType::Loa),
+                                age: player.age(date),
                                 level,
                                 floor,
                                 days_clear: day.saturating_sub(since),
@@ -3627,6 +3638,15 @@ impl LoanAssetCensus {
 struct LoanAssetPrinter;
 
 impl LoanAssetPrinter {
+    /// Percentage share, guarding the empty-census divide.
+    fn share(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            part as f64 / whole as f64 * 100.0
+        }
+    }
+
     const TIERS: [&'static str; 6] = [
         "elite",
         "continental",
@@ -3866,12 +3886,32 @@ impl LoanAssetPrinter {
             LoanAssetCensus::TRAP_MARGIN
         );
         println!("  players: {}  [target ~0 from day 30]", census.trap.len());
+        let listed = census.trap.iter().filter(|r| r.listed).count();
+        let loan = census.trap.iter().filter(|r| r.loan_intent && !r.listed).count();
+        let clean = census.trap.len() - listed - loan;
+        println!(
+            "  held by Lst: {listed}  |  by Loa alone: {loan}  |  NO status gate at all:              {clean} ({:.1}%)",
+            LoanAssetPrinter::share(clean, census.trap.len())
+        );
+        let overage = census.trap.iter().filter(|r| r.age >= 21).count();
+        println!(
+            "  aged 21+: {overage} ({:.1}%)",
+            LoanAssetPrinter::share(overage, census.trap.len())
+        );
         let mut rows: Vec<&TrapRow> = census.trap.iter().collect();
         rows.sort_by(|a, b| b.days_clear.cmp(&a.days_clear));
         for row in rows.into_iter().take(Self::TOP_ROWS) {
             println!(
-                "  {:<24} {:<22} {:<5} level {:>3} vs floor {:>3}  clear for {} days",
-                row.player_name, row.club_name, row.squad, row.level, row.floor, row.days_clear,
+                "  {:<24} {:<22} {:<5} {:>2}y level {:>3} vs floor {:>3}  clear {:>4}d                   lst={} loa={}",
+                row.player_name,
+                row.club_name,
+                row.squad,
+                row.age,
+                row.level,
+                row.floor,
+                row.days_clear,
+                row.listed,
+                row.loan_intent,
             );
         }
     }

@@ -4424,6 +4424,12 @@ struct LevelRow {
     level: u8,
     matches: u32,
     goals: u32,
+    /// Sum of squared per-match goal totals, so the sweep can work out
+    /// the standard error of this level's mean and judge the spread
+    /// against what noise alone would produce. Without it the verdict is
+    /// a coin toss at any sample size the harness actually runs — see
+    /// `FLAT_TOLERANCE`.
+    goals_sq: u64,
     shots: u32,
     on_target: u32,
     saves: u32,
@@ -4503,11 +4509,14 @@ impl LevelSweep {
     /// against it, because the population level is `stats`'s question
     /// and divisional flatness is this mode's.
     const REAL_GOALS: f32 = 2.65;
-    /// How far apart the best and worst level are allowed to be before
-    /// the sweep calls the engine division-coupled. Two runs of the same
-    /// binary carry ±0.13 goals (see the harness noise floor), so
-    /// anything under ~0.4 across a whole sweep is indistinguishable
-    /// from sampling.
+    /// How far the spread may stand **above its own noise floor** before
+    /// the sweep calls the engine division-coupled.
+    ///
+    /// It is a margin, not an absolute bar. Read absolutely it was a test
+    /// of `n`: `max - min` over k level means is positive on a perfectly
+    /// flat engine and shrinks only as sqrt(n), so at n=14 the floor is
+    /// 0.46 and nothing could pass, while at n=30 it is 0.32 and almost
+    /// nothing could fail. The verdict now subtracts the floor first.
     const FLAT_TOLERANCE: f32 = 0.40;
 
     fn run(n_matches: usize, min_level: u8, max_level: u8, step: u8) {
@@ -4694,20 +4703,76 @@ impl LevelSweep {
             .unwrap_or(0);
         let spread = per_match[hi_i] - per_match[lo_i];
         let mean = per_match.iter().sum::<f32>() / per_match.len().max(1) as f32;
+
+        // **What this spread would read on a PERFECTLY FLAT engine.**
+        //
+        // `max - min` over k noisy level means is positive whatever the
+        // truth is, and it grows with k and shrinks only as sqrt(n) — so
+        // comparing it to a fixed tolerance tests the sample size, not
+        // the football. Measured, a 30-match level mean carries an SD of
+        // 0.136 goals, which puts the expected range of five of them at
+        // 0.32 against a tolerance of 0.40: the old verdict could not
+        // fail a flat engine at n=30 and could not pass one at n=14,
+        // where the same floor is 0.46. Both happened.
+        //
+        // The floor is computed rather than assumed: pooled per-match
+        // variance gives the SE of a level mean, and E[range of k
+        // standard normals] scales it. Real tilt is what stands ABOVE
+        // that.
+        let (mut ss, mut nn) = (0.0f64, 0u64);
+        for r in &rows {
+            let n = r.matches.max(1) as f64;
+            let mean_l = r.goals as f64 / n;
+            ss += r.goals_sq as f64 - n * mean_l * mean_l;
+            nn += r.matches.max(1) as u64;
+        }
+        let dof = (nn as f64 - rows.len() as f64).max(1.0);
+        let per_match_sd = (ss / dof).max(0.0).sqrt();
+        let mean_n = nn as f64 / rows.len().max(1) as f64;
+        let se = per_match_sd / mean_n.sqrt();
+        // E[range] of k standard normals: 1.13, 1.69, 2.06, 2.33, 2.53…
+        const RANGE_K: [f64; 9] = [0.0, 0.0, 1.128, 1.693, 2.059, 2.326, 2.534, 2.704, 2.847];
+        let k = rows.len().clamp(2, 8);
+        let floor = se * RANGE_K[k];
+        let excess = spread as f64 - floor;
+
         println!();
+        println!(
+            "  goals/match by level: {}",
+            rows.iter()
+                .zip(&per_match)
+                .map(|(r, g)| format!("L{}={:.2}", r.level, g))
+                .collect::<Vec<_>>()
+                .join("  "),
+        );
         println!(
             "  goals/match spread across levels: {:.2}  ({:.2} at level {} -> {:.2} at level {})",
             spread, per_match[lo_i], rows[lo_i].level, per_match[hi_i], rows[hi_i].level,
         );
         println!(
-            "  FLATNESS: {}  (tolerance {:.2}; real football is flat across the pyramid)",
-            if spread <= Self::FLAT_TOLERANCE {
+            "  noise floor at n={:.0}/level: a FLAT engine reads {:.2} here (per-match SD {:.2}, \
+             SE of a level mean {:.3}) — this run is {:+.2} against it",
+            mean_n, floor, per_match_sd, se, excess,
+        );
+        println!(
+            "  FLATNESS: {}  (tolerance {:.2} ABOVE the floor, i.e. {:.2} at this n; real football \
+             is flat across the pyramid)",
+            if excess <= Self::FLAT_TOLERANCE as f64 {
                 "PASS"
             } else {
                 "FAIL - the engine plays a different sport in different divisions"
             },
             Self::FLAT_TOLERANCE,
+            floor + Self::FLAT_TOLERANCE as f64,
         );
+        if floor > Self::FLAT_TOLERANCE as f64 {
+            println!(
+                "    NB n is too small for this verdict to be worth much — the floor ({:.2}) is \
+                 already bigger than the tolerance. Run at n>={:.0}.",
+                floor,
+                (per_match_sd * RANGE_K[k] / Self::FLAT_TOLERANCE as f64).powi(2).ceil(),
+            );
+        }
         println!(
             "  LEVEL:    mean {:.2} goals/match against a real ~{:.2}  (that one is `stats`'s question)",
             mean,
@@ -4794,6 +4859,7 @@ impl LevelSweep {
         for (hg, ag, h, a) in &outcomes {
             let total = *hg as u32 + *ag as u32;
             row.goals += total;
+            row.goals_sq += (total as u64) * (total as u64);
             row.nil_nil += (total == 0) as u32;
             row.draws += (hg == ag) as u32;
             row.high_scoring += (total >= 4) as u32;
