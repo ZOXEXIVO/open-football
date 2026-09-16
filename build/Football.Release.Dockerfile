@@ -72,8 +72,11 @@ COPY ./ ./
 
 # `sysinfo` (IOKit) and `chrono`→`iana-time-zone` (CoreFoundation) link real
 # Apple frameworks, so these builds go through the image's osxcross clang.
+# Target-scoped, never a bare CC/CXX: host build scripts compile too
+# (`wasm-opt-cxx-sys` builds binaryen) and cc-rs would hand the osxcross
+# wrapper `--target=x86_64-unknown-linux-gnu` against the macOS SDK headers.
 # CARGO_HOME is /root/.cargo in this image, not /usr/local/cargo.
-ENV CC=o64-clang CXX=o64-clang++
+ENV CC_x86_64_apple_darwin=o64-clang CXX_x86_64_apple_darwin=o64-clang++
 RUN --mount=type=cache,id=cargo-registry-mac-intel,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-apple-darwin \
     --mount=type=cache,id=match-viewer-mac-intel,target=/src/src/match/target \
@@ -93,7 +96,7 @@ RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
 
 COPY ./ ./
 
-ENV CC=oa64-clang CXX=oa64-clang++
+ENV CC_aarch64_apple_darwin=oa64-clang CXX_aarch64_apple_darwin=oa64-clang++
 RUN --mount=type=cache,id=cargo-registry-mac-m-series,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/aarch64-apple-darwin \
     --mount=type=cache,id=match-viewer-mac-m-series,target=/src/src/match/target \
