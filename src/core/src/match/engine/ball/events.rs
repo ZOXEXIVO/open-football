@@ -227,6 +227,9 @@ impl BallEventDispatcher {
                 // pending-pass metadata. The downstream ClaimBall
                 // handler sees an empty pass window and won't double-
                 // credit.
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::CREDIT_TARGET
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 PlayerEventDispatcher::credit_completed_pass(
                     receiver_id,
                     passer_id,

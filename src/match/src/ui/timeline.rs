@@ -168,7 +168,7 @@ impl Timeline {
     /// — it earns that by being the only solid fill on the bar rather than by
     /// being a different shape or size.
     const PLAY_WIDTH: f32 = 44.0;
-    const CHIP_HEIGHT: f32 = 44.0;
+    const CHIP_HEIGHT: f32 = 22.0;
 
     /// Progress along the rail.
     const ACCENT: Color = Color::srgb(0.29, 0.68, 0.98);

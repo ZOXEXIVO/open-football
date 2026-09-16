@@ -482,6 +482,18 @@ pub struct Ball {
     /// to bring down than one weighted to feet. 0.0 outside a pass
     /// window; cleared with the rest of the `pending_pass_*` set.
     pub pending_pass_error: f32,
+    /// **Where the delivery was meant to arrive** — the receiver's
+    /// position plus the lead the passer played in front of his run, so
+    /// this is the spot he is actually running to. Distinct from
+    /// `pending_pass_target`, which is where he was STANDING when the
+    /// ball was struck and is therefore the wrong post to judge a
+    /// through ball against.
+    ///
+    /// [`Ball::delivery_reaches_its_man`] measures the ball's projected
+    /// arrival against this, and that is what ends the receiver's
+    /// exclusive claim on a pass which is not going to reach him. None
+    /// outside a pass window.
+    pub pending_pass_aim: Option<Vector3<f32>>,
 
     /// Snapshot of the most recently *completed* pass — populated by
     /// `credit_completed_pass` AFTER it bumps `passes_completed` and
@@ -862,6 +874,7 @@ impl Ball {
             pending_pass_target: None,
             pending_pass_was_cross: false,
             pending_pass_error: 0.0,
+            pending_pass_aim: None,
             last_completed_pass_passer_id: None,
             last_completed_pass_receiver_id: None,
             last_completed_pass_tick: 0,
@@ -1328,6 +1341,7 @@ impl Ball {
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
         self.pending_pass_error = 0.0;
+        self.pending_pass_aim = None;
         self.offside_snapshot = None;
         // ⚠ `pending_save_credit` is NOT cleared here — it is EARNED, not
         // in-flight. See `clear_for_dead_ball` for the full note.

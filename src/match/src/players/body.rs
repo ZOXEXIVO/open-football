@@ -1,6 +1,8 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::DynamicSkinnedMeshBounds;
 use bevy::mesh::Indices;
 use bevy::mesh::VertexAttributeValues;
+use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -10,6 +12,8 @@ use crate::app::quality::Tier;
 use crate::art::textures::FaceLayout;
 use crate::players::actors::Actors;
 use crate::players::kit::{Outfit, Swatch};
+
+mod garment;
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
 /// body) and `z` (front to back) at height `y`, in the part's own space, and
@@ -522,6 +526,26 @@ impl Sculptor {
         Self::part_at(grain, rings, grain.sides)
     }
 
+    /// Close a descending limb profile with a hemisphere about its last ring.
+    /// Sampling the cap by angle keeps it round at the pole, where splining
+    /// a few radii down to zero would leave a pointed end. The cap is part of
+    /// the limb surface, so there is no intersecting ball or flat joint rim.
+    fn rounded_limb(grain: Grain, rings: &[Ring], relief: Relief) -> Mesh {
+        let mut profile = Self::curved(grain, rings);
+        let end = *rings.last().expect("a limb has a profile");
+        for step in 1..=3 * grain.curve {
+            let angle = FRAC_PI_2 * step as f32 / (3 * grain.curve) as f32;
+            let (down, radius) = angle.sin_cos();
+            profile.push(Ring::set(
+                end.y - end.z * down,
+                end.x * radius.max(0.0),
+                end.z * radius.max(0.0),
+                end.offset,
+            ));
+        }
+        Self::lathe(&profile, grain.sides, relief)
+    }
+
     /// The same, at a chosen resolution.
     fn part_at(grain: Grain, rings: &[Ring], sides: usize) -> Mesh {
         Self::modelled(grain, rings, sides, Relief::SMOOTH)
@@ -587,8 +611,7 @@ impl Sculptor {
     /// of that is Bevy walking, extracting and submitting their seven hundred
     /// parts. Anything rigidly fixed to its parent and wearing its parent's
     /// material is therefore an entity bought for nothing, and belongs in the
-    /// parent's buffer instead — see the joint balls in [`BodyParts::new`],
-    /// which is what this exists for.
+    /// parent's buffer instead — see the fingers in [`BodyParts::hand`].
     ///
     /// Both sides come out of [`Self::build`], so they carry the same
     /// attributes in the same order and the merge cannot fail.
@@ -1136,16 +1159,16 @@ impl Physique {
 /// a [`Joint`], anything with a per-player material (the face, the prints),
 /// and the cap of hair a portrait takes off.
 pub struct BodyParts {
+    torso_long: Handle<Mesh>,
+    bindposes: Handle<SkinnedMeshInverseBindposes>,
+    shorts_bindposes: Handle<SkinnedMeshInverseBindposes>,
     /// The shirt with its collar in it, worn on the kit sheet.
     torso: Handle<Mesh>,
     pelvis: Handle<Mesh>,
     head: Handle<Mesh>,
     hair: [Option<Handle<Mesh>>; 4],
-    /// A short-sleeved upper arm: the limb, the sleeve and the cuff as one
-    /// mesh on the limb sheet, since the arm shows through below the hem.
-    arm_sleeved: Handle<Mesh>,
-    /// A keeper's upper arm, sleeved to the elbow.
-    arm_sleeved_long: Handle<Mesh>,
+    /// Bare upper arm below the sleeve. Both kits share this mesh.
+    upper_arm: Handle<Mesh>,
     /// The bare forearm every outfielder shows — unmerged, and still painted
     /// in the shared complexion ramp entry, which ignores its lathe UVs.
     forearm: Handle<Mesh>,
@@ -1156,7 +1179,7 @@ pub struct BodyParts {
     finger: Handle<Mesh>,
     fingertip: Handle<Mesh>,
     thumb: Handle<Mesh>,
-    /// The thigh with the leg of the shorts hanging on it.
+    /// The bare thigh visible below the shorts.
     thigh: Handle<Mesh>,
     /// The socked shin with the turnover at the top of it.
     shin: Handle<Mesh>,
@@ -1176,6 +1199,9 @@ pub struct BodyParts {
 /// not show a collar against its shirt. See `preview`, which is the other
 /// walker of this list.
 pub(crate) struct Cuts {
+    #[cfg(test)]
+    grain: Grain,
+    torso_long: Handle<Mesh>,
     torso: Handle<Mesh>,
     /// The neck of the shirt, in the club's trim colour. Derived from the
     /// torso rather than written out again — see [`Sculptor::band`].
@@ -1197,9 +1223,6 @@ pub(crate) struct Cuts {
     /// itself with the stubble drawn onto the face texture.
     hair: [Option<Handle<Mesh>>; 4],
     upper_arm: Handle<Mesh>,
-    sleeve: Handle<Mesh>,
-    /// The band round the end of a sleeve, in the trim colour.
-    cuff: Handle<Mesh>,
     forearm: Handle<Mesh>,
     /// A bare hand, left and right — see [`BodyParts::hand`] for why it is a
     /// pair rather than one mesh used twice. Indexed by side, `[0]` left.
@@ -1222,15 +1245,11 @@ pub(crate) struct Cuts {
     finger: Handle<Mesh>,
     fingertip: Handle<Mesh>,
     thumb: Handle<Mesh>,
-    /// A keeper wears long sleeves. Two parts, because the arm is two: this
-    /// one takes over from [`Self::sleeve`] on the upper arm and runs to the
-    /// elbow, and [`Self::sleeve_forearm`] carries on from there.
-    sleeve_long: Handle<Mesh>,
+    /// The keeper's lower sleeve bends separately at the elbow.
     sleeve_forearm: Handle<Mesh>,
     /// …and the trim band at the wrist end of it, which on a long sleeve is
     /// where a cuff actually is.
     cuff_forearm: Handle<Mesh>,
-    shorts_leg: Handle<Mesh>,
     thigh: Handle<Mesh>,
     shin: Handle<Mesh>,
     sock_top: Handle<Mesh>,
@@ -1423,6 +1442,17 @@ impl BodyParts {
         Ring::squared(0.020, 0.1420, 0.0965, -0.012, 2.50),
     ];
 
+    /// Loose legs and a narrow hem, blended into the waistband by the garment.
+    const SHORTS_LEG: [Ring; 7] = [
+        Ring::squared(-0.038, 0.0720, 0.0710, 0.000, 2.26),
+        Ring::squared(-0.072, 0.0824, 0.0840, 0.001, 2.34),
+        Ring::squared(-0.120, 0.0870, 0.0900, 0.002, 2.40),
+        Ring::squared(-0.210, 0.0865, 0.0900, 0.003, 2.40),
+        Ring::squared(-0.292, 0.0850, 0.0870, 0.003, 2.40),
+        Ring::squared(-0.318, 0.0840, 0.0850, 0.003, 2.40),
+        Ring::squared(-0.326, 0.0825, 0.0835, 0.003, 2.40),
+    ];
+
     /// Heights of the features on that skull, in its own space. The mesh puts
     /// a nose at one of them and the texture draws the rest.
     const EYES: f32 = 0.130;
@@ -1536,22 +1566,19 @@ impl BodyParts {
                 .clone()
         };
 
-        let torso = Sculptor::outfitted(vec![
-            (taken(meshes, cuts.torso), Swatch::Shirt),
-            (taken(meshes, cuts.collar), Swatch::Trim),
-        ]);
-        let pelvis = Sculptor::clad(taken(meshes, cuts.pelvis), Swatch::Shorts);
-        // The short sleeve first, copying the arm…
-        let arm_sleeved = Sculptor::outfitted(vec![
-            (copied(meshes, &cuts.upper_arm), Swatch::Skin),
-            (taken(meshes, cuts.sleeve), Swatch::Shirt),
-            (taken(meshes, cuts.cuff), Swatch::Trim),
-        ]);
-        // …and the keeper's long one second, which is what takes it away.
-        let arm_sleeved_long = Sculptor::outfitted(vec![
-            (taken(meshes, cuts.upper_arm), Swatch::Skin),
-            (taken(meshes, cuts.sleeve_long), Swatch::Shirt),
-        ]);
+        let mut torso_long = Sculptor::joined(
+            taken(meshes, cuts.torso_long),
+            Sculptor::clad(copied(meshes, &cuts.collar), Swatch::Trim),
+        );
+        garment::skin(&mut torso_long, grain, true);
+        let mut torso = Sculptor::joined(
+            taken(meshes, cuts.torso),
+            Sculptor::clad(taken(meshes, cuts.collar), Swatch::Trim),
+        );
+        garment::skin(&mut torso, grain, false);
+        let mut pelvis = taken(meshes, cuts.pelvis);
+        garment::skin_shorts(&mut pelvis);
+        let upper_arm = Sculptor::clad(taken(meshes, cuts.upper_arm), Swatch::Skin);
         // The forearm is copied and never taken: the bare one is carried over
         // into the working set below, where an outfielder wears it.
         let forearm_sleeved = Sculptor::outfitted(vec![
@@ -1559,20 +1586,19 @@ impl BodyParts {
             (taken(meshes, cuts.sleeve_forearm), Swatch::Shirt),
             (taken(meshes, cuts.cuff_forearm), Swatch::Trim),
         ]);
-        let thigh = Sculptor::outfitted(vec![
-            (taken(meshes, cuts.thigh), Swatch::Skin),
-            (taken(meshes, cuts.shorts_leg), Swatch::Shorts),
-        ]);
+        let thigh = Sculptor::clad(taken(meshes, cuts.thigh), Swatch::Skin);
         let shin = Sculptor::outfitted(vec![
             (taken(meshes, cuts.shin), Swatch::Socks),
             (taken(meshes, cuts.sock_top), Swatch::Shorts),
         ]);
 
         let parts = BodyParts {
+            torso_long: meshes.add(torso_long),
+            bindposes: Handle::default(),
+            shorts_bindposes: Handle::default(),
             torso: meshes.add(torso),
             pelvis: meshes.add(pelvis),
-            arm_sleeved: meshes.add(arm_sleeved),
-            arm_sleeved_long: meshes.add(arm_sleeved_long),
+            upper_arm: meshes.add(upper_arm),
             forearm_sleeved: meshes.add(forearm_sleeved),
             thigh: meshes.add(thigh),
             shin: meshes.add(shin),
@@ -1591,6 +1617,12 @@ impl BodyParts {
         };
         parts.narrow(meshes);
         parts
+    }
+
+    /// Shared bind matrices for the shirt and shorts.
+    pub fn bind_clothes(&mut self, assets: &mut Assets<SkinnedMeshInverseBindposes>) {
+        self.bindposes = assets.add(garment::binds());
+        self.shorts_bindposes = assets.add(garment::shorts_binds());
     }
 
     /// **Halves the index buffer of every part that can spare the width.**
@@ -1677,10 +1709,10 @@ impl BodyParts {
     fn each(&self, visit: &mut impl FnMut(&Handle<Mesh>)) {
         for handle in [
             &self.torso,
+            &self.torso_long,
             &self.pelvis,
             &self.head,
-            &self.arm_sleeved,
-            &self.arm_sleeved_long,
+            &self.upper_arm,
             &self.forearm,
             &self.forearm_sleeved,
             &self.glove,
@@ -1722,7 +1754,7 @@ impl BodyParts {
             + count(&self.name_front)
             // The fullest cap, since a squad wears a spread of them.
             + self.hair.iter().flatten().map(count).max().unwrap_or(0);
-        let paired = count(&self.arm_sleeved)
+        let paired = count(&self.upper_arm)
             + count(&self.forearm)
             + count(&self.hand[1])
             + count(&self.thigh)
@@ -1736,12 +1768,10 @@ impl BodyParts {
     /// because a preview has to show a collar against its shirt.
     pub(crate) fn tailor(meshes: &mut Assets<Mesh>, grain: Grain) -> Cuts {
         Cuts {
-            torso: meshes.add(Sculptor::modelled(
-                grain,
-                &Self::SHIRT,
-                grain.sides,
-                Self::TRUNK,
-            )),
+            #[cfg(test)]
+            grain,
+            torso: meshes.add(garment::shirt(grain, false)),
+            torso_long: meshes.add(garment::shirt(grain, true)),
             // The neck of the shirt: the top of the torso swollen by five
             // millimetres, with a rim of its own standing a little above the
             // cloth. Every kit on earth has one, and without it the shirt
@@ -1760,48 +1790,19 @@ impl BodyParts {
             // on a throat — seven millimetres of daylight is a rib-knit neck,
             // and the two and a half centimetres this had were a socket with
             // a head standing in it.
-            collar: meshes.add(Sculptor::part(grain, &[
-                Ring::set(0.5775, 0.0930, 0.0775, -0.0105),
-                Ring::set(0.5845, 0.0810, 0.0705, -0.0115),
-                Ring::set(0.5905, 0.0725, 0.0655, -0.0120),
-                Ring::set(0.5955, 0.0675, 0.0620, -0.0122),
-            ])),
-            // The seat of the shorts, which stays put while the legs swing.
-            //
-            // Wide enough to CONTAIN the tops of the two legs of the shorts,
-            // which it was not. The hips are 88 mm apart and a leg of cloth
-            // round a thigh is nearly ninety more, so two tubes that reach
-            // their full width up at the seat cut out through its sides — and
-            // two nearly tangent surfaces crossing draw as a hard rectangular
-            // notch, which is what sat on the front of every pair of shorts on
-            // the pitch. Solved from the other end now that the seat is a
-            // man's rather than a woman's: the legs are pulled IN at the top
-            // and only reach their width below the crotch, so they emerge from
-            // under the seat's own hem, which is where a leg of a pair of
-            // shorts emerges.
-            //
-            // Narrower than it was by two centimetres a side, squarer in
-            // section, and carried BACK: a man's seat projects behind him and
-            // his front stays flat, where an ellipse on the axis gives the
-            // same curve fore and aft and draws a hip. The waistband end of it
-            // is pulled well in — nothing above the shirt's hem is ever seen,
-            // and the narrower it is up there the more room the legs have to
-            // stay inside it.
-            //
-            // **It also stops two centimetres above the hip joint**, where it
-            // used to stand ten. The shirt leans and the seat does not — the
-            // torso is a joint and [`Limb::Pelvis`] deliberately is not — so
-            // every centimetre of shorts modelled ABOVE the pivot swings out
-            // through the back of the shirt the moment a player leans into a
-            // run. Measured at the lean the run cycle actually uses, the seat
-            // came seven millimetres out through the cloth and drew a dark
-            // crescent across the small of his back. Nothing up there is ever
-            // seen — the hem covers it — so the fix is to not model it.
-            pelvis: meshes.add(Sculptor::lathe(
-                &Self::seat(grain),
-                grain.sides,
-                Relief::SMOOTH,
+            collar: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::set(0.5775, 0.0930, 0.0775, -0.0105),
+                    Ring::set(0.5845, 0.0810, 0.0705, -0.0115),
+                    Ring::set(0.5905, 0.0725, 0.0655, -0.0120),
+                    Ring::set(0.5955, 0.0675, 0.0620, -0.0122),
+                ],
             )),
+            // The waistband stays under the shirt while the shorts legs
+            // swing below it. Its top ends close to the hip pivot so leaning
+            // does not push the shorts through the back of the shirt.
+            pelvis: meshes.add(garment::shorts(grain)),
             head: meshes.add(Sculptor::part_at(grain, &Self::SKULL, grain.head_sides)),
             // Shaved, a crop, short back and sides, and a mop: the three caps
             // start lower at the temple, carry more volume and leave less
@@ -1821,67 +1822,34 @@ impl BodyParts {
             // Deltoid and biceps taper into a rounded elbow centred on the
             // pivot. Extending the surface beyond the pivot hides the cut end
             // during flexion without a separate joint ball.
-            upper_arm: meshes.add(Sculptor::part(grain, &[
-                Ring::oval(0.050, 0.0195, 0.0192),
-                Ring::oval(0.026, 0.0400, 0.0388),
-                Ring::oval(-0.006, 0.0568, 0.0545),
-                Ring::oval(-0.060, 0.0568, 0.0532),
-                Ring::oval(-0.130, 0.0522, 0.0488),
-                Ring::oval(-0.205, 0.0472, 0.0448),
-                Ring::oval(-0.268, 0.0430, 0.0420),
-                Ring::oval(-0.300, 0.0420, 0.0420),
-                Ring::oval(-0.316, 0.0388, 0.0388),
-                Ring::oval(-0.332, 0.0272, 0.0272),
-                Ring::oval(-0.342, 0.0000, 0.0000),
-            ])),
-            // Close-fitting cloth over the deltoid, with the cap buried in
-            // the sloping shirt shoulder. Shared with the keeper's sleeve.
-            sleeve: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
-                Ring::squared(-0.018, 0.0650, 0.0608, 0.001, 2.16),
-                Ring::squared(-0.050, 0.0630, 0.0592, 0.002, 2.18),
-                Ring::squared(-0.085, 0.0610, 0.0562, 0.003, 2.20),
-                Ring::squared(-0.112, 0.0592, 0.0542, 0.004, 2.20),
-                Ring::squared(-0.132, 0.0560, 0.0520, 0.004, 2.18),
-            ]))),
-            // And the band round the end of it. The same trim as the collar,
-            // and the pair of them together are what say "kit" rather than
-            // "coloured shape" at any distance a face is legible from. Rolled
-            // under at the hem, the way a sewn edge is, so it does not end in
-            // a flat washer hanging round the arm.
-            //
-            // Three to four millimetres proud of the sleeve it bands, and it
-            // ends BELOW the sleeve's own last ring so that it covers that rim
-            // rather than stopping level with it — the lower part outside, the
-            // way every crossing on this figure is arranged.
-            //
-            // **Its LENGTH is the whole of what says trim rather than
-            // armband**, and it is the visible length that counts: this band
-            // is proud of the sleeve from its first ring, so every millimetre
-            // of it is on show. A crew shirt carries two to three centimetres.
-            // Twenty-six of them, from −0.118 to the roll at −0.144, leaves
-            // fourteen still overlapping the sleeve's rim at −0.132 — which
-            // is the overlap the rule above wants, and the rest of the
-            // sleeve's length back to the shoulder.
-            cuff: meshes.add(Sculptor::part(grain, &[
-                Ring::squared(-0.118, 0.0618, 0.0570, 0.0034, 2.22),
-                Ring::squared(-0.130, 0.0598, 0.0554, 0.0040, 2.20),
-                Ring::squared(-0.138, 0.0578, 0.0534, 0.0040, 2.19),
-                Ring::squared(-0.144, 0.0552, 0.0512, 0.0040, 2.18),
-            ])),
+            upper_arm: meshes.add(Sculptor::rounded_limb(
+                grain,
+                &[
+                    Ring::oval(-0.118, 0.0530, 0.0500),
+                    Ring::oval(-0.130, 0.0522, 0.0488),
+                    Ring::oval(-0.205, 0.0472, 0.0448),
+                    Ring::oval(-0.268, 0.0430, 0.0420),
+                    Ring::oval(-0.300, 0.0420, 0.0420),
+                ],
+                Relief::SMOOTH,
+            )),
             // The proximal forearm stays inside the rounded upper-arm end.
             // Its radius grows below the elbow instead of stepping out at the
             // pivot, so the join reads as a crease when bent.
-            forearm: meshes.add(Sculptor::part(grain, &[
-                Ring::oval(0.040, 0.0090, 0.0090),
-                Ring::oval(0.026, 0.0310, 0.0310),
-                Ring::oval(0.000, 0.0405, 0.0405),
-                Ring::oval(-0.028, 0.0430, 0.0415),
-                Ring::oval(-0.065, 0.0445, 0.0420),
-                Ring::oval(-0.115, 0.0420, 0.0378),
-                Ring::oval(-0.180, 0.0350, 0.0310),
-                Ring::oval(-0.225, 0.0292, 0.0258),
-                Ring::oval(-0.252, 0.0268, 0.0240),
-            ])),
+            forearm: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::oval(0.040, 0.0090, 0.0090),
+                    Ring::oval(0.026, 0.0310, 0.0310),
+                    Ring::oval(0.000, 0.0405, 0.0405),
+                    Ring::oval(-0.028, 0.0430, 0.0415),
+                    Ring::oval(-0.065, 0.0445, 0.0420),
+                    Ring::oval(-0.115, 0.0420, 0.0378),
+                    Ring::oval(-0.180, 0.0350, 0.0310),
+                    Ring::oval(-0.225, 0.0292, 0.0258),
+                    Ring::oval(-0.252, 0.0268, 0.0240),
+                ],
+            )),
             hand: [Self::hand(grain, -1.0), Self::hand(grain, 1.0)].map(|mesh| meshes.add(mesh)),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
@@ -1893,15 +1861,18 @@ impl BodyParts {
             // hand and squared off at the end, which is what a keeper's glove
             // is — a flat surface, deliberately, because the point of it is
             // to be in the way.
-            glove: meshes.add(Sculptor::part(grain, &[
-                Ring::oval(0.062, 0.034, 0.030),
-                Ring::oval(0.038, 0.045, 0.036),
-                Ring::oval(0.014, 0.052, 0.038),
-                Ring::oval(-0.020, 0.060, 0.038),
-                Ring::oval(-0.058, 0.063, 0.036),
-                Ring::oval(-0.082, 0.062, 0.033),
-                Ring::oval(-0.092, 0.058, 0.029),
-            ])),
+            glove: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::oval(0.062, 0.034, 0.030),
+                    Ring::oval(0.038, 0.045, 0.036),
+                    Ring::oval(0.014, 0.052, 0.038),
+                    Ring::oval(-0.020, 0.060, 0.038),
+                    Ring::oval(-0.058, 0.063, 0.036),
+                    Ring::oval(-0.082, 0.062, 0.033),
+                    Ring::oval(-0.092, 0.058, 0.029),
+                ],
+            )),
             // One finger, in two segments: the proximal phalanx off the
             // knuckle, and the other two past it as one part. Both modelled
             // about their own root so the splay and the curl are rotations
@@ -1943,116 +1914,52 @@ impl BodyParts {
                 ],
                 grain.blob_sides,
             )),
-            // The long sleeve, in two parts for the two halves of the arm.
-            // Cut the same four millimetres looser than the limb inside it
-            // that the short one is — two nearly tangent surfaces crossing
-            // each other draw as a ragged sawtooth no depth buffer can fix.
-            sleeve_long: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
-                Ring::squared(-0.018, 0.0650, 0.0608, 0.001, 2.16),
-                Ring::squared(-0.050, 0.0630, 0.0592, 0.002, 2.18),
-                Ring::squared(-0.090, 0.0592, 0.0556, 0.002, 2.20),
-                Ring::squared(-0.155, 0.0546, 0.0516, 0.002, 2.15),
-                Ring::squared(-0.228, 0.0518, 0.0496, 0.002, 2.10),
-                Ring::oval(-0.300, 0.0470, 0.0470),
-                Ring::oval(-0.318, 0.0434, 0.0434),
-                Ring::oval(-0.336, 0.0302, 0.0302),
-                Ring::oval(-0.347, 0.0000, 0.0000),
-            ]))),
-            sleeve_forearm: meshes.add(Sculptor::part(grain, &[
-                Ring::oval(0.044, 0.0090, 0.0090),
-                Ring::oval(0.029, 0.0340, 0.0340),
-                Ring::oval(0.000, 0.0455, 0.0455),
-                Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
-                Ring::squared(-0.120, 0.0464, 0.0422, 0.002, 2.10),
-                Ring::squared(-0.185, 0.0394, 0.0354, 0.002, 2.10),
-                Ring::squared(-0.235, 0.0336, 0.0302, 0.002, 2.05),
-                Ring::squared(-0.268, 0.0294, 0.0266, 0.002, 2.00),
-            ])),
-            cuff_forearm: meshes.add(Sculptor::part(grain, &[
-                Ring::squared(-0.212, 0.0396, 0.0374, 0.002, 2.10),
-                Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
-                Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
-                Ring::squared(-0.270, 0.0268, 0.0254, 0.002, 2.00),
-            ])),
-            // The leg of the shorts: it belongs to the thigh, not to the hips.
-            //
-            // Rolled under at the hem for the same reason the cuff is: a leg
-            // of cloth that simply stops is a tube with a hole in the end of
-            // it, and from below that hole is what you see.
-            //
-            // **And it was an A-LINE, which is a skirt.** Waist in, hem out,
-            // one unbroken bell from the belt to the knee — the two legs met
-            // in the middle and there was no seeing where either began. Shorts
-            // are the opposite shape: the fullest point is the HIP, and from
-            // there down the cloth hangs in a straight column that is a little
-            // narrower at the hem than it is at the top of the thigh. Squared
-            // in section, because cloth over a leg is a rounded box rather
-            // than a tube.
-            //
-            // Nothing above the seat's own widest ring may reach past it: two
-            // tubes at their full width up there cut out through its sides,
-            // and two nearly tangent surfaces crossing draw a hard rectangular
-            // notch. So the tube is pulled IN at the top and only reaches its
-            // width below the crotch, and what emerges from under the seat's
-            // hem is a leg of a pair of shorts.
-            //
-            // **A hanging column is MONOTONE**, and this used to swell again
-            // below the hip: 89 mm at mid-thigh over a hem of 76, which is
-            // cloth getting fuller as it falls and reads as inflated wherever
-            // the eye picks it up. Nothing hangs like that. The widest ring is
-            // the one the leg hangs FROM and every ring under it is a little
-            // narrower, which is the whole of the difference between a pair of
-            // shorts and a pair of bloomers. Taking the mid-thigh belly out
-            // also opens the middle: the legs sit 88 mm apart, so 89 mm of
-            // half-width had their inner faces overlapping at the centreline
-            // and drew the crease that came with it.
-            //
-            // **Where the tube STARTS is a question about the stride, not
-            // about standing.** Its top rim has to stay buried in the seat,
-            // and the seat does not move: the rim swings on an arc whose
-            // radius is its own distance below the hip, so a rim six
-            // centimetres down travels three of them fore-aft through a
-            // running swing and comes out through the front of the seat by
-            // more than a centimetre at every phase of it — which is the
-            // notch that made a pair of shorts read as a pod with two pipes
-            // under it. Halve the radius and the arc halves with it: at
-            // −0.038 the rim stays five to fifteen millimetres inside the
-            // seat's own front all the way out to nine tenths of a radian,
-            // which is past anything but a kick. It has to be pulled IN
-            // across to buy that (nothing above the seat's widest ring may
-            // reach past it), and the tuck it takes is under the cloth.
-            shorts_leg: meshes.add(Sculptor::part(grain, &[
-                Ring::squared(-0.038, 0.0720, 0.0710, 0.000, 2.26),
-                Ring::squared(-0.072, 0.0824, 0.0814, 0.001, 2.34),
-                Ring::squared(-0.100, 0.0855, 0.0850, 0.001, 2.38),
-                Ring::squared(-0.150, 0.0850, 0.0846, 0.002, 2.40),
-                Ring::squared(-0.180, 0.0834, 0.0830, 0.003, 2.40),
-                Ring::squared(-0.202, 0.0808, 0.0796, 0.003, 2.40),
-                Ring::squared(-0.212, 0.0748, 0.0728, 0.003, 2.40),
-            ])),
+            sleeve_forearm: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::oval(0.044, 0.0090, 0.0090),
+                    Ring::oval(0.029, 0.0340, 0.0340),
+                    Ring::oval(0.000, 0.0455, 0.0455),
+                    Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
+                    Ring::squared(-0.120, 0.0464, 0.0422, 0.002, 2.10),
+                    Ring::squared(-0.185, 0.0394, 0.0354, 0.002, 2.10),
+                    Ring::squared(-0.235, 0.0336, 0.0302, 0.002, 2.05),
+                    Ring::squared(-0.268, 0.0294, 0.0266, 0.002, 2.00),
+                ],
+            )),
+            cuff_forearm: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::squared(-0.212, 0.0396, 0.0374, 0.002, 2.10),
+                    Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
+                    Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
+                    Ring::squared(-0.270, 0.0268, 0.0254, 0.002, 2.00),
+                ],
+            )),
             // Quadriceps high on the thigh, narrowing into the knee — and the
             // whole muscle carried a few millimetres forward of the bone,
             // which is where it is. The channel between the two heads of the
             // muscle is the [`Self::QUADS`] relief, on the half of the thigh
             // the shorts leave bare.
-            thigh: meshes.add(Sculptor::modelled(
+            thigh: meshes.add(Sculptor::rounded_limb(
                 grain,
                 &[
-                    Ring::set(-0.085, 0.0805, 0.0800, 0.000),
-                    Ring::set(-0.150, 0.0812, 0.0805, 0.002),
-                    Ring::set(-0.245, 0.0770, 0.0748, 0.003),
+                    // Flesh begins inside the leg opening. Hidden upper
+                    // thighs would cut through cloth blending with the pelvis.
+                    Ring::set(-0.292, 0.0730, 0.0710, 0.003),
                     Ring::set(-0.340, 0.0685, 0.0672, 0.002),
                     Ring::set(-0.420, 0.0550, 0.0550, 0.000),
                     Ring::set(-0.455, 0.0520, 0.0520, 0.000),
-                    Ring::set(-0.475, 0.0480, 0.0480, 0.000),
-                    Ring::set(-0.495, 0.0332, 0.0332, 0.000),
-                    Ring::set(-0.507, 0.0000, 0.0000, 0.000),
                 ],
-                grain.sides,
                 Self::QUADS,
             )),
             // The rounded end of the thigh fills the knee as the shin bends.
-            shin: meshes.add(Sculptor::modelled(grain, &Self::SHIN, grain.sides, Self::CALF)),
+            shin: meshes.add(Sculptor::modelled(
+                grain,
+                &Self::SHIN,
+                grain.sides,
+                Self::CALF,
+            )),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
             //
@@ -2067,7 +1974,10 @@ impl BodyParts {
                     let mut band = Sculptor::band(&Self::shin(grain), -0.078, -0.024, 4, 0.0020);
                     // Rolled under at the bottom edge, where a turnover is turned
                     // over.
-                    band.insert(0, Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012));
+                    band.insert(
+                        0,
+                        Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012),
+                    );
                     band
                 },
                 grain.sides,
@@ -2085,15 +1995,18 @@ impl BodyParts {
             // well in front of the ankle, the widest part is across the ball
             // of the foot, and the whole thing draws back and narrows into the
             // heel as it rises.
-            boot: meshes.add(Sculptor::part(grain, &[
-                Ring::set(-0.040, 0.026, 0.062, 0.024),
-                Ring::set(-0.032, 0.040, 0.086, 0.022),
-                Ring::set(-0.018, 0.047, 0.097, 0.016),
-                Ring::set(0.000, 0.048, 0.096, 0.006),
-                Ring::set(0.018, 0.044, 0.080, -0.008),
-                Ring::set(0.034, 0.036, 0.058, -0.018),
-                Ring::set(0.046, 0.026, 0.038, -0.022),
-            ])),
+            boot: meshes.add(Sculptor::part(
+                grain,
+                &[
+                    Ring::set(-0.040, 0.026, 0.062, 0.024),
+                    Ring::set(-0.032, 0.040, 0.086, 0.022),
+                    Ring::set(-0.018, 0.047, 0.097, 0.016),
+                    Ring::set(0.000, 0.048, 0.096, 0.006),
+                    Ring::set(0.018, 0.044, 0.080, -0.008),
+                    Ring::set(0.034, 0.036, 0.058, -0.018),
+                    Ring::set(0.046, 0.026, 0.038, -0.022),
+                ],
+            )),
             // A real shirt number covers most of the upper back, and a real
             // name runs across the shoulders above it. Both lie ON the shirt:
             // see [`Sculptor::decal`] for why a flat rectangle cannot.
@@ -2329,15 +2242,18 @@ impl BodyParts {
         // stepping in from it. Written the other way round — which it was —
         // the wrist draws as a bright ring and the hand as a separate object
         // hung under it.
-        let mut hand = Sculptor::part(grain, &[
-            Ring::squared(0.056, 0.0210, 0.0205, 0.000, 2.05),
-            Ring::squared(0.038, 0.0300, 0.0298, 0.001, 2.15),
-            Ring::squared(0.012, 0.0252, 0.0332, 0.002, 2.35),
-            Ring::squared(-0.024, 0.0206, 0.0392, 0.004, 2.50),
-            Ring::squared(-0.052, 0.0192, 0.0416, 0.006, 2.55),
-            Ring::squared(-0.072, 0.0172, 0.0400, 0.009, 2.50),
-            Ring::squared(-0.086, 0.0138, 0.0344, 0.011, 2.40),
-        ]);
+        let mut hand = Sculptor::part(
+            grain,
+            &[
+                Ring::squared(0.056, 0.0210, 0.0205, 0.000, 2.05),
+                Ring::squared(0.038, 0.0300, 0.0298, 0.001, 2.15),
+                Ring::squared(0.012, 0.0252, 0.0332, 0.002, 2.35),
+                Ring::squared(-0.024, 0.0206, 0.0392, 0.004, 2.50),
+                Ring::squared(-0.052, 0.0192, 0.0416, 0.006, 2.55),
+                Ring::squared(-0.072, 0.0172, 0.0400, 0.009, 2.50),
+                Ring::squared(-0.086, 0.0138, 0.0344, 0.011, 2.40),
+            ],
+        );
         for (along, drop, length, curl) in DIGITS {
             let digit: Vec<Ring> = FINGER
                 .iter()
@@ -5193,8 +5109,7 @@ impl Joint {
                     Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
                     gait.hop,
                 );
-                let leaping =
-                    Self::held(hopping, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
+                let leaping = Self::held(hopping, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
                 // swinging up over it.
@@ -6355,7 +6270,7 @@ impl Joint {
     /// does this. It is also, for free, the pelvic list that a side-step
     /// visibly has and that the rig had no other way to produce: the legs
     /// hang off the carriage rather than off the pelvis, so rotating
-    /// [`Limb::Pelvis`] moves the seat of the shorts and nothing else.
+    /// [`Limb::Pelvis`] carries the waistband; the hips carry the leg openings.
     fn hip_list(gait: Gait, side: f32) -> f32 {
         (Self::leg_reach(gait, side) - Self::leg_reach(gait, -side)) * 0.5
     }
@@ -6767,23 +6682,31 @@ impl Footballer {
         commands.entity(root).add_child(carriage);
 
         commands.entity(carriage).with_children(|body| {
-            body.spawn((
-                Joint::new(root, Limb::Pelvis, 0.0, hips),
-                Mesh3d(parts.pelvis.clone()),
-                MeshMaterial3d(outfit.kit.clone()),
-                Transform::from_translation(hips),
-            ));
+            let pelvis = body
+                .spawn((
+                    Joint::new(root, Limb::Pelvis, 0.0, hips),
+                    Mesh3d(parts.pelvis.clone()),
+                    MeshMaterial3d(outfit.kit.clone()),
+                    Transform::from_translation(hips),
+                ))
+                .id();
 
             // The torso mesh carries its own collar now, so the kit sheet
             // answers for both — see [`BodyParts`], which is where the merge
             // and its arithmetic live.
-            body.spawn((
+            let mut shoulders = Vec::new();
+            let mut chest = body.spawn((
                 Joint::new(root, Limb::Torso, 0.0, hips),
-                Mesh3d(parts.torso.clone()),
+                Mesh3d(if keeper {
+                    parts.torso_long.clone()
+                } else {
+                    parts.torso.clone()
+                }),
                 MeshMaterial3d(outfit.kit.clone()),
                 Transform::from_translation(hips),
-            ))
-            .with_children(|torso| {
+            ));
+            let chest_id = chest.id();
+            chest.with_children(|torso| {
                 // Both panels lie ON the shirt rather than in front of it, so
                 // they take the torso's own transform and nothing else — see
                 // [`Sculptor::decal`].
@@ -6834,20 +6757,12 @@ impl Footballer {
                 for side in [-1.0f32, 1.0] {
                     let shoulder =
                         Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
-                    // A keeper wears long sleeves, which is half of what
-                    // tells him apart from the twenty outfield players at any
-                    // distance the strip does not. Either way the sleeve —
-                    // and the cuff on a short one — is IN the arm mesh now,
-                    // painted from the limb sheet; what was three entities of
-                    // limb and cloth is one.
-                    torso
+                    // The arm still drives the hand and forearm. The shirt
+                    // follows this same joint through its skin weights.
+                    let shoulder_id = torso
                         .spawn((
                             Joint::new(root, Limb::Shoulder, side, shoulder),
-                            Mesh3d(if keeper {
-                                parts.arm_sleeved_long.clone()
-                            } else {
-                                parts.arm_sleeved.clone()
-                            }),
+                            Mesh3d(parts.upper_arm.clone()),
                             MeshMaterial3d(outfit.limb.clone()),
                             DressedFlesh {
                                 actor: root,
@@ -6941,10 +6856,20 @@ impl Footballer {
                                     }
                                 });
                             });
-                        });
+                        })
+                        .id();
+                    shoulders.push(shoulder_id);
                 }
             });
+            chest.insert((
+                SkinnedMesh {
+                    inverse_bindposes: parts.bindposes.clone(),
+                    joints: vec![chest_id, shoulders[0], shoulders[1]],
+                },
+                DynamicSkinnedMeshBounds,
+            ));
 
+            let mut legs = Vec::new();
             for side in [-1.0f32, 1.0] {
                 let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
                 // The leg of the shorts swings with the thigh it hangs on and
@@ -6952,38 +6877,48 @@ impl Footballer {
                 // meshes now — the thigh on the limb sheet because bare skin
                 // shows below the hem, the shin on the kit sheet because a
                 // sock covers all of it.
-                body.spawn((
-                    Joint::new(root, Limb::Hip, side, hip),
-                    Mesh3d(parts.thigh.clone()),
-                    MeshMaterial3d(outfit.limb.clone()),
-                    DressedFlesh {
-                        actor: root,
-                        strip: outfit.strip,
-                    },
-                    Transform::from_translation(hip),
-                ))
-                .with_children(|leg| {
-                    leg.spawn((
-                        Joint::new(root, Limb::Knee, side, knee),
-                        Mesh3d(parts.shin.clone()),
-                        MeshMaterial3d(outfit.kit.clone()),
-                        Transform::from_translation(knee),
+                let leg = body
+                    .spawn((
+                        Joint::new(root, Limb::Hip, side, hip),
+                        Mesh3d(parts.thigh.clone()),
+                        MeshMaterial3d(outfit.limb.clone()),
+                        DressedFlesh {
+                            actor: root,
+                            strip: outfit.strip,
+                        },
+                        Transform::from_translation(hip),
                     ))
-                    .with_children(|shin| {
-                        // The boot hangs off an ANKLE rather than off the
-                        // shin: its mesh origin already sits where the
-                        // ankle is (the sole is 38 mm below it), so the
-                        // joint rotates the foot about the right point
-                        // without moving the boot a millimetre at rest.
-                        shin.spawn((
-                            Joint::new(root, Limb::Ankle, side, ankle),
-                            Mesh3d(parts.boot.clone()),
-                            MeshMaterial3d(outfit.boots.clone()),
-                            Transform::from_translation(ankle),
-                        ));
-                    });
-                });
+                    .with_children(|leg| {
+                        leg.spawn((
+                            Joint::new(root, Limb::Knee, side, knee),
+                            Mesh3d(parts.shin.clone()),
+                            MeshMaterial3d(outfit.kit.clone()),
+                            Transform::from_translation(knee),
+                        ))
+                        .with_children(|shin| {
+                            // The boot hangs off an ANKLE rather than off the
+                            // shin: its mesh origin already sits where the
+                            // ankle is (the sole is 38 mm below it), so the
+                            // joint rotates the foot about the right point
+                            // without moving the boot a millimetre at rest.
+                            shin.spawn((
+                                Joint::new(root, Limb::Ankle, side, ankle),
+                                Mesh3d(parts.boot.clone()),
+                                MeshMaterial3d(outfit.boots.clone()),
+                                Transform::from_translation(ankle),
+                            ));
+                        });
+                    })
+                    .id();
+                legs.push(leg);
             }
+            body.commands().entity(pelvis).insert((
+                SkinnedMesh {
+                    inverse_bindposes: parts.shorts_bindposes.clone(),
+                    joints: vec![pelvis, legs[0], legs[1]],
+                },
+                DynamicSkinnedMeshBounds,
+            ));
         });
     }
 }
@@ -7522,8 +7457,27 @@ pub(crate) mod preview {
         let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
         let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
         let wrist = Vec3::new(0.0, -Physique::FOREARM - Physique::WRIST_DROP, 0.0);
+        let shirt = garment::posed(
+            meshes
+                .get(if keeper {
+                    &parts.torso_long
+                } else {
+                    &parts.torso
+                })
+                .unwrap(),
+            parts.grain,
+            gait,
+            keeper,
+        );
+        let shorts = garment::posed_shorts(meshes.get(&parts.pelvis).unwrap(), gait);
         let mut draw = |handle: &Handle<Mesh>, at: Transform, tint: Vec3| {
-            part(canvas, lens, meshes, handle, carriage * at, tint);
+            if handle == &parts.torso {
+                part_mesh(canvas, lens, &shirt, carriage * at, tint);
+            } else if handle == &parts.pelvis {
+                part_mesh(canvas, lens, &shorts, carriage, tint);
+            } else {
+                part(canvas, lens, meshes, handle, carriage * at, tint);
+            }
         };
 
         let seat = skeleton::step(Limb::Pelvis, 0.0, hips, gait);
@@ -7551,12 +7505,6 @@ pub(crate) mod preview {
             let shoulder = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
             let arm = torso * skeleton::step(Limb::Shoulder, side, shoulder, gait);
             draw(&parts.upper_arm, arm, SKIN);
-            if keeper {
-                draw(&parts.sleeve_long, arm, SHIRT);
-            } else {
-                draw(&parts.sleeve, arm, SHIRT);
-                draw(&parts.cuff, arm, TRIM);
-            }
 
             let fore = arm * skeleton::step(Limb::Elbow, side, elbow, gait);
             draw(&parts.forearm, fore, SKIN);
@@ -7604,7 +7552,6 @@ pub(crate) mod preview {
             let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
             let leg = skeleton::step(Limb::Hip, side, hip, gait);
             draw(&parts.thigh, leg, SKIN);
-            draw(&parts.shorts_leg, leg, SHORTS);
 
             let lower = leg * skeleton::step(Limb::Knee, side, knee, gait);
             draw(&parts.shin, lower, SHORTS);
@@ -7626,6 +7573,10 @@ pub(crate) mod preview {
         let Some(mesh) = meshes.get(handle) else {
             return;
         };
+        part_mesh(canvas, lens, mesh, at, tint);
+    }
+
+    fn part_mesh(canvas: &mut Canvas, lens: &Lens, mesh: &Mesh, at: Transform, tint: Vec3) {
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
@@ -7663,7 +7614,20 @@ pub(crate) mod preview {
             })
             .collect();
 
+        let cloth_uvs = if mesh.attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT).is_some() {
+            match mesh.attribute(Mesh::ATTRIBUTE_UV_0) {
+                Some(VertexAttributeValues::Float32x2(uvs)) => Some(uvs),
+                _ => None,
+            }
+        } else {
+            None
+        };
         for triangle in indices.chunks_exact(3) {
+            let tint = if cloth_uvs.is_some_and(|uvs| uvs[triangle[0]] == Swatch::Trim.uv()) {
+                TRIM
+            } else {
+                tint
+            };
             canvas.triangle(
                 [
                     screen[triangle[0]],
@@ -7812,7 +7776,9 @@ mod tests {
         let full = count(Grain::FULL);
         let spare = count(Grain::SPARE);
         assert!(
-            (360_000..400_000).contains(&full),
+            // Connected shorts no longer carry overlapping hidden thigh and
+            // seat surfaces, reducing the count without coarsening the model.
+            (350_000..400_000).contains(&full),
             "a full-grain outfielder came to {full} triangles"
         );
         assert!(
@@ -10885,6 +10851,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn shorts_hang_above_the_knee_with_room_at_the_hem() {
+        for grain in [Grain::FULL, Grain::SPARE] {
+            let mut meshes = Assets::<Mesh>::default();
+            let cuts = BodyParts::tailor(&mut meshes, grain);
+            let positions = |handle: &Handle<Mesh>| {
+                meshes
+                    .get(handle)
+                    .unwrap()
+                    .attribute(Mesh::ATTRIBUTE_POSITION)
+                    .unwrap()
+                    .as_float3()
+                    .unwrap()
+            };
+            let shorts = positions(&cuts.pelvis);
+            let hem = shorts.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+            let knee_clearance = Physique::THIGH + hem;
+            assert!(
+                (0.10..0.17).contains(&knee_clearance),
+                "shorts end too high or cover the knee"
+            );
+            let width = shorts
+                .iter()
+                .filter(|p| p[1] < hem + 0.010)
+                .map(|p| p[0].abs())
+                .fold(0.0, f32::max)
+                - Physique::HIP_SPREAD;
+            let thigh = positions(&cuts.thigh);
+            let nearest = thigh
+                .iter()
+                .map(|p| (p[1] - hem).abs())
+                .fold(f32::MAX, f32::min);
+            let leg_width = thigh
+                .iter()
+                .filter(|p| (p[1] - hem).abs() < nearest + 1e-6)
+                .map(|p| p[0].abs())
+                .fold(0.0, f32::max);
+            assert!(width > leg_width + 0.008, "the opening hugs the thigh");
+            assert!(
+                width < Physique::HIP_SPREAD,
+                "the leg openings overlap at rest"
+            );
+        }
+    }
+
     fn a_merged_part_wears_only_swatches_at(grain: Grain) {
         let mut meshes = Assets::<Mesh>::default();
         let cuts = BodyParts::tailor(&mut meshes, grain);
@@ -10897,10 +10908,10 @@ mod tests {
         let expected = [
             count(&cuts.torso) + count(&cuts.collar),
             count(&cuts.pelvis),
-            count(&cuts.upper_arm) + count(&cuts.sleeve) + count(&cuts.cuff),
-            count(&cuts.upper_arm) + count(&cuts.sleeve_long),
+            count(&cuts.upper_arm),
+            count(&cuts.torso_long) + count(&cuts.collar),
             count(&cuts.forearm) + count(&cuts.sleeve_forearm) + count(&cuts.cuff_forearm),
-            count(&cuts.thigh) + count(&cuts.shorts_leg),
+            count(&cuts.thigh),
             count(&cuts.shin) + count(&cuts.sock_top),
         ];
 
@@ -10918,15 +10929,14 @@ mod tests {
         for (name, handle, wanted) in [
             ("torso", &parts.torso, expected[0]),
             ("pelvis", &parts.pelvis, expected[1]),
-            ("arm", &parts.arm_sleeved, expected[2]),
-            ("keeper arm", &parts.arm_sleeved_long, expected[3]),
+            ("arm", &parts.upper_arm, expected[2]),
+            ("keeper shirt", &parts.torso_long, expected[3]),
             ("keeper forearm", &parts.forearm_sleeved, expected[4]),
             ("thigh", &parts.thigh, expected[5]),
             ("shin", &parts.shin, expected[6]),
         ] {
             let mesh = meshes.get(handle).expect("the part was built");
-            let Some(VertexAttributeValues::Float32x2(uvs)) =
-                mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+            let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
             else {
                 panic!("the {name} lost its UVs in the merge");
             };
@@ -10949,52 +10959,14 @@ mod tests {
     /// quietly closed the gap would leave both absolute bounds satisfied.
     fn footballer_triangles(grain: Grain) -> usize {
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes, grain);
-        let count = |handle: &Handle<Mesh>| {
-            meshes
-                .get(handle)
-                .and_then(|mesh| mesh.indices())
-                .map_or(0, |indices| indices.len() / 3)
-        };
-
-        // Exactly what one player wears, counted once for the parts he has one
-        // of and twice for the parts he has a pair of.
-        let single = [&parts.torso, &parts.collar, &parts.pelvis, &parts.head]
-            .iter()
-            .map(|handle| count(handle))
-            .sum::<usize>()
-            + count(&parts.number)
-            + count(&parts.name)
-            // The fullest cap, since a squad wears a spread of them.
-            + parts.hair.iter().flatten().map(count).max().unwrap_or(0);
-        let paired = [
-            &parts.upper_arm,
-            &parts.sleeve,
-            &parts.cuff,
-            &parts.forearm,
-            // The bare hand, which is what twenty of the twenty-two wear and
-            // which this used to leave out of the count altogether.
-            &parts.hand[1],
-            &parts.glove,
-            &parts.shorts_leg,
-            &parts.thigh,
-            &parts.shin,
-            &parts.sock_top,
-            &parts.boot,
-        ]
-        .iter()
-        .map(|handle| count(handle))
-        .sum::<usize>();
-
-        // And nothing in him is a hidden extravagance: no single part is worth
-        // more than a quarter of him.
+        let parts = BodyParts::new(&mut meshes, grain);
+        let total = parts.triangles(&meshes);
+        let head = meshes.get(&parts.head).unwrap().indices().unwrap().len() / 3;
         assert!(
-            count(&parts.head) * 4 < single + 2 * paired,
-            "the head alone is {} of a footballer's {} triangles",
-            count(&parts.head),
-            single + 2 * paired
+            head * 4 < total,
+            "the head exceeds a quarter of the player's triangles"
         );
-        single + 2 * paired
+        total
     }
 
     /// **The geometry budget, and the gap between the two grains.**
@@ -11056,27 +11028,64 @@ mod tests {
         assert_eq!(Grain::of(Tier::PostProcessed, Some("")), Grain::SPARE);
     }
 
-    /// The balls at the elbow and the knee are there for a limb that is BENT.
-    /// Straight, they have to be invisible — a footballer standing still with
-    /// a bead on each joint is a doll.
+    /// The cut end of each lower limb must stay buried when it bends. Read
+    /// the generated meshes, including the coarse tier, rather than checking
+    /// a filler-ball radius that may no longer be used by the renderer.
     #[test]
-    fn the_joint_balls_hide_when_the_limb_is_straight() {
-        // The knee ball against the two profiles that meet over it: the thigh
-        // coming down and the sock going up.
-        let ball = 0.048f32;
-        for above in [0.010f32, 0.020, 0.030] {
-            let across = ball * (1.0 - (above / ball).powi(2)).max(0.0).sqrt();
-            let sock = Sculptor::section(&BodyParts::shin(Grain::FULL), above).x;
-            let thigh = 0.053 + (0.059 - 0.053) * (above / 0.035).min(1.0);
-            assert!(
-                across < sock.max(thigh),
-                "the knee shows {across} at {above} above the joint, \
-                 against a sock of {sock} and a thigh of {thigh}"
-            );
+    fn limb_roots_stay_inside_the_rounded_joint_through_flexion() {
+        for grain in [Grain::FULL, Grain::SPARE] {
+            let mut meshes = Assets::<Mesh>::default();
+            let cuts = BodyParts::tailor(&mut meshes, grain);
+            let positions = |handle: &Handle<Mesh>| {
+                meshes
+                    .get(handle)
+                    .unwrap()
+                    .attribute(Mesh::ATTRIBUTE_POSITION)
+                    .unwrap()
+                    .as_float3()
+                    .unwrap()
+            };
+            for (name, upper, lower, length, direction) in [
+                (
+                    "elbow",
+                    &cuts.upper_arm,
+                    &cuts.forearm,
+                    Physique::UPPER_ARM,
+                    -1.0,
+                ),
+                ("knee", &cuts.thigh, &cuts.shin, Physique::THIGH, 1.0),
+            ] {
+                // Loft rings precede the cap vertices and run bottom-up.
+                let profile: Vec<Ring> = positions(upper)
+                    .chunks_exact(grain.sides + 1)
+                    .take_while(|ring| ring.iter().all(|p| (p[1] - ring[0][1]).abs() < 1e-6))
+                    .map(|ring| {
+                        let x = ring.iter().map(|p| p[0].abs()).fold(0.0, f32::max);
+                        let front = ring.iter().map(|p| p[2]).fold(f32::MIN, f32::max);
+                        let back = ring.iter().map(|p| p[2]).fold(f32::MAX, f32::min);
+                        Ring::set(ring[0][1], x, (front - back) * 0.5, (front + back) * 0.5)
+                    })
+                    .collect();
+                let top = positions(lower)
+                    .iter()
+                    .map(|p| p[1])
+                    .fold(f32::MIN, f32::max);
+                for degrees in (0..=140).step_by(10) {
+                    let bend = Quat::from_rotation_x(direction * (degrees as f32).to_radians());
+                    for p in positions(lower)
+                        .iter()
+                        .filter(|p| (p[1] - top).abs() < 1e-6)
+                    {
+                        let point = bend * Vec3::from_array(*p) - Vec3::Y * length;
+                        let section = Sculptor::section(&profile, point.y);
+                        assert!(
+                            section.radius(point.x, point.z) < 1.0,
+                            "{name} root is exposed at {degrees} degrees ({grain:?})"
+                        );
+                    }
+                }
+            }
         }
-        // And it is big enough to be worth having: wider than the gap the two
-        // tapers leave between them at the joint itself.
-        assert!(ball > 0.045);
     }
 
     /// The face texture is laid out against the skull it wraps, and the front
@@ -11144,7 +11153,8 @@ mod tests {
         // The cheek half-width is what turns an angle into a distance across
         // the face, so it has to be the skull's, at eye level.
         assert!(
-            (layout.cheek - Sculptor::section(&BodyParts::skull(Grain::FULL), layout.eyes).x).abs() < 1e-6
+            (layout.cheek - Sculptor::section(&BodyParts::skull(Grain::FULL), layout.eyes).x).abs()
+                < 1e-6
         );
         // A face is about a fifth narrower than the head is deep, which is
         // what stops it reading as a barrel with eyes on it.

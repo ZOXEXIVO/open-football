@@ -8049,6 +8049,71 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     out_of_reach,
                     out_of_reach as f32 / n_matches as f32,
                 );
+
+                let (
+                    target,
+                    control,
+                    rolls,
+                    spilled,
+                    engaged,
+                    mean_err,
+                    overrun,
+                    overrun_short,
+                    overrun_miss,
+                    overrun_age,
+                ) = core::reception_diag::credit_route_snapshot();
+                let credited = (target + control).max(1);
+                println!(
+                    "  pass credit route: intended receiver {:.1}% (rolls a first touch), \
+                     any team-mate on control {:.1}% (CANNOT fail)   \
+                     — the second share is deaf to the passer's execution",
+                    target as f32 / credited as f32 * 100.0,
+                    control as f32 / credited as f32 * 100.0,
+                );
+                println!(
+                    "  first touch at a targeted reception: {} rolls, spilled {:.1}%; \
+                     arrival error mean {:.2}u, cleared the stretch dead zone {:.1}% of the time",
+                    rolls,
+                    spilled as f32 / rolls.max(1) as f32 * 100.0,
+                    mean_err,
+                    engaged as f32 / rolls.max(1) as f32 * 100.0,
+                );
+                println!(
+                    "  deliveries that lost the receiver's exclusive claim (ball was never \
+                     reaching him): {} ({:.1}% of passes emitted, {:.1}/match) \
+                     — these become ordinary loose balls",
+                    overrun,
+                    overrun as f32 / emitted.max(1) as f32 * 100.0,
+                    overrun as f32 / n_matches as f32,
+                );
+                println!(
+                    "    of those: ball DIED SHORT of the aim {:.1}% (weighting), passed it wide \
+                     {:.1}% (targeting); missed by {:.2}u ({:.2} m) on average, {:.0} ticks after \
+                     the strike",
+                    overrun_short as f32 / overrun.max(1) as f32 * 100.0,
+                    (overrun - overrun_short) as f32 / overrun.max(1) as f32 * 100.0,
+                    overrun_miss,
+                    overrun_miss * 0.125,
+                    overrun_age,
+                );
+                let (ball_aim, man_aim, man_ball, speed, angle, airborne) =
+                    core::reception_diag::overrun_geometry();
+                println!(
+                    "    geometry at the trip: ball is {:.1}u ({:.1} m) from the aim point, the \
+                     RECEIVER is {:.1}u ({:.1} m) from it, and {:.1}u apart from the ball; ball \
+                     doing {:.2} u/tick",
+                    ball_aim,
+                    ball_aim * 0.125,
+                    man_aim,
+                    man_aim * 0.125,
+                    man_ball,
+                    speed,
+                );
+                println!(
+                    "    ball heading {:.1}deg off the line to the aim point; airborne on {:.1}% \
+                     of trips   (near 0deg = the ball is ON LINE and the projection is at fault)",
+                    angle, airborne,
+                );
             }
             let (seen, too_high, candidates, fired) = BlockDiag::snapshot();
             let bpct = |x: u64| {

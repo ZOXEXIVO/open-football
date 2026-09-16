@@ -72,7 +72,7 @@ use crate::transfers::pipeline::{
 use crate::transfers::scouting::breakout::{
     BreakoutInputs, BreakoutPerformanceSignal, LeaguePerformanceLookup,
 };
-use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
+use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
 use crate::transfers::squad::standing::{CareerRecordSnapshot, StandingInputs, StandingSignal};
 use crate::transfers::view::player::ClubGroupRanks;
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType};
@@ -688,21 +688,16 @@ impl FormWatch {
                     })
                     .unwrap_or(0);
                 let plan = &mut club.transfer_plan;
-                if plan
-                    .find_monitoring_mut(action.recommender_staff_id, action.player_id)
-                    .is_some()
-                {
-                    continue;
-                }
-                let id = plan.next_monitoring_id();
-                let mut row = ScoutPlayerMonitoring::new(
-                    id,
+                // Upsert rather than create: a standing find on a player the
+                // department already has a stale file on must RAISE that
+                // file, not be dropped because one exists.
+                plan.upsert_monitoring(
                     action.recommender_staff_id,
                     action.player_id,
                     ScoutMonitoringSource::StaffRecommendation,
-                    date,
-                );
-                row.record_observation(
+                    None,
+                    None,
+                    None,
                     action.assessed_ability,
                     action.assessed_potential,
                     action.confidence,
@@ -712,7 +707,6 @@ impl FormWatch {
                     date,
                     false,
                 );
-                plan.scout_monitoring.push(row);
 
                 // What the club now knows about him. For a foreigner this
                 // is the only durable record of who and where he is — he
@@ -916,7 +910,21 @@ impl FormWatch {
                 if !reach.contains(&s.region) {
                     return None;
                 }
-                if !plan.monitorings_for_player(s.player_id).is_empty() {
+                // A file that already says what this find would say, or that
+                // the club is already acting on, needs nothing from the
+                // watch. A stale one below the meeting bar does: the pool
+                // path opens every file at its single-observation
+                // confidence and cannot raise it, so treating any row as
+                // "already tracking him" let one cheap look shut the
+                // standing channel out of a player for good.
+                if plan.monitorings_for_player(s.player_id).iter().any(|m| {
+                    m.is_ready_for_meeting()
+                        || matches!(
+                            m.status,
+                            ScoutMonitoringStatus::PromotedToShortlist
+                                | ScoutMonitoringStatus::Negotiating
+                        )
+                }) {
                     return None;
                 }
                 // Meeting rejections blocklist the player for 6 months.

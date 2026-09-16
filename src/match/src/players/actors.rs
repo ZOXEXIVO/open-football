@@ -16,6 +16,7 @@ use crate::recording::replay::{MatchEvent, ReplayTracks, Track};
 use crate::scene::field::Field;
 use crate::scene::pitch::Pitch;
 use crate::ui::timeline::DebugOverlay;
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use bevy::text::FontSource;
 use bevy::window::PrimaryWindow;
@@ -1914,6 +1915,7 @@ impl Actors {
     pub fn spawn(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
+        mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
         config: Res<ViewerConfig>,
@@ -1927,7 +1929,8 @@ impl Actors {
         // every mesh below is shared by the whole squad and re-cutting them
         // mid-match would mean re-uploading every vertex buffer in the scene.
         let grain = Grain::of(quality.tier(), config.grain.as_deref());
-        let parts = BodyParts::new(&mut meshes, grain);
+        let mut parts = BodyParts::new(&mut meshes, grain);
+        parts.bind_clothes(&mut bindposes);
         // Said out loud while the vertices are still here to be counted. The
         // meshes are `RENDER_WORLD`-only, so a moment from now the main world
         // will not have the data and no later system could work this out —

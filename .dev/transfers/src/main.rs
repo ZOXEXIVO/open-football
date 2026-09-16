@@ -85,6 +85,10 @@ use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
 use core::transfers::squad::plan::BriefTier;
 use core::transfers::value::PlayerValuationCalculator;
+use core::transfers::scouting::recruitment::{
+    RecruitmentDecisionType, ScoutMonitoringSource, ScoutMonitoringStatus,
+    ScoutPlayerMonitoring,
+};
 use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
 use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as GeographyMoveKind};
 use core::transfers::{
@@ -4074,6 +4078,7 @@ impl SimHarness {
                 let mut report = MarketCensus::collect(&self.data);
                 ReportPrinter::print(&mut report, &self.data, day);
                 CorridorCensus::report(&self.data, day);
+                ScoutingFunnelCensus::report(&self.data, day);
                 self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
                 LoanAssetPrinter::print(&self.loan_assets);
@@ -4082,6 +4087,7 @@ impl SimHarness {
         let mut report = MarketCensus::collect(&self.data);
         ReportPrinter::print(&mut report, &self.data, days);
         CorridorCensus::report(&self.data, days);
+        ScoutingFunnelCensus::report(&self.data, days);
         self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
         LoanAssetPrinter::print(&self.loan_assets);
@@ -4188,6 +4194,7 @@ fn main() {
     let mut initial = MarketCensus::collect(&harness.data);
     ReportPrinter::print(&mut initial, &harness.data, 0);
     CorridorCensus::report(&harness.data, 0);
+    LoanLadderCensus::report(&harness.data);
     PlacementCensus::report(&harness.data, &harness.odb_clubs);
 
     harness.run(days, every);
@@ -5322,6 +5329,399 @@ impl CorridorCensus {
             0.0
         } else {
             part as f64 / whole as f64
+        }
+    }
+}
+
+// ============================================================
+// Scouting funnel census
+// ============================================================
+
+/// Where recruitment interest dies before it can become a bid.
+///
+/// The move census answers "how many players moved"; this answers the
+/// prior question a stuck player poses — whether a club that has watched a
+/// man for years is even able to put him in front of its recruitment
+/// meeting. Every gate between a scout's first viewing and a shortlist
+/// place is a threshold on one number, `ScoutPlayerMonitoring::confidence`,
+/// and nothing in the sim reports its distribution.
+///
+/// The load-bearing table is [`Self::print_ladder`]: confidence against how
+/// often the row has actually been watched. A file watched twenty times
+/// that still reads at its opening value is a ladder with no rungs, and no
+/// amount of further scouting will ever move it.
+struct ScoutingFunnelCensus;
+
+/// One club's monitoring row, reduced to the numbers the gates read.
+struct MonitoringRow {
+    confidence: f32,
+    times_watched: u16,
+    ready: bool,
+    source: ScoutMonitoringSource,
+    status: ScoutMonitoringStatus,
+}
+
+impl ScoutingFunnelCensus {
+    /// The bar a row must clear to reach a recruitment-meeting agenda.
+    const MEETING_BAR: f32 = ScoutPlayerMonitoring::MEETING_READY_CONFIDENCE;
+    /// Watch-count buckets for the ladder table.
+    const WATCH_BUCKETS: [u16; 5] = [1, 2, 3, 5, 10];
+
+    fn report(data: &SimulatorData, day: u32) {
+        let rows = Self::rows(data);
+        println!("\n== scouting funnel census (day {day}) ==");
+        Self::print_ladder(&rows);
+        Self::print_by_source(&rows);
+        Self::print_assignments(data);
+        Self::print_meetings(data);
+    }
+
+    fn rows(data: &SimulatorData) -> Vec<MonitoringRow> {
+        let mut rows = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for m in &club.transfer_plan.scout_monitoring {
+                        rows.push(MonitoringRow {
+                            confidence: m.confidence,
+                            times_watched: m.times_watched,
+                            ready: m.is_ready_for_meeting(),
+                            source: m.source,
+                            status: m.status,
+                        });
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    /// Confidence against viewings — the rung test. If the mean confidence
+    /// of rows watched ten times equals that of rows watched once, the
+    /// ladder does not exist and the meeting bar is unreachable by scouting.
+    fn print_ladder(rows: &[MonitoringRow]) {
+        println!(
+            "\n  monitoring rows: {} (meeting bar {:.2})",
+            rows.len(),
+            Self::MEETING_BAR
+        );
+        println!(
+            "  {:<14} {:>8} {:>8} {:>8} {:>8} {:>10}",
+            "times_watched", "rows", "mean", "max", "ready", "ready%"
+        );
+        for (i, floor) in Self::WATCH_BUCKETS.iter().enumerate() {
+            let ceiling = Self::WATCH_BUCKETS.get(i + 1).copied().unwrap_or(u16::MAX);
+            let bucket: Vec<&MonitoringRow> = rows
+                .iter()
+                .filter(|r| r.times_watched >= *floor && r.times_watched < ceiling)
+                .collect();
+            if bucket.is_empty() {
+                continue;
+            }
+            let mean = bucket.iter().map(|r| r.confidence).sum::<f32>() / bucket.len() as f32;
+            let max = bucket.iter().map(|r| r.confidence).fold(0.0_f32, f32::max);
+            let ready = bucket.iter().filter(|r| r.ready).count();
+            let label = if ceiling == u16::MAX {
+                format!("{floor}+")
+            } else if ceiling - floor == 1 {
+                format!("{floor}")
+            } else {
+                format!("{floor}-{}", ceiling - 1)
+            };
+            println!(
+                "  {:<14} {:>8} {:>8.3} {:>8.3} {:>8} {:>9.1}%",
+                label,
+                bucket.len(),
+                mean,
+                max,
+                ready,
+                Self::pct(ready, bucket.len())
+            );
+        }
+        let ready_total = rows.iter().filter(|r| r.ready).count();
+        println!(
+            "  meeting-ready overall: {ready_total}/{} ({:.1}%)",
+            rows.len(),
+            Self::pct(ready_total, rows.len())
+        );
+    }
+
+    /// Which intake wrote the row. The demand-driven pool path and the
+    /// year-round breakout watch open files at different confidences, and
+    /// only one of them can ever clear the bar — so the mix decides whether
+    /// the meeting sees anybody at all.
+    fn print_by_source(rows: &[MonitoringRow]) {
+        println!(
+            "\n  {:<22} {:>8} {:>8} {:>8} {:>8}",
+            "source", "rows", "mean", "max", "ready"
+        );
+        for source in [
+            ScoutMonitoringSource::TransferRequest,
+            ScoutMonitoringSource::StaffRecommendation,
+            ScoutMonitoringSource::MatchStandout,
+            ScoutMonitoringSource::ShadowReport,
+            ScoutMonitoringSource::KnownPlayerRefresh,
+            ScoutMonitoringSource::ManualFollowUp,
+        ] {
+            let bucket: Vec<&MonitoringRow> = rows.iter().filter(|r| r.source == source).collect();
+            if bucket.is_empty() {
+                continue;
+            }
+            let mean = bucket.iter().map(|r| r.confidence).sum::<f32>() / bucket.len() as f32;
+            let max = bucket.iter().map(|r| r.confidence).fold(0.0_f32, f32::max);
+            println!(
+                "  {:<22} {:>8} {:>8.3} {:>8.3} {:>8}",
+                format!("{source:?}"),
+                bucket.len(),
+                mean,
+                max,
+                bucket.iter().filter(|r| r.ready).count()
+            );
+        }
+        println!("\n  {:<22} {:>8}", "status", "rows");
+        for status in [
+            ScoutMonitoringStatus::Active,
+            ScoutMonitoringStatus::Paused,
+            ScoutMonitoringStatus::ReportReady,
+            ScoutMonitoringStatus::Rejected,
+            ScoutMonitoringStatus::PromotedToShortlist,
+            ScoutMonitoringStatus::Negotiating,
+            ScoutMonitoringStatus::Signed,
+            ScoutMonitoringStatus::Lost,
+        ] {
+            let n = rows.iter().filter(|r| r.status == status).count();
+            if n > 0 {
+                println!("  {:<22} {n:>8}", format!("{status:?}"));
+            }
+        }
+    }
+
+    /// The upstream cause the ladder table can only imply: an assignment
+    /// that retires after its first report never records a second viewing,
+    /// so the per-assignment observation count — which is what sets the
+    /// confidence — cannot leave 1.
+    fn print_assignments(data: &SimulatorData) {
+        let mut total = 0usize;
+        let mut completed = 0usize;
+        let mut reports: Vec<u32> = Vec::new();
+        let mut max_obs = 0u32;
+        let mut multi_obs = 0usize;
+        let mut obs_total = 0usize;
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for a in &club.transfer_plan.scouting_assignments {
+                        total += 1;
+                        if a.completed {
+                            completed += 1;
+                        }
+                        reports.push(a.reports_produced);
+                        for o in &a.observations {
+                            obs_total += 1;
+                            max_obs = max_obs.max(o.observation_count);
+                            if o.observation_count > 1 {
+                                multi_obs += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!("\n  scouting assignments: {total} ({completed} completed)");
+        if !reports.is_empty() {
+            let mean = reports.iter().sum::<u32>() as f64 / reports.len() as f64;
+            println!("  reports produced per assignment: mean {mean:.2}");
+        }
+        println!(
+            "  player observations: {obs_total}, max observation_count {max_obs}, \
+             seen more than once {multi_obs} ({:.1}%)",
+            Self::pct(multi_obs, obs_total)
+        );
+    }
+
+    /// What the meetings actually decided. A promotion is the only way a
+    /// monitored player who is not transfer-listed reaches a shortlist.
+    fn print_meetings(data: &SimulatorData) {
+        let mut meetings = 0usize;
+        let mut agenda = 0usize;
+        let mut promote = 0usize;
+        let mut board = 0usize;
+        let mut negotiate = 0usize;
+        let mut keep = 0usize;
+        let mut reject = 0usize;
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for m in &club.transfer_plan.recruitment_meetings {
+                        meetings += 1;
+                        agenda += m.decisions.len();
+                        for d in &m.decisions {
+                            match d.decision {
+                                RecruitmentDecisionType::PromoteToShortlist => promote += 1,
+                                RecruitmentDecisionType::AskBoardApproval => board += 1,
+                                RecruitmentDecisionType::StartNegotiation => negotiate += 1,
+                                RecruitmentDecisionType::KeepMonitoring => keep += 1,
+                                RecruitmentDecisionType::Reject => reject += 1,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        println!(
+            "\n  recruitment meetings: {meetings} holding {agenda} decisions \
+             (promote {promote}, board {board}, negotiate {negotiate}, \
+             keep {keep}, reject {reject})"
+        );
+    }
+
+    fn pct(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            part as f64 / whole as f64 * 100.0
+        }
+    }
+}
+
+// ============================================================
+// Loan ladder census
+// ============================================================
+
+/// Whether a country's own divisions give a parent club anywhere to send a
+/// prospect.
+///
+/// [`crate::core::transfers::loan`]'s destination guard refuses any borrower
+/// whose league sits below `division_floor × the parent's league`. The floor
+/// is continuous in readiness, but it has a FLOOR of its own: at readiness
+/// zero — a completely raw teenager, the player the development loan exists
+/// for — it bottoms out at `RAW_LEAGUE_FLOOR × (1 - RAW_LEAGUE_ALLOWANCE)`.
+///
+/// So a country whose second tier sits below that fraction of its first has
+/// no reachable rung: every domestic development loan out of the top flight
+/// is refused on division before money or minutes are ever read, at every
+/// readiness. That is invisible in the move totals — the loans simply never
+/// happen — and it is a property of the league table alone, so it reads the
+/// same in a stubbed world as in a played one.
+struct LoanLadderCensus;
+
+/// One country's divisions, top-flight first.
+struct LadderRow {
+    country: String,
+    /// League reputations, descending.
+    tiers: Vec<u16>,
+}
+
+impl LoanLadderCensus {
+    /// `RAW_LEAGUE_FLOOR × (1 - RAW_LEAGUE_ALLOWANCE)` — the smallest share
+    /// of the parent's league a loan destination may ever be, reached only
+    /// by a completely raw player. Mirrors the guard's own constants; if
+    /// they move, this moves with them.
+    const MIN_FLOOR: f32 = 0.45 * (1.0 - 0.25);
+    /// The floor a player already pressing for the parent's first team
+    /// faces, for the second column of the table.
+    const READY_FLOOR: f32 = 0.85;
+    /// Countries listed individually.
+    const TOP_ROWS: usize = 30;
+
+    fn report(data: &SimulatorData) {
+        let rows = Self::rows(data);
+        let multi: Vec<&LadderRow> = rows.iter().filter(|r| r.tiers.len() >= 2).collect();
+        if multi.is_empty() {
+            return;
+        }
+
+        println!("\n== loan ladder census ==");
+        println!(
+            "  raw-player floor {:.3} of the parent league, ready-player floor {:.3}",
+            Self::MIN_FLOOR,
+            Self::READY_FLOOR
+        );
+
+        let stranded: Vec<&&LadderRow> = multi
+            .iter()
+            .filter(|r| Self::best_ratio(r) < Self::MIN_FLOOR)
+            .collect();
+        println!(
+            "  countries with 2+ divisions: {}  |  NO domestic rung reachable at any \
+             readiness: {} ({:.1}%)",
+            multi.len(),
+            stranded.len(),
+            Self::pct(stranded.len(), multi.len())
+        );
+
+        println!(
+            "\n  {:<28} {:>8} {:>8} {:>7} {:>8}",
+            "country (2+ tiers)", "top", "tier 2", "ratio", "reachable"
+        );
+        let mut listed: Vec<&&LadderRow> = multi.iter().collect();
+        listed.sort_by(|a, b| {
+            Self::best_ratio(a)
+                .partial_cmp(&Self::best_ratio(b))
+                .unwrap_or(Ordering::Equal)
+        });
+        for row in listed.iter().take(Self::TOP_ROWS) {
+            let ratio = Self::best_ratio(row);
+            println!(
+                "  {:<28} {:>8} {:>8} {:>7.3} {:>8}",
+                row.country,
+                row.tiers[0],
+                row.tiers[1],
+                ratio,
+                if ratio >= Self::READY_FLOOR {
+                    "any"
+                } else if ratio >= Self::MIN_FLOOR {
+                    "raw only"
+                } else {
+                    "none"
+                },
+            );
+        }
+    }
+
+    /// Best ratio any lower division achieves against the top flight — the
+    /// most generous rung the country offers.
+    fn best_ratio(row: &LadderRow) -> f32 {
+        let top = row.tiers[0] as f32;
+        if top <= 0.0 {
+            return 0.0;
+        }
+        row.tiers[1..]
+            .iter()
+            .map(|&t| t as f32 / top)
+            .fold(0.0_f32, f32::max)
+    }
+
+    fn rows(data: &SimulatorData) -> Vec<LadderRow> {
+        let mut rows = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let mut tiers: Vec<u16> = country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .filter(|l| !l.friendly && !l.is_cup && l.reputation > 0)
+                    .map(|l| l.reputation)
+                    .collect();
+                if tiers.is_empty() {
+                    continue;
+                }
+                tiers.sort_unstable_by(|a, b| b.cmp(a));
+                tiers.dedup();
+                rows.push(LadderRow {
+                    country: country.name.clone(),
+                    tiers,
+                });
+            }
+        }
+        rows
+    }
+
+    fn pct(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            part as f64 / whole as f64 * 100.0
         }
     }
 }

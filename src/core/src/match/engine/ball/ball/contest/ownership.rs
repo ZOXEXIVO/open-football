@@ -4,8 +4,9 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{
-    AerialReach, AwaitedRestart, Ball, LOOSE_CLAIM_DISTANCE, PlayerReach,
+    AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
 };
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
@@ -56,6 +57,96 @@ pub mod reception_diag {
     /// become `OWNER_TOO_FAR` a tick later, with the ball's velocity
     /// already destroyed — see `Ball::within_possession_reach`.
     pub static GRANT_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+
+    /// **Which route a completed pass took to its credit**, and the one
+    /// number that bounds how much the passer's execution can ever be
+    /// worth.
+    ///
+    /// `try_pass_target_claim` rolls [`Ball::roll_first_touch`] before it
+    /// grants, so a delivery struck off its line can be spilled and the
+    /// pass booked as a failure. Every other route to control
+    /// (`ClaimBall` / `GainBall` / `TakeBall` →
+    /// `resolve_pending_pass_on_control`) credits the pass on contact
+    /// and cannot fail. Whatever share sits in `CREDIT_CONTROL` is
+    /// deaf to `pending_pass_error` by construction, so the measured
+    /// skill response to passing is diluted by exactly that fraction.
+    /// Deliveries on which the receiver lost his exclusive claim because
+    /// the ball was never going to reach him — see
+    /// `Ball::delivery_reaches_its_man`. These become ordinary loose
+    /// balls, which he still usually wins.
+    pub static DELIVERY_OVERRUN: AtomicU64 = AtomicU64::new(0);
+    /// Of those, the ones where the ball's travel ENDED before it got to
+    /// the aim point (underhit / lofted-and-short) rather than passing it
+    /// wide. Separates a weighting problem from a targeting one.
+    pub static OVERRUN_SHORT: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the closest approach at the trip, ×100.
+    pub static OVERRUN_MISS_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ticks since the strike at the trip, summed.
+    pub static OVERRUN_AGE: AtomicU64 = AtomicU64::new(0);
+    /// Geometry at the trip, summed ×100 over `DELIVERY_OVERRUN`. Which
+    /// of the two moved is the whole question: `BALL_AIM` large with
+    /// `MAN_AIM` small means the delivery went somewhere else, and the
+    /// reverse means the receiver did.
+    pub static OVERRUN_BALL_AIM_X100: AtomicU64 = AtomicU64::new(0);
+    pub static OVERRUN_MAN_AIM_X100: AtomicU64 = AtomicU64::new(0);
+    pub static OVERRUN_MAN_BALL_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ball speed at the trip, ×100. Separates "still flying past him"
+    /// from "already dead somewhere else".
+    pub static OVERRUN_SPEED_X100: AtomicU64 = AtomicU64::new(0);
+    /// Angle between where the ball is going and where the aim point is,
+    /// in degrees ×100. Near zero means the ball is on line and the
+    /// PROJECTION is wrong; large means the delivery really is misaimed.
+    pub static OVERRUN_ANGLE_X100: AtomicU64 = AtomicU64::new(0);
+    /// Trips where the ball was still in the air, so `projected_arrival`
+    /// used the landing cache rather than the roll.
+    pub static OVERRUN_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+
+    /// `(ball→aim, man→aim, man→ball, speed)`, each a mean in game units.
+    pub fn overrun_geometry() -> (f32, f32, f32, f32, f32, f32) {
+        let n = (DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) * 100) as f32;
+        (
+            OVERRUN_BALL_AIM_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_MAN_AIM_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_MAN_BALL_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_SPEED_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_ANGLE_X100.load(Ordering::Relaxed) as f32 / n,
+            OVERRUN_AIRBORNE.load(Ordering::Relaxed) as f32
+                / DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) as f32
+                * 100.0,
+        )
+    }
+    pub static CREDIT_TARGET: AtomicU64 = AtomicU64::new(0);
+    pub static CREDIT_CONTROL: AtomicU64 = AtomicU64::new(0);
+    /// First-touch rolls at a targeted reception, and the ones that
+    /// spilled (miscontrol + heavy). `STRETCH_ENGAGED` counts rolls
+    /// where the delivery's arrival error cleared the dead zone at all —
+    /// if it reads near zero the stretch term is not in the model.
+    pub static TOUCH_ROLLS: AtomicU64 = AtomicU64::new(0);
+    pub static TOUCH_SPILLED: AtomicU64 = AtomicU64::new(0);
+    pub static STRETCH_ENGAGED: AtomicU64 = AtomicU64::new(0);
+    /// Sum of arrival error over `TOUCH_ROLLS`, ×100 so it can live in
+    /// an integer counter. Divided out it is the mean radial the
+    /// receiver was actually asked to cover, in game units.
+    pub static ARRIVAL_ERROR_X100: AtomicU64 = AtomicU64::new(0);
+
+    /// `(target, control, rolls, spilled, stretch_engaged, mean_error_u, overrun)`
+    pub fn credit_route_snapshot() -> (u64, u64, u64, u64, u64, f32, u64, u64, f32, f32) {
+        let rolls = TOUCH_ROLLS.load(Ordering::Relaxed);
+        (
+            CREDIT_TARGET.load(Ordering::Relaxed),
+            CREDIT_CONTROL.load(Ordering::Relaxed),
+            rolls,
+            TOUCH_SPILLED.load(Ordering::Relaxed),
+            STRETCH_ENGAGED.load(Ordering::Relaxed),
+            ARRIVAL_ERROR_X100.load(Ordering::Relaxed) as f32 / (rolls.max(1) * 100) as f32,
+            DELIVERY_OVERRUN.load(Ordering::Relaxed),
+            OVERRUN_SHORT.load(Ordering::Relaxed),
+            OVERRUN_MISS_X100.load(Ordering::Relaxed) as f32
+                / (DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) * 100) as f32,
+            OVERRUN_AGE.load(Ordering::Relaxed) as f32
+                / DELIVERY_OVERRUN.load(Ordering::Relaxed).max(1) as f32,
+        )
+    }
 
     /// Attribution for the `OWNER_TOO_FAR` drops, so the granting site can
     /// be identified without auditing all fifteen of them by hand.
@@ -389,6 +480,22 @@ pub mod reception_diag {
             &FATE_LIVE_TICKS,
             &FATE_STRUCK_DIST_X100,
             &FATE_REACHED_DIST_X100,
+            &DELIVERY_OVERRUN,
+            &OVERRUN_SHORT,
+            &OVERRUN_MISS_X100,
+            &OVERRUN_AGE,
+            &OVERRUN_BALL_AIM_X100,
+            &OVERRUN_MAN_AIM_X100,
+            &OVERRUN_MAN_BALL_X100,
+            &OVERRUN_SPEED_X100,
+            &OVERRUN_ANGLE_X100,
+            &OVERRUN_AIRBORNE,
+            &CREDIT_TARGET,
+            &CREDIT_CONTROL,
+            &TOUCH_ROLLS,
+            &TOUCH_SPILLED,
+            &STRETCH_ENGAGED,
+            &ARRIVAL_ERROR_X100,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -598,24 +705,43 @@ impl Ball {
         // A ball weighted to feet and one collected a stretch off its
         // line are different receptions. `pending_pass_error` is the
         // radial the delivery genuinely arrived off its ideal point
-        // (stashed at emit — jitter + miskick, swing excluded); the
-        // dead zone means anything inside 0.5 m still counts as "at
-        // his feet", with full difficulty at a ~1.8 m stretch. This is
-        // the passer's error reaching the receiver's touch — before it,
-        // a wayward delivery rolled the same reception as a perfect
-        // one, so pass quality died at the claim radius. The dead zone
-        // was titrated: at 2u the term charged routine arrivals too
-        // (+1.7 miscontrols/team on a population already above the real
-        // 8-15 band); 4u exempts the bulk and keeps the pressured /
-        // miskicked tail, which is the tail it was built for.
-        // `OF_TOUCH_STRETCH=<w>` overrides the weight; 0 disables
-        // exactly.
-        let stretch01 = ((self.pending_pass_error - 4.0) / 10.0).clamp(0.0, 1.0);
+        // (stashed at emit — jitter + miskick, swing excluded), and
+        // this is the one place the passer's execution reaches an
+        // outcome: `max_position_error` is bounded so far under
+        // `CONTROL_DISTANCE` that a wayward delivery is still caught,
+        // so if it does not cost the receiver a touch it costs nothing
+        // at all.
+        //
+        // The band is the reception geometry itself, not a pair of
+        // titrated constants: inside a boot the ball is at his feet and
+        // free, and a ball arriving a full `CONTROL_DISTANCE` off its
+        // line is the furthest he can still reach, so that is what a
+        // full stretch means. Anchoring it there is what keeps the two
+        // in step — the old fixed 4u sill was set against an error
+        // model that topped out at 9.3u, and when the budget moved the
+        // sill silently stopped describing anything (it exempted 88% of
+        // all receptions). `STRETCH_ENGAGED` is how often the term is in
+        // the model at all; `OF_TOUCH_STRETCH=<w>` overrides the weight,
+        // 0 disables exactly.
+        const STRETCH_FREE: f32 = 2.0;
+        let stretch01 = ((self.pending_pass_error - STRETCH_FREE)
+            / (CONTROL_DISTANCE - STRETCH_FREE))
+            .clamp(0.0, 1.0);
         let difficulty = (speed01 * 0.40
             + pressure01 * 0.40
             + aerial01 * 0.20
             + stretch01 * Self::touch_stretch_weight())
         .min(1.0);
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            reception_diag::TOUCH_ROLLS.fetch_add(1, Ordering::Relaxed);
+            reception_diag::ARRIVAL_ERROR_X100
+                .fetch_add((self.pending_pass_error * 100.0) as u64, Ordering::Relaxed);
+            if stretch01 > 0.0 {
+                reception_diag::STRETCH_ENGAGED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
 
         // Nervousness bump — high-pressure psych state spills more
         // first touches (the modifier is additive probability already).
@@ -637,6 +763,10 @@ impl Ball {
         let p_heavy = (p_miscontrol * 2.2).min(0.25);
 
         let roll = context.rng.unit_f32();
+        #[cfg(feature = "match-logs")]
+        if roll < p_miscontrol + p_heavy {
+            reception_diag::TOUCH_SPILLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if roll < p_miscontrol {
             FirstTouchOutcome::Miscontrol
         } else if roll < p_miscontrol + p_heavy {
@@ -869,12 +999,204 @@ impl Ball {
         events.add_ball_event(BallEvent::TakeMe(taker_id));
     }
 
+    /// **Is the delivery still going to reach the man it was played to?**
+    ///
+    /// The intended receiver holds an exclusive claim on a pass: nobody
+    /// else may take it while it is in flight, and `LooseBallChase`
+    /// truncates every other man's race at his collection point
+    /// ([`ChasePath::end_at`]). That is right while the ball is on its
+    /// way to him and indefensible once it is not — and because the
+    /// claim never expired, a sprayed or mis-weighted delivery stayed
+    /// his however far from him it ended up, so he simply ran after it
+    /// and completed the pass. `try_pass_target_claim` re-tests his
+    /// distance to the ball every tick, which makes it a CHASE test
+    /// rather than a catch test.
+    ///
+    /// That is why the passer's execution was worth nothing. Measured
+    /// with `OF_PIN=passing:20:1:out`, a 19-point swing in the attribute
+    /// across a whole side moved team pass accuracy +0.6pp against a
+    /// 0.5pp noise floor; driving the mean arrival error to 3.3 m, more
+    /// than double `CONTROL_DISTANCE`, left it flat at 87.4%.
+    ///
+    /// The test is the ball's own projected arrival against the spot the
+    /// receiver is running to. One predicate covers every way a
+    /// delivery can fail to find him — sprayed wide, overhit through
+    /// him, underhit short — because all three are the same fact about
+    /// where the ball is going to end up. Losing the privilege is not
+    /// losing the ball: he is usually still the nearest man and wins the
+    /// loose-ball election anyway. It stops being UNCONTESTED, which is
+    /// the whole of the difference.
+    fn delivery_reaches_its_man(&self, receiver: Option<&MatchPlayer>) -> bool {
+        let Some(aim) = self.pending_pass_aim else {
+            return true;
+        };
+        // Two anchors, because a pass is not struck to STOP on its man —
+        // it is struck to run through him and be collected in stride
+        // (`BallRoll::range` is most of a pitch for a firm ball). While
+        // the delivery is still short of the aim point that spot is what
+        // it has to find; once it is past, the only question left is
+        // whether it is still passing the man himself. Measured with one
+        // anchor, 37% of all passes were ruled overrun at a mean 12 m
+        // past an aim point the receiver was standing beside.
+        let reach = Self::delivery_reach();
+        if let Some(receiver) = receiver {
+            if self.travel_passes_within(receiver.position, reach) {
+                return true;
+            }
+        }
+        // Still short of him: the aim point is what the ball has to find.
+        // Closest approach rather than the finishing point, so an underhit
+        // delivery that dies before it gets there fails on the same test
+        // as one sprayed wide — no branch per kind of bad pass.
+        let reaches = self.travel_passes_within(aim, reach);
+        #[cfg(feature = "match-logs")]
+        if !reaches {
+            use std::sync::atomic::Ordering;
+            let d = reception_diag::OVERRUN_AGE.fetch_add(
+                self.current_tick_cached
+                    .saturating_sub(self.last_release_tick),
+                Ordering::Relaxed,
+            );
+            let _ = d;
+            let flat = Vector3::new(self.position.x, self.position.y, 0.0);
+            let cm = |v: f32| (v * 100.0) as u64;
+            reception_diag::OVERRUN_BALL_AIM_X100
+                .fetch_add(cm((flat - aim).norm()), Ordering::Relaxed);
+            reception_diag::OVERRUN_SPEED_X100.fetch_add(
+                cm(Vector3::new(self.velocity.x, self.velocity.y, 0.0).norm()),
+                Ordering::Relaxed,
+            );
+            if let Some(receiver) = receiver {
+                let man = Vector3::new(receiver.position.x, receiver.position.y, 0.0);
+                reception_diag::OVERRUN_MAN_AIM_X100
+                    .fetch_add(cm((man - aim).norm()), Ordering::Relaxed);
+                reception_diag::OVERRUN_MAN_BALL_X100
+                    .fetch_add(cm((man - flat).norm()), Ordering::Relaxed);
+            }
+            if self.position.z > 0.5 {
+                reception_diag::OVERRUN_AIRBORNE.fetch_add(1, Ordering::Relaxed);
+            }
+            let heading = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+            if let (Some(h), Some(t)) = (
+                heading.try_normalize(1.0e-4),
+                (aim - flat).try_normalize(1.0e-4),
+            ) {
+                let deg = h.dot(&t).clamp(-1.0, 1.0).acos().to_degrees();
+                reception_diag::OVERRUN_ANGLE_X100.fetch_add(cm(deg), Ordering::Relaxed);
+            }
+        }
+        reaches
+    }
+
+    /// How far off his line a delivery may run and still be counted as
+    /// coming to the man it was played to.
+    ///
+    /// Deliberately wider than `CONTROL_DISTANCE`: that is the radius at
+    /// which he can CONTROL the ball standing still, and a footballer
+    /// will happily chase one several metres off his line. This is the
+    /// bar for keeping his EXCLUSIVE claim, so it has to be the generous
+    /// question — and `CONTROL_DISTANCE` is already that question asked
+    /// of the delivery rather than of the man, so the two are the same
+    /// number and not two that have to be kept in step.
+    ///
+    /// Titrated against the population it has to leave standing:
+    ///
+    /// ```text
+    ///   reach   expiries   team pass accuracy   (real ~85%)
+    ///     36u      3.9%          87.4%
+    ///     24u      5.9%          87.6%
+    ///     12u      9.0%          86.4%
+    ///      8u     16.1%          81.3%
+    /// ```
+    ///
+    /// `OF_PASS_REACH=<u>` overrides; a very large value disarms it.
+    fn delivery_reach() -> f32 {
+        static REACH: OnceLock<f32> = OnceLock::new();
+        *REACH.get_or_init(|| {
+            var("OF_PASS_REACH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(CONTROL_DISTANCE)
+        })
+    }
+
+    /// Does the ball's remaining travel ever come within `reach` of
+    /// `point`? The travel is the straight run to wherever it would end
+    /// up untouched, so this is a point-to-segment distance.
+    fn travel_passes_within(&self, point: Vector3<f32>, reach: f32) -> bool {
+        let from = Vector3::new(self.position.x, self.position.y, 0.0);
+        let travel = self.projected_arrival() - from;
+        let len_sq = travel.norm_squared();
+        let along = if len_sq <= f32::EPSILON {
+            0.0
+        } else {
+            ((point - from).dot(&travel) / len_sq).clamp(0.0, 1.0)
+        };
+        let closest = from + travel * along;
+        let dx = closest.x - point.x;
+        let dy = closest.y - point.y;
+        dx * dx + dy * dy <= reach * reach
+    }
+
+    /// Where the ball ends up if nobody touches it: the landing spot
+    /// while it is in the air, otherwise the end of its roll.
+    fn projected_arrival(&self) -> Vector3<f32> {
+        // Same sill as `is_delivery_spent`: anything with height left is
+        // still arriving.
+        const AIRBORNE: f32 = 0.5;
+        let velocity = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+        let speed = velocity.norm();
+        // A lofted delivery does not finish where it lands — it lands and
+        // RUNS ON, and a ball flighted to drop in front of its man and
+        // roll to him is the most ordinary pass in football. Stopping the
+        // projection at the landing spot called all of them misses: 84%
+        // of every expiry was an airborne ball, at a mean 28.9 degrees
+        // off a line it was in fact going to reach.
+        let start = if self.position.z > AIRBORNE {
+            self.cached_landing_position
+        } else {
+            Vector3::new(self.position.x, self.position.y, 0.0)
+        };
+        if speed <= BallRoll::STOPPED {
+            return start;
+        }
+        start + (velocity / speed) * BallRoll::range(speed)
+    }
+
     fn try_pass_target_claim(
         &mut self,
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // **A pass that is not going to reach him stops being his.**
+        //
+        // Checked before the claim because everything below — and the
+        // whole in-flight exclusion window around it — exists to protect
+        // a delivery genuinely travelling to a named man, and nothing in
+        // the engine used to ask whether it still was.
+        // Only a LIVE privilege can expire. A deflection, a block or a
+        // body contact nulls `pass_target_player_id` on its own and
+        // leaves `pending_pass_aim` standing until the window closes, so
+        // asking this question without a target measures a ball that
+        // stopped being a pass some time ago — and it is travelling
+        // somewhere else by definition.
+        let target = self
+            .pass_target_player_id
+            .and_then(|id| players.iter().find(|p| p.id == id));
+        if target.is_some() && !self.delivery_reaches_its_man(target) {
+            #[cfg(feature = "match-logs")]
+            reception_diag::DELIVERY_OVERRUN
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.pass_target_player_id = None;
+            // The exclusion window goes with the privilege it was
+            // protecting. Left standing it would be strictly worse than
+            // before: the ball would fly on as nobody's AND stay
+            // untouchable until it came to rest.
+            self.flags.in_flight_state = 0;
+            self.check_ball_ownership(context, players, events);
+            return;
+        }
         // Check if pass target can claim the ball
         if let Some(target_id) = self.pass_target_player_id {
             if let Some(target_player) = players.iter().find(|p| p.id == target_id) {

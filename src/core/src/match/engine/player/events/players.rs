@@ -2667,6 +2667,42 @@ impl PlayerEventDispatcher {
         })
     }
 
+    /// Size of the targeting-error budget between the best and worst
+    /// passer in the game, in game units before distance scaling.
+    ///
+    /// Set for physical honesty, NOT to buy an outcome: 16 lands the
+    /// measured population mean arrival error at 7.0u (0.88 m) across
+    /// every pass including the long and pressured ones. Pushing it
+    /// further does move the skill response, but only by making the
+    /// deliveries unrealistic — 31.6 reads 1.36 m mean and still moves
+    /// team pass accuracy barely 2pp, because the receiver chases the
+    /// ball rather than catching it where it lands. See the curve at
+    /// its use site for why that ceiling exists.
+    const PASS_ERROR_SPREAD: f32 = 16.0;
+
+    /// Scales the lead a pass is played in front of its receiver's run.
+    /// `OF_PASS_LEAD=0` aims straight at him — the control for asking how
+    /// much of a wayward delivery is the LEAD rather than the passer.
+    fn pass_lead_scale() -> f32 {
+        static SCALE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SCALE.get_or_init(|| {
+            std::env::var("OF_PASS_LEAD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.0)
+        })
+    }
+
+    fn pass_error_spread() -> f32 {
+        static SPREAD: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SPREAD.get_or_init(|| {
+            std::env::var("OF_PASS_SPREAD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(Self::PASS_ERROR_SPREAD)
+        })
+    }
+
     /// How far the forced-miss rolls swing either side of
     /// `POPULATION_EXECUTION` for the best and worst finisher in the
     /// game. CENTRED on the population anchor, so this is a spread, not
@@ -2851,7 +2887,7 @@ impl PlayerEventDispatcher {
         let lead_ticks = if event_model.target_is_space {
             0.0
         } else {
-            flight_time_est * lead_fraction
+            flight_time_est * lead_fraction * Self::pass_lead_scale()
         };
         let ideal_target = receiver_pos + receiver_velocity * lead_ticks;
 
@@ -2860,37 +2896,67 @@ impl PlayerEventDispatcher {
         let ideal_pass_vector = ideal_target - pass_origin;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
-        // Skill-based targeting error. The accuracy_factor is the
-        // overall passing × concentration product; everything below
-        // shapes how much positional error gets applied to the actual
-        // pass target.
-        let accuracy_factor = (overall_quality * skills.concentration).clamp(0.0, 1.0);
+        // Skill-based targeting error.
+        //
+        // Concentration MODULATES the passing composite rather than
+        // multiplying it down. As a bare product, `accuracy_factor` was
+        // quadratic in a uniform attribute set — an all-10 player read
+        // 0.24, an all-14 player 0.46 — so the entire population sat
+        // bunched at the top of the error curve and only the last few
+        // attribute points bought anything. Keeping the band at
+        // 0.70..1.00 leaves concentration a real say (a lapse is worth
+        // 30% of your accuracy) without collapsing the scale everyone
+        // else is measured on.
+        let accuracy_factor =
+            (overall_quality * (0.70 + 0.30 * skills.concentration)).clamp(0.0, 1.0);
 
         // Distance-based error: longer passes have more positional error.
         // Curve steepened so 20u passes are near-perfect for skilled
         // players, while 200u passes lose significant accuracy.
         let distance_error_factor = (horizontal_distance / 250.0).clamp(0.1, 1.8);
 
-        // Max error: shaped on `(1 - accuracy_factor)^1.5` rather than
-        // on `(1 - precision)` linearly. The previous linear-in-precision
-        // formula collapsed the spread between *average* and *poor*
-        // passers (both landing ~5.5u) — a poor passer was no worse
-        // than an average one, which let low-skill players hide inside
-        // possession-dominant teams. The exponent restores skill spread:
+        // **The error has to be able to miss.**
         //
-        //   accuracy_factor 0.81 (elite):    max_err ≈ 1.0u
-        //   accuracy_factor 0.50 (good):     max_err ≈ 3.5u
-        //   accuracy_factor 0.30 (average):  max_err ≈ 5.5u
-        //   accuracy_factor 0.10 (poor):     max_err ≈ 8.0u
+        // Everything downstream of this number — the receiver's claim at
+        // `CONTROL_DISTANCE`, the first-touch stretch term, the
+        // interception lane — reads a ball that is already at the
+        // receiver's feet, so an error budget that cannot clear 12u is
+        // an error budget that cannot change an outcome. The previous
+        // `shortfall^1.5 * 9.0` topped out at 9.3u BEFORE distance
+        // scaling and ~1.2 m after it at a typical 22 m pass: measured
+        // with `OF_PIN=passing:20:1:out`, a 19-point swing in the
+        // attribute across a whole side moved team pass accuracy
+        // **0.6pp**, and pinning the whole passing / technique / vision
+        // / concentration composite moved it the same 0.6pp. The
+        // attribute was decorative.
         //
-        // Distance scaling still applies on top, so long passes by
-        // poor passers stretch toward ~14u of error — close to but
-        // still inside the 40u receiver claim radius, so completion
-        // rates don't collapse, but the offset is large enough that
-        // first-touch rolls trigger more often on receive (poor pass
-        // arrival → harder control → more miscontrols → lower rating).
+        // The exponent shapes where the cost lands — 1.8 keeps the top
+        // half of the range cheap (a good passer's error grows slowly)
+        // and makes the bottom expensive. At the mean 22 m pass, mean
+        // radial arrival error by uniform attribute level:
+        //
+        //   20 → 0.03 m    16 → 0.13 m    14 → 0.22 m
+        //   10 → 0.44 m     6 → 0.70 m     1 → 1.03 m
+        //
+        // `MatchStandard::shift` keeps this peer-relative, so a
+        // fourth-tier passer is judged against fourth-tier football and
+        // the pyramid stays flat — the spread is WITHIN a match, which
+        // is where it was missing. `OF_PASS_SPREAD=<f32>` overrides.
+        //
+        // ⚠ This curve is NOT what makes passing skill matter, and
+        // nothing here should be titrated as if it were.
+        // `try_pass_target_claim` tests the receiver's distance to the
+        // ball EVERY TICK while he runs at it, so the delivery does not
+        // have to arrive near him — it has to arrive somewhere he can
+        // get to before the window closes. Measured: raising the budget
+        // until the mean arrival error was 3.3 m, more than double
+        // `CONTROL_DISTANCE`, left team pass accuracy at 87.4% — dead
+        // flat. Targeting error buys TIME, not turnovers. Until the
+        // target's claim expires when the ball has overrun him, the
+        // ceiling on this whole channel is ~2pp.
         let shortfall = (1.0 - accuracy_factor).clamp(0.0, 1.0);
-        let base_max_position_error = (0.3 + shortfall.powf(1.5) * 9.0) * distance_error_factor;
+        let skill_budget = 0.3 + shortfall.powf(1.8) * Self::pass_error_spread();
+        let base_max_position_error = skill_budget * distance_error_factor;
 
         // Crossing-specific error multiplier. Crosses are a distinct
         // skill from open-play passing — a low-crossing winger sails
@@ -2992,7 +3058,6 @@ impl PlayerEventDispatcher {
                         ));
                 let transmission =
                     Self::press_transmission(skills.composure, skills.technique, skills.passing);
-                let skill_budget = 0.3 + shortfall.powf(1.5) * 9.0;
                 max_position_error + press01 * transmission * skill_budget * Self::pass_press_gain()
             } else {
                 max_position_error
@@ -3021,6 +3086,13 @@ impl PlayerEventDispatcher {
         // target, so it arrives where it was meant to.
         field.ball.pending_pass_error =
             (target_error_x * target_error_x + target_error_y * target_error_y).sqrt();
+        // The spot the receiver is running to, which is what the ball
+        // has to reach for the pass to stay his. Kept alongside the
+        // error rather than derived from it because the ball's ARRIVAL
+        // misses for reasons the targeting jitter never sees — a
+        // mis-weighted strike dies short or runs through, and that is
+        // as much a bad pass as a sprayed one.
+        field.ball.pending_pass_aim = Some(ideal_target);
 
         // Calculate actual target with error
         let mut actual_target = Vector3::new(
@@ -3861,6 +3933,9 @@ impl PlayerEventDispatcher {
             // Single completion path, shared with `BallEvent::PassCompleted`
             // — increments `passes_completed`, classifies progressive /
             // cross / box-entry, and clears the metadata.
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::ownership::reception_diag::CREDIT_CONTROL
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Self::credit_completed_pass(player_id, passer_id, field, context);
             field
                 .ball

@@ -478,11 +478,23 @@ impl<'a> ClubScan<'a> {
         let country_id = self.country_id;
         let target = Self::pick_target(assignment, matching, config);
 
-        let existing_obs = assignment
-            .observations
-            .iter()
-            .find(|o| o.player_id == target.player_id);
-        let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
+        // How often this scout has watched the man, read off the department's
+        // durable file rather than the assignment's own ledger. An assignment
+        // retires after its first report, so its ledger never records a second
+        // viewing — reading it pinned every pool report at the
+        // single-observation confidence and put the meeting bar out of reach.
+        let obs_count = assignment
+            .scout_staff_id
+            .and_then(|sid| self.club.transfer_plan.find_monitoring(sid, target.player_id))
+            .map(|m| m.times_watched as u32)
+            .unwrap_or_else(|| {
+                assignment
+                    .observations
+                    .iter()
+                    .find(|o| o.player_id == target.player_id)
+                    .map(|o| o.observation_count)
+                    .unwrap_or(0)
+            });
 
         // Region penalty blends structural knowledge (in known_regions?)
         // with empirical experience (familiarity, 0-100). A veteran
