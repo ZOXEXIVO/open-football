@@ -112,6 +112,12 @@ impl<'b> BallOperationsImpl<'b> {
         }
     }
 
+    /// **Not "the ball has been passed".** A tick countdown armed on a
+    /// release AND on an ordinary claim (30), a contested gain (100) and
+    /// foul protection (150) — so it is true for up to three seconds
+    /// after a man simply takes the ball, and it says nothing about
+    /// height. Ask `is_owned` for possession and the ball's `z` for
+    /// aerial.
     #[inline]
     pub fn is_in_flight(&self) -> bool {
         self.ctx.tick_context.ball.is_in_flight_state > 0

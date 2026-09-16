@@ -1,8 +1,9 @@
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::team::WideChannel;
@@ -39,14 +40,23 @@ pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Winning it is not an off-ball situation. Without this the
+        // ladder below ran to completion for a defender holding the ball
+        // and `ctx.ball().distance() < 150.0` is trivially true for him,
+        // so he deterministically reached `Marking` or `Intercepting`.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         // Attacking corner: centre-backs push up to attack the delivery
         // (self-terminates the instant the corner is over).
-        if !ctx.player.has_ball(ctx)
-            && ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_central_defender()
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_central_defender()
             && ctx.ball().is_team_attacking_corner()
         {
             return Some(StateChangeResult::with_defender_state(
@@ -82,18 +92,8 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         // BOX EMERGENCY — ball is in our penalty area with an opposing
         // carrier. Break shape and engage. The two closest defenders
         // attack; the rest hold line so the far side isn't exposed.
-        if ctx.player().defensive().is_box_emergency_for_me() {
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                let d = carrier.distance(ctx);
-                if d < 25.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
-            }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // STEP UP — attacker is approaching the penalty area and I'm
@@ -140,11 +140,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             // any teammate. Otherwise I hold the line while the closer
             // defender engages. Stops the whole back four lunging at
             // the same carrier.
-            let is_primary = matches!(
-                ctx.player().defensive().defensive_role_for_ball_carrier(),
-                DefensiveRole::Primary
-            );
-            if distance < 25.0 && is_primary {
+            if TackleEngagement::should_commit(ctx, distance) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));

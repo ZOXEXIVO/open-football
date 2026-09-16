@@ -6,6 +6,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfieldPlay, MidfielderCondition,
 };
 use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -15,7 +16,6 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const MIN_STAY_TIME: u64 = 60; // Minimum ticks before allowing non-urgent exit to Running
 /// Width of the vertical channels a runner attacks (~10 m). Was 15u —
@@ -41,10 +41,12 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             let ball_distance = ctx.ball().distance();
 
             // Very close — tackle reactively (always urgent, ignore min stay)
-            if ball_distance < TACKLE_RANGE {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Tackling,
-                ));
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Tackling,
+                    ));
+                }
             }
 
             // Only the best-positioned player presses — others hold shape

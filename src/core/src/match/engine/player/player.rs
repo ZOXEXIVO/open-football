@@ -186,7 +186,7 @@ pub struct MatchPlayer {
     /// `CONTACT` (10u = 1.25 m). So the cadence was counting the RUN and
     /// the challenge together.
     ///
-    /// Two things followed, and both are in the census. `is_decision_tick`
+    /// Two things followed, and both are in the census. `is_eligible`
     /// is `% DECISION_INTERVAL_TICKS`, so the documented "entry always
     /// counts" roll fired while he was still three metres away with
     /// `reach` at its floor, and was then discarded by the distance guard
@@ -805,7 +805,7 @@ impl MatchPlayer {
 
     /// Advance [`Self::contact_ticks`] and [`Self::stretch_ticks`].
     /// Called once per AI tick from `update()`, before the state machine
-    /// runs, so a state asking `TackleDecision::is_decision_tick` this
+    /// runs, so a state asking `TackleDecision::is_eligible` this
     /// tick sees a clock that already includes it.
     ///
     /// "In contact" is deliberately the same question the `Tackling`
@@ -944,7 +944,7 @@ impl MatchPlayer {
     ) {
         self.tick_tackle_cooldown();
         // Before the state machine, so a `Tackling` state asking
-        // `TackleDecision::is_decision_tick` this tick sees a clock that
+        // `TackleDecision::is_eligible` this tick sees a clock that
         // already counts it — which is what makes the roll happen on the
         // tick he arrives.
         self.tick_contact_clock(tick_context);

@@ -185,10 +185,21 @@ impl PlayerState {
                     | GoalkeeperState::Catching
                     | GoalkeeperState::Punching
             ),
+            // ⚠ `Tackling` IS NOT ONE. It is CONTAINMENT.
+            //
+            // The challenge itself resolves and transitions out inside a
+            // single `process()` — there is no multi-tick lunge to
+            // protect. What the flag actually froze was up to 600 ms of
+            // standing a carrier up, during which the defender was
+            // dropped from the chase table, ignored the loose-ball
+            // override and the `TakeMe` redirect, and was exempt from the
+            // transition-reversal hold that damps every other two-cycle
+            // in the engine. A man jockeying two metres from a ball that
+            // has just come loose is precisely the man who should go for
+            // it.
             PlayerState::Defender(s) => matches!(
                 s,
-                DefenderState::Tackling
-                    | DefenderState::Heading
+                DefenderState::Heading
                     | DefenderState::Clearing
                     | DefenderState::Shooting
                     | DefenderState::Crossing
@@ -196,8 +207,7 @@ impl PlayerState {
             ),
             PlayerState::Midfielder(s) => matches!(
                 s,
-                MidfielderState::Tackling
-                    | MidfielderState::Heading
+                MidfielderState::Heading
                     | MidfielderState::Shooting
                     | MidfielderState::DistanceShooting
                     | MidfielderState::Crossing
@@ -207,7 +217,6 @@ impl PlayerState {
                 ForwardState::Shooting
                     | ForwardState::Finishing
                     | ForwardState::Heading
-                    | ForwardState::Tackling
                     | ForwardState::Crossing
             ),
         }
@@ -998,9 +1007,18 @@ mod state_id_tests {
         // launched, must be shielded from the loose-ball redirects.
         assert!(PlayerState::Goalkeeper(GoalkeeperState::Diving).is_committed_action());
         assert!(PlayerState::Forward(ForwardState::Heading).is_committed_action());
-        assert!(PlayerState::Defender(DefenderState::Tackling).is_committed_action());
+        assert!(PlayerState::Defender(DefenderState::Clearing).is_committed_action());
         assert!(PlayerState::Midfielder(MidfielderState::Heading).is_committed_action());
         assert!(PlayerState::Injured.is_committed_action());
+
+        // …but `Tackling` is CONTAINMENT, not an action. The challenge
+        // resolves inside one `process()`; the state itself is a man
+        // standing his opponent up, and freezing him out of the chase for
+        // the 600 ms he does it is how a ball that comes loose at his feet
+        // goes to somebody else.
+        assert!(!PlayerState::Defender(DefenderState::Tackling).is_committed_action());
+        assert!(!PlayerState::Midfielder(MidfielderState::Tackling).is_committed_action());
+        assert!(!PlayerState::Forward(ForwardState::Tackling).is_committed_action());
 
         // Deliberative / positional states stay interruptible so nobody is
         // frozen out of a chase for a meaningful stretch of play.

@@ -1164,8 +1164,18 @@ impl PassEvaluator {
             if miss >= InterceptionContest::REACH {
                 continue;
             }
+            // He was priced from where he stands NOW, which is where he
+            // stood at the strike — the passer is deciding before it.
+            let perp = (to_opponent - direction * along).norm();
             risk = risk.max(InterceptionContest::chance(
-                miss, pace, arrives, 1.0, man.read, delivery, shift,
+                miss,
+                pace,
+                arrives,
+                1.0,
+                man.read,
+                delivery,
+                shift,
+                InterceptionContest::is_set_for_it(perp),
             ));
         }
         risk

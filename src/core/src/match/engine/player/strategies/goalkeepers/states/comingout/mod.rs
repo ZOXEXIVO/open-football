@@ -1,4 +1,5 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperDelivery,
     KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
@@ -369,12 +370,11 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             1.1 // Far distance - moderate urgency
         };
 
-        // Calculate interception point for moving balls
+        // Where the ball can actually be met — the same solve the chase
+        // election and the steering use, rather than a third one built on
+        // `pace` as if it were a velocity.
         let target_position = if ball_speed > 1.0 {
-            let keeper_sprint_speed =
-                ctx.player.skills.physical.pace * (1.0 + prof.rushing_out_profile * 0.55);
-            let time_to_intercept = ball_distance / keeper_sprint_speed.max(1.0);
-            ball_position + ball_velocity * time_to_intercept * 0.8
+            LooseBallChase::meeting_point(ctx, ball_position, ball_velocity)
         } else {
             ball_position
         };
@@ -457,26 +457,27 @@ impl GoalkeeperComingOutState {
         let keeper_to_ball = (ball_position - keeper_position).magnitude();
         let opponent_to_ball = (ball_position - opponent_position).magnitude();
 
-        // Keeper sprint speed reads raw pace + acceleration — both are
-        // direct kinematic skills, fatigue is already folded in via the
-        // engine's `max_speed_with_condition` clamp. The keeper's
-        // *decision* to commit (anticipation, agility, hands) is folded
-        // into `gk_rush_out` below; this branch is the foot-race math.
-        let keeper_pace = ctx.player.skills.physical.pace;
+        // ⚠ Speeds are u/tick, not attributes. This raced `pace * (1 +
+        // acceleration)` on both sides — a number around 20 against a
+        // real ceiling of 0.63 — so every time below was ~30x short and
+        // the ball-lead it bought was centimetres. `acceleration` keeps
+        // its edge as a multiplier on the real speed, which is what it
+        // is: how quickly the top speed is reached.
         let keeper_acceleration = ctx.player.skills.physical.acceleration / 20.0;
-        let opponent_pace = ctx.player().skills(opponent.id).physical.pace;
         let opponent_acceleration = ctx.player().skills(opponent.id).physical.acceleration / 20.0;
 
-        let keeper_sprint_speed = keeper_pace * (1.0 + keeper_acceleration * 0.5);
-        let opponent_sprint_speed = opponent_pace * (1.0 + opponent_acceleration * 0.3);
+        let keeper_sprint_speed =
+            ctx.player.max_speed_with_condition_cached() * (1.0 + keeper_acceleration * 0.5);
+        let opponent_sprint_speed = ctx.tick_context.positions.players.max_speed(opponent.id)
+            * (1.0 + opponent_acceleration * 0.3);
 
         // If ball is moving, predict interception point
         let (keeper_distance, opponent_distance) = if ball_velocity.norm() > 1.0 {
             // Ball is moving - calculate interception distances
 
             // Simple prediction: where will ball be when keeper/opponent reaches it
-            let keeper_intercept_time = keeper_to_ball / keeper_sprint_speed.max(1.0);
-            let opponent_intercept_time = opponent_to_ball / opponent_sprint_speed.max(1.0);
+            let keeper_intercept_time = keeper_to_ball / keeper_sprint_speed.max(1e-3);
+            let opponent_intercept_time = opponent_to_ball / opponent_sprint_speed.max(1e-3);
 
             let keeper_intercept_pos = ball_position + ball_velocity * keeper_intercept_time;
             let opponent_intercept_pos = ball_position + ball_velocity * opponent_intercept_time;
@@ -491,8 +492,8 @@ impl GoalkeeperComingOutState {
         };
 
         // Time estimates with actual distances
-        let keeper_time = keeper_distance / keeper_sprint_speed.max(1.0);
-        let opponent_time = opponent_distance / opponent_sprint_speed.max(1.0);
+        let keeper_time = keeper_distance / keeper_sprint_speed.max(1e-3);
+        let opponent_time = opponent_distance / opponent_sprint_speed.max(1e-3);
 
         // Keeper foot-race advantage routed through the unified
         // rushing-out profile. Keeps the constant 1.2 hand advantage

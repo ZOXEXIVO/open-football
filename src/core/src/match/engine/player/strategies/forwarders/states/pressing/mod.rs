@@ -50,7 +50,12 @@ impl StateProcessingHandler for ForwardPressingState {
         // tackle cooldown, which `Tackling` answers by handing him back —
         // and the pair ran ~15k round trips a match with 98.8% of
         // `Forward: Tackling` visits lasting a single tick.
-        if ctx.ball().is_owned() && TackleEngagement::should_commit(ctx, ctx.ball().distance()) {
+        // `should_commit` takes CARRIER distance. This passed
+        // `ball().distance()`, which is 3-D and mixes the ball's METRE z
+        // with unit x/y — a different quantity in different units.
+        if let Some(carrier) = ctx.players().opponents().with_ball().next()
+            && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+        {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
             ));

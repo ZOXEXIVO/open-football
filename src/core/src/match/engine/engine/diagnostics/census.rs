@@ -802,3 +802,146 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         BoxPassDiag::note_voice(lane, aggregates.keeper_voice);
     }
 }
+
+/// **One attacking possession that reached the defending side's penalty
+/// area**, from the box touch to whatever ends it.
+///
+/// The symptom this whole pass exists for is an attacking side keeping
+/// the ball in and around the area for an unreasonable length of time,
+/// and no counter in the engine could see it: tackles, interceptions and
+/// clearances are all per-EVENT, and a defence can produce plenty of
+/// events while the ball never leaves. An episode is the exposure those
+/// rates have to be read against.
+///
+/// Per-MATCH state, held on [`MatchContext`], because matches run in
+/// parallel; only the finished episode is folded into the global
+/// histogram.
+#[derive(Default, Clone, Copy)]
+pub struct BoxEpisode {
+    /// Tick the episode opened. Zero means none is live.
+    start: u64,
+    /// The side keeping the ball.
+    team: u32,
+    /// Last tick the ball was inside the area, so a pass out and back is
+    /// one episode rather than two.
+    last_in_box: u64,
+    /// Attacking touches after the first — passes completed in and
+    /// around the area.
+    passes: u32,
+    /// Tick of the first defensive challenge, zero until there is one.
+    first_challenge: u64,
+    /// Who had it last, to notice a change of touch.
+    last_owner: u32,
+}
+
+/// How an episode ended, in the order the census reports them.
+pub struct BoxEpisodeEnd;
+
+impl BoxEpisodeEnd {
+    pub const REGAIN: usize = 0;
+    pub const SHOT: usize = 1;
+    pub const CLEARED: usize = 2;
+}
+
+impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    /// How long the ball may sit outside the area before the episode is
+    /// over — one second, so a pass out to the edge and back in is still
+    /// the same spell of pressure.
+    #[cfg(feature = "match-logs")]
+    const BOX_EPISODE_GRACE: u64 = 100;
+
+    /// Track the live box-possession episode and book it when it ends.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_episode(
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxEpisodeDiag;
+
+        let tick = context.current_tick();
+        let owner = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id));
+
+        // Whose area is the ball in? The referee's test, so this is the
+        // same geometry the restart award uses.
+        let in_left_box = context.penalty_area(true).contains(&field.ball.position);
+        let in_right_box = context.penalty_area(false).contains(&field.ball.position);
+
+        let live = context.box_episode.start != 0;
+        if !live {
+            // An episode opens on an attacking touch inside the box the
+            // toucher is attacking.
+            let Some(carrier) = owner else { return };
+            let Some(side) = carrier.side else { return };
+            let attacking_their_box = match side {
+                PlayerSide::Left => in_right_box,
+                PlayerSide::Right => in_left_box,
+            };
+            if !attacking_their_box {
+                return;
+            }
+            context.box_episode = BoxEpisode {
+                start: tick,
+                team: carrier.team_id,
+                last_in_box: tick,
+                passes: 0,
+                first_challenge: 0,
+                last_owner: carrier.id,
+            };
+            return;
+        }
+
+        let episode = &mut context.box_episode;
+        if in_left_box || in_right_box {
+            episode.last_in_box = tick;
+        }
+
+        // A defensive challenge, whether or not it wins anything.
+        if episode.first_challenge == 0
+            && field.players.iter().any(|p| {
+                p.team_id != episode.team
+                    && matches!(
+                        p.state,
+                        PlayerState::Defender(DefenderState::Tackling)
+                            | PlayerState::Midfielder(MidfielderState::Tackling)
+                            | PlayerState::Forward(ForwardState::Tackling)
+                    )
+            })
+        {
+            episode.first_challenge = tick;
+        }
+
+        let ending = match owner {
+            Some(p) if p.team_id != episode.team => Some(BoxEpisodeEnd::REGAIN),
+            Some(p) => {
+                if p.id != episode.last_owner {
+                    episode.passes += 1;
+                    episode.last_owner = p.id;
+                }
+                None
+            }
+            None => None,
+        };
+        let ending = ending
+            .or_else(|| {
+                field
+                    .ball
+                    .cached_shot_target
+                    .is_some()
+                    .then_some(BoxEpisodeEnd::SHOT)
+            })
+            .or_else(|| {
+                (tick.saturating_sub(episode.last_in_box) > Self::BOX_EPISODE_GRACE)
+                    .then_some(BoxEpisodeEnd::CLEARED)
+            });
+
+        let Some(ending) = ending else { return };
+        let duration = tick.saturating_sub(episode.start);
+        let to_challenge = (episode.first_challenge != 0)
+            .then(|| episode.first_challenge.saturating_sub(episode.start));
+        BoxEpisodeDiag::note(duration, episode.passes, to_challenge, ending);
+        context.box_episode = BoxEpisode::default();
+    }
+}

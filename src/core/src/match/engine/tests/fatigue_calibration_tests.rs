@@ -23,7 +23,6 @@
 
 use crate::PlayerSkills;
 use crate::club::player::builder::PlayerBuilder;
-use crate::r#match::{ActivityIntensity, MatchPlayer, MovementEffort};
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
 };
@@ -31,6 +30,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
     GoalkeeperSkillInputs, GoalkeeperSkillProfile,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::{ActivityIntensity, MatchPlayer, MovementEffort};
 use crate::shared::fullname::FullName;
 use crate::{
     PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,

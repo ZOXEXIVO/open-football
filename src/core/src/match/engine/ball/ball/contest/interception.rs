@@ -119,7 +119,7 @@ impl InterceptionContest {
     /// reachable. The passer refused lanes that were in fact open, and
     /// passes into the box fell 35% for midfielders while the balls he
     /// did play were cut out at 30% against a priced 50%.
-    const STEP_IN: f32 = 24.0;
+    pub(crate) const STEP_IN: f32 = 24.0;
     /// A driven ball is harder to take cleanly: the chance halves at
     /// 3 u/tick (37 m/s), so a 1 u/tick pass keeps three quarters of it.
     const SPEED_DRAG: f32 = 0.33;
@@ -146,14 +146,70 @@ impl InterceptionContest {
     /// held where it was while the rolls move to where the ball actually
     /// passes a man.
     ///
-    /// Titrated on the level sweep (60 fixtures at each of levels 4-18),
+    /// Titrated on the level sweep (fixtures at each of levels 4-18),
     /// which is the reading that matters because it shows the rate AND
     /// whether it walks up the pyramid. At 0.70 the contest ran 50-67
     /// interceptions a team against the 30-38 the one-roll-per-pass
     /// model ran over the same sweep.
-    const GAIN: f32 = 0.40;
+    ///
+    /// ⚠ RE-TITRATED 0.40 → 0.30, AND THE GEOMETRY IS WHY.
+    ///
+    /// Two contests the contest did not used to hold were added: a man
+    /// inside the receiver's last stride and a half now contests the
+    /// overlap instead of being removed from it, and a man already
+    /// standing in the lane when it was struck runs the short read clock.
+    /// Both are physical, both are wanted, and both raise the number of
+    /// encounters rather than the rate of any one of them — measured, the
+    /// `60+` band's probability held at 0.152 → 0.155 while its rolls went
+    /// 424 → 475 a match. The sweep drifted to 36.6-51.9 with the gain
+    /// left alone.
+    ///
+    /// This constant is what the sweep is titrated with, so it is what
+    /// moves. Removing the new contacts to hold the total instead would
+    /// be putting the geometry back.
+    const GAIN: f32 = 0.30;
     /// Nothing is a certainty.
     pub(crate) const CAP: f32 = 0.95;
+    /// How much of the read a man played THROUGH does not have to do.
+    ///
+    /// [`Self::READ_QUICK`]/[`Self::READ_SLOW`] price a reaction AND a
+    /// step, which is the right clock for a man who has to go to the
+    /// lane. A ball rolled between a standing defender's feet asks him
+    /// for the foot only, and he is not made ready by the same clock.
+    const SET_READ_MULT: f32 = 0.50;
+
+    /// **Was he standing in the lane when it was struck?**
+    ///
+    /// `perp_at_strike` is his distance from the pass line at the moment
+    /// the ball left the boot — not where he is when it draws level with
+    /// him. That distinction is the whole carve-out: asked at the
+    /// crossing it is not a distinction at all, because a roll only
+    /// happens inside [`Self::REACH`] (8u) and the census mean miss at a
+    /// roll is 3.2u, so three quarters of every roll in the match would
+    /// take the short clock. Measured that way it was worth **+9.9
+    /// interceptions per team per match** — a near-global halving of the
+    /// read wearing a carve-out's clothes.
+    ///
+    /// Strictly inside the claim band, because [`Self::closing_miss`]
+    /// floors at exactly `LOOSE_CLAIM_DISTANCE`.
+    #[inline]
+    pub fn is_set_for_it(perp_at_strike: f32) -> bool {
+        perp_at_strike < LOOSE_CLAIM_DISTANCE
+    }
+
+    /// What the chase election waits out before it will send this man
+    /// after a pass: [`Self::typical_delay`], halved for one already
+    /// standing in the lane. One clock for both halves of the question,
+    /// so a defender who is eligible to GO is also ready to PLAY it.
+    #[inline]
+    pub fn chase_delay(perp: f32) -> f32 {
+        Self::typical_delay()
+            * if Self::is_set_for_it(perp) {
+                Self::SET_READ_MULT
+            } else {
+                1.0
+            }
+    }
 
     /// Ticks after a strike before a man has read the ball.
     ///
@@ -207,6 +263,9 @@ impl InterceptionContest {
     /// RAW, because the duel scores the difference and a difference is
     /// already peer-relative. `shift` is [`MatchStandard::shift`], and it
     /// is what keeps the readiness clock from walking up the pyramid.
+    /// `set` is [`Self::is_set_for_it`] on his distance from the lane AT
+    /// THE STRIKE — the caller owns that reading, because only the caller
+    /// knows where he was standing then.
     #[allow(clippy::too_many_arguments)]
     pub fn chance(
         miss: f32,
@@ -216,11 +275,13 @@ impl InterceptionContest {
         read: f32,
         delivery: f32,
         shift: f32,
+        set: bool,
     ) -> f32 {
         let stretch = (miss / Self::REACH).clamp(0.0, 1.0);
         let reach = 1.0 - stretch * stretch;
         let pace = 1.0 / (1.0 + speed.max(0.0) * Self::SPEED_DRAG);
-        let half = Self::read_delay(MatchStandard::peer(read, shift)) * 0.5;
+        let set = if set { Self::SET_READ_MULT } else { 1.0 };
+        let half = Self::read_delay(MatchStandard::peer(read, shift)) * set * 0.5;
         let t = ((ticks_since_strike - half) / half).clamp(0.0, 1.0);
         let ready = t * t * (3.0 - 2.0 * t);
         let skill = InterceptionDuel::advantage(read, delivery);
@@ -296,11 +357,8 @@ impl Ball {
         else {
             return;
         };
-        if (self.position.x - target.position.x).hypot(self.position.y - target.position.y)
-            <= CONTROL_DISTANCE
-        {
-            return;
-        }
+        let receiver_gap =
+            (self.position.x - target.position.x).hypot(self.position.y - target.position.y);
 
         // Below this the ball is trickling, not travelling, and the claim
         // scan owns it. 0.25 u/tick is 3.1 m/s.
@@ -337,7 +395,11 @@ impl Ball {
             if along > 0.0 || along < -(speed + STRIDE) {
                 continue;
             }
-            let miss = (dx * dx + dy * dy).sqrt();
+            // His CLOSEST approach, not his distance at the sample the
+            // crossing happened to be caught on. The along-axis window is
+            // a tick wide, so a driven ball put up to half a metre of
+            // pure sampling error into the reach term.
+            let miss = (dx * dir_y - dy * dir_x).abs();
             #[cfg(feature = "match-logs")]
             if since_strike >= 20.0 {
                 if let Some(census) = self.lane_census.as_mut() {
@@ -345,6 +407,17 @@ impl Ball {
                 }
             }
             if miss > InterceptionContest::REACH {
+                continue;
+            }
+            // ⚠ THE LAST STRIDE AND A HALF IS A CONTEST, NOT A GIFT.
+            //
+            // The whole function used to return once the ball was within
+            // `CONTROL_DISTANCE` (12u) of its intended man, which removes
+            // every defender from the last metre and a half whatever his
+            // own reach. Controlled reception and clean interception keep
+            // their separate reaches; where they overlap, the man who is
+            // physically closer to the ball has it.
+            if receiver_gap <= CONTROL_DISTANCE && miss > receiver_gap {
                 continue;
             }
             // One go, whatever the height: a ball over his head at the
@@ -355,6 +428,14 @@ impl Ball {
             if height_factor <= 0.0 {
                 continue;
             }
+            // Where he was standing when it was struck, so a man the ball
+            // is rolled THROUGH is told apart from one who ran into its
+            // line. Back-extrapolated from his own velocity, which is the
+            // only record of it the tick carries.
+            let was_there = player.position - player.velocity * since_strike;
+            let sx = was_there.x - self.last_release_position.x;
+            let sy = was_there.y - self.last_release_position.y;
+            let set = InterceptionContest::is_set_for_it((sx * dir_y - sy * dir_x).abs());
             let chance = InterceptionContest::chance(
                 miss,
                 speed,
@@ -363,6 +444,7 @@ impl Ball {
                 sc::interception(player, minute),
                 delivery,
                 shift,
+                set,
             );
             let fires = context.rng.unit_f32() < chance;
             #[cfg(feature = "match-logs")]
@@ -520,8 +602,15 @@ mod interception_contest_tests {
     /// The contest at the standard of football it is being played at —
     /// `shift` is zero for a mid-pyramid match, and the level sweep is
     /// what guards the rest.
+    /// A man who had to move to it: the ordinary case, and the one the
+    /// read clock is written for.
     fn chance(miss: f32, speed: f32, ticks: f32, height: f32, read: f32, delivery: f32) -> f32 {
-        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, 0.0)
+        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, 0.0, false)
+    }
+
+    /// …and one who was already standing in the lane when it was struck.
+    fn chance_set(miss: f32, speed: f32, ticks: f32, height: f32, read: f32, delivery: f32) -> f32 {
+        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, 0.0, true)
     }
 
     /// A ball through an even reader's feet is a real chance — not a
@@ -567,14 +656,40 @@ mod interception_contest_tests {
 
     /// Nothing at the instant of the strike, everything once he has read
     /// it: the presser the ball is played past is not an interceptor.
+    ///
+    /// Measured at a STRETCH, because a man the ball is rolled through
+    /// runs the shorter clock — see the test below.
     #[test]
     fn he_needs_time_to_read_it() {
-        assert_eq!(chance(0.0, 1.0, 0.0, 1.0, 1.0, 0.0), 0.0);
-        assert_eq!(chance(0.0, 1.0, 15.0, 1.0, 1.0, 0.0), 0.0);
-        let early = chance(0.0, 1.0, 30.0, 1.0, 0.5, 0.5);
-        let late = chance(0.0, 1.0, 100.0, 1.0, 0.5, 0.5);
+        let reach = InterceptionContest::REACH * 0.9;
+        assert_eq!(chance(reach, 1.0, 0.0, 1.0, 1.0, 0.0), 0.0);
+        assert_eq!(chance(reach, 1.0, 15.0, 1.0, 1.0, 0.0), 0.0);
+        let early = chance(reach, 1.0, 30.0, 1.0, 0.5, 0.5);
+        let late = chance(reach, 1.0, 100.0, 1.0, 0.5, 0.5);
         assert!(early < late * 0.2, "{early} vs {late}");
-        assert_eq!(late, chance(0.0, 1.0, 300.0, 1.0, 0.5, 0.5));
+        assert_eq!(late, chance(reach, 1.0, 300.0, 1.0, 0.5, 0.5));
+    }
+
+    /// …and the man who was ALREADY IN THE LANE when it was struck is
+    /// ready sooner than the man who had to go to it. The long clock
+    /// prices a reaction and a step; he only has to move the foot.
+    ///
+    /// ⚠ The reading is his distance from the lane AT THE STRIKE, not at
+    /// the crossing. Keyed to the crossing it is not a carve-out at all:
+    /// a roll only happens inside `REACH`, so almost every roll in the
+    /// match takes the short clock.
+    #[test]
+    fn a_man_already_in_the_lane_asks_less_of_his_read() {
+        assert!(InterceptionContest::is_set_for_it(0.0));
+        assert!(!InterceptionContest::is_set_for_it(
+            InterceptionContest::REACH * 0.9
+        ));
+        // Same geometry at the crossing, same everything: only whether he
+        // was standing there when it left the boot.
+        let stood = chance_set(0.0, 1.0, 20.0, 1.0, 0.5, 0.5);
+        let ran_in = chance(0.0, 1.0, 20.0, 1.0, 0.5, 0.5);
+        assert!(stood > 0.0, "a man set for it had no chance at all");
+        assert_eq!(ran_in, 0.0, "a man still closing is not ready that early");
     }
 
     /// The sharper reader is on it sooner — a third of a second for the
@@ -586,8 +701,9 @@ mod interception_contest_tests {
         assert!(InterceptionContest::read_delay(1.0) < InterceptionContest::read_delay(0.0));
         assert!((InterceptionContest::read_delay(1.0) - 35.0).abs() < 1e-6);
         assert!((InterceptionContest::read_delay(0.0) - 70.0).abs() < 1e-6);
-        let sharp = chance(0.0, 1.0, 30.0, 1.0, 0.9, 0.5);
-        let dull = chance(0.0, 1.0, 30.0, 1.0, 0.3, 0.5);
+        let reach = InterceptionContest::REACH * 0.9;
+        let sharp = chance(reach, 1.0, 30.0, 1.0, 0.9, 0.5);
+        let dull = chance(reach, 1.0, 30.0, 1.0, 0.3, 0.5);
         assert!(sharp > dull * 2.0, "{sharp} vs {dull}");
     }
 

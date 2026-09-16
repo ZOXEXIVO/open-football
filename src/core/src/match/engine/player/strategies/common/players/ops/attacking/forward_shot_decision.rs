@@ -1083,6 +1083,102 @@ pub mod mid_run_diag {
     pub static RECOV_GAP_X100: AtomicU64 = AtomicU64::new(0);
     pub static RECOV_LEAD_X100: AtomicI64 = AtomicI64::new(0);
 
+    /// **How long the ball stays in and around our area.**
+    ///
+    /// The exposure every defensive rate has to be read against: a back
+    /// line can produce plenty of tackles and interceptions while the
+    /// attack never actually has to leave. Bucketed by duration so the
+    /// tail — which is the reported symptom — survives the mean.
+    ///
+    /// Buckets are seconds: 0-1, 1-2, 2-3, 3-5, 5-10, 10+.
+    pub static EPISODE_BUCKETS: [AtomicU64; 6] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
+    /// Endings: regain, shot, cleared — see `BoxEpisodeEnd`.
+    pub static EPISODE_ENDINGS: [AtomicU64; 3] =
+        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static EPISODE_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static EPISODE_PASSES: AtomicU64 = AtomicU64::new(0);
+    pub static EPISODE_CHALLENGED: AtomicU64 = AtomicU64::new(0);
+    pub static EPISODE_TO_CHALLENGE: AtomicU64 = AtomicU64::new(0);
+
+    pub struct BoxEpisodeDiag;
+
+    impl BoxEpisodeDiag {
+        /// Upper edge of each duration bucket, in physics ticks (100/s).
+        const EDGES: [u64; 5] = [100, 200, 300, 500, 1000];
+
+        pub fn note(duration: u64, passes: u32, to_challenge: Option<u64>, ending: usize) {
+            let bucket = Self::EDGES
+                .iter()
+                .position(|edge| duration < *edge)
+                .unwrap_or(Self::EDGES.len());
+            EPISODE_BUCKETS[bucket].fetch_add(1, Ordering::Relaxed);
+            if let Some(slot) = EPISODE_ENDINGS.get(ending) {
+                slot.fetch_add(1, Ordering::Relaxed);
+            }
+            EPISODE_TICKS.fetch_add(duration, Ordering::Relaxed);
+            EPISODE_PASSES.fetch_add(passes as u64, Ordering::Relaxed);
+            if let Some(ticks) = to_challenge {
+                EPISODE_CHALLENGED.fetch_add(1, Ordering::Relaxed);
+                EPISODE_TO_CHALLENGE.fetch_add(ticks, Ordering::Relaxed);
+            }
+        }
+
+        /// `(episodes, mean seconds, share over 5 s, share over 10 s,
+        /// mean passes, challenged share, mean seconds to the first
+        /// challenge, [regain, shot, cleared] shares)`
+        pub fn totals() -> (u64, f32, f32, f32, f32, f32, f32, [f32; 3]) {
+            let counts: Vec<u64> = EPISODE_BUCKETS
+                .iter()
+                .map(|b| b.load(Ordering::Relaxed))
+                .collect();
+            let n: u64 = counts.iter().sum();
+            if n == 0 {
+                return (0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3]);
+            }
+            let share = |v: u64| v as f32 / n as f32;
+            let challenged = EPISODE_CHALLENGED.load(Ordering::Relaxed);
+            let endings = [
+                share(EPISODE_ENDINGS[0].load(Ordering::Relaxed)),
+                share(EPISODE_ENDINGS[1].load(Ordering::Relaxed)),
+                share(EPISODE_ENDINGS[2].load(Ordering::Relaxed)),
+            ];
+            (
+                n,
+                EPISODE_TICKS.load(Ordering::Relaxed) as f32 / n as f32 / 100.0,
+                share(counts[4] + counts[5]),
+                share(counts[5]),
+                EPISODE_PASSES.load(Ordering::Relaxed) as f32 / n as f32,
+                share(challenged),
+                if challenged == 0 {
+                    0.0
+                } else {
+                    EPISODE_TO_CHALLENGE.load(Ordering::Relaxed) as f32 / challenged as f32 / 100.0
+                },
+                endings,
+            )
+        }
+
+        pub fn reset() {
+            for b in EPISODE_BUCKETS.iter() {
+                b.store(0, Ordering::Relaxed);
+            }
+            for e in EPISODE_ENDINGS.iter() {
+                e.store(0, Ordering::Relaxed);
+            }
+            EPISODE_TICKS.store(0, Ordering::Relaxed);
+            EPISODE_PASSES.store(0, Ordering::Relaxed);
+            EPISODE_CHALLENGED.store(0, Ordering::Relaxed);
+            EPISODE_TO_CHALLENGE.store(0, Ordering::Relaxed);
+        }
+    }
+
     pub struct RecoveryDiag;
 
     impl RecoveryDiag {

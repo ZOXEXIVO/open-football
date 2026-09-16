@@ -4,6 +4,7 @@
 
 mod corner_setup_tests;
 mod effort_appetite_tests;
+mod engagement_contract_tests;
 mod fatigue_calibration_tests;
 mod friendly_recording_tests;
 mod goal_celebration_tests;

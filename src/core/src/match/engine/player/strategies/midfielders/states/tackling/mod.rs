@@ -1,9 +1,13 @@
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::{TackleDecision, TackleEngagement};
+use crate::r#match::player::strategies::common::states::{
+    TackleDecision, TackleEngagement, TackleOutcome,
+};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -11,8 +15,6 @@ use crate::r#match::{
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
-
-const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // ~1m — midfielder ball-winner contact range. Tightened from 12u after dev_match showed MID tackles at 21/match/team vs real ~4: the 12u "engagement" radius was a soft press circle, not a tackle zone. Real midfielders win the ball by getting CLOSE to the carrier; the 8u threshold matches the actual contact distance.
 
 #[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}
@@ -23,14 +25,6 @@ impl StateProcessingHandler for MidfielderTacklingState {
         crate::tackle_stats::MID_ENTRIES.fetch_add(1, Ordering::Relaxed);
 
         if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // CRITICAL: Don't try to claim ball if it's in protected flight state
-        // Transition OUT of tackling to avoid clustering around the ball carrier
-        if ctx.ball().is_in_flight() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -67,31 +61,21 @@ impl StateProcessingHandler for MidfielderTacklingState {
             ));
         }
 
-        // Closest-teammate duel gate. Midfielders were the single biggest
-        // tackle-event source (208/team/match vs real ~8) because 3-4 of
-        // them inside the 50u pressing radius simultaneously entered
-        // Tackling. Only the best-positioned one actually engages; the
-        // rest revert to Pressing to cover passing lanes.
-        // Entry condition only. `TackleEngagement::should_commit` already
-        // applies this before anyone is sent here, so re-checking it on
-        // every tick could only ever ABANDON a challenge already under
-        // way — and the designation is a tolerance band that swaps
-        // between team-mates tick to tick, so it did exactly that. A
-        // committed engagement now runs to contact or to `DISENGAGE`.
-        // …and the plan's own nomination WINS it — see
-        // `TackleEngagement::may_engage_carrier`.
-        if ctx.in_state_time == 0 && !TackleEngagement::may_engage_carrier(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
-            ));
-        }
-
         let opponents = ctx.players().opponents();
         let mut opponents_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponents_with_ball.next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
-            if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
+
+            // The shared break-off. This state's own exits are BALL
+            // distances of 80u and 150u, neither of which a carrier who
+            // has simply gone past his man ever trips.
+            if opponent_distance > TackleEngagement::DISENGAGE {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+            if opponent_distance <= TackleEngagement::CONTACT {
                 // JOCKEY FIRST — the same rule the defenders got, and for
                 // the same reason. Reaching contact range is not a reason
                 // to lunge; the cooldown alone was the limiter, so a
@@ -104,45 +88,22 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 //
                 // Declining keeps him in the state containing, exactly as
                 // it does for a defender.
-                if !TackleDecision::is_decision_tick(ctx)
+                // The licence is asked of the CHALLENGE, not of the entry
+                // tick — see `DefenderTacklingState`.
+                if !TackleEngagement::may_engage_carrier(ctx)
+                    || !TackleDecision::is_eligible(ctx)
                     || !ctx
                         .context
                         .rng
-                        .bernoulli(TackleDecision::commit_probability(ctx, opponent_distance))
+                        .bernoulli(TackleDecision::commits_now(ctx, opponent_distance))
                 {
                     return None;
                 }
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                let (tackle_success, committed_foul, foul_severity) =
-                    self.attempt_tackle(ctx, &opponent);
-                if tackle_success {
-                    // Double-check ball is not in flight before claiming.
-                    if !ctx.ball().is_in_flight() {
-                        #[cfg(feature = "match-logs")]
-                        crate::tackle_stats::MID_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-                        let mut result = StateChangeResult::with_midfielder_state_and_event(
-                            MidfielderState::Standing,
-                            Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
-                        );
-                        result.start_tackle_cooldown = true;
-                        return Some(result);
-                    }
-                } else if committed_foul {
-                    let mut result = StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
-                    );
-                    result.start_tackle_cooldown = true;
-                    return Some(result);
-                } else {
-                    // Missed tackle, no foul — still cooldown so we don't
-                    // re-attempt next tick
-                    let mut result =
-                        StateChangeResult::with_midfielder_state(MidfielderState::Pressing);
-                    result.start_tackle_cooldown = true;
-                    return Some(result);
-                }
+                let mut result = self.settle(ctx, self.attempt_tackle(ctx, &opponent));
+                result.start_tackle_cooldown = true;
+                return Some(result);
             }
         } else if self.can_intercept_ball(ctx) {
             // can_intercept_ball already checks is_in_flight
@@ -180,42 +141,44 @@ impl StateProcessingHandler for MidfielderTacklingState {
 }
 
 impl MidfielderTacklingState {
-    /// Attempts a tackle and returns whether it was successful and if a foul was committed.
-    /// Uses the unified midfielder profile's `tackle_profile` and
-    /// `discipline` instead of raw `(tackling+composure)/2` blends.
+    /// One resolved challenge, turned into the state change it implies.
+    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+        match outcome {
+            TackleOutcome::Won => {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::MID_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                )
+            }
+            TackleOutcome::Foul(severity) => StateChangeResult::with_midfielder_state_and_event(
+                MidfielderState::Standing,
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+            ),
+            TackleOutcome::Missed => {
+                StateChangeResult::with_midfielder_state(MidfielderState::Pressing)
+            }
+        }
+    }
+
+    /// `discipline` drives the foul model; the duel itself is the shared
+    /// composite pair every role resolves — see `defenders/tackling` for
+    /// why a peer-relative profile cannot be differenced against an
+    /// absolute carry score.
     fn attempt_tackle(
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool, FoulSeverity) {
+    ) -> TackleOutcome {
         let rng = &ctx.context.rng;
 
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
         let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
 
-        // Opponent carry profile via a dribble_attack-shaped blend.
-        // Without a direct MatchPlayer ref for the opponent we read the
-        // skill snapshot via the helper and apply the composite weights
-        // in-place; mirrors the structure of `sc::dribble_attack`.
-        let opp_helper = ctx.player();
-        let opponent_carry = {
-            let opp_skills = opp_helper.skills(opponent.id);
-            ((opp_skills.technical.dribbling / 20.0) * 0.30
-                + (opp_skills.technical.technique / 20.0) * 0.20
-                + (opp_skills.physical.agility / 20.0) * 0.20
-                + (opp_skills.physical.acceleration / 20.0) * 0.12
-                + (opp_skills.physical.balance / 20.0) * 0.10
-                + (opp_skills.mental.composure / 20.0) * 0.08)
-                .clamp(0.0, 1.0)
-        };
-
-        // Logistic success: tackle_profile vs opponent carry. Same trim
-        // as `defenders/tackling`: 3.0 → 2.4 sigmoid and cap 0.70 → 0.55.
-        // Equal-skill matchups still resolve at 0.50 so calibration-
-        // neutral. Asymmetric softening of the strong-mid-vs-weak-
-        // carrier rate that compounded with the defender tackle to
-        // crush weak teams' possession survival.
-        let raw_diff = mid_profile.tackle_profile - opponent_carry;
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let raw_diff =
+            sc::defensive_duel(ctx.player, minute) - TackleDecision::carrier_threat(ctx, opponent);
         let logistic = 1.0 / (1.0 + (-raw_diff * 2.4).exp());
         let success_chance = logistic.clamp(0.06, 0.55);
         let tackle_success = rng.random::<f32>() < success_chance;
@@ -269,29 +232,20 @@ impl MidfielderTacklingState {
             FoulSeverity::Normal
         };
 
-        (tackle_success, committed_foul, severity)
+        TackleOutcome::of(tackle_success, committed_foul, severity)
     }
 
+    /// See `DefenderTacklingState::can_intercept_ball` — one prediction
+    /// model, the one the movement layer uses.
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.ball().is_in_flight() {
+        if ctx.tick_context.ball.is_owned {
             return false;
         }
-
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let player_position = ctx.player.position;
-        let player_speed = ctx.player.skills.physical.pace;
-
-        if !ctx.tick_context.ball.is_owned && ball_velocity.magnitude() > 0.1 {
-            let time_to_ball = (ball_position - player_position).magnitude() / player_speed;
-            let ball_travel_distance = ball_velocity.magnitude() * time_to_ball;
-            let ball_intercept_position =
-                ball_position + ball_velocity.normalize() * ball_travel_distance;
-            let player_intercept_distance = (ball_intercept_position - player_position).magnitude();
-
-            player_intercept_distance <= TACKLE_DISTANCE_THRESHOLD
-        } else {
-            false
-        }
+        let meeting = LooseBallChase::meeting_point(
+            ctx,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+        );
+        (meeting - ctx.player.position).magnitude() <= TackleEngagement::CONTACT
     }
 }

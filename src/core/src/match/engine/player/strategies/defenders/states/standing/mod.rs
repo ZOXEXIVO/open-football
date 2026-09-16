@@ -1,8 +1,9 @@
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine,
 };
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
@@ -50,7 +51,6 @@ const MARKING_DISTANCE: f32 = 35.0; // Pick up attackers early
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const PRESSING_DISTANCE: f32 = 70.0; // Aggressive pressing range
 const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 60.0; // Very tight in own third
-const TACKLE_DISTANCE: f32 = 40.0; // Engage tackles from further out
 const BLOCKING_DISTANCE: f32 = 35.0; // Block shots from wider range
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
@@ -95,18 +95,8 @@ impl StateProcessingHandler for DefenderStandingState {
         // inside the box there's no time to run through it; the
         // half-tick the role reassignment takes is the half-tick the
         // forward uses to shoot.
-        if ctx.player().defensive().is_box_emergency_for_me() {
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                let d = carrier.distance(ctx);
-                if d < 25.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
-            }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // STEP UP — closest defender to a carrier approaching our
@@ -137,11 +127,7 @@ impl StateProcessingHandler for DefenderStandingState {
             // foul spike (multiple simultaneous tackle attempts with
             // independent foul rolls) and the "running in groups"
             // visual — the whole back line pulled out of shape.
-            let is_primary_or_emergency = matches!(
-                ctx.player().defensive().defensive_role_for_ball_carrier(),
-                DefensiveRole::Primary
-            ) || ctx.player().defensive().is_box_emergency_for_me();
-            if distance_to_opponent < TACKLE_DISTANCE && is_primary_or_emergency {
+            if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));

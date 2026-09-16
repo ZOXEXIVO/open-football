@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::PlayerSkills;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchField, PlayerSide};
 use nalgebra::Vector3;
@@ -152,6 +153,22 @@ impl PlayerFieldData {
     #[inline]
     pub fn has_player(&self, player_id: u32) -> bool {
         self.lookup_index(player_id).is_some()
+    }
+
+    /// Top speed in **units per physics tick**, condition-adjusted — the
+    /// same number the movement layer and the chase table race on.
+    ///
+    /// `skills.physical.pace` is a 1-20 ATTRIBUTE and is not a speed;
+    /// dividing a distance by it produces a tick count that is wrong by
+    /// more than an order of magnitude and, because the real relation is
+    /// affine (`0.36 + pace01 * 0.27`), the error does not cancel in a
+    /// ratio either: pace 5 against pace 20 is 4.00:1 as an attribute and
+    /// 1.51:1 as a speed.
+    #[inline]
+    pub fn max_speed(&self, player_id: u32) -> f32 {
+        self.lookup_index(player_id)
+            .map(|idx| unsafe { self.items.get_unchecked(idx) }.max_speed)
+            .unwrap_or(PlayerSkills::MIN_MAX_SPEED)
     }
 
     #[inline]

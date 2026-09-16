@@ -1,4 +1,3 @@
-use super::duel::PenaltyRisk;
 use crate::r#match::{DefensiveDuty, StateProcessingContext};
 
 /// Where a player's engagement with the ball carrier starts, where the
@@ -96,68 +95,37 @@ impl TackleEngagement {
         distance < Self::COMMIT && ctx.player.can_attempt_tackle() && Self::may_engage_carrier(ctx)
     }
 
-    /// Who is allowed to challenge the man on the ball.
+    /// **Who is allowed to challenge the man on the ball.**
     ///
-    /// ⚠ THE TWO DOORS WERE OPEN AT ONCE, AND THAT IS WHY THE LADDER
-    /// STAYED UPSIDE DOWN.
+    /// One engager in open play — it is what stopped four defenders
+    /// converging on one carrier and rolling four independent foul
+    /// chances — and two inside our own area, where every defence in
+    /// football goes man-to-man because the cost of losing him is a goal.
     ///
-    /// This read `is_best_player_to_chase_ball() || is_nominated_presser()`
-    /// — the plan's nomination was ADDED to the chase election rather than
-    /// preferred over it, so the election's `position_factor` (Forward
-    /// 1.2, Midfielder 1.1, **Defender 0.9**) still handed the duel to
-    /// whichever forward happened to be in the area. The note above says
-    /// exactly why that factor is wrong for this question and then leaves
-    /// it live.
+    /// The chase election is the fallback and not an alternative: its
+    /// `position_factor` (Forward 1.2, Midfielder 1.1, Defender 0.9) is
+    /// the right bias for a loose ball and the wrong one entirely for
+    /// "who challenges the man carrying the ball at our box", where the
+    /// defender is by definition the man. Read as an alternative it
+    /// measured **2.74 tackles per forward per match against a real
+    /// ~0.8**, with defenders on 1.37 against ~1.6. The plan nominates
+    /// nobody for a ball at rest by design, which is exactly the case the
+    /// election is left to answer.
     ///
-    /// Measured over 120 fixtures with both doors open: **2.74 tackles per
-    /// forward per match against a real ~0.8**, with defenders on 1.37
-    /// against ~1.6 — a front line winning the ball more often than the
-    /// back four, in an engine that already documents that as the defect.
-    ///
-    /// The election is the right answer for a LOOSE ball — a forward does
-    /// gamble on those, and the plan nominates nobody for a ball at rest
-    /// by design (see `DutyAssigner::assign`). So it stays, as the
-    /// fallback for exactly the case the plan declines to answer: when
-    /// nobody has been nominated, whoever can get there first goes.
-    /// When somebody HAS been nominated, he is the man, and everybody
-    /// else covers.
-    /// …AND IN YOUR OWN BOX, TWO GO.
-    ///
-    /// One engager is right in open play — it is what stopped four
-    /// defenders converging on one carrier and rolling four independent
-    /// foul chances. It is wrong inside your own penalty area, and the
-    /// engine already knew that: `is_box_emergency_for_me` elects the
-    /// **two** closest defenders to a carrier in our area, and five
-    /// defender states (`Standing`, `Marking`, `Covering`, `Guarding`,
-    /// `HoldingLine`) send them to `Tackling` on the strength of it.
-    /// Every one of those second men was then refused here on the entry
-    /// tick and handed back to `Pressing`, so the emergency was computed
-    /// in five places and discarded in one.
-    ///
-    /// Measured, that is the user's report exactly: with a carrier in
-    /// our own area, 20% of all defender-ticks inside `COMMIT` fail on
-    /// this gate, and a box carry draws 20 commit decisions a match
-    /// between all of them.
-    ///
-    /// The second man is the plan's `Cover` — the duty is already
-    /// defined as "second body, goal-side of the presser — the one who
-    /// deals with it when the presser is beaten", it is already
-    /// exclusive, and `DutyAssigner` already picks it markers-only and
-    /// within `COVER_REACH`. So the licence stays a licence: two named
-    /// players, not everybody who is near.
-    ///
-    /// Gated on [`PenaltyRisk::applies`] — the referee's test, the ball
-    /// inside the area we are defending — rather than on the defender's
-    /// own position, so the second man is licensed by where the BALL is
-    /// and not by his having drifted into his own box.
+    /// ⚠ The second man is the one the BOX ELECTION picked, not the
+    /// plan's `Cover`. The five states that send a second body into the
+    /// area read `is_box_emergency_for_me` — the geometric nearest two —
+    /// while this licensed a duty the plan assigns from the point of
+    /// attack at `COVER_REACH` 140u on a 250 ms cadence. Those are
+    /// different men, so the emergency was computed in five places and
+    /// refused in one. Routing the ELECTION through the plan instead is
+    /// the other way to close the disagreement, and it is recorded
+    /// in-tree as measured worse — see `is_box_emergency_for_me`.
     pub fn may_engage_carrier(ctx: &StateProcessingContext) -> bool {
-        if Self::is_nominated_presser(ctx) {
-            return true;
-        }
-        if PenaltyRisk::applies(ctx) && matches!(ctx.team().my_duty(), DefensiveDuty::Cover) {
-            return true;
-        }
-        ctx.team().defensive_plan().presser().is_none() && ctx.team().is_best_player_to_chase_ball()
+        Self::is_nominated_presser(ctx)
+            || ctx.player().defensive().is_box_emergency_for_me()
+            || (ctx.team().defensive_plan().presser().is_none()
+                && ctx.team().is_best_player_to_chase_ball())
     }
 
     /// True when the team plan has made this player the engager.

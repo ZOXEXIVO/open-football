@@ -1,8 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, Interception, StationKeeping,
+    ActivityIntensity, BoxEmergency, DefenderCondition, Interception, StationKeeping,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -11,7 +12,6 @@ use nalgebra::Vector3;
 
 const GUARD_DISTANCE: f32 = 20.0; // Keep a realistic marking distance (don't sit on top of opponent)
 const MAX_GUARD_RANGE: f32 = 80.0; // Give up guarding if attacker moves too far
-const TACKLE_TRANSITION_DISTANCE: f32 = 15.0; // Tackle immediately when guarded opponent receives ball
 const STAMINA_THRESHOLD: f32 = 15.0; // Guarding is tiring — need minimum stamina
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
@@ -31,25 +31,15 @@ impl StateProcessingHandler for DefenderGuardingState {
         // hole `GoalkeeperComingOutState` had; see the sweep note there.
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Passing,
+                DefenderState::Running,
             ));
         }
 
         // BOX EMERGENCY — engage the carrier immediately if they're in
         // our box and we're one of the two closest defenders. Guarding
         // an off-ball runner is the wrong duty at that moment.
-        if ctx.player().defensive().is_box_emergency_for_me() {
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                let d = carrier.distance(ctx);
-                if d < 25.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
-            }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // Crisis override — guarding an off-ball runner is useless when
@@ -93,7 +83,7 @@ impl StateProcessingHandler for DefenderGuardingState {
         // 2. Ball carrier nearby — engage directly instead of guarding off-ball player
         if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
             let dist_to_carrier = ball_carrier.distance(ctx);
-            if dist_to_carrier < TACKLE_TRANSITION_DISTANCE {
+            if TackleEngagement::should_commit(ctx, dist_to_carrier) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));
@@ -125,7 +115,7 @@ impl StateProcessingHandler for DefenderGuardingState {
 
             // 4. If the guarded opponent receives the ball — react immediately
             if opponent.has_ball(ctx) {
-                if distance_to_opponent < TACKLE_TRANSITION_DISTANCE {
+                if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));

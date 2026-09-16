@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, Interception,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior, VectorExtensions,
@@ -11,20 +12,24 @@ use nalgebra::Vector3;
 const INTERCEPTION_DISTANCE: f32 = 150.0;
 const MARKING_DISTANCE: f32 = 50.0;
 const PRESSING_DISTANCE: f32 = 80.0;
-const TACKLE_DISTANCE: f32 = 25.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderWalkingState {}
 
 impl StateProcessingHandler for DefenderWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         // Attacking corner: centre-backs push up to attack the delivery.
-        if !ctx.player.has_ball(ctx)
-            && ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_central_defender()
+        if ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_central_defender()
             && ctx.ball().is_team_attacking_corner()
         {
             return Some(StateChangeResult::with_defender_state(
@@ -46,7 +51,7 @@ impl StateProcessingHandler for DefenderWalkingState {
             let distance_to_opponent = ctx.player.position.distance_to(&opponent.position);
 
             // Tackle if very close
-            if distance_to_opponent < TACKLE_DISTANCE {
+            if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));

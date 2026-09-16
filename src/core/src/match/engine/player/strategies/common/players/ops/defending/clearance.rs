@@ -42,9 +42,52 @@
 //!   a limited one hoof it, and that difference is most of what the
 //!   attribute means.
 
-use crate::r#match::StateProcessingContext;
+use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::events::Event;
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::team::KeeperVoice;
+use crate::r#match::{MatchPlayerLite, StateChangeResult, StateProcessingContext};
+
+/// What a defender who has the ball in his own area does with it.
+///
+/// Returned rather than acted on, so the branch that asked the question
+/// is the branch that answers it. Nine separate ladders used to reach
+/// `Clearing` and only one of them consulted [`ClearanceCall`]; the rest
+/// sat ABOVE it and decided first.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DefensiveRelease {
+    Clear,
+    /// Play the out — this man.
+    Outlet(u32),
+}
+
+impl DefensiveRelease {
+    /// Turn the decision into the state change it implies.
+    ///
+    /// On the enum rather than on each state: `Running` and `Passing`
+    /// both act on it, and a hand copy in the second silently dropped
+    /// the clearance from the diagnostic that counts them.
+    pub fn resolve(self, ctx: &StateProcessingContext) -> StateChangeResult {
+        match self {
+            Self::Clear => {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
+                StateChangeResult::with_defender_state(DefenderState::Clearing)
+            }
+            Self::Outlet(target) => StateChangeResult::with_defender_state_and_event(
+                DefenderState::Standing,
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::new()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(target)
+                        .with_reason("DEF_CLEARANCE_OUTLET")
+                        .build(ctx),
+                )),
+            ),
+        }
+    }
+}
 
 pub struct ClearanceCall;
 
@@ -78,6 +121,41 @@ impl ClearanceCall {
     const TOLERANCE_BASE: f32 = 0.40;
     const TOLERANCE_SKILL: f32 = 0.42;
 
+    /// **The urgent on-ball choice**, or `None` when this is not one of
+    /// those moments and the caller's own ladder applies.
+    ///
+    /// The whole point of returning it is that the caller cannot then
+    /// reach a branch that answers the same question differently: a
+    /// counter-attack outlet, a coach-tempo hold, an emergency pass and
+    /// two separate `must_clear_under_pressure` ladders all used to run
+    /// FIRST, so the model that knows about the squeeze, the danger and
+    /// whether the out is genuinely an out was the last thing consulted
+    /// and usually never reached at all.
+    pub fn decide(ctx: &StateProcessingContext) -> Option<DefensiveRelease> {
+        if !ctx.ball().in_own_penalty_area() {
+            return None;
+        }
+        let squeeze = Self::squeeze(ctx);
+        if squeeze <= 0.0 {
+            // Nobody near him. Playing out is the whole point of having
+            // defenders who can, and the ordinary build-up ladder is the
+            // right one.
+            return None;
+        }
+        // One squeeze reading and ONE outlet search. `find_best_pass_option`
+        // draws from the match RNG, so asking twice is asking a different
+        // question the second time — `decide` could answer `Clear` on a
+        // tick where `now` had just found him a safe out.
+        let outlet = Self::outlet(ctx, squeeze);
+        if Self::clears(ctx, squeeze, outlet.is_some()) {
+            return Some(DefensiveRelease::Clear);
+        }
+        Some(match outlet {
+            Some(mate) => DefensiveRelease::Outlet(mate.id),
+            None => DefensiveRelease::Clear,
+        })
+    }
+
     /// Should this defender clear it?
     ///
     /// Only ever consulted with the ball in his own penalty area — the
@@ -85,6 +163,11 @@ impl ClearanceCall {
     /// produces a pass under pressure rather than a hoof.
     pub fn now(ctx: &StateProcessingContext) -> bool {
         let squeeze = Self::squeeze(ctx);
+        Self::clears(ctx, squeeze, Self::outlet(ctx, squeeze).is_some())
+    }
+
+    /// The call itself, on readings the caller has already taken.
+    fn clears(ctx: &StateProcessingContext, squeeze: f32, has_outlet: bool) -> bool {
         if squeeze <= 0.0 {
             // Nobody near him. Playing out is the whole point of having
             // defenders who can.
@@ -92,7 +175,7 @@ impl ClearanceCall {
         }
 
         // No out at all, with anybody near him: it goes.
-        if !Self::has_outlet(ctx, squeeze) {
+        if !has_outlet {
             return true;
         }
 
@@ -141,20 +224,17 @@ impl ClearanceCall {
         (1.0 - depth / Self::DANGER_DEPTH).clamp(0.0, 1.0)
     }
 
-    /// Is there a pass that is actually an alternative?
+    /// The pass that is actually an alternative, if there is one.
     ///
     /// `find_best_pass_option_with_distance` is the evaluator every line
     /// on the pitch uses, and it is the right search — but "the best
     /// available pass" and "a safe pass" are different questions, and
     /// inside your own area only the second one counts.
-    fn has_outlet(ctx: &StateProcessingContext, squeeze: f32) -> bool {
-        let Some((mate, _)) = ctx
+    fn outlet(ctx: &StateProcessingContext, squeeze: f32) -> Option<MatchPlayerLite> {
+        let (mate, _) = ctx
             .player()
             .passing()
-            .find_best_pass_option_with_distance(Self::OUTLET_RANGE)
-        else {
-            return false;
-        };
+            .find_best_pass_option_with_distance(Self::OUTLET_RANGE)?;
 
         // A team-mate with a man on him is not an out.
         let marked = ctx
@@ -163,7 +243,7 @@ impl ClearanceCall {
             .all()
             .any(|o| (o.position - mate.position).magnitude() < Self::OUTLET_MARKED);
         if marked {
-            return false;
+            return None;
         }
 
         // …and neither is a ball played BACKWARDS across your own area
@@ -174,10 +254,10 @@ impl ClearanceCall {
             let mine = (ctx.player.position - own_goal).magnitude();
             let theirs = (mate.position - own_goal).magnitude();
             if theirs < mine {
-                return false;
+                return None;
             }
         }
 
-        true
+        Some(mate)
     }
 }

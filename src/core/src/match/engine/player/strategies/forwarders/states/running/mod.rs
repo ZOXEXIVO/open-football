@@ -1,4 +1,5 @@
 use crate::PlayerPositionType;
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::Event;
@@ -1665,12 +1666,12 @@ impl ForwardRunningState {
 
         // Ball moving toward player
         if ball_distance < 150.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-            // Calculate if player can reach interception point
-            let player_speed = ctx.player.skills.physical.pace / 20.0 * 10.0;
-            let time_to_reach = ball_distance / player_speed;
-            let ball_travel_distance = ball_speed * time_to_reach;
-
-            return ball_travel_distance < ball_distance * 1.5;
+            let meeting = LooseBallChase::meeting_point(
+                ctx,
+                ctx.tick_context.positions.ball.position,
+                ctx.tick_context.positions.ball.velocity,
+            );
+            return LooseBallChase::wins_the_race(ctx, meeting);
         }
 
         false

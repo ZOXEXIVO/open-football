@@ -1,17 +1,18 @@
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
-use crate::r#match::player::strategies::common::states::{TackleDecision, TackleEngagement};
+use crate::r#match::player::strategies::common::states::{
+    TackleDecision, TackleEngagement, TackleOutcome,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // ~1m — forwards rarely tackle from range. Tightened from 12u after dev_match showed FWD tackles at 15/match/team vs real ~2.
 // `CLOSE_TACKLE_DISTANCE` is gone with the per-tick immediate-attempt
 // branch it gated — `TackleDecision` prices proximity continuously
 // through its `reach` term, so a separate "right on top of him" range
@@ -34,51 +35,12 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // CRITICAL: Don't try to claim ball if it's in protected flight state
-        // Transition OUT of tackling to avoid clustering around the ball carrier
-        if ctx.ball().is_in_flight() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        }
-
         // Per-player tackle cooldown. Without it a forward in Tackling
         // state attempts a fresh tackle every tick — 100 attempts × 15%
         // base foul chance = 15 fouls per forward per match, and with
         // three forwards on the field that compounds into the 150+
         // team-foul counts seen in the metrics.
         if !ctx.player.can_attempt_tackle() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Pressing,
-            ));
-        }
-
-        // Closest-teammate duel gate — see def/mid tackling for rationale.
-        // Forwards rarely lead the team in chase-score, so this mostly
-        // defers the counter-press to whichever midfielder is closer.
-        // Entry condition only. `TackleEngagement::should_commit` already
-        // applies this before anyone is sent here, so re-checking it on
-        // every tick could only ever ABANDON a challenge already under
-        // way — and the designation is a tolerance band that swaps
-        // between team-mates tick to tick, so it did exactly that. A
-        // committed engagement now runs to contact or to `DISENGAGE`.
-        // …and the plan's nomination WINS it, with the chase election as
-        // the fallback for a ball the plan declines to nominate for. A
-        // forward who is merely NEAR the duel does not take it off the
-        // defender whose duel it is — see
-        // `TackleEngagement::may_engage_carrier`.
-        if ctx.in_state_time == 0 && !TackleEngagement::may_engage_carrier(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Pressing,
-            ));
-        }
-
-        // Skill gate — most strikers don't drill defensive tackles
-        // (Haaland, Mbappe profile). Sigmoid pivot at 8/20: a tackling=4
-        // pure attacker very rarely commits to a tackle; a tackling=14
-        // ball-winning forward almost always does. Smooth replacement
-        // for the hard cliff that flattened the 1-8 range.
-        let tackling_p =
-            SkillCurve::new(ctx.player.skills.technical.tackling, 8.0, 0.6).probability();
-        if ctx.context.rng.unit_f32() >= tackling_p {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Pressing,
             ));
@@ -112,55 +74,36 @@ impl StateProcessingHandler for ForwardTacklingState {
             // shepherds, and goes in when the moment is there. Declining
             // keeps him in the state, containing, exactly as it does for
             // a defender.
-            if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
-                if !TackleDecision::is_decision_tick(ctx)
+            if opponent_distance <= TackleEngagement::CONTACT {
+                // ⚠ A PER-TICK EJECTION IS NOT A SKILL GATE.
+                //
+                // A `SkillCurve` roll on `tackling` used to sit above
+                // this and throw the forward out of the state on a random
+                // fraction of EVERY tick — so how long he contained was
+                // a geometric variable in the tick rate, and a tackling-4
+                // forward was ejected within a tick or two of arriving
+                // however good the moment was. Who he is belongs in
+                // whether he COMMITS, which `TackleDecision` already
+                // prices continuously, and the licence belongs to the
+                // challenge rather than to the entry tick.
+                if !TackleEngagement::may_engage_carrier(ctx)
+                    || !TackleDecision::is_eligible(ctx)
                     || !ctx
                         .context
                         .rng
-                        .bernoulli(TackleDecision::commit_probability(ctx, opponent_distance))
+                        .bernoulli(TackleDecision::commits_now(ctx, opponent_distance))
                 {
                     return None; // contain
                 }
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::FWD_ATTEMPTS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let (tackle_success, committed_foul, foul_severity) =
-                    self.attempt_tackle(ctx, &opponent);
-
-                if committed_foul {
-                    let mut result = StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
-                    );
-                    result.start_tackle_cooldown = true;
-                    return Some(result);
-                }
-
-                if tackle_success {
-                    // Double-check ball is not in flight before claiming
-                    if !ctx.ball().is_in_flight() {
-                        #[cfg(feature = "match-logs")]
-                        crate::tackle_stats::FWD_SUCCESSES
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let mut result = StateChangeResult::with_forward_state_and_event(
-                            ForwardState::Running,
-                            Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
-                        );
-                        result.start_tackle_cooldown = true;
-                        return Some(result);
-                    }
-                }
-
-                // Missed tackle — cooldown
-                let mut result = StateChangeResult::with_forward_state(ForwardState::Pressing);
+                let mut result = self.settle(ctx, self.attempt_tackle(ctx, &opponent));
                 result.start_tackle_cooldown = true;
                 return Some(result);
             }
 
             // If opponent is further but still chaseable, continue pursuit
-            if opponent_distance <= CHASE_DISTANCE_THRESHOLD {
-                return None; // Continue chasing
-            }
         }
 
         // Check for loose ball interception opportunities
@@ -200,7 +143,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
 
             // If very close, move more carefully to avoid overrunning
-            if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
+            if opponent_distance <= TackleEngagement::CONTACT {
                 return Some(
                     SteeringBehavior::Arrive {
                         target: opponent.position,
@@ -252,12 +195,31 @@ impl StateProcessingHandler for ForwardTacklingState {
 }
 
 impl ForwardTacklingState {
-    /// Attempt a tackle with improved physics and skill-based calculation
+    /// One resolved challenge, turned into the state change it implies.
+    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+        match outcome {
+            TackleOutcome::Won => {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::FWD_SUCCESSES
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                )
+            }
+            TackleOutcome::Foul(severity) => StateChangeResult::with_forward_state_and_event(
+                ForwardState::Standing,
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+            ),
+            TackleOutcome::Missed => StateChangeResult::with_forward_state(ForwardState::Pressing),
+        }
+    }
+
     fn attempt_tackle(
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool, FoulSeverity) {
+    ) -> TackleOutcome {
         let rng = &ctx.context.rng;
 
         // Aggression and composure still feed the foul-risk path
@@ -270,7 +232,7 @@ impl ForwardTacklingState {
 
         // Calculate relative positioning advantage
         let distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
-        let distance_factor = (TACKLE_DISTANCE_THRESHOLD - distance) / TACKLE_DISTANCE_THRESHOLD;
+        let distance_factor = (TackleEngagement::CONTACT - distance) / TackleEngagement::CONTACT;
         let distance_factor = distance_factor.clamp(0.0, 1.0);
 
         // Calculate angle advantage (tackling from behind is harder but less likely to be seen)
@@ -356,59 +318,21 @@ impl ForwardTacklingState {
             FoulSeverity::Normal
         };
 
-        (tackle_success, committed_foul, severity)
+        TackleOutcome::of(tackle_success, committed_foul, severity)
     }
 
-    /// Check if player can intercept a loose ball
+    /// See `DefenderTacklingState::can_intercept_ball` — one prediction
+    /// model, and one race, shared with every other chase in the engine.
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
-        // Don't try to intercept if ball is owned or in flight
-        if ctx.ball().is_owned() || ctx.ball().is_in_flight() {
+        if ctx.ball().is_owned() {
             return false;
         }
-
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let player_position = ctx.player.position;
-        let player_speed = ctx.player.skills.physical.pace / 20.0 * 10.0; // Convert to game units
-
-        // If ball is moving, calculate interception
-        if ball_velocity.magnitude() > 0.5 {
-            // Calculate if player can reach ball before it goes too far
-            let time_to_ball = (ball_position - player_position).magnitude() / player_speed;
-            let ball_future_position = ball_position + ball_velocity * time_to_ball;
-            let intercept_distance = (ball_future_position - player_position).magnitude();
-
-            // Check if interception is feasible
-            if intercept_distance <= TACKLE_DISTANCE_THRESHOLD * 2.0 {
-                // Also check if any opponent is closer to the interception point
-                let closest_opponent_distance = ctx
-                    .players()
-                    .opponents()
-                    .all()
-                    .map(|opp| (ball_future_position - opp.position).magnitude())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(f32::MAX);
-
-                return intercept_distance < closest_opponent_distance * 0.9; // Need to be clearly closer
-            }
-        } else {
-            // Ball is stationary - simple distance check
-            let ball_distance = (ball_position - player_position).magnitude();
-
-            if ball_distance <= TACKLE_DISTANCE_THRESHOLD {
-                // Check if any opponent is closer
-                let closest_opponent_distance = ctx
-                    .players()
-                    .opponents()
-                    .all()
-                    .map(|opp| (ball_position - opp.position).magnitude())
-                    .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                    .unwrap_or(f32::MAX);
-
-                return ball_distance < closest_opponent_distance * 0.8;
-            }
-        }
-
-        false
+        let meeting = LooseBallChase::meeting_point(
+            ctx,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+        );
+        (meeting - ctx.player.position).magnitude() <= TackleEngagement::CONTACT * 2.0
+            && LooseBallChase::wins_the_race(ctx, meeting)
     }
 }

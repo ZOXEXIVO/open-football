@@ -12,7 +12,7 @@ use crate::r#match::player::strategies::common::players::ops::defender_skill::De
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
-use crate::r#match::player::strategies::common::states::MarkEngagement;
+use crate::r#match::player::strategies::common::states::{MarkEngagement, TackleEngagement};
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -70,6 +70,21 @@ impl StateProcessingHandler for DefenderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
+            // WINNING IT IN YOUR OWN AREA IS NOT A BUILD-UP SITUATION.
+            //
+            // Everything below this used to come first — a counter-attack
+            // outlet, a coach-tempo hold that returns `None` for any
+            // opponent beyond 15u, an emergency pass whose only test is
+            // that the selector returned somebody, the wide ladder, the
+            // shot — and `should_clear` sat at the bottom. So the one
+            // model that reads the squeeze, the danger and whether the
+            // out is genuinely an out was the last thing asked and, under
+            // `prefer_possession`, was not reached at all between 15u and
+            // `ClearanceCall::SQUEEZE_FAR`.
+            if let Some(release) = ClearanceCall::decide(ctx) {
+                return Some(release.resolve(ctx));
+            }
+
             // Counter-attack outlet (see `defenders/states/passing/mod.rs`
             // for the rationale). Defenders frequently fire passes from
             // the Running state on the first tick after winning the ball
@@ -272,11 +287,7 @@ impl StateProcessingHandler for DefenderRunningState {
             // (instinct beats math when the carrier is on top of you).
             if ctx.team().counterpress_window() {
                 if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                    let role = ctx.player().defensive().defensive_role_for_ball_carrier();
-                    let immediate = opponent.distance(ctx) < 30.0;
-                    let elected = role == DefensiveRole::Primary
-                        && ctx.player().pressure().should_counterpress();
-                    if immediate || elected {
+                    if TackleEngagement::should_commit(ctx, opponent.distance(ctx)) {
                         return Some(StateChangeResult::with_defender_state(
                             DefenderState::Tackling,
                         ));
@@ -340,46 +351,19 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            // Only tackle when we're the designated closer — Primary role
-            // or box emergency. The reactive "any defender within 30u
-            // lunges" rule produced pileups of 3-4 defenders all
-            // attempting tackles simultaneously, each with an independent
-            // foul roll. One committing defender + the shape behind
-            // them is the right football picture.
+            // Three doors into `Tackling` here measured BALL distance at
+            // 30u, 100u and 80u and each carried its own opinion about who
+            // was allowed through — none of them the one `Tackling` itself
+            // enforces. A defender let through at 80u entered a state
+            // whose exit condition (`DISENGAGE` 24u) was already true.
+            // The contract answers carrier distance, once; a defender it
+            // refuses keeps running at the man, because the state's own
+            // velocity is already a pursuit onto him.
             if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                let ball_dist = ctx.ball().distance();
-                let is_primary = matches!(
-                    ctx.player().defensive().defensive_role_for_ball_carrier(),
-                    DefensiveRole::Primary
-                );
-                let is_emergency = ctx.player().defensive().is_box_emergency_for_me();
-                // Very close — only the designated closer tackles
-                if ball_dist < 30.0 && (is_primary || is_emergency) {
+                if TackleEngagement::should_commit(ctx, opponent.distance(ctx)) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
-                }
-                // Best-positioned chase at medium range
-                if ball_dist < 100.0 && ctx.team().is_best_player_to_chase_ball() {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                // Carrier running AT us — still engage (we're the wall).
-                // Gate this too so a carrier cutting across a line of
-                // defenders doesn't trigger all of them.
-                if ball_dist < 80.0 && (is_primary || is_emergency) {
-                    let carrier_vel = ctx.tick_context.positions.players.velocity(opponent.id);
-                    let carrier_speed = carrier_vel.magnitude();
-                    if carrier_speed > 0.1 {
-                        let to_defender = (ctx.player.position - opponent.position).normalize();
-                        let approach = carrier_vel.normalize().dot(&to_defender);
-                        if approach > 0.3 {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::Tackling,
-                            ));
-                        }
-                    }
                 }
             }
 
@@ -864,10 +848,12 @@ impl DefenderRunningState {
             // Defensive transition — the one closest defender engages,
             // others recover shape.
             GamePhase::DefensiveTransition => {
-                if ball_dist < 40.0 && ctx.team().is_best_player_to_chase_ball() {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
+                if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                    if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Tackling,
+                        ));
+                    }
                 }
                 if !near_start {
                     return Some(StateChangeResult::with_defender_state(
@@ -925,29 +911,10 @@ impl DefenderRunningState {
         false
     }
 
+    /// Clear it because he is stuck, not because he is in his own area —
+    /// that call belongs to [`ClearanceCall::decide`], which runs before
+    /// every other on-ball branch in this state.
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        // In his own penalty area, the call belongs to `ClearanceCall` —
-        // the squeeze, the danger, whether the out is genuinely an out,
-        // and the man's own willingness to play through it.
-        //
-        // What was here asked whether an opponent was within 14u (1.75 m)
-        // and whether `find_best_pass_option_with_distance(220.0)` came up
-        // empty. The first is a man practically standing on you and the
-        // second is almost never true, so a centre-half surrounded in his
-        // own six-yard box went looking for a twenty-metre pass: measured
-        // 0.61 clearances per defender per match against a real ~3.5.
-        //
-        // The threshold before that one was 30u with no test of the man
-        // at all, and it produced 15.2 per defender. Both numbers are the
-        // same mistake — a cliff standing in for a reading — which is why
-        // the replacement is a model rather than a third threshold.
-        if ctx.ball().in_own_penalty_area() && ClearanceCall::now(ctx) {
-            #[cfg(feature = "match-logs")]
-            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
-            return true;
-        }
-
-        // Clear if congested anywhere (not just boundaries)
         if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
             #[cfg(feature = "match-logs")]
             crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(1);

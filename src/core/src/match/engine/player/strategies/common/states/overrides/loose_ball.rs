@@ -188,6 +188,45 @@ impl LooseBallChase {
     /// Ball height above which the aim point is where it will land.
     pub const AERIAL_H: f32 = 3.0;
 
+    /// How much later than the first opponent a man will still set off to
+    /// contest a ball — 0.10 s, in physics ticks. A race this close is a
+    /// contest, not a verdict.
+    pub const CONTEST_MARGIN_TICKS: f32 = 10.0;
+
+    /// **Can he get to `point` before the opposition?**
+    ///
+    /// The man CARRYING the ball is excluded: his distance to the
+    /// meeting point is zero, so including him makes this false for every
+    /// owned ball.
+    ///
+    /// ⚠ Both sides race at `max_speed`, in units per physics tick.
+    /// Three copies of this test divided distance by
+    /// `skills.physical.pace`, a 1-20 ATTRIBUTE — and because the real
+    /// relation is affine (`0.36 + pace01 * 0.27`) the error does not
+    /// cancel in the ratio either: pace 5 against pace 20 is 4.00:1 as an
+    /// attribute and 1.51:1 as a speed. Condition never entered at all.
+    pub fn wins_the_race(ctx: &StateProcessingContext, point: Vector3<f32>) -> bool {
+        let mine = (point - ctx.player.position).magnitude()
+            / ctx.player.max_speed_with_condition_cached().max(1e-3);
+        let carrier = ctx.ball().owner_id();
+        let theirs = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opponent| Some(opponent.id) != carrier)
+            .map(|opponent| {
+                let speed = ctx
+                    .tick_context
+                    .positions
+                    .players
+                    .max_speed(opponent.id)
+                    .max(1e-3);
+                (point - opponent.position).magnitude() / speed
+            })
+            .fold(f32::MAX, f32::min);
+        mine <= theirs + Self::CONTEST_MARGIN_TICKS
+    }
+
     /// Where to run for a loose ball, and the velocity to run there with.
     ///
     /// Returns `(target, velocity)` — the target is also what the caller

@@ -201,7 +201,7 @@ impl Ball {
             return;
         }
 
-        if self.pass_block_rolled || MatchContext::box_defence_off() {
+        if MatchContext::box_defence_off() {
             return;
         }
         if self.current_owner.is_some()
@@ -249,11 +249,17 @@ impl Ball {
             sc::passing_execution(passer, sc::minute_from_ticks(self.current_tick_cached));
         let minute = sc::minute_from_ticks(self.current_tick_cached);
 
-        let mut best_blocker: Option<u32> = None;
+        let mut best_blocker: Option<(u32, u64)> = None;
         let mut best_chance = 0.0f32;
 
-        for player in players {
+        for (slot, player) in players.iter().enumerate() {
             if player.team_id == passer.team_id {
+                continue;
+            }
+            // One flight, one roll per man — see
+            // [`Ball::pass_block_rolled`].
+            let bit = 1u64 << slot;
+            if self.pass_block_rolled & bit != 0 {
                 continue;
             }
             if player.tactical_position.current_position.position_group()
@@ -312,18 +318,17 @@ impl Ball {
                 skill * perp_factor * line_factor * speed_penalty * danger * Self::BLOCK_GAIN;
             if chance > best_chance {
                 best_chance = chance;
-                best_blocker = Some(player.id);
+                best_blocker = Some((player.id, bit));
             }
         }
 
-        let Some(blocker_id) = best_blocker else {
+        let Some((blocker_id, bit)) = best_blocker else {
             return;
         };
-        // One pass, one roll. Latched the moment a candidate exists, so
-        // the rate is a property of the defending rather than of how long
-        // the flight happened to be — the correction `try_intercept`
-        // already carries, made here from the start.
-        self.pass_block_rolled = true;
+        // Latched per MAN, so the rate stays a property of the defending
+        // rather than of how long the flight happened to be, while the
+        // defender downstream still gets the encounter that is his.
+        self.pass_block_rolled |= bit;
         let chance = best_chance.clamp(0.0, 0.65);
         let fired = context.rng.unit_f32() < chance;
         #[cfg(feature = "match-logs")]

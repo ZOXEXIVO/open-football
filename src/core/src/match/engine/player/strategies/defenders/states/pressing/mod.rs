@@ -106,29 +106,32 @@ impl StateProcessingHandler for DefenderPressingState {
                 BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity + profile_bonus
             };
 
+            // …AND NEITHER HE NOR THE BOX-ELECTED MAN GETS DISTANCE-EXITED
+            // OR RE-RANKED OUT OF IT. The second body the box election
+            // sends is handed here by `BoxEmergency::response` whenever
+            // the contract refuses the challenge, and the role dispatch
+            // below returns the rank-1 man to `Covering`, whose own
+            // `BoxEmergency::response` sends him straight back.
+            //
+            // This exit ran FIRST, so a man the plan had nominated from
+            // the point of attack at `PRESS_REACH` (200u) was told to
+            // press and then, on the same tick, told to hold the line
+            // because the local bubble is only `40 + 30*intensity +
+            // 18*press_profile`. The nomination refreshes on the plan's
+            // own 250 ms cadence with an incumbency discount, which IS
+            // the hysteresis; the local bubble is for a defender acting
+            // on his own initiative.
+            if TackleEngagement::is_nominated_presser(ctx)
+                || ctx.player().defensive().is_box_emergency_for_me()
+            {
+                return None;
+            }
+
             // If the opponent is too far away, stop pressing
             if distance_to_opponent > pressing_threshold {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::HoldingLine,
                 ));
-            }
-
-            // THE PLAN'S PRESSER DOES NOT GET RE-RANKED OUT OF PRESSING.
-            //
-            // The block below is a per-tick geometric rank over the back
-            // line only, and it ejects anybody who is not the single
-            // closest defender to the carrier. `DefensivePlan` nominates
-            // the presser over the whole unit, on a 250 ms cadence, with
-            // an incumbency bonus so the nomination does not swap on
-            // sub-metre movement — and `TackleEngagement::may_engage_carrier`
-            // then licenses ONLY that man to challenge. So the two
-            // disagreeing meant the licensed presser could be handed out
-            // of the state that takes him to the ball, by a rank that has
-            // no say in whether he is allowed to challenge when he gets
-            // there. Same "THE ASSIGNMENT WINS" precedence
-            // `DefenderMarkingState::find_best_marking_target` opens with.
-            if TackleEngagement::is_nominated_presser(ctx) {
-                return None;
             }
 
             // Role-based coordination: a defender only stays in Pressing
@@ -311,12 +314,20 @@ impl StateProcessingHandler for DefenderPressingState {
             return Some(pressing_velocity + separation);
         }
 
-        // Loose ball nearby — pursue it
+        // Loose ball nearby — pursue it. `Intercept` onto the shared
+        // meeting point rather than `direction * pace`: `pace` is a 1-20
+        // attribute, so that assigned an absolute velocity of up to 20
+        // u/tick against a ~0.63 ceiling and threw away the velocity the
+        // defender already had.
         if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
-            let direction =
-                (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
-            let speed = ctx.player.skills.physical.pace;
-            return Some(direction * speed);
+            return Some(
+                SteeringBehavior::Intercept {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
         }
 
         // Nobody on the ball and it is further out than the loose-ball

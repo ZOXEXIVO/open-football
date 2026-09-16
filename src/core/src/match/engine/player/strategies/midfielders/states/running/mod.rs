@@ -14,7 +14,7 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
 };
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::skill_composites as sc;
-use crate::r#match::player::strategies::common::states::MarkEngagement;
+use crate::r#match::player::strategies::common::states::{MarkEngagement, TackleEngagement};
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, DefensiveDuty, GamePhase, MatchContext, MatchPlayerLite, PassEvaluator,
@@ -423,8 +423,9 @@ impl StateProcessingHandler for MidfielderRunningState {
             // also won the eligibility roll.
             let elected = ctx.player().pressure().should_counterpress()
                 && ctx.team().is_best_player_to_chase_ball();
-            let immediate = ball_dist < 25.0;
-            if immediate {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
@@ -1658,8 +1659,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-                // Close — tackle regardless (reactive)
-                if opponent_distance < 30.0 {
+                if TackleEngagement::should_commit(ctx, opponent_distance) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));
@@ -1667,11 +1667,6 @@ impl StateProcessingHandler for MidfielderRunningState {
 
                 // Only the best-positioned player presses — prevents team swarming
                 if ctx.team().is_best_player_to_chase_ball() {
-                    if opponent_distance < 50.0 {
-                        return Some(StateChangeResult::with_midfielder_state(
-                            MidfielderState::Tackling,
-                        ));
-                    }
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Pressing,
                     ));

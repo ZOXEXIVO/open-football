@@ -4,6 +4,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition, ShapeStation,
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -43,7 +44,7 @@ impl StateProcessingHandler for MidfielderReturningState {
         {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            if opponent_distance < 40.0 {
+            if TackleEngagement::should_commit(ctx, opponent_distance) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));

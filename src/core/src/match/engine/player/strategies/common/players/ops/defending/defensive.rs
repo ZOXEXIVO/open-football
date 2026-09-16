@@ -387,6 +387,22 @@ impl<'p> DefensiveOperationsImpl<'p> {
     ///
     /// Inside the area, proximity is the whole of the answer. Keep it.
     pub fn is_box_emergency_for_me(&self) -> bool {
+        // …and he has to be one of the men it ranks. "Fewer than two
+        // DEFENDERS are closer to the carrier than I am" is an answer
+        // about the back line; asked by a midfielder standing in his own
+        // area it is true for most of them at once, which is how a
+        // two-body election becomes a crowd. Cost nothing while the five
+        // callers were all defender states; it binds now that the tackle
+        // licence reads this election.
+        if !self
+            .ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_defender()
+        {
+            return false;
+        }
         if !self.ctx.ball().in_own_penalty_area() {
             return false;
         }

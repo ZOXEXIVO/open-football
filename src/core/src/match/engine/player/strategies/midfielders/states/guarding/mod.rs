@@ -5,7 +5,9 @@ use crate::r#match::midfielders::states::common::{
 };
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
-use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
+use crate::r#match::player::strategies::common::states::{
+    ContactFoul, MarkEngagement, TackleEngagement,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -39,7 +41,6 @@ const MAX_GUARD_RANGE: f32 = 100.0; // Give up guarding if attacker moves too fa
 /// (`dev_match trace`). Committing only inside the tighter radius leaves
 /// a 20u band in which whatever the player is already doing stands.
 const GUARD_COMMIT_RANGE: f32 = 80.0;
-const TACKLE_TRANSITION_DISTANCE: f32 = 15.0; // Tackle if opponent receives ball nearby
 const STAMINA_THRESHOLD: f32 = 15.0;
 const PREDICTION_TIME: f32 = 0.25;
 const MAX_DISTANCE_FROM_START: f32 = 150.0; // Don't follow opponent too far from tactical zone
@@ -52,20 +53,22 @@ impl StateProcessingHandler for MidfielderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // The shirt pull — see `ContactFoul` and the defender marking
         // state, which carries the same block for the same reason.
-        if ContactFoul::is_decision_tick(ctx) {
-            if let Some(man) = self.find_guard_target(ctx) {
-                let gap = (man.position - ctx.player.position).magnitude();
-                let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
-                let p = ContactFoul::probability(ctx, gap, losing_him);
-                if ctx.context.rng.bernoulli(p) {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(
-                            ctx.player.id,
-                            ContactFoul::severity(ctx, losing_him),
-                        )),
-                    ));
-                }
+        if let Some(man) = self.find_guard_target(ctx) {
+            let gap = (man.position - ctx.player.position).magnitude();
+            let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
+            if ContactFoul::is_decision_tick(ctx)
+                && ctx
+                    .context
+                    .rng
+                    .bernoulli(ContactFoul::probability(ctx, gap, losing_him))
+            {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::CommitFoul(
+                        ctx.player.id,
+                        ContactFoul::severity(ctx, losing_him),
+                    )),
+                ));
             }
         }
 
@@ -102,7 +105,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let dist = opponent_with_ball.distance(ctx);
             // Close — tackle aggressively
-            if dist < 25.0 {
+            if TackleEngagement::should_commit(ctx, dist) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
@@ -123,7 +126,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
 
             // Opponent received the ball — react
             if opponent.has_ball(ctx) {
-                if distance < TACKLE_TRANSITION_DISTANCE {
+                if TackleEngagement::should_commit(ctx, distance) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));

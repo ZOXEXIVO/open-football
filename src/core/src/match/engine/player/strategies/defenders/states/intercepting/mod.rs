@@ -1,12 +1,12 @@
 use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::cmp::Ordering;
 
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
@@ -46,11 +46,16 @@ impl StateProcessingHandler for DefenderInterceptingState {
             ));
         }
 
-        // Opponent with ball close — switch to tackling
-        if ball_distance < 25.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Tackling,
-            ));
+        // A ball within 25u is not a reason to challenge anybody: this
+        // asked BALL distance and never asked whether an opponent was
+        // carrying it, so it handed a defender into a state that ejects
+        // him again on the next line.
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
         }
 
         // Only abandon interception if ball is moving away AND is far
@@ -102,39 +107,7 @@ impl StateProcessingHandler for DefenderInterceptingState {
 
 impl DefenderInterceptingState {
     fn can_reach_before_opponent(&self, ctx: &StateProcessingContext) -> bool {
-        // Calculate time for defender to reach interception point
-        let interception_point = self.calculate_interception_point(ctx);
-        let defender_distance = (interception_point - ctx.player.position).magnitude();
-        let defender_speed = ctx.player.skills.physical.pace.max(0.1); // Avoid division by zero
-        let defender_time = defender_distance / defender_speed;
-
-        // Find the minimum time for any opponent to reach the interception point.
-        //
-        // The man CARRYING the ball is excluded: his distance to the
-        // interception point is zero, so including him made this test
-        // false for every owned ball and the whole state a pass-through
-        // to Pressing. You do not race someone for a ball he already has
-        // — you press him. Same fault, same fix, in all three copies of
-        // this helper.
-        let carrier = ctx.ball().owner_id();
-        let opponent_time = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| Some(opponent.id) != carrier)
-            .map(|opponent| {
-                let player = ctx.player();
-                let skills = player.skills(opponent.id);
-
-                let opponent_speed = skills.physical.pace.max(0.1);
-                let opponent_distance = (interception_point - opponent.position).magnitude();
-                opponent_distance / opponent_speed
-            })
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal))
-            .unwrap_or(f32::MAX);
-
-        // Return true if defender can reach before any opponent
-        defender_time < opponent_time
+        LooseBallChase::wins_the_race(ctx, self.calculate_interception_point(ctx))
     }
 
     /// Where the ball can actually be met.

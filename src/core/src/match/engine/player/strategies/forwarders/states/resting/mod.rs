@@ -1,5 +1,6 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -15,9 +16,6 @@ const STAMINA_RECOVERY_THRESHOLD: f32 = 60.0;
 /// condition recovery stalls near the threshold.
 const MAX_REST_TICKS: u64 = 500;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
-/// ~5 m. Was 10u — 1.25 m, so "an opponent is near me" was false unless
-/// he was touching.
-const OPPONENT_NEARBY_THRESHOLD: f32 = 40.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardRestingState {}
@@ -37,10 +35,12 @@ impl StateProcessingHandler for ForwardRestingState {
                     ForwardState::TakeBall,
                 ));
             }
-            if ctx.players().opponents().exists(OPPONENT_NEARBY_THRESHOLD) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Tackling,
-                ));
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Tackling,
+                    ));
+                }
             }
         }
 

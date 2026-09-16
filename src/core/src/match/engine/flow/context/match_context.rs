@@ -7,6 +7,8 @@ use super::config::MatchEngineConfig;
 use super::substitution_record::{SubstitutionRecord, SubstitutionWindows};
 use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::engine::BoxEpisode;
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
@@ -66,6 +68,12 @@ pub struct MatchContext {
     /// reduces this to the two or three per side that reach the match sheet,
     /// at full time, when there is a whole match to rank them against.
     pub chances: Vec<ChanceDetail>,
+
+    /// The box-possession episode currently running, for the `match-logs`
+    /// census. Per-match state, so it cannot be a global counter: matches
+    /// run in parallel.
+    #[cfg(feature = "match-logs")]
+    pub box_episode: BoxEpisode,
 
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
@@ -359,6 +367,8 @@ impl MatchContext {
             period_stoppage_time_ms: 0,
             penalty_shootout_kicks: Vec::new(),
             chances: Vec::new(),
+            #[cfg(feature = "match-logs")]
+            box_episode: Default::default(),
             last_goal_tick: 0,
             last_conceded_tick: [u64::MAX, u64::MAX],
             substituted_out_stats: Vec::new(),

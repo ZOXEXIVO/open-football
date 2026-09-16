@@ -54,8 +54,7 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag, strike_diag,
-    teleport,
+    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag, strike_diag, teleport,
 };
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
@@ -192,17 +191,31 @@ pub struct Ball {
     /// player who already has the ball cannot relabel their acquisition.
     pub possession_source_for: Option<u32>,
     /// Which men (by roster slot) have had their interception roll at
-    /// this ball — one each per pass, at the tick it draws level with
+    /// this ball — one each per flight, at the tick it draws level with
     /// him. Without the latch a man running alongside the ball would
-    /// roll every tick. Reset when a pass is struck.
+    /// roll every tick. Reset when the ball is next struck.
     pub intercept_rolled: u64,
     /// The same latch for the pass-BLOCK contest — see
-    /// [`contest::pass_block`]. Kept separate from `intercept_rolled`
-    /// because the two are different actions on the same ball: one man
-    /// may read the pass and take it cleanly while another throws a leg
-    /// at it, and sharing a latch would make winning one silently
-    /// cancel the other.
-    pub pass_block_rolled: bool,
+    /// [`contest::pass_block`].
+    ///
+    /// ⚠ PER MAN. It was a single `bool`, and it was spent by a
+    /// candidate merely EXISTING: set before the draw, so a failed roll,
+    /// and even a roll on a man the ball never reached, consumed the
+    /// whole flight. The defender the ball then ran through downstream
+    /// got nothing. Because the only reset sites are the dead ball and
+    /// the `PassTo` arm, a clearance also inherited the spent latch of
+    /// the pass before it.
+    ///
+    /// Kept SEPARATE from `intercept_rolled`, and deliberately: the two
+    /// are different actions at different moments of the same flight —
+    /// a leg thrown at a ball five metres ahead of you, and taking one
+    /// that draws level with your feet. Sharing one ledger was measured
+    /// and is much worse than the defect it was meant to fix, because
+    /// the block candidacy window reaches 40u UP the lane and therefore
+    /// consumes a man's encounter long before the ball gets to him:
+    /// interceptions 37.7 → 14.8 per team, goals 2.07 → 3.40, and the
+    /// carrier's time in our own area 1 411 → 2 240 ticks a match.
+    pub pass_block_rolled: u64,
     /// A pass-block that has been won, waiting for the ball to reach the
     /// man who won it: `(blocker, outcome roll)`. The mirror of
     /// `ShotTarget::blocked_by`, and it exists for the same reason — the
@@ -820,7 +833,7 @@ impl Ball {
             possession_source: PossessionSource::Unknown,
             possession_source_for: None,
             intercept_rolled: 0,
-            pass_block_rolled: false,
+            pass_block_rolled: 0,
             pass_blocked_by: None,
             contested_claim_count: 0,
             unowned_ticks: 0,
@@ -920,6 +933,14 @@ impl Ball {
         // goalkeeper release paths.
         self.last_release_from_hands = self.held_in_hands;
         self.held_in_hands = false;
+        // A new strike is a new set of encounters. Reset here rather than
+        // on the `PassTo` arm alone: a clearance, a keeper's distribution
+        // and a throw-in are all releases, and each used to inherit the
+        // spent latches of the delivery before it — which for the block
+        // channel's single `bool` meant it could never fire at all.
+        self.intercept_rolled = 0;
+        self.pass_block_rolled = 0;
+        self.pass_blocked_by = None;
     }
 
     /// A field player has deliberately played the ball with their feet.
@@ -1593,7 +1614,7 @@ impl Ball {
         self.possession_source = PossessionSource::Unknown;
         self.possession_source_for = None;
         self.intercept_rolled = 0;
-        self.pass_block_rolled = false;
+        self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;

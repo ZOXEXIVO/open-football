@@ -1,7 +1,6 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition,
-};
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -9,7 +8,6 @@ use nalgebra::Vector3;
 
 const STAMINA_RECOVERY_THRESHOLD: f32 = 90.0;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
-const MARKING_DISTANCE_THRESHOLD: f32 = 10.0;
 const OPPONENT_THREAT_THRESHOLD: usize = 2;
 
 #[derive(Default, Clone)]
@@ -30,14 +28,17 @@ impl StateProcessingHandler for MidfielderRestingState {
             // If the ball is close, check for nearby opponents.
             // A ball somebody is carrying is a challenge, not an
             // interception — see the note on the guards elsewhere.
-            let opponent_nearby = self.is_opponent_nearby(ctx);
-            return Some(StateChangeResult::with_midfielder_state(
-                if opponent_nearby || !Interception::is_available(ctx) {
-                    MidfielderState::Tackling
-                } else {
-                    MidfielderState::Intercepting
-                },
-            ));
+            let challenging = ctx
+                .players()
+                .opponents()
+                .with_ball()
+                .next()
+                .is_some_and(|carrier| TackleEngagement::should_commit(ctx, carrier.distance(ctx)));
+            return Some(StateChangeResult::with_midfielder_state(if challenging {
+                MidfielderState::Tackling
+            } else {
+                MidfielderState::Intercepting
+            }));
         }
 
         // 3. Check if the team is under threat
@@ -64,11 +65,6 @@ impl StateProcessingHandler for MidfielderRestingState {
 }
 
 impl MidfielderRestingState {
-    /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.
-    fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(MARKING_DISTANCE_THRESHOLD)
-    }
-
     /// Determines if the team is under threat based on the number of opponents in the attacking third.
     fn is_team_under_threat(&self, ctx: &StateProcessingContext) -> bool {
         let opponents_in_attacking_third = ctx

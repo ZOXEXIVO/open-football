@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, Interception,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -21,7 +22,7 @@ impl StateProcessingHandler for DefenderReturningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Passing,
+                DefenderState::Running,
             ));
         }
 
@@ -73,10 +74,12 @@ impl StateProcessingHandler for DefenderReturningState {
             }
         } else {
             if ctx.ball().distance() < 100.0 {
-                if ctx.players().opponents().with_ball().next().is_some() {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
+                if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                    if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Tackling,
+                        ));
+                    }
                 } else if ctx.team().is_best_player_to_chase_ball() {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::TakeBall,

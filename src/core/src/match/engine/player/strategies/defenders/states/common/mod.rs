@@ -8,6 +8,7 @@ use crate::r#match::engine::player::strategies::common::{
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
 use crate::r#match::player::strategies::RestartHold;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::ShapeDiscipline;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
@@ -111,6 +112,35 @@ impl Interception {
         !ctx.player.has_ball(ctx)
             && !ctx.ball().is_owned()
             && ctx.tick_context.chase.may_go(ctx.player.id)
+    }
+}
+
+/// **A carrier in our own penalty area.** The two bodies
+/// `is_box_emergency_for_me` elects go to him; everybody else holds
+/// shape so the box is not emptied.
+///
+/// One copy, because it was five — `Standing`, `HoldingLine`, `Marking`,
+/// `Covering` and `Guarding` each carried the same thirteen lines with
+/// their own literal 25u threshold, which sits OUTSIDE
+/// [`TackleEngagement::DISENGAGE`]: every one of them could hand a
+/// defender into a `Tackling` state whose first act is to hand him back.
+pub struct BoxEmergency;
+
+impl BoxEmergency {
+    /// Where an elected body goes, or `None` when this is not his
+    /// emergency.
+    pub fn response(ctx: &StateProcessingContext) -> Option<DefenderState> {
+        if !ctx.player().defensive().is_box_emergency_for_me() {
+            return None;
+        }
+        let carrier = ctx.players().opponents().with_ball().next()?;
+        Some(
+            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                DefenderState::Tackling
+            } else {
+                DefenderState::Pressing
+            },
+        )
     }
 }
 

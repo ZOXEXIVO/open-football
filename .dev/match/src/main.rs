@@ -327,9 +327,28 @@ impl HarnessTactic {
 }
 
 const FIRST_NAMES: [&str; 22] = [
-    "Lucas", "Diego", "Thomas", "Marco", "Antoine", "Oliver", "Michael", "Pablo", "Mateo", "Luka",
-    "Nikolai", "Erik", "Hiroshi", "Min-jun", "Gabriel", "Rafael", "Felix", "Alexandre", "Lorenzo",
-    "Jakub", "Ivan", "Jonas",
+    "Lucas",
+    "Diego",
+    "Thomas",
+    "Marco",
+    "Antoine",
+    "Oliver",
+    "Michael",
+    "Pablo",
+    "Mateo",
+    "Luka",
+    "Nikolai",
+    "Erik",
+    "Hiroshi",
+    "Min-jun",
+    "Gabriel",
+    "Rafael",
+    "Felix",
+    "Alexandre",
+    "Lorenzo",
+    "Jakub",
+    "Ivan",
+    "Jonas",
 ];
 
 const LAST_NAMES: &[&str] = &[
@@ -3123,9 +3142,7 @@ fn print_usage() {
     );
     eprintln!();
     eprintln!("Environment:");
-    eprintln!(
-        "  OF_PIN=<attr>:<home>:<away>[:<unit>][,…]   hold ONE attribute across a side. The"
-    );
+    eprintln!("  OF_PIN=<attr>:<home>:<away>[:<unit>][,…]   hold ONE attribute across a side. The");
     eprintln!(
         "                                      sensitivity instrument: the level sweep moves all fifty"
     );
@@ -3360,8 +3377,10 @@ impl SubstitutionCensus {
             total_subs as f32 / total_teams.max(1) as f32,
             total_goals as f32 / rows.len().max(1) as f32
         );
-        let recycled: Vec<(u64, bool)> =
-            rows.iter().flat_map(|r| r.recycled.iter().copied()).collect();
+        let recycled: Vec<(u64, bool)> = rows
+            .iter()
+            .flat_map(|r| r.recycled.iter().copied())
+            .collect();
         let instant = recycled.iter().filter(|&&(m, _)| m == 0).count();
         let short_discretionary = recycled.iter().filter(|&&(m, d)| d && m < 15).count();
         println!(
@@ -4596,7 +4615,18 @@ impl LevelSweep {
         println!();
         println!(
             "{:>5} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} {:>7} {:>6} {:>7} {:>7} {:>8}",
-            "level", "exec", "edge", "cond", "wide%", "over%", "miskick%", "aim%", "lane", "defl%", "force", "struck"
+            "level",
+            "exec",
+            "edge",
+            "cond",
+            "wide%",
+            "over%",
+            "miskick%",
+            "aim%",
+            "lane",
+            "defl%",
+            "force",
+            "struck"
         );
         for r in &rows {
             println!(
@@ -4630,7 +4660,15 @@ impl LevelSweep {
         println!();
         println!(
             "{:>5} {:>9} {:>10} {:>10} {:>9} {:>7} {:>10} {:>10} {:>8}",
-            "level", "reached%", "def-claim%", "att-claim%", "stopped%", "out%", "struck m", "reached m", "n"
+            "level",
+            "reached%",
+            "def-claim%",
+            "att-claim%",
+            "stopped%",
+            "out%",
+            "struck m",
+            "reached m",
+            "n"
         );
         for r in &rows {
             println!(
@@ -4770,7 +4808,9 @@ impl LevelSweep {
                 "    NB n is too small for this verdict to be worth much — the floor ({:.2}) is \
                  already bigger than the tolerance. Run at n>={:.0}.",
                 floor,
-                (per_match_sd * RANGE_K[k] / Self::FLAT_TOLERANCE as f64).powi(2).ceil(),
+                (per_match_sd * RANGE_K[k] / Self::FLAT_TOLERANCE as f64)
+                    .powi(2)
+                    .ceil(),
             );
         }
         println!(
@@ -4943,6 +4983,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // at population scale, not match-to-match noise.
     core::shot_gate_stats::reset();
     core::tackle_stats::reset();
+    core::mid_run_diag::BoxEpisodeDiag::reset();
     core::save_accounting_stats::reset();
     core::key_pass_diag::reset();
     core::assist_diag::reset();
@@ -5281,15 +5322,14 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // above averages exactly the signal a pin run exists to measure.
     // Home is team 1 — the pin's first value.
     {
-        let (h_pa, h_pc, a_pa, a_pc) =
-            outcomes.iter().fold((0u64, 0u64, 0u64, 0u64), |acc, o| {
-                (
-                    acc.0 + o.home.passes_attempted as u64,
-                    acc.1 + o.home.passes_completed as u64,
-                    acc.2 + o.away.passes_attempted as u64,
-                    acc.3 + o.away.passes_completed as u64,
-                )
-            });
+        let (h_pa, h_pc, a_pa, a_pc) = outcomes.iter().fold((0u64, 0u64, 0u64, 0u64), |acc, o| {
+            (
+                acc.0 + o.home.passes_attempted as u64,
+                acc.1 + o.home.passes_completed as u64,
+                acc.2 + o.away.passes_attempted as u64,
+                acc.3 + o.away.passes_completed as u64,
+            )
+        });
         let pct = |c: u64, a: u64| c as f32 / a.max(1) as f32 * 100.0;
         println!(
             "  home/away split   : H {:.1}% of {:.0}/match   A {:.1}% of {:.0}/match",
@@ -7380,7 +7420,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     for (h, name) in Handler::NAMES.iter().enumerate() {
                         let row: Vec<String> = (0..Band::COUNT)
                             .map(|b| {
-                                format!("{} {:.1}", Band::NAMES[b], per(strikes[h * Band::COUNT + b]))
+                                format!(
+                                    "{} {:.1}",
+                                    Band::NAMES[b],
+                                    per(strikes[h * Band::COUNT + b])
+                                )
                             })
                             .collect();
                         println!("    {:<10} {}", name, row.join(", "));
@@ -7396,7 +7440,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     for (p, name) in GrantPath::NAMES.iter().enumerate() {
                         let row: Vec<String> = (0..Band::COUNT)
                             .map(|b| {
-                                format!("{} {:.1}", Band::NAMES[b], per(grants[p * Band::COUNT + b]))
+                                format!(
+                                    "{} {:.1}",
+                                    Band::NAMES[b],
+                                    per(grants[p * Band::COUNT + b])
+                                )
                             })
                             .collect();
                         println!("    {:<10} {}", name, row.join(", "));
@@ -7753,7 +7801,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         );
                         println!(
                             "    {:<8} {:>6} {:>5} | {:>7} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} | {:>8} {:>7} {:>7} {:>7} {:>7} {:>7}",
-                            "band", "passes", "share",
+                            "band",
+                            "passes",
+                            "share",
                             core::flight_diag::PASS_SHAPES[0],
                             core::flight_diag::PASS_SHAPES[1],
                             core::flight_diag::PASS_SHAPES[2],
@@ -7761,22 +7811,46 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             core::flight_diag::PASS_SHAPES[4],
                             core::flight_diag::PASS_SHAPES[5],
                             core::flight_diag::PASS_SHAPES[6],
-                            "traffic", "≥1m", "≥0.5m", "back", "wide", "box"
+                            "traffic",
+                            "≥1m",
+                            "≥0.5m",
+                            "back",
+                            "wide",
+                            "box"
                         );
                         for (i, (shapes, traffic, airborne, lifted, backward, wide, into_box)) in
                             bands.iter().enumerate()
                         {
                             let n: u64 = shapes.iter().sum();
-                            let pct = |c: u64| if n == 0 { 0.0 } else { c as f64 / n as f64 * 100.0 };
+                            let pct = |c: u64| {
+                                if n == 0 {
+                                    0.0
+                                } else {
+                                    c as f64 / n as f64 * 100.0
+                                }
+                            };
                             println!(
                                 "    {:<8} {:>6} {:>4.0}% | {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>7.1}% {:>7.1}% | {:>7.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
                                 core::flight_diag::PASS_BAND_LABELS[i],
                                 n,
-                                if total == 0 { 0.0 } else { n as f64 / total as f64 * 100.0 },
-                                pct(shapes[0]), pct(shapes[1]), pct(shapes[2]), pct(shapes[3]),
-                                pct(shapes[4]), pct(shapes[5]), pct(shapes[6]),
-                                pct(*traffic), pct(*airborne), pct(*lifted), pct(*backward),
-                                pct(*wide), pct(*into_box)
+                                if total == 0 {
+                                    0.0
+                                } else {
+                                    n as f64 / total as f64 * 100.0
+                                },
+                                pct(shapes[0]),
+                                pct(shapes[1]),
+                                pct(shapes[2]),
+                                pct(shapes[3]),
+                                pct(shapes[4]),
+                                pct(shapes[5]),
+                                pct(shapes[6]),
+                                pct(*traffic),
+                                pct(*airborne),
+                                pct(*lifted),
+                                pct(*backward),
+                                pct(*wide),
+                                pct(*into_box)
                             );
                         }
                     }
@@ -8245,9 +8319,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 let row = BlockDiag::HEIGHT_BANDS
                     .iter()
                     .zip(bands.iter())
-                    .map(|(label, n)| {
-                        format!("{label} {:.0}%", *n as f32 / total as f32 * 100.0)
-                    })
+                    .map(|(label, n)| format!("{label} {:.0}%", *n as f32 / total as f32 * 100.0))
                     .collect::<Vec<_>>()
                     .join(" | ");
                 println!("    height of the ball at the block: {row}");
@@ -9783,7 +9855,13 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!("--- KEEPER BY HIS OWN DEPTH (on-frame arrivals at his plane) ---");
             println!(
                 "  {:<12} {:>8} {:>8} {:>9} {:>9} {:>9} {:>8} {:>8}",
-                "off his line", "arrived", "depth", "lateral", "err@line", "reach", "saved",
+                "off his line",
+                "arrived",
+                "depth",
+                "lateral",
+                "err@line",
+                "reach",
+                "saved",
                 "beyond"
             );
             let bands = ["< 2 m", "2-4 m", "4-7 m", "7-11 m", "11 m +"];
@@ -11076,6 +11154,30 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     .collect();
                 println!("    what he was doing: {}", labels.join("  ·  "));
             }
+            // How long the ball actually stays in and around the area —
+            // the exposure every per-event defensive rate has to be read
+            // against. See `BoxEpisode`.
+            {
+                use core::mid_run_diag::BoxEpisodeDiag;
+                let (en, mean, over5, over10, passes, challenged, to_ch, endings) =
+                    BoxEpisodeDiag::totals();
+                if en > 0 {
+                    println!(
+                        "  BOX POSSESSION EPISODES ({en} — {:.1}/match, mean {mean:.2} s, {:.1} attacking touches each)
+                             over 5 s {:.0}%  ·  over 10 s {:.0}%
+                             a challenge was made in {:.0}% of them, first one after {to_ch:.2} s
+                             ended: regain {:.0}%  ·  shot {:.0}%  ·  cleared / left the area {:.0}%",
+                        en as f64 / n_matches as f64,
+                        passes,
+                        over5 * 100.0,
+                        over10 * 100.0,
+                        challenged * 100.0,
+                        endings[0] * 100.0,
+                        endings[1] * 100.0,
+                        endings[2] * 100.0,
+                    );
+                }
+            }
             // What the beaten defender did about it — see
             // `mid_run_diag::RECOV_DECISIONS`. A challenge he could not
             // make before this existed at all.
@@ -11227,7 +11329,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         if rolls > 0 {
                             let states: Vec<String> = LaneDiag::states(age)
                                 .iter()
-                                .map(|(l, n)| format!("{l} {:.0}%", *n as f64 / rolls as f64 * 100.0))
+                                .map(|(l, n)| {
+                                    format!("{l} {:.0}%", *n as f64 / rolls as f64 * 100.0)
+                                })
                                 .collect();
                             println!(
                                 "    INTERCEPTION ROLLS {label:<9} {rolls:>7} ({:>6.1}/match) at mean p={chance:.3} from {:.2} m  →  {fired:>6} taken ({:>5.1}/match, {:.1}%)  ·  ball {:.1} m from its man, {:.1} m travelled, {:.2} u/tick; the man rolled stands {:.1} m from the receiver, stood {:.2} m off the lane at the strike ({:.0}% from outside reach)",
@@ -11255,7 +11359,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 use core::mid_run_diag::KeeperOrgDiag;
                 let bands = KeeperOrgDiag::by_band();
                 if !bands.is_empty() {
-                    println!("  KEEPER ORGANISATION (per defensive-plan refresh, by his own voice)");
+                    println!(
+                        "  KEEPER ORGANISATION (per defensive-plan refresh, by his own voice)"
+                    );
                     for (label, n, reach, in_zone, free, gap, calls) in bands {
                         println!(
                             "    {label:<12} n={n:<9} organises {:.1} m out — {in_zone:.2} opponents in the zone at a mean {:.1} m from our nearest man, {free:.2} of them FREE  →  shouts on {:.0}% of refreshes",
@@ -13388,7 +13494,6 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open")
-
             .arg("http://localhost:18002")
             .spawn();
     }
@@ -14034,7 +14139,16 @@ impl HeatCensusRun {
         println!("--- WHERE EACH SLOT LIVES (all play) ---");
         println!(
             "  {:<5} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} {:>7} {:>8} {:>7}",
-            "slot", "mean x", "sd x", "mean y", "sd y", "A50 m²", "A95 m²", "peak%", "ball m", "<15m%"
+            "slot",
+            "mean x",
+            "sd x",
+            "mean y",
+            "sd y",
+            "A50 m²",
+            "A95 m²",
+            "peak%",
+            "ball m",
+            "<15m%"
         );
         for slot in &slots {
             let p = &report.positions[*slot];
@@ -14106,7 +14220,10 @@ impl HeatCensusRun {
                 p.poss_x,
                 p.oop_x,
                 p.poss_x - p.oop_x,
-                Self::cosine(&p.grid[heat::PHASE_IN_POSSESSION], &p.grid[heat::PHASE_OUT_OF_POSSESSION]),
+                Self::cosine(
+                    &p.grid[heat::PHASE_IN_POSSESSION],
+                    &p.grid[heat::PHASE_OUT_OF_POSSESSION]
+                ),
             );
         }
         println!(
@@ -14143,7 +14260,15 @@ impl HeatCensusRun {
         );
         println!("  a right-back share almost no grass, a striker and a centre-back none at all)");
         println!();
-        println!("  {:<5}{}", "", outfield.iter().map(|s| format!("{:>6}", Self::label(*s))).collect::<Vec<_>>().join(""));
+        println!(
+            "  {:<5}{}",
+            "",
+            outfield
+                .iter()
+                .map(|s| format!("{:>6}", Self::label(*s)))
+                .collect::<Vec<_>>()
+                .join("")
+        );
         for a in &outfield {
             let row: String = outfield
                 .iter()
@@ -14203,7 +14328,9 @@ impl HeatCensusRun {
                 n
             );
         }
-        let in_poss: u64 = report.game_phase[0] + report.game_phase[1] + report.game_phase[2]
+        let in_poss: u64 = report.game_phase[0]
+            + report.game_phase[1]
+            + report.game_phase[2]
             + report.game_phase[3];
         println!(
             "  in possession: {:.1}% of it, of which Attack+Progression {:.1}%   (real ~50-60%)",
@@ -14218,7 +14345,10 @@ impl HeatCensusRun {
             "  {:<14} {:>8} {:>8} {:>9} {:>9} {:>9} {:>8}",
             "phase", "length", "width", "centroid", "deepest", "highest", "swarm"
         );
-        for (i, name) in ["all play", "in possession", "out of poss."].iter().enumerate() {
+        for (i, name) in ["all play", "in possession", "out of poss."]
+            .iter()
+            .enumerate()
+        {
             let s = report.shape[i];
             println!(
                 "  {:<14} {:>7.1} {:>8.1} {:>9.1} {:>9.1} {:>9.1} {:>8.2}",
@@ -14243,7 +14373,10 @@ impl HeatCensusRun {
         Self::render(&report.ball, "THE BALL");
         let mut team: Vec<u64> = vec![0; heat::CELLS];
         for slot in &outfield {
-            for (t, v) in team.iter_mut().zip(&report.positions[*slot].grid[heat::PHASE_ALL]) {
+            for (t, v) in team
+                .iter_mut()
+                .zip(&report.positions[*slot].grid[heat::PHASE_ALL])
+            {
                 *t += *v;
             }
         }

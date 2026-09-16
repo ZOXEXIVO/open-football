@@ -1,10 +1,13 @@
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
-use crate::r#match::player::strategies::common::states::{RecoveryChallenge, TackleDecision};
+use crate::r#match::player::strategies::common::states::{
+    RecoveryChallenge, TackleDecision, TackleOutcome,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -35,15 +38,6 @@ impl StateProcessingHandler for DefenderTacklingState {
             ));
         }
 
-        // CRITICAL: Don't try to claim ball if it's in protected flight state
-        // Transition OUT of tackling to avoid clustering around the ball carrier
-        if ctx.ball().is_in_flight() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
-        }
-
-        // Check if there's an opponent with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
@@ -76,45 +70,26 @@ impl StateProcessingHandler for DefenderTacklingState {
             let lead = RecoveryChallenge::lead(ctx, opponent.position);
             if RecoveryChallenge::is_available(ctx, distance_to_opponent, lead)
                 && TackleEngagement::may_engage_carrier(ctx)
-                && RecoveryChallenge::is_decision_tick(ctx)
-                && ctx
-                    .context
-                    .rng
-                    .bernoulli(RecoveryChallenge::commit_probability(
-                        ctx,
-                        distance_to_opponent,
-                        lead,
-                    ))
+                && RecoveryChallenge::is_eligible(ctx)
+                && ctx.context.rng.bernoulli(RecoveryChallenge::commits_now(
+                    ctx,
+                    distance_to_opponent,
+                    lead,
+                ))
             {
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
                 let def_profile = DefenderSkillProfile::from_ctx(ctx);
-                let (won, fouled, severity) = RecoveryChallenge::resolve(
+                let minute = sc::minute_from_ms(ctx.context.total_match_time);
+                let outcome = RecoveryChallenge::resolve(
                     ctx,
-                    def_profile.tackle_profile,
+                    sc::defensive_duel(ctx.player, minute),
                     def_profile.discipline,
-                    self.carry_score(ctx, &opponent),
+                    TackleDecision::carrier_threat(ctx, &opponent),
                     distance_to_opponent,
                     lead,
                 );
-                let mut result = if won {
-                    #[cfg(feature = "match-logs")]
-                    crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-                    StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
-                    )
-                } else if fouled {
-                    StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
-                    )
-                } else {
-                    // He missed and the man is gone. Pressing is where a
-                    // beaten defender goes to get back into the picture,
-                    // the same exit a missed block tackle takes.
-                    StateChangeResult::with_defender_state(DefenderState::Pressing)
-                };
+                let mut result = self.settle(ctx, outcome);
                 result.start_tackle_cooldown = true;
                 return Some(result);
             }
@@ -135,39 +110,27 @@ impl StateProcessingHandler for DefenderTacklingState {
             // Covering / Guarding / HoldingLine, each with its own
             // distance trigger and no shared cooldown. The cooldown lives
             // on the player itself — whatever path routed us here, if we
-            // just tackled, we can't tackle again for ~1 s.
+            // just tackled, we can't tackle again for 5 s (250 AI ticks;
+            // see `MatchPlayer::start_tackle_cooldown`).
             if !ctx.player.can_attempt_tackle() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
             }
 
-            // Closest-teammate duel gate. Without this, 3-4 defenders
-            // within `TACKLE_DISTANCE_THRESHOLD` of the same ball carrier
-            // all enter Tackling in the same tick and each rolls their
-            // own attempt. Instrumentation showed this path was the
-            // primary driver of ~370 tackle events/team/match (real
-            // football: ~18). Only the best-positioned teammate
-            // engages; the rest fall back to Pressing to cover angles.
-            // Entry condition only — see the midfielder/forward variants.
-            // Re-checking a flickering designation every tick could only
-            // abandon a challenge already under way.
-            // …and the plan's own nomination counts as passing it, or the
-            // chase election's `position_factor` (Defender 0.9 against
-            // Forward 1.2) hands the challenge to whichever forward
-            // happens to be in the area. Measured, that inverted the
-            // ladder completely: 0.47 tackles per defender per match
-            // against 3.01 per forward. See `TackleEngagement`.
-            // …and the duel gate is `TackleEngagement::may_engage_carrier`
-            // rather than the chase election on its own: the plan's
-            // nomination WINS, and the election only fills in when the
-            // plan has nobody. Reading the election here as an
-            // alternative is what let a forward take a defender's duel
-            // (Forward 1.2 against Defender 0.9 on `position_factor`).
-            if ctx.in_state_time == 0 && !TackleEngagement::may_engage_carrier(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
+            // ⚠ THE LICENCE GUARDED THE ENTRY TICK, AND THE ENTRY TICK
+            // CANNOT REACH IT.
+            //
+            // This read `ctx.in_state_time == 0`, and the distance guard
+            // above returns first for anybody outside `CONTACT` — which
+            // is every carrier-based entry the engine makes, because a
+            // state is entered at `COMMIT` and challenges at `CONTACT`.
+            // So an unlicensed defender was never tested, closed all the
+            // way in, and rolled the challenge below with no gate at all.
+            // The question belongs to the CHALLENGE, and asked here it is
+            // asked once per physical attempt.
+            if !TackleEngagement::may_engage_carrier(ctx) {
+                return None;
             }
 
             // JOCKEY FIRST.
@@ -187,14 +150,11 @@ impl StateProcessingHandler for DefenderTacklingState {
             // rather than pursues — so he stays on the carrier's
             // shoulder instead of being handed back to `Pressing`, which
             // is what containing actually looks like.
-            if !TackleDecision::is_decision_tick(ctx)
+            if !TackleDecision::is_eligible(ctx)
                 || !ctx
                     .context
                     .rng
-                    .bernoulli(TackleDecision::commit_probability(
-                        ctx,
-                        distance_to_opponent,
-                    ))
+                    .bernoulli(TackleDecision::commits_now(ctx, distance_to_opponent))
             {
                 return None;
             }
@@ -203,30 +163,9 @@ impl StateProcessingHandler for DefenderTacklingState {
             // enforced by the cooldown.
             #[cfg(feature = "match-logs")]
             crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-            let (tackle_success, committed_foul, foul_severity) =
-                self.attempt_sliding_tackle(ctx, &opponent);
-
-            return if tackle_success {
-                #[cfg(feature = "match-logs")]
-                crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-                let mut result = StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
-                );
-                result.start_tackle_cooldown = true;
-                Some(result)
-            } else if committed_foul {
-                let mut result = StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
-                );
-                result.start_tackle_cooldown = true;
-                Some(result)
-            } else {
-                let mut result = StateChangeResult::with_defender_state(DefenderState::Pressing);
-                result.start_tackle_cooldown = true;
-                Some(result)
-            };
+            let mut result = self.settle(ctx, self.attempt_sliding_tackle(ctx, &opponent));
+            result.start_tackle_cooldown = true;
+            return Some(result);
         } else {
             // Ball is loose - check for interception
             // Double-check not in flight before claiming
@@ -349,11 +288,36 @@ impl DefenderTacklingState {
         }
     }
 
+    /// One resolved challenge, turned into the state change it implies.
+    /// Both challenge paths end here so a win, a foul and a miss cannot
+    /// mean different things depending on which one was made.
+    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+        match outcome {
+            TackleOutcome::Won => {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                )
+            }
+            TackleOutcome::Foul(severity) => StateChangeResult::with_defender_state_and_event(
+                DefenderState::Standing,
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+            ),
+            // He missed and the man is gone. Pressing is where a beaten
+            // defender goes to get back into the picture.
+            TackleOutcome::Missed => {
+                StateChangeResult::with_defender_state(DefenderState::Pressing)
+            }
+        }
+    }
+
     fn attempt_sliding_tackle(
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool, FoulSeverity) {
+    ) -> TackleOutcome {
         let rng = &ctx.context.rng;
 
         // Unified defender profile drives both the success and the foul
@@ -363,21 +327,22 @@ impl DefenderTacklingState {
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
 
-        // Opponent carry score — see `carry_score`, shared with the
-        // recovery challenge so the two never disagree about the man.
-        let attacker_score = self.carry_score(ctx, opponent);
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let attacker_score = TackleDecision::carrier_threat(ctx, opponent);
 
-        // Logistic success: tackle_profile vs attacker carry.
-        // Sigmoid 3.2 → 2.4 and upper clamp 0.72 → 0.55 trim the
-        // strong-defender-vs-weak-attacker dominance. At equal skill
-        // `raw_diff = 0` and `sigmoid = 0.5` regardless of coefficient,
-        // so calibration-neutral for equal matchups. The 0.55 cap means
-        // even an elite CB vs a poor forward leaves the attacker with
-        // 45% per-attempt survival — across 3 engagement sequences in
-        // the final third that's ~14% accumulated retention, enough to
-        // let weak teams complete the occasional shooting chain at
-        // extreme skill gaps (the prior 0.62 cap gave only ~5%).
-        let raw_diff = def_profile.tackle_profile - attacker_score;
+        // ⚠ BOTH SIDES OF THE DUEL MUST BE ON ONE SCALE.
+        //
+        // This scored `tackle_profile`, which subtracts
+        // `MatchStandard::shift` from every input, against an ABSOLUTE
+        // carry composite. Differencing a peer-relative score against an
+        // absolute one leaves the standard of the match in the result:
+        // the same equal-quality matchup won 55% at the bottom of the
+        // pyramid and 24% at the top. `defensive_duel` is the same family
+        // of composite as `dribble_attack`, so the difference is level at
+        // every level. The profile still drives the decision, the
+        // movement and the discipline — it is a selection model, not a
+        // contest one.
+        let raw_diff = sc::defensive_duel(ctx.player, minute) - attacker_score;
         let success_chance = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.06, 0.55);
 
         let tackle_success = rng.random::<f32>() < success_chance;
@@ -526,31 +491,7 @@ impl DefenderTacklingState {
             FoulSeverity::Normal
         };
 
-        (tackle_success, committed_foul, severity)
-    }
-
-    /// How dangerous this man is with the ball at his feet.
-    ///
-    /// Composite-led for a registered attacker, a skill blend when the
-    /// opponent is missing from the registry. Factored out of
-    /// [`Self::attempt_sliding_tackle`] so the block tackle and
-    /// [`RecoveryChallenge`] weigh the same opponent the same way — two
-    /// challenges on one carrier must not disagree about who he is.
-    fn carry_score(&self, ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> f32 {
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        if let Some(att) = ctx.context.players.by_id(opponent.id) {
-            sc::dribble_attack(att, minute)
-        } else {
-            let dribbling;
-            let agility;
-            {
-                let players = ctx.player();
-                let s = players.skills(opponent.id);
-                dribbling = sc::n(s.technical.dribbling);
-                agility = sc::n(s.physical.agility);
-            }
-            (dribbling + agility) * 0.5
-        }
+        TackleOutcome::of(tackle_success, committed_foul, severity)
     }
 
     fn exists_nearby(&self, ctx: &StateProcessingContext) -> bool {
@@ -559,27 +500,23 @@ impl DefenderTacklingState {
         ctx.players().opponents().exists(DISTANCE) || ctx.players().teammates().exists(DISTANCE)
     }
 
+    /// Can he get a foot to a ball nobody owns?
+    ///
+    /// ⚠ The prediction is [`LooseBallChase::meeting_point`], not
+    /// `distance / pace`. `pace` is a 1-20 attribute; dividing a
+    /// field-unit distance by it produced a tick count wrong by more than
+    /// an order of magnitude, and the extrapolated "intercept position"
+    /// that followed was meaningless.
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
-        if self.exists_nearby(ctx) {
+        if self.exists_nearby(ctx) || ctx.tick_context.ball.is_owned {
             return false;
         }
-
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let player_position = ctx.player.position;
-        let player_speed = ctx.player.skills.physical.pace;
-
-        if !ctx.tick_context.ball.is_owned && ball_velocity.magnitude() > 0.1 {
-            let time_to_ball = (ball_position - player_position).magnitude() / player_speed;
-            let ball_travel_distance = ball_velocity.magnitude() * time_to_ball;
-            let ball_intercept_position =
-                ball_position + ball_velocity.normalize() * ball_travel_distance;
-            let player_intercept_distance = (ball_intercept_position - player_position).magnitude();
-
-            player_intercept_distance <= TackleEngagement::CONTACT
-        } else {
-            false
-        }
+        let meeting = LooseBallChase::meeting_point(
+            ctx,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+        );
+        (meeting - ctx.player.position).magnitude() <= TackleEngagement::CONTACT
     }
 }
 
@@ -680,6 +617,108 @@ mod tests {
         let elite_attacker = attacker(18.0, 17.0, 17.0);
         let diff = sc::defensive_duel(&weak, 30) - sc::dribble_attack(&elite_attacker, 30);
         assert!(diff < -0.10, "expected attacker advantage, got diff={diff}");
+    }
+
+    /// Every attribute at `level`, so the two sides of the duel are
+    /// matched by construction.
+    fn uniform(id: u32, level: f32, position: PlayerPositionType) -> MatchPlayer {
+        let mut attrs = PlayerAttributes::default();
+        attrs.condition = 10000;
+        attrs.jadedness = 0;
+        let mut skills = PlayerSkills::default();
+        let s = &mut skills;
+        s.technical.tackling = level;
+        s.technical.marking = level;
+        s.technical.heading = level;
+        s.technical.passing = level;
+        s.technical.technique = level;
+        s.technical.first_touch = level;
+        s.technical.crossing = level;
+        s.technical.dribbling = level;
+        s.mental.positioning = level;
+        s.mental.anticipation = level;
+        s.mental.concentration = level;
+        s.mental.decisions = level;
+        s.mental.composure = level;
+        s.mental.bravery = level;
+        s.mental.aggression = level;
+        s.mental.teamwork = level;
+        s.mental.work_rate = level;
+        s.mental.leadership = level;
+        s.mental.vision = level;
+        s.mental.off_the_ball = level;
+        s.mental.determination = level;
+        s.mental.flair = level;
+        s.physical.strength = level;
+        s.physical.jumping = level;
+        s.physical.pace = level;
+        s.physical.acceleration = level;
+        s.physical.agility = level;
+        s.physical.balance = level;
+        s.physical.stamina = level;
+        s.physical.natural_fitness = level;
+        s.physical.match_readiness = level;
+        let p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("U".into(), "Z".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(skills)
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 18,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        MatchPlayer::from_player(id, &p, position, false, None)
+    }
+
+    /// **The production duel is level for equal quality, at every level
+    /// of the pyramid.**
+    ///
+    /// This is the property `tackle_profile` could not have. It subtracts
+    /// `MatchStandard::shift` from each of its inputs and `dribble_attack`
+    /// does not, so differencing the two left the standard of the match in
+    /// the result: the same matched pair resolved at 0.55 in the fourth
+    /// tier and 0.24 in the top flight. Both composites here are absolute,
+    /// so the difference is zero wherever the pair is drawn from.
+    #[test]
+    fn an_equal_duel_resolves_level_at_every_level() {
+        let win = |level: f32| {
+            let d = uniform(1, level, PlayerPositionType::DefenderCenter);
+            let a = uniform(2, level, PlayerPositionType::ForwardCenter);
+            let diff = sc::defensive_duel(&d, 30) - sc::dribble_attack(&a, 30);
+            (1.0f32 / (1.0 + (-diff * 2.4).exp())).clamp(0.06, 0.55)
+        };
+        let mut lowest = f32::MAX;
+        let mut highest = f32::MIN;
+        for level in [4.0f32, 8.0, 12.0, 16.0, 18.0, 20.0] {
+            let p = win(level);
+            assert!(
+                (p - 0.5).abs() <= 0.05,
+                "equal quality at level {level} resolved at {p}"
+            );
+            lowest = lowest.min(p);
+            highest = highest.max(p);
+        }
+        assert!(
+            highest - lowest <= 0.05,
+            "the duel walks up the pyramid: {lowest} to {highest}"
+        );
+    }
+
+    /// …and skill advantage is still monotone through it.
+    #[test]
+    fn the_better_defender_still_wins_more_of_them() {
+        let elite = uniform(1, 18.0, PlayerPositionType::DefenderCenter);
+        let poor = uniform(3, 6.0, PlayerPositionType::DefenderCenter);
+        let carrier = uniform(2, 12.0, PlayerPositionType::ForwardCenter);
+        let carry = sc::dribble_attack(&carrier, 30);
+        assert!(sc::defensive_duel(&elite, 30) - carry > sc::defensive_duel(&poor, 30) - carry);
     }
 
     #[test]

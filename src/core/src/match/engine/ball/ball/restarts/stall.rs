@@ -202,8 +202,9 @@ pub mod dead_ball_diag {
             }
             let n = ticks as f64;
             let mean_top = MOTION_TOPSPEED_X1000.load(Ordering::Relaxed) as f64 / n;
-            let variance =
-                (MOTION_TOPSPEED_SQ.load(Ordering::Relaxed) as f64 / n - mean_top * mean_top).max(0.0);
+            let variance = (MOTION_TOPSPEED_SQ.load(Ordering::Relaxed) as f64 / n
+                - mean_top * mean_top)
+                .max(0.0);
             (
                 Self::per_90(MOTION_DISTANCE_X1000.load(Ordering::Relaxed), ticks),
                 Self::per_90(

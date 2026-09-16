@@ -3,6 +3,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -32,7 +33,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
             // If opponent with ball is close, tackle immediately
-            if opponent_distance < 40.0 {
+            if TackleEngagement::should_commit(ctx, opponent_distance) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
@@ -95,21 +96,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 }
             }
 
-            // Compute the nearest opponent distance in a single pass — no
-            // intermediate Vec.
-            let mut any_nearby = false;
-            let mut closest_opponent_distance = f32::MAX;
-            for opponent in ctx.players().opponents().nearby(150.0) {
-                any_nearby = true;
-                let distance = ctx.player().distance_to_player(opponent.id);
-                if distance < closest_opponent_distance {
-                    closest_opponent_distance = distance;
-                }
-            }
-
-            if any_nearby {
-                let ball_distance = ctx.ball().distance();
-                if ball_distance < 50.0 && closest_opponent_distance < 50.0 {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));

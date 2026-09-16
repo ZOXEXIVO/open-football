@@ -2,6 +2,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{
     ActivityIntensity, ForwardCondition, InterceptionRange,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, MATCH_TIME_MS, StateChangeResult, StateProcessingContext,
@@ -67,10 +68,12 @@ impl StateProcessingHandler for ForwardReturningState {
         // Narrower check first — the old order put the 200u Intercepting
         // branch above this one, so the close-range Tackling branch was
         // unreachable.
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Tackling,
-            ));
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Tackling,
+                ));
+            }
         }
 
         // Commit at the INNER band — `Intercepting` gives up at the outer

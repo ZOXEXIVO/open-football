@@ -1,12 +1,14 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
-use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
+use crate::r#match::player::strategies::common::states::{
+    ContactFoul, MarkEngagement, TackleEngagement,
+};
 use crate::r#match::player::strategies::common::team::KeeperVoice;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -16,7 +18,6 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 10.0; // Aggressive tackle when marking — don't let attacker turn
 const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
 const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earlier to ball
 const HEADING_HEIGHT: f32 = 1.5;
@@ -92,22 +93,24 @@ impl StateProcessingHandler for DefenderMarkingState {
         // leans or blocks — the commonest foul in football and one this
         // engine could not produce, because tackling was its only foul
         // source. See `ContactFoul`.
-        if ContactFoul::is_decision_tick(ctx) {
-            if let Some(man) = self.find_best_marking_target(ctx) {
-                let gap = (man.position - ctx.player.position).magnitude();
-                // He is going past me if he is moving and I am not with
-                // him — the moment a beaten defender reaches out.
-                let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
-                let p = ContactFoul::probability(ctx, gap, losing_him);
-                if ctx.context.rng.bernoulli(p) {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul(
-                            ctx.player.id,
-                            ContactFoul::severity(ctx, losing_him),
-                        )),
-                    ));
-                }
+        if let Some(man) = self.find_best_marking_target(ctx) {
+            let gap = (man.position - ctx.player.position).magnitude();
+            // He is going past me if he is moving and I am not with
+            // him — the moment a beaten defender reaches out.
+            let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
+            if ContactFoul::is_decision_tick(ctx)
+                && ctx
+                    .context
+                    .rng
+                    .bernoulli(ContactFoul::probability(ctx, gap, losing_him))
+            {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::CommitFoul(
+                        ctx.player.id,
+                        ContactFoul::severity(ctx, losing_him),
+                    )),
+                ));
             }
         }
 
@@ -115,18 +118,8 @@ impl StateProcessingHandler for DefenderMarkingState {
         // carrier is INSIDE our penalty area and we're one of the two
         // closest defenders. A shot is imminent; engage the carrier
         // regardless of marking duties.
-        if ctx.player().defensive().is_box_emergency_for_me() {
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                let d = carrier.distance(ctx);
-                if d < 25.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
-            }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // Take ball only if best positioned — prevents swarming
@@ -166,7 +159,7 @@ impl StateProcessingHandler for DefenderMarkingState {
 
             // Priority: If opponent with ball is close, press/tackle immediately
             if opponent.has_ball(ctx) {
-                if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
+                if TackleEngagement::should_commit(ctx, distance_to_opponent) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));

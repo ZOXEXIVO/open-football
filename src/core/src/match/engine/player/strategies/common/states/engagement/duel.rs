@@ -4,7 +4,9 @@ use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchContext, PlayerSide, StateProcessingContext};
+use crate::r#match::{
+    MATCH_TIME_INCREMENT_MS, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext,
+};
 use nalgebra::Vector3;
 
 /// How far behind a challenging player a team-mate can be and still count
@@ -68,6 +70,31 @@ impl PenaltyRisk {
     }
 }
 
+/// The clock every engagement decision is drawn against.
+///
+/// Rolling once every N ticks makes the rate a function of the tick size,
+/// and forfeits outright any opportunity whose tick lands on one of the
+/// state's early returns — the next chance is then a whole interval away
+/// because the phase is fixed by when contact began. Drawing the same
+/// rate on every eligible tick removes both: over one window,
+/// `1 - (1-p)^(dt/window)` compounded across `window/dt` ticks is exactly
+/// `p`, at any tick size. It is `P = 1 - exp(-lambda*t)` with
+/// `lambda = -ln(1-p)`, written without the transcendentals.
+pub struct EngagementClock;
+
+impl EngagementClock {
+    /// Seconds of match time one full AI tick advances. The engine
+    /// alternates full ticks with movement-only light ones and only the
+    /// full ones run the state machine.
+    pub const TICK_SECONDS: f32 = (MATCH_TIME_INCREMENT_MS * 2) as f32 / 1000.0;
+
+    /// One AI tick's share of a rate quoted over `window` seconds.
+    #[inline]
+    pub fn per_tick(rate: f32, window: f32) -> f32 {
+        1.0 - (1.0 - rate).powf(Self::TICK_SECONDS / window)
+    }
+}
+
 /// When a defender in contact range actually commits to a challenge,
 /// rather than staying on his feet and containing.
 ///
@@ -121,7 +148,7 @@ impl TackleDecision {
     /// ⚠ RE-ANCHORED AGAIN, 0.098 → 0.073, AND AGAIN NOT BECAUSE THE
     /// DECISION CHANGED — because the DIVISOR did.
     ///
-    /// [`Self::is_decision_tick`] now counts time in CONTACT rather than
+    /// [`Self::is_eligible`] now counts time in CONTACT rather than
     /// time in the `Tackling` state, and the interval is the one real
     /// second the doc always claimed rather than two. Both corrections
     /// pull the same way: a defender who arrives on the carrier is asked
@@ -206,59 +233,30 @@ impl TackleDecision {
     /// …and when he is the last man, where the challenge has to be made.
     const BOX_RESTRAINT_LAST_MAN: f32 = 0.72;
 
-    /// How often the decision is taken while containing, in AI ticks.
+    /// The window [`Self::commit_probability`] is quoted over.
     ///
-    /// ONE ROLL PER MOMENT, not one per tick — the same discipline
-    /// `intercept_rolled` / `save_rolled` / `block_rolled` enforce
-    /// elsewhere, and for the same reason. Rolling every tick makes the
-    /// rate a function of how long the defender happens to stay in range
-    /// rather than of the defending: at 100 ticks in contact and any
-    /// per-tick probability above ~3%, a challenge becomes a certainty,
-    /// so the tackle cooldown silently remained the only real limiter and
-    /// the whole decision was decorative. Measured that way it moved
-    /// tackles per defender only 11.9 → 10.3 against a real 1.6.
-    ///
-    /// One second is the natural cadence: it is roughly how long a
-    /// carrier holds a shape before his next touch, which is what creates
-    /// or denies the moment.
-    ///
-    /// ⚠ 100 → 50, AND THAT IS A UNITS FIX, NOT A RATE CHANGE.
-    ///
-    /// The engine alternates full AI ticks with movement-only light ones
-    /// and only the full ones run the state machine, so **one AI tick is
-    /// 20 ms**, not 10 (`MatchPlayer::in_state_time`, `game_tick_light`).
-    /// 100 was therefore a TWO-second cadence while the comment above —
-    /// and the whole argument for the number — says one. 50 is what the
-    /// doc has always described.
-    const DECISION_INTERVAL_TICKS: u16 = 50;
+    /// One second is the natural cadence: roughly how long a carrier
+    /// holds a shape before his next touch, which is what creates or
+    /// denies the moment. It is no longer an INTERVAL — see
+    /// [`EngagementClock`] — so a decision can never be forfeited by
+    /// landing on a tick the state returns early from.
+    const RATE_WINDOW: f32 = 1.0;
 
-    /// Is this tick one on which the defender re-decides?
+    /// Can this defender make the block tackle at all right now?
     ///
-    /// ⚠ THE CLOCK IS TIME IN CONTACT, NOT TIME IN THE STATE.
-    ///
-    /// This read `ctx.in_state_time`, and the comment claimed "entry
-    /// always counts, so a defender arriving on a carrier who has already
-    /// lost control can challenge immediately". Neither half held.
-    /// `Tackling` is entered from up to 25u — every one of the five
-    /// box-emergency routes hands over at that range, and so does
-    /// `Pressing` — while an attempt is only ever rolled inside
-    /// [`TackleEngagement::CONTACT`] (10u), and the state's own distance
-    /// guard `return None`s above this call. So the entry roll was spent
-    /// three metres away and discarded, and the defender then contained
-    /// in silence until the phase came round again.
-    ///
-    /// Measured: **46% of the players in a `Tackling` state are inside
-    /// contact**, and a carrier inside our own area — where a possession
-    /// lasts a second or two — drew 20 commit decisions a match between
-    /// every defender on the pitch. The commitment model was not
-    /// declining those duels; it was never asked about them.
-    ///
-    /// [`MatchPlayer::contact_ticks`] counts the thing the cadence is
-    /// about. It is incremented before the state machine runs, so the
-    /// first tick in contact reads 1 and the roll happens on arrival.
-    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
-        let t = ctx.player.contact_ticks;
-        t > 0 && (t - 1) % Self::DECISION_INTERVAL_TICKS == 0
+    /// [`MatchPlayer::contact_ticks`] counts dwell inside
+    /// [`TackleEngagement::CONTACT`] of an opposing CARRIER, which is the
+    /// thing the rate is about, and nothing about which state he is in —
+    /// so a hand-off between the states that share one duel does not
+    /// reset it. It is advanced before the state machine runs, so the
+    /// first tick in contact already counts.
+    pub fn is_eligible(ctx: &StateProcessingContext) -> bool {
+        ctx.player.contact_ticks > 0
+    }
+
+    /// [`Self::commit_probability`] drawn over this AI tick.
+    pub fn commits_now(ctx: &StateProcessingContext, distance: f32) -> f32 {
+        EngagementClock::per_tick(Self::commit_probability(ctx, distance), Self::RATE_WINDOW)
     }
 
     /// Probability this defender commits to a challenge at this decision.
@@ -555,6 +553,46 @@ impl TackleDecision {
             .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
         carrier + to_goal * TackleEngagement::CONTACT * 0.8
     }
+
+    /// How dangerous the man on the ball is, on the same absolute
+    /// composite scale as [`sc::defensive_duel`] — so a duel scored as
+    /// the difference of the two is level for equal quality at every
+    /// level of the pyramid.
+    pub fn carrier_threat(ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> f32 {
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        if let Some(att) = ctx.context.players.by_id(opponent.id) {
+            return sc::dribble_attack(att, minute);
+        }
+        let players = ctx.player();
+        let s = players.skills(opponent.id);
+        (sc::n(s.technical.dribbling) + sc::n(s.physical.agility)) * 0.5
+    }
+}
+
+/// How one physical challenge ended.
+///
+/// Replaces a `(won, fouled, severity)` tuple whose two booleans could
+/// both be true and whose precedence lived at the call site — and
+/// differed between roles.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TackleOutcome {
+    /// He took the ball. Winning it cleanly is not a foul.
+    Won,
+    Foul(FoulSeverity),
+    Missed,
+}
+
+impl TackleOutcome {
+    /// The two rolls, resolved in football order.
+    pub fn of(won: bool, fouled: bool, severity: FoulSeverity) -> Self {
+        if won {
+            Self::Won
+        } else if fouled {
+            Self::Foul(severity)
+        } else {
+            Self::Missed
+        }
+    }
 }
 
 /// The challenge a BEATEN defender makes — the poke, the stretch, the
@@ -631,21 +669,27 @@ impl RecoveryChallenge {
     /// — but it has to be POSSIBLE, and before this it was not.
     const BASE: f32 = 0.085;
 
-    /// How often the decision is taken, in AI ticks — one real second,
-    /// the same cadence [`TackleDecision`] uses and for the same reason.
-    /// One AI tick is 20 ms (see `ai_tick_is_20ms`).
-    const DECISION_INTERVAL_TICKS: u16 = 50;
+    /// The window [`Self::commit_probability`] is quoted over — the same
+    /// one second the block tackle uses, so how readily a given defender
+    /// goes is one property of the player. See [`EngagementClock`].
+    const RATE_WINDOW: f32 = 1.0;
 
-    /// Is this tick one on which the beaten defender decides?
+    /// Can this beaten defender stretch for it at all right now?
     ///
     /// Keyed to [`MatchPlayer::stretch_ticks`], which counts dwell inside
-    /// [`Self::REACH`] rather than inside `CONTACT`. A defender running
+    /// [`Self::REACH`] rather than inside `CONTACT`: a defender running
     /// at the carrier's shoulder two metres off him accrues no contact at
-    /// all, so `TackleDecision`'s clock never starts for him — which is
-    /// the whole reason this population rolls nothing today.
-    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
-        let t = ctx.player.stretch_ticks;
-        t > 0 && (t - 1) % Self::DECISION_INTERVAL_TICKS == 0
+    /// all, so the block tackle's clock never starts for him.
+    pub fn is_eligible(ctx: &StateProcessingContext) -> bool {
+        ctx.player.stretch_ticks > 0
+    }
+
+    /// [`Self::commit_probability`] drawn over this AI tick.
+    pub fn commits_now(ctx: &StateProcessingContext, distance: f32, lead: f32) -> f32 {
+        EngagementClock::per_tick(
+            Self::commit_probability(ctx, distance, lead),
+            Self::RATE_WINDOW,
+        )
     }
 
     /// How far the carrier has got past this defender, in units, along
@@ -742,7 +786,7 @@ impl RecoveryChallenge {
         p
     }
 
-    /// Resolve the stretch: `(won the ball, fouled, severity)`.
+    /// Resolve the stretch.
     ///
     /// # The three ways it ends
     ///
@@ -755,12 +799,12 @@ impl RecoveryChallenge {
     /// is already past is where the cards come from.
     pub fn resolve(
         ctx: &StateProcessingContext,
-        tackle_profile: f32,
+        defender_score: f32,
         discipline: f32,
         attacker_score: f32,
         distance: f32,
         lead: f32,
-    ) -> (bool, bool, FoulSeverity) {
+    ) -> TackleOutcome {
         let rng = &ctx.context.rng;
         let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
         let beaten = Self::beaten(lead);
@@ -769,13 +813,13 @@ impl RecoveryChallenge {
             .clamp(0.0, 1.0);
 
         // Winning it. The duel is the same contest of ability the block
-        // tackle scores — `tackle_profile` against the carry — handicapped
+        // tackle scores — `defensive_duel` against the carry — handicapped
         // by the two things that make this challenge hard: he is behind,
         // and he is at full stretch. The ceiling is well under the block
         // tackle's 0.55 because from here even a good defender is mostly
         // hoping.
         let handicap = 0.55 + beaten * 0.85 + over * 0.55;
-        let raw_diff = tackle_profile - attacker_score - handicap * 0.45;
+        let raw_diff = defender_score - attacker_score - handicap * 0.45;
         let success = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.05, 0.40);
         let won = rng.random::<f32>() < success;
 
@@ -833,7 +877,7 @@ impl RecoveryChallenge {
 
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RecoveryDiag::note_attempt(won, fouled, distance, lead);
-        (won, fouled, severity)
+        TackleOutcome::of(won, fouled, severity)
     }
 
     /// Diagnostic switch: with `OF_NO_RECOVERY_TACKLE` set, a beaten
@@ -871,26 +915,30 @@ impl RecoveryChallenge {
 /// him; one marking at a set piece holds. None of those are challenges
 /// for the ball, and none of them existed here.
 ///
-/// Rolled on the same one-decision-per-second cadence as
-/// [`TackleDecision`], for the same reason: a per-tick roll makes the
-/// rate a function of how long two players happen to stand near each
-/// other rather than of the defending.
+/// Rolled on a fixed cadence, like [`TackleDecision`] and for the same
+/// reason: an unpriced per-tick roll makes the rate a function of how
+/// long two players happen to stand near each other rather than of the
+/// defending.
 pub struct ContactFoul;
 
 impl ContactFoul {
     /// How often the decision is taken while engaged, in AI ticks — so
-    /// **two real seconds**, not one. One AI tick is 20 ms: the engine
-    /// alternates full ticks with movement-only light ones and only the
-    /// full ones advance `in_state_time` (see `game_tick_light`).
+    /// **two real seconds**, not one. One AI tick is 20 ms.
     ///
-    /// Left at 100 deliberately. Unlike [`TackleDecision`]'s clock this
-    /// one is anchored to the right thing already — dwell in the
-    /// engagement is exactly what a shirt-pull is a function of — so the
-    /// only defect was the doc, and `BASE` below is fitted against this
-    /// cadence and a foul rate that is already 16.3 per team against a
-    /// real ~12. Halving the interval here doubles contact fouls and
-    /// nothing else; it is a calibration change wearing a units fix's
-    /// clothes.
+    /// ⚠ STILL A MODULO, DELIBERATELY, AND IT IS THE ONE CLOCK IN THE
+    /// ENGAGEMENT MODELS THAT IS NOT DWELL.
+    ///
+    /// [`TackleDecision`] and [`RecoveryChallenge`] key off
+    /// `contact_ticks` / `stretch_ticks`, which count time in RANGE and
+    /// survive a hand-off between states; this keys off `in_state_time`,
+    /// which every transition resets. Converting it to an
+    /// [`EngagementClock`] hazard therefore does not preserve its rate —
+    /// it hands back all the dwell the resets were destroying, and
+    /// measured that is a multiple: fouls 12.7 → 18.2 per team, yellows
+    /// 3.50 → 5.53, direct free kicks 10.4 → 17.6. `BASE` below is
+    /// fitted against the cadence AS IT RUNS, resets included. The fix is
+    /// a dwell clock for the marking engagement, not a conversion on top
+    /// of the wrong one.
     const DECISION_INTERVAL_TICKS: u64 = 100;
     /// Close enough for contact (~2.5 m).
     const CONTACT_RANGE: f32 = 20.0;

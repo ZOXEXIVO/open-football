@@ -1,8 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine, Interception, StationKeeping,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, StationKeeping,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -62,18 +63,8 @@ impl StateProcessingHandler for DefenderCoveringState {
         // BOX EMERGENCY — override every other consideration. If the
         // carrier is in our penalty area and we're one of the two
         // closest defenders, stop covering and engage immediately.
-        if ctx.player().defensive().is_box_emergency_for_me() {
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                let d = carrier.distance(ctx);
-                if d < 25.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
-            }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // Adaptive reaction time based on threat detection
@@ -139,7 +130,7 @@ impl StateProcessingHandler for DefenderCoveringState {
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
             // Very close — tackle immediately regardless of role.
-            if distance < 20.0 {
+            if TackleEngagement::should_commit(ctx, distance) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));

@@ -870,6 +870,10 @@ impl ListingPass {
             return decision;
         }
 
+        if let Some(decision) = Self::contract_runout_verdict(player, date, reading, pa) {
+            return decision;
+        }
+
         if let Some(decision) =
             Self::numeric_listing_triggers(player, analysis, club, date, reading)
         {
@@ -968,6 +972,16 @@ impl ListingPass {
     /// this tier.
     /// Official appearances at or below which a fit player has been frozen
     /// out rather than merely rotated.
+    /// Ability band over which the club's belief in a player swings from
+    /// "he will never make it here" to "he certainly will". Parity with the
+    /// level the first team already plays at reads as an even bet.
+    const CONVICTION_SPAN: f32 = 20.0;
+    /// Contract months over which the runout pressure ramps. Two years is
+    /// where a selling club still has leverage; inside it every month of
+    /// waiting costs fee.
+    const RUNOUT_HORIZON_MONTHS: f32 = 24.0;
+    /// Pressure at which the club stops waiting and puts him up for sale.
+    const RUNOUT_SELL_PRESSURE: f32 = 0.45;
     const FROZEN_OUT_APPEARANCE_BAR: u16 = 3;
     /// Share of the club's official matches (per cent) below which a
     /// player the club has outgrown counts as no longer being picked —
@@ -1046,6 +1060,50 @@ impl ListingPass {
             + player.cup_statistics.played_subs;
         u32::from(appearances) * 100
             < u32::from(sample.club_matches_proxy()) * Self::STANDING_SHARE_PCT
+    }
+
+    /// The club's belief that this player will make its OWN first team,
+    /// 0..1, from what the staff can see: the ceiling they credit him with
+    /// against the level the first team already plays at.
+    ///
+    /// Age is deliberately not a term of its own —
+    /// [`PotentialEstimator::observable_ceiling`] already projects it, and
+    /// reading it twice made every teenager a future starter.
+    fn first_team_conviction(observable_ceiling: u8, squad_level: i16) -> f32 {
+        ((observable_ceiling as i16 - squad_level) as f32 / Self::CONVICTION_SPAN + 0.5)
+            .clamp(0.0, 1.0)
+    }
+
+    /// A deal running down on a player the club does not see making its
+    /// first team.
+    ///
+    /// The expiry guard refuses to list on proximity alone, and for a
+    /// first-teamer that is right: a short contract on a man you want is a
+    /// renewal, not a sale. It is wrong for the other one — nobody intends
+    /// to renew him, so nobody ever offers, so no rejection history exists
+    /// for the stalemate path to read, and he runs to zero and leaves for
+    /// nothing. That is the one outcome a selling club can never bank.
+    ///
+    /// Pressure is the product of two continuous facts: how little the club
+    /// believes in him, and how little of his deal is left. A player it
+    /// believes in generates none of it at any contract length, so the
+    /// guard the protected players rely on is untouched.
+    fn contract_runout_verdict(
+        player: &Player,
+        date: NaiveDate,
+        reading: ListingReading,
+        observable_ceiling: u8,
+    ) -> Option<ListingDecision> {
+        let expiration = player.contract.as_ref().map(|c| c.expiration)?;
+        let months_left = ((expiration - date).num_days() as f32 / 30.0).max(0.0);
+        let decay = (1.0 - months_left / Self::RUNOUT_HORIZON_MONTHS).clamp(0.0, 1.0);
+        let conviction = Self::first_team_conviction(observable_ceiling, reading.avg);
+        if (1.0 - conviction) * decay < Self::RUNOUT_SELL_PRESSURE {
+            return None;
+        }
+        Some(ListingDecision::Transfer {
+            reason: "dec_reason_contract_expiring".to_string(),
+        })
     }
 
     fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
@@ -2383,6 +2441,55 @@ mod tests {
         assert!(
             has(203, PlayerStatusType::Loa),
             "an actively loan-listed player keeps his badge"
+        );
+    }
+
+    /// The other half of the expiry rule. A club that does not see a
+    /// player making its first team sells him while his deal still carries
+    /// a fee, rather than letting it run to zero and losing him for
+    /// nothing. Continuous in both terms, so belief alone or a short deal
+    /// alone is not enough — a player the club rates generates no pressure
+    /// at any contract length.
+    #[test]
+    fn a_player_the_club_does_not_rate_is_sold_before_his_deal_runs_out() {
+        let today = Fixture::date(2026, 5, 1);
+        let reading = |avg: i16| ListingReading {
+            age: 24,
+            ca_i: 100,
+            avg,
+            is_promising_youth: false,
+            rep_level: ReputationLevel::National,
+            parent_holds: false,
+            affordability: AffordabilityInput {
+                wage_budget_headroom: None,
+                current_salary: 50_000,
+            },
+        };
+
+        // Six months left on a man whose credited ceiling is a full band
+        // below the side he is at: sell now or lose him.
+        let mut doomed = Fixture::player(201);
+        doomed.contract.as_mut().unwrap().expiration = Fixture::date(2026, 11, 1);
+        assert!(
+            matches!(
+                ListingPass::contract_runout_verdict(&doomed, today, reading(130), 100),
+                Some(ListingDecision::Transfer { .. })
+            ),
+            "a player the club does not rate must reach the market before expiry"
+        );
+
+        // Same contract, same club, a ceiling the first team can use.
+        assert!(
+            ListingPass::contract_runout_verdict(&doomed, today, reading(100), 130).is_none(),
+            "a player the club rates is a renewal, not a sale"
+        );
+
+        // Same player, a deal with years left: no pressure yet.
+        let mut early = Fixture::player(202);
+        early.contract.as_mut().unwrap().expiration = Fixture::date(2029, 5, 1);
+        assert!(
+            ListingPass::contract_runout_verdict(&early, today, reading(130), 100).is_none(),
+            "a long deal leaves the club time to decide"
         );
     }
 

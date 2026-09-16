@@ -180,6 +180,10 @@ impl PlayerSkills {
         skills
     }
 
+    /// The ends of the `pace` band, in units per physics tick.
+    pub const MIN_MAX_SPEED: f32 = 0.36;
+    pub const MAX_MAX_SPEED: f32 = 0.63;
+
     /// Fresh top speed in units/tick — 1u = 0.125 m on a 100 Hz tick, so
     /// `pace` = 1 is 0.36 u/tick (4.5 m/s) and `pace` = 20 is 0.63 (7.9 m/s).
     ///
@@ -199,11 +203,7 @@ impl PlayerSkills {
     /// back toward the squad mean.
     pub fn max_speed(&self) -> f32 {
         let pace01 = ((self.physical.pace - 1.0) / 19.0).clamp(0.0, 1.0);
-
-        let min_speed = 0.36;
-        let max_speed = 0.63;
-
-        min_speed + pace01 * (max_speed - min_speed)
+        Self::MIN_MAX_SPEED + pace01 * (Self::MAX_MAX_SPEED - Self::MIN_MAX_SPEED)
     }
 
     /// Top speed as the legs are RIGHT NOW — [`Self::max_speed`] shaded by

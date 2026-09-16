@@ -473,11 +473,42 @@ impl LooseBallChase {
         self.left = [None; 2];
         self.right = [None; 2];
         self.len = 0;
+        // The lane, for the readiness half of the clock below, measured
+        // from where the ball was struck.
+        let release = ball.last_release_position;
+        let ball_vel = positions.ball.velocity;
+        let lane = {
+            let speed = ball_vel.x.hypot(ball_vel.y);
+            (speed > 1e-3).then(|| (ball_vel.x / speed, ball_vel.y / speed))
+        };
         for meta in positions.players.as_slice() {
             let read_wait = if Some(meta.side) == knowing_side {
                 0.0
             } else {
-                (InterceptionContest::typical_delay() - since_strike).max(0.0)
+                // A man who was ALREADY STANDING IN THE LANE when it was
+                // struck is not made ready by the clock that prices a
+                // reaction and a step — see
+                // `InterceptionContest::chase_delay`. Applied to the
+                // election as well as to the contest, so eligibility to go
+                // and readiness to play it cannot disagree.
+                //
+                // Where he was, not where he is: asked at his current
+                // position the test catches everyone the ball happens to
+                // pass close to, which is most of the men it passes at
+                // all. Ahead of the ball, too — one it has already gone
+                // by is not standing in the way of anything.
+                let perp = lane.map_or(f32::MAX, |(dx, dy)| {
+                    let was_there = meta.position - meta.velocity * since_strike;
+                    let rx = was_there.x - release.x;
+                    let ry = was_there.y - release.y;
+                    let along = rx * dx + ry * dy;
+                    if along <= 0.0 {
+                        f32::MAX
+                    } else {
+                        (rx * dy - ry * dx).abs()
+                    }
+                });
+                (InterceptionContest::chase_delay(perp) - since_strike).max(0.0)
             };
             let row = ChaseRow {
                 id: meta.player_id,

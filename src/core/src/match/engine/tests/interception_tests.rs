@@ -112,8 +112,13 @@ fn the_roll_is_made_where_the_ball_draws_level_with_him() {
 
 /// A ball played straight through a reader's feet is often stopped
 /// there; one he has to stretch a metre and a quarter for rarely is.
-/// The bands are wide because the levels are calibration (see
-/// `InterceptionContest::GAIN`) — the ORDERING is the claim.
+///
+/// The ORDERING is the claim. The bands only bound the shape — that it
+/// is a real chance and not a certainty — because the LEVEL belongs to
+/// [`InterceptionContest::GAIN`], which is titrated on the level sweep
+/// and moves whenever the contest gains or loses an encounter. Pinned
+/// tightly, this test fails every re-titration and says nothing about
+/// the football; that is the defect the next test's doc names.
 #[test]
 fn through_his_feet_is_often_taken_and_a_stretch_rarely_is() {
     let taken = |offset: f32| {
@@ -132,7 +137,7 @@ fn through_his_feet_is_often_taken_and_a_stretch_rarely_is() {
     };
     let feet = taken(0.0);
     let stretch = taken(10.0);
-    assert!((50..=220).contains(&feet), "through his feet: {feet}/300");
+    assert!((25..=250).contains(&feet), "through his feet: {feet}/300");
     assert!(
         (0..=80).contains(&stretch),
         "a 1.25 m stretch: {stretch}/300"
@@ -240,5 +245,102 @@ fn every_man_the_ball_passes_gets_his_own_roll() {
     assert!(
         reached_second > 0,
         "the first man never missed in 60 flights"
+    );
+}
+
+/// **The last stride and a half is a contest, not a gift.**
+///
+/// `try_intercept` used to return outright once the ball was within
+/// `CONTROL_DISTANCE` of its intended man, so a defender standing ON the
+/// ball's line inside that band was removed from the contest by the
+/// receiver's metadata rather than by anything physical. He is closer to
+/// the ball than the receiver is; it is his to contest.
+#[test]
+fn a_defender_inside_the_receivers_last_stride_still_contests() {
+    let mut rolled = 0;
+    for _ in 0..40 {
+        // Receiver a stride past the defender, both on the line.
+        let (mut field, context) = flight(1.0, 100, |p| {
+            if p.id == DEFENDER {
+                p.position = Vector3::new(340.0, 272.0, 0.0);
+            } else if p.id == RECEIVER {
+                p.position = Vector3::new(346.0, 272.0, 0.0);
+            }
+        });
+        let bit = slot_of(&field, DEFENDER);
+        let mut events = EventCollection::new();
+        while field.ball.position.x < 344.0 && field.ball.current_owner.is_none() {
+            field
+                .ball
+                .try_intercept(&context, &field.players, &mut events);
+            field.ball.position.x += 1.0;
+            field.ball.current_tick_cached += 1;
+        }
+        if field.ball.intercept_rolled & bit != 0 {
+            rolled += 1;
+        }
+    }
+    assert_eq!(
+        rolled, 40,
+        "the man the ball was rolled through was never contested"
+    );
+}
+
+/// …and the receiver still keeps what is genuinely his: a defender
+/// FURTHER from the ball than the man it is going to does not get to
+/// reach through him for it.
+#[test]
+fn the_receiver_keeps_the_ball_a_trailing_defender_cannot_reach_first() {
+    let (mut field, context) = flight(1.0, 100, |p| {
+        if p.id == DEFENDER {
+            // On the line, but a full reach off the ball when it arrives.
+            p.position = Vector3::new(346.0, 279.0, 0.0);
+        } else if p.id == RECEIVER {
+            p.position = Vector3::new(347.0, 272.0, 0.0);
+        }
+    });
+    let bit = slot_of(&field, DEFENDER);
+    let mut events = EventCollection::new();
+    // Past him, so the crossing test itself is reached.
+    while field.ball.position.x < 350.0 && field.ball.current_owner.is_none() {
+        field
+            .ball
+            .try_intercept(&context, &field.players, &mut events);
+        field.ball.position.x += 1.0;
+        field.ball.current_tick_cached += 1;
+    }
+    assert_eq!(
+        field.ball.intercept_rolled & bit,
+        0,
+        "a defender further from the ball than its receiver took the contest"
+    );
+}
+
+/// **One flight, one interception roll per man** — even while the block
+/// channel is also running. The two are separate ledgers: sharing one
+/// lets the block candidacy window, which reaches 40u up the lane,
+/// consume a man's encounter long before the ball gets to his feet.
+#[test]
+fn the_block_channel_does_not_consume_his_interception() {
+    let (mut field, context) = flight(1.0, 100, |p| {
+        if p.id == DEFENDER {
+            p.position = Vector3::new(340.0, 272.0, 0.0);
+        }
+    });
+    let bit = slot_of(&field, DEFENDER);
+    let mut events = EventCollection::new();
+    while field.ball.position.x < 400.0 && field.ball.current_owner.is_none() {
+        field
+            .ball
+            .try_block_pass(&context, &field.players, &mut events);
+        field
+            .ball
+            .try_intercept(&context, &field.players, &mut events);
+        field.ball.position.x += 1.0;
+        field.ball.current_tick_cached += 1;
+    }
+    assert!(
+        field.ball.intercept_rolled & bit != 0,
+        "the block channel swallowed his interception roll"
     );
 }

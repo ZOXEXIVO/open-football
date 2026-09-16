@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::clearance::ClearanceCall;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -20,6 +21,16 @@ impl StateProcessingHandler for DefenderPassingState {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
             ));
+        }
+
+        // The same policy `DefenderRunningState` opens with. Three of
+        // this state's own branches reach `Clearing` on criteria of their
+        // own (`is_under_heavy_pressure`, a 50u safe-pass scan, a
+        // 65-tick timeout) and none of them consults `ClearanceCall`, so
+        // a defender routed here rather than to `Running` answered the
+        // same question a different way.
+        if let Some(release) = ClearanceCall::decide(ctx) {
+            return Some(release.resolve(ctx));
         }
 
         // ── Counter-attack outlet ──────────────────────────────────────

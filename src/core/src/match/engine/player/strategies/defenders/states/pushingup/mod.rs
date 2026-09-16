@@ -1,6 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::PlayerSide;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -8,7 +9,6 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 2.0;
 const PRESSING_DISTANCE_THRESHOLD: f32 = 20.0;
 const STAMINA_THRESHOLD: f32 = 30.0;
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
@@ -72,6 +72,17 @@ impl StateProcessingHandler for DefenderPushingUpState {
         }
 
         if !ctx.team().is_control_ball() {
+            // Only a man ON the ball can be challenged, and whether he can
+            // be is not conditional on some other opponent happening to be
+            // inside the press scan below.
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+            }
+
             // Scan out to press range — the tackle branch re-checks its
             // own tighter radius. (The old scan used the 2u tackle radius,
             // so the 20u press branch below could never see a candidate.)
@@ -82,12 +93,6 @@ impl StateProcessingHandler for DefenderPushingUpState {
                 .next()
             {
                 let distance_to_opponent = ctx.tick_context.grid.get(opponent.id, ctx.player.id);
-
-                if distance_to_opponent <= TACKLING_DISTANCE_THRESHOLD {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
 
                 // Condition gate matches the sibling states (0-100 match
                 // fitness, not the static 0-20 stamina skill, which made

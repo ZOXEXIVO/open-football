@@ -1186,8 +1186,7 @@ impl Ball {
             .and_then(|id| players.iter().find(|p| p.id == id));
         if target.is_some() && !self.delivery_reaches_its_man(target) {
             #[cfg(feature = "match-logs")]
-            reception_diag::DELIVERY_OVERRUN
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            reception_diag::DELIVERY_OVERRUN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.pass_target_player_id = None;
             // The exclusion window goes with the privilege it was
             // protecting. Left standing it would be strictly worse than
