@@ -47,6 +47,7 @@ impl Team {
             penalty_taker_id,
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
+            overlooked: squad_result.overlooked,
             coach_snapshot,
         }
     }
@@ -93,6 +94,7 @@ impl Team {
             penalty_taker_id,
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
+            overlooked: squad_result.overlooked,
             coach_snapshot,
         }
     }
@@ -154,6 +156,7 @@ impl Team {
             penalty_taker_id,
             free_kick_taker_id,
             selection_omissions: squad_result.omissions,
+            overlooked: squad_result.overlooked,
             coach_snapshot,
         }
     }

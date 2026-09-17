@@ -524,6 +524,7 @@
   "dec_reason_contract_expiring": "合約即將到期，尋求轉會費",
   "dec_reason_contract_stalemate": "續約談判破裂 — 多次被拒後掛牌",
   "dec_reason_financial_relief": "租出以減輕薪資負擔",
+  "dec_reason_dead_wage": "多个赛季未为一线队出场却持续领薪",
   "dec_reason_lack_playing_time": "本賽季上場時間不足",
   "dec_reason_loan_playing_time": "租借以獲得穩定上場時間",
   "dec_reason_low_ability_surplus": "能力不足，超出需求",

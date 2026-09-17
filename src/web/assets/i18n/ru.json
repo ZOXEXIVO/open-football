@@ -523,6 +523,7 @@
   "dec_reason_contract_expiring": "Контракт истекает, поиск трансферной компенсации",
   "dec_reason_contract_stalemate": "Переговоры о продлении сорваны — выставлен после серии отказов",
   "dec_reason_financial_relief": "Аренда для снижения зарплатной ведомости",
+  "dec_reason_dead_wage": "Сезонами получает зарплату без игр за основной состав",
   "dec_reason_lack_playing_time": "Недостаточно игрового времени в этом сезоне",
   "dec_reason_loan_playing_time": "Аренда для получения регулярного игрового времени",
   "dec_reason_low_ability_surplus": "Низкий уровень, лишний в составе",

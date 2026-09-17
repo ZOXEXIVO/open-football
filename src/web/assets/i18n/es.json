@@ -523,6 +523,7 @@
   "dec_reason_contract_expiring": "Contrato expirando, buscando traspaso antes de salir gratis",
   "dec_reason_contract_stalemate": "Negociaciones de renovación estancadas — incluido tras varios rechazos",
   "dec_reason_financial_relief": "Cesión para reducir la masa salarial",
+  "dec_reason_dead_wage": "Pagado durante temporadas sin fútbol en el primer equipo",
   "dec_reason_lack_playing_time": "Tiempo de juego insuficiente esta temporada",
   "dec_reason_loan_playing_time": "Cesión para obtener minutos regulares",
   "dec_reason_low_ability_surplus": "Nivel bajo, excedente en plantilla",

@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "Sunulan rol beklentileriyle örtüşmedi.",
   "contract_evidence_rejected_over_release_clause": "Anlaşmada istediği serbest kalma maddesi yoktu.",
   "contract_evidence_rejected_over_length": "Sözleşme süresi ona uymadı.",
+  "contract_evidence_rejected_over_playing_time": "İlk takımda oynamadan geçecek yıllar için imza atmak istemedi.",
   "contract_evidence_rejected_over_ambition": "Kulübün projesi hırsıyla örtüşmedi.",
   "private_talk_reason_playing_time": "Oynadığı süreden memnun değil.",
   "private_talk_reason_contract": "Sözleşmesiyle ilgili çözülmemiş endişeleri var.",

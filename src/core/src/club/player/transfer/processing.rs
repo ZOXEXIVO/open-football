@@ -33,6 +33,18 @@ const CONTINENT_SOUTH_AMERICA: u32 = 3;
 /// sell signal.
 pub(crate) const UNHAPPY_LISTING_MIN_DAYS: i64 = 182;
 
+/// What years without a first-team shirt have hardened into.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FirstTeamFootballAsk {
+    /// Young enough that a season away is a career step: he wants to be
+    /// sent somewhere he plays, and the club keeps him. Carries how hard
+    /// he is pushing, 0..1.
+    Loan(f32),
+    /// The waiting is over — a standing request to leave for a club that
+    /// will pick him.
+    Transfer,
+}
+
 /// Inputs the weekly tick collects from `GlobalContext` once and feeds
 /// into [`Player::process_transfer_desire`]. Decoupled from
 /// `GlobalContext` so the desire logic stays unit-testable and the
@@ -593,7 +605,26 @@ impl Player {
 
         self.tick_career_desire_moods(now, ctx, recently_transferred);
 
-        let active_reasons = self.active_transfer_reasons(now, ctx, age, recently_transferred);
+        let football_ask = if recently_transferred {
+            None
+        } else {
+            self.first_team_football_ask(now, ctx, age)
+        };
+        // A youngster's answer to years without a shirt is a season
+        // somewhere he plays. The want lands in the mind, where the
+        // weekly talk pass reads it and takes it to the coach.
+        if let Some(FirstTeamFootballAsk::Loan(push)) = football_ask {
+            self.mind.organs.goals.pursue(
+                GoalKind::GoOutOnLoan,
+                GoalOrigin::Survival,
+                GoalEvidence::of(&[GoalEvidence::NO_FIRST_TEAM_FOOTBALL]),
+                push,
+                MindClock::day(now),
+            );
+        }
+
+        let active_reasons =
+            self.active_transfer_reasons(now, ctx, age, recently_transferred, football_ask);
 
         let wants_transfer = !active_reasons.is_empty();
 
@@ -1203,8 +1234,10 @@ impl Player {
         mood_count >= 2
     }
 
-    /// True when years without a first-team shirt have hardened into a
-    /// standing request to leave for somewhere he will actually play.
+    /// What years without a first-team shirt have hardened into, if
+    /// anything: a wish to be lent somewhere he plays while he is young
+    /// enough for that to be a career step, or a standing request to
+    /// leave for a club that will pick him.
     ///
     /// Deliberately structural — it reads the season ledger, the squad
     /// role and the player's own character, never a cooldowned mood
@@ -1216,16 +1249,22 @@ impl Player {
     /// him — which is precisely the resolution the request is asking
     /// for.
     ///
-    /// The bar sits above the mood audit's: minding is cheap, asking to
-    /// leave the biggest club you will ever play for is not.
-    fn first_team_football_pressure(
+    /// The bars sit either side of the mood audit's: asking for a loan is
+    /// cheaper than minding, asking to leave the biggest club you will
+    /// ever play for is not.
+    fn first_team_football_ask(
         &self,
         now: NaiveDate,
         ctx: &TransferDesireContext,
         age: u8,
-    ) -> bool {
-        /// Restlessness needed to act, against the mood's 0.52.
+    ) -> Option<FirstTeamFootballAsk> {
+        /// Restlessness needed to ask out, against the mood's 0.52.
         const REQUEST_THRESHOLD: f32 = 0.60;
+        /// Restlessness needed to ask for a season away.
+        const LOAN_ASK_THRESHOLD: f32 = 0.40;
+        /// Below this a stuck player asks to be lent out rather than
+        /// sold — the line the development-loan market itself draws.
+        const LOAN_ASK_MAX_AGE: u8 = 24;
         /// Post-transfer settling window before a stuck story exists —
         /// shared with the mood audit.
         const SETTLED_DAYS: i64 = 540;
@@ -1236,9 +1275,7 @@ impl Player {
         /// the ledger — it sits at 0.5 until the player actually plays.
         const MIN_TRACKED_APPS: u8 = 6;
 
-        let Some(contract) = self.contract.as_ref() else {
-            return false;
-        };
+        let contract = self.contract.as_ref()?;
         // A manager-pinned player IS first-team by definition. A player the
         // club has put up for sale is being handled by the listing /
         // release systems: the contract flag is a live market intent —
@@ -1249,7 +1286,7 @@ impl Player {
         // that: a written-off player the club has not put on the market
         // is exactly the man this request exists for.
         if self.is_force_match_selection || contract.is_transfer_listed {
-            return false;
+            return None;
         }
         // Read the label through the squad that minted it: a B side's own
         // "key player" is a senior backup as far as the first team is
@@ -1258,12 +1295,11 @@ impl Player {
         let squad_status = contract.squad_status.as_first_team_designation(squad_tier);
 
         let is_goalkeeper = self.position().is_goalkeeper();
-        // Under-24s belong to the development-loan pathway — the answer
-        // to a blocked 21-year-old is a loan, not a sale. Past the
-        // late-career line a squad role is a career, not a grievance.
-        let late_career_age = if is_goalkeeper { 37 } else { 34 };
-        if age < 24 || age >= late_career_age {
-            return false;
+        // Past the late-career line a squad role is a career, not a
+        // grievance.
+        let (_, _, fade_end) = StuckCareerScan::career_phases(is_goalkeeper);
+        if age as f32 >= fade_end {
+            return None;
         }
 
         // Still settling in after a move — no stuck story yet.
@@ -1272,7 +1308,7 @@ impl Player {
             .map(|d| d < SETTLED_DAYS)
             .unwrap_or(false)
         {
-            return false;
+            return None;
         }
 
         // Breaking through right now? A backup who has claimed the shirt
@@ -1286,25 +1322,12 @@ impl Player {
             && self.happiness.appearances_tracked >= MIN_TRACKED_APPS
             && self.happiness.starter_ratio >= BREAKING_THROUGH_SHARE
         {
-            return false;
+            return None;
         }
 
-        let Some(scan) = StuckCareerScan::of_in_squad(self, now, squad_tier) else {
-            return false;
-        };
+        let scan = StuckCareerScan::of_in_squad(self, now, squad_tier)?;
         if scan.stuck_years < 2 {
-            return false;
-        }
-
-        // Eligibility: the perennial backup by squad status, the man the
-        // club has written off without putting him on the market, or
-        // anyone the club keeps shipping out on loan instead of playing.
-        let is_backup = matches!(
-            squad_status,
-            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
-        );
-        if !is_backup && !scan.serial_loanee {
-            return false;
+            return None;
         }
 
         let restlessness = scan.restlessness(RestlessnessInputs {
@@ -1315,7 +1338,25 @@ impl Player {
             is_goalkeeper,
             club_rep01: ((ctx.club_reputation * 10_000.0 - 4_000.0) / 4_000.0).clamp(0.0, 1.0),
         });
-        restlessness.score >= REQUEST_THRESHOLD
+
+        // A youngster's route is a loan whatever the club calls him: the
+        // label is the club's word, the ledger is the fact.
+        if age < LOAN_ASK_MAX_AGE {
+            return (restlessness.score >= LOAN_ASK_THRESHOLD)
+                .then_some(FirstTeamFootballAsk::Loan(restlessness.score));
+        }
+
+        // Eligibility: the perennial backup by squad status, the man the
+        // club has written off without putting him on the market, or
+        // anyone the club keeps shipping out on loan instead of playing.
+        let is_backup = matches!(
+            squad_status,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+        );
+        if !is_backup && !scan.serial_loanee {
+            return None;
+        }
+        (restlessness.score >= REQUEST_THRESHOLD).then_some(FirstTeamFootballAsk::Transfer)
     }
 
     fn return_home_request_pressure(&self, now: NaiveDate, _ctx: &TransferDesireContext) -> bool {
@@ -1494,6 +1535,7 @@ impl Player {
         ctx: &TransferDesireContext,
         age: u8,
         recently_transferred: bool,
+        football_ask: Option<FirstTeamFootballAsk>,
     ) -> Vec<TransferRequestReason> {
         // Re-evaluate every reason every tick. A reason in the set
         // *now* is unresolved; a reason that's silent has gone away.
@@ -1650,7 +1692,7 @@ impl Player {
         // watching. Every other reason above points him upward — this is
         // the only one that points down, and it is the only route by
         // which a perennial backup at a giant can ever become available.
-        if !recently_transferred && self.first_team_football_pressure(now, ctx, age) {
+        if football_ask == Some(FirstTeamFootballAsk::Transfer) {
             active_reasons.push(TransferRequestReason::WantsFirstTeamFootball);
         }
 
@@ -2179,6 +2221,24 @@ mod career_desire_tests {
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
             "the answer to a blocked 21-year-old is a development loan, not a transfer request"
         );
+        assert!(
+            p.mind.pressure_of(GoalKind::GoOutOnLoan) > 0.0,
+            "and the same years on the ledger must leave him wanting that loan"
+        );
+    }
+
+    /// The label is the club's word; the ledger is the fact. A youngster
+    /// still filed as a prospect asks for the loan exactly as a backup
+    /// would.
+    #[test]
+    fn a_stuck_youngster_wants_the_loan_whatever_his_label_says() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(21, 18.0, 6.0, today);
+        p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::HotProspectForTheFuture;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(p.mind.pressure_of(GoalKind::GoOutOnLoan) > 0.0);
+        assert!(!p.statuses.has(PlayerStatusType::Req));
     }
 
     #[test]

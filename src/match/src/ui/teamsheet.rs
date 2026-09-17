@@ -20,19 +20,33 @@
 //!
 //! White team panels with club-coloured banners, prominent surnames and
 //! smaller first names. The bench is a compact two-column grid.
+//!
+//! It is laid out once at one size and then scaled into whatever picture the
+//! page gave the canvas — see [`TeamSheet::fit_frame`], which is what keeps the
+//! whole of it on a laptop's canvas and off the transport bar on a phone's.
 
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::art::typeface::Faces;
 use crate::broadcast::lineup::Lineup;
 use crate::ui::plate::Plate;
+use crate::ui::timeline::Timeline;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak};
 use bevy::ui::FocusPolicy;
+use bevy::window::PrimaryWindow;
 
 /// The sheet the card is centred on, and the only thing switched on and off.
 #[derive(Component)]
 pub struct SheetScreen;
+
+/// The two panels together — the card, as opposed to the tint behind it.
+///
+/// The scrim is the frame and this is what stands in it, which is why they are
+/// two entities: the tint covers the whole picture whatever size it is, and the
+/// card is only ever as big as the picture can hold ([`TeamSheet::fit_frame`]).
+#[derive(Component)]
+pub struct SheetCard;
 
 /// The card the walk-out is watched over.
 pub struct TeamSheet;
@@ -69,8 +83,10 @@ impl TeamSheet {
     /// A bench is seven in most competitions and nine in some, and a document
     /// is free to carry more — but the card is centred over a moving camera
     /// with nowhere to scroll, so it stops at the deepest bench a competition
-    /// actually names. Eleven starters and nine substitutes occupy about
-    /// 610 px of a 682 px frame, with substitutes arranged in two columns.
+    /// actually names. Eleven starters and nine substitutes stand about 610 px
+    /// tall, with the substitutes in two columns: that and [`Self::PANEL_WIDTH`]
+    /// are the card's full size, and [`Self::fit_frame`] is what gets it into a
+    /// picture smaller than that.
     const MOST_SUBS: usize = 9;
 
     /// Builds the card, hidden, at startup.
@@ -91,7 +107,11 @@ impl TeamSheet {
                     height: percent(100),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    padding: UiRect::all(px(Self::GUTTER)),
+                    // The transport bar is furniture the card may not cover,
+                    // so the box it is centred in is the picture above the bar
+                    // rather than the whole canvas.
+                    padding: UiRect::all(px(Self::GUTTER))
+                        .with_bottom(px(Self::GUTTER + Timeline::BAR_HEIGHT)),
                     ..default()
                 },
                 BackgroundColor(Self::SCRIM),
@@ -99,13 +119,23 @@ impl TeamSheet {
                 Visibility::Hidden,
             ))
             .with_children(|over| {
-                over.spawn(Node {
-                    width: percent(100),
-                    max_width: px(Self::PANEL_WIDTH),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: px(12),
-                    ..default()
-                })
+                over.spawn((
+                    SheetCard,
+                    UiTransform::IDENTITY,
+                    Node {
+                        // The width it was drawn at, held against a frame of
+                        // any size: a card that shrank its own columns would
+                        // squeeze the names into a clip rather than set them
+                        // smaller, and every measurement below is a fixed
+                        // pixel figure that assumes this one. What a narrow
+                        // canvas gets instead is the whole card, scaled.
+                        width: px(Self::PANEL_WIDTH),
+                        flex_shrink: 0.0,
+                        flex_direction: FlexDirection::Row,
+                        column_gap: px(12),
+                        ..default()
+                    },
+                ))
                 .with_children(|card| {
                     for home in [true, false] {
                         Self::side(card, &faces, &config, home, &bench);
@@ -343,6 +373,48 @@ impl TeamSheet {
         ));
     }
 
+    /// Scales the card down into whatever picture the page gave the canvas.
+    ///
+    /// Every measurement on the sheet is a fixed pixel size settled against a
+    /// frame of around eight hundred by seven hundred, and anything smaller —
+    /// a laptop window, a phone in portrait — had the card running off the top
+    /// and the bottom of the picture and sitting over the transport bar. One
+    /// factor off the tighter axis keeps the proportions it was drawn with,
+    /// where a second set of sizes would be a second set of numbers to keep in
+    /// step. A [`UiTransform`] rather than those sizes for the reason the
+    /// full-time card's lift is one: it moves nothing inside the card, where a
+    /// written size has taffy re-solve two panels and forty lines of text.
+    /// Never scaled UP: past its own size there is nothing to gain.
+    pub fn fit_frame(
+        window: Single<&Window, With<PrimaryWindow>>,
+        card: Single<(&ComputedNode, &mut UiTransform), With<SheetCard>>,
+    ) {
+        let (measured, mut sizing) = card.into_inner();
+        // Logical pixels: the unit the window reports its size in, and the one
+        // the layout above is written in.
+        let full = measured.size * measured.inverse_scale_factor;
+        let canvas = Vec2::new(window.width(), window.height());
+        let fit = Vec2::splat(Self::factor(full, canvas));
+        if sizing.scale != fit {
+            sizing.scale = fit;
+        }
+    }
+
+    /// How much of its full size the card is drawn at on a canvas this big.
+    ///
+    /// Zero before the first layout and zero on a canvas with no room under the
+    /// bar: nothing is drawn, which is the honest answer to how much of it fits.
+    fn factor(full: Vec2, canvas: Vec2) -> f32 {
+        if full.cmple(Vec2::ZERO).any() {
+            return 0.0;
+        }
+        let frame = Vec2::new(
+            canvas.x - 2.0 * Self::GUTTER,
+            canvas.y - Timeline::BAR_HEIGHT - 2.0 * Self::GUTTER,
+        );
+        (frame / full).min_element().clamp(0.0, 1.0)
+    }
+
     /// Shows the card for the ceremony's opening beats and hides it for the
     /// rest of the match.
     ///
@@ -357,5 +429,54 @@ impl TeamSheet {
         } else {
             Visibility::Hidden
         });
+    }
+}
+
+/// The card's one measurement that is arithmetic rather than layout, asked
+/// without a screen to draw on.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The full size the card is built at: two panels of eleven and nine, the
+    /// deepest sheet a competition names. The height is what those rows add up
+    /// to — a banner, eleven men, a bench heading and five paired rows.
+    const FULL: Vec2 = Vec2::new(TeamSheet::PANEL_WIDTH, 618.0);
+
+    #[test]
+    fn full_size_on_a_frame_that_holds_it() {
+        assert_eq!(TeamSheet::factor(FULL, Vec2::new(1280.0, 720.0)), 1.0);
+    }
+
+    /// A phone in portrait: the page gives the replay a 16:9 strip the width of
+    /// the screen, which is a quarter of the height the card is drawn at. It is
+    /// the height that binds, and what comes back has to leave the transport
+    /// bar showing.
+    #[test]
+    fn a_phone_gets_the_whole_card_inside_the_picture() {
+        let canvas = Vec2::new(366.0, 206.0);
+        let drawn = FULL * TeamSheet::factor(FULL, canvas);
+
+        assert!(drawn.x <= canvas.x - 2.0 * TeamSheet::GUTTER);
+        assert!(drawn.y <= canvas.y - Timeline::BAR_HEIGHT - 2.0 * TeamSheet::GUTTER);
+    }
+
+    /// One factor for both axes, or the names come out stretched.
+    #[test]
+    fn the_tighter_axis_sets_it() {
+        let canvas = Vec2::new(900.0, 500.0);
+        let fit = TeamSheet::factor(FULL, canvas);
+
+        let across = (canvas.x - 2.0 * TeamSheet::GUTTER) / FULL.x;
+        let down = (canvas.y - Timeline::BAR_HEIGHT - 2.0 * TeamSheet::GUTTER) / FULL.y;
+        assert!(down < across);
+        assert_eq!(fit, down);
+    }
+
+    /// Nothing to scale yet, and nothing to scale into.
+    #[test]
+    fn no_card_and_no_room_both_draw_nothing() {
+        assert_eq!(TeamSheet::factor(Vec2::ZERO, Vec2::new(1280.0, 720.0)), 0.0);
+        assert_eq!(TeamSheet::factor(FULL, Vec2::new(320.0, 60.0)), 0.0);
     }
 }

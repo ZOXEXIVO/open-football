@@ -523,6 +523,7 @@
   "dec_reason_contract_expiring": "Vertrag läuft aus, Ablöse vor Vertragsende gesucht",
   "dec_reason_contract_stalemate": "Vertragsverhandlungen gescheitert — nach wiederholten Absagen gelistet",
   "dec_reason_financial_relief": "Leihe zur Reduzierung der Gehaltslast",
+  "dec_reason_dead_wage": "Seit Saisons bezahlt, ohne in der ersten Mannschaft zu spielen",
   "dec_reason_lack_playing_time": "Unzureichende Spielzeit in dieser Saison",
   "dec_reason_loan_playing_time": "Leihe für regelmäßige Spielzeit",
   "dec_reason_low_ability_surplus": "Geringe Leistung, überzählig",

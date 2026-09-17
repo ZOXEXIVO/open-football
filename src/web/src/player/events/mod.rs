@@ -2270,6 +2270,7 @@ impl ContractRender {
                 core::ContractEventEvidence::RejectedOverRole,
                 core::ContractEventEvidence::RejectedOverReleaseClause,
                 core::ContractEventEvidence::RejectedOverAmbition,
+                core::ContractEventEvidence::RejectedOverPlayingTime,
                 core::ContractEventEvidence::RejectedOverLength,
             ];
             for atom in preferred {

@@ -576,9 +576,10 @@ impl ContractRenewalManager {
     /// prime-age squad player who has gone seasons at this club without
     /// first-team football.
     ///
-    /// Deliberately narrow. Youngsters are exempt — the development
-    /// pathway, not the contract clock, owns a blocked 21-year-old, and a
-    /// club that let every unplayed prospect walk would gut its academy.
+    /// Deliberately narrow. Youth buys patience rather than exemption:
+    /// every year under twenty-two adds half a season to the bar, so the
+    /// academy is not gutted while a parked twenty-four-year-old is no
+    /// longer a development case.
     /// A veteran deputy KEEPER is exempt: the mentoring number two is a
     /// real role, and the veteran-keeper protection elsewhere says so. An
     /// outfield veteran is not — "seeing out his career" means letting the
@@ -593,21 +594,18 @@ impl ContractRenewalManager {
         date: NaiveDate,
         squad_tier: TeamType,
     ) -> bool {
-        /// Below this age a blocked player is a development case.
-        const MIN_AGE: u8 = 25;
         /// From this age a squad role is judged on the shorter clock.
         const VETERAN_AGE: u8 = 33;
         /// Consecutive seasons without first-team football before the
-        /// club stops offering fresh terms.
+        /// club stops offering fresh terms to a man in his prime.
         const STUCK_SEASONS: u16 = 3;
         /// A veteran has fewer seasons left to wait out; two unused ones
         /// are the case.
         const VETERAN_STUCK_SEASONS: u16 = 2;
+        /// Under this age each year buys another half-season of patience.
+        const DEVELOPMENT_AGE: u8 = 22;
 
         let age = player.age(date);
-        if age < MIN_AGE {
-            return false;
-        }
         let is_veteran = age >= VETERAN_AGE;
         if is_veteran && player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
         {
@@ -616,7 +614,7 @@ impl ContractRenewalManager {
         let stuck_bar = if is_veteran {
             VETERAN_STUCK_SEASONS
         } else {
-            STUCK_SEASONS
+            STUCK_SEASONS + (u16::from(DEVELOPMENT_AGE.saturating_sub(age)) + 1) / 2
         };
         // A manager-pinned player is wanted by definition.
         if player.is_force_match_selection {
@@ -1732,6 +1730,86 @@ mod loanee_evaluate_tests {
         // Parent club id = 99, loan agreement at borrower club id = 2.
         p.contract_loan = Some(PlayerClubContract::new_loan(50_000, loan_end, 99, 1, 2));
         p
+    }
+
+    fn league_season(year: u16, starts: u16) -> crate::PlayerStatLedgerEntry {
+        crate::PlayerStatLedgerEntry {
+            seq_id: 0,
+            season_start_year: year,
+            team_slug: "t".into(),
+            team_name: "T".into(),
+            team_reputation: 6_000,
+            league_slug: "l".into(),
+            league_name: "L".into(),
+            competition_kind: crate::PlayerStatCompetitionKind::League,
+            competition_slug: "l".into(),
+            is_loan: false,
+            transfer_fee: None,
+            coverage_days: None,
+            spell_end: None,
+            statistics: crate::PlayerStatistics {
+                played: starts,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// A homegrown backup whose last `stuck` seasons were spent watching,
+    /// with a full season of starts before them so the chain is exactly
+    /// that long.
+    fn parked_backup(age: u8, stuck: u16, today: NaiveDate) -> Player {
+        let birth = today - chrono::Duration::days(i64::from(age) * 365 + 30);
+        let mut p = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Parked".into(), "Backup".into()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        let mut contract = PlayerClubContract::new(100_000, d(2027, 6, 30));
+        contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        p.contract = Some(contract);
+        let last = 2025u16;
+        for year in (last + 1 - stuck)..=last {
+            p.statistics_history
+                .season_ledger
+                .push(league_season(year, 1));
+        }
+        p.statistics_history
+            .season_ledger
+            .push(league_season(last - stuck, 25));
+        p
+    }
+
+    /// Youth buys patience, not exemption: the same three unused seasons
+    /// end the offers at twenty-four and are still development at twenty,
+    /// where a fourth is needed.
+    #[test]
+    fn no_football_case_ramps_with_age() {
+        let today = d(2026, 6, 1);
+        let case = |age: u8, stuck: u16| {
+            ContractRenewalManager::renewal_has_no_football_case(
+                &parked_backup(age, stuck, today),
+                today,
+                TeamType::Main,
+            )
+        };
+        assert!(
+            case(24, 3),
+            "three unused seasons at twenty-four end the offers"
+        );
+        assert!(!case(24, 2), "two are not yet a verdict in his prime");
+        assert!(!case(20, 3), "at twenty the club waits a season longer");
+        assert!(case(20, 4));
     }
 
     #[test]

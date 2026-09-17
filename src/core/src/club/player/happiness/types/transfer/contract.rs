@@ -80,6 +80,9 @@ pub enum ContractEventEvidence {
     /// Player rejected the deal over ambition / project mismatch — the
     /// club's direction doesn't match what he wants from his career.
     RejectedOverAmbition,
+    /// Player rejected the deal because it meant more years without
+    /// first-team football.
+    RejectedOverPlayingTime,
 }
 
 impl ContractEventEvidence {
@@ -120,6 +123,9 @@ impl ContractEventEvidence {
             ContractEventEvidence::RejectedOverLength => "contract_evidence_rejected_over_length",
             ContractEventEvidence::RejectedOverAmbition => {
                 "contract_evidence_rejected_over_ambition"
+            }
+            ContractEventEvidence::RejectedOverPlayingTime => {
+                "contract_evidence_rejected_over_playing_time"
             }
         }
     }

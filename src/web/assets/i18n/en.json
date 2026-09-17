@@ -523,6 +523,7 @@
   "dec_reason_contract_expiring": "Contract expiring, seeking fee before free departure",
   "dec_reason_contract_stalemate": "Contract talks stalled — listed after repeated failed renewals",
   "dec_reason_financial_relief": "Loan out to reduce wage bill",
+  "dec_reason_dead_wage": "Paid for seasons without first-team football",
   "dec_reason_lack_playing_time": "Insufficient playing time this season",
   "dec_reason_loan_playing_time": "Loan to gain regular playing time",
   "dec_reason_low_ability_surplus": "Low ability, surplus to requirements",

@@ -637,6 +637,24 @@ mod development_squad_tests {
         assert_eq!(status_of(&team, 2), PlayerSquadStatus::DecentYoungster);
     }
 
+    /// Labelled a prospect at nineteen, parked on a reserve roster, and
+    /// still a prospect at twenty-four because nothing below the first
+    /// team ever re-read the label.
+    #[test]
+    fn adult_prospect_label_expires_on_development_squad() {
+        let mut team = squad_of(
+            TeamType::Reserve,
+            vec![
+                keeper(1, 2002, 120, PlayerSquadStatus::HotProspectForTheFuture),
+                keeper(2, 2003, 80, PlayerSquadStatus::DecentYoungster),
+            ],
+        );
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(status_of(&team, 1), PlayerSquadStatus::MainBackupPlayer);
+        assert_eq!(status_of(&team, 2), PlayerSquadStatus::MainBackupPlayer);
+    }
+
     #[test]
     fn unexpired_role_promise_floors_the_label_on_development_squad() {
         let mut vet = keeper(1, 1994, 130, PlayerSquadStatus::FirstTeamRegular);

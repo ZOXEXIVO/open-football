@@ -7,6 +7,7 @@
 //! [`SquadDecision`]; [`Club::process_underutilized_players`] is the single
 //! place those become statuses, listings and loan candidates.
 
+use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::transfers::loan::guard::LoanAssetGuard;
@@ -45,6 +46,16 @@ impl Club {
             ReputationLevel::National => (60, 3),
             ReputationLevel::Regional => (45, 2),
             _ => (30, 1),
+        };
+
+        // How many seasons a club of this standing pays a man it does not
+        // pick before the wage itself is the reason to act. The wealth
+        // that buys patience with a quiet autumn buys it with a quiet year,
+        // not with a career.
+        let dead_wage_seasons: u16 = match rep_level {
+            ReputationLevel::Elite => 3,
+            ReputationLevel::Continental | ReputationLevel::National => 2,
+            _ => 1,
         };
 
         // Wealthy clubs within squad targets don't need to aggressively list
@@ -211,8 +222,17 @@ impl Club {
                 let days_idle = player.player_attributes.days_since_last_match;
                 let total_games = player.statistics.total_games();
 
+                // Seasons on the books without first-team football, read
+                // off the ledger rather than this autumn's counters: the
+                // one signal a quiet current season, a wealthy owner or a
+                // flattering level cannot excuse. A man breaking through
+                // right now is not a dead wage, whatever last year says.
+                let dead_wage = total_games < games_threshold * 2
+                    && StuckCareerScan::of_in_squad(player, date, team.team_type)
+                        .is_some_and(|scan| scan.stuck_years >= dead_wage_seasons);
+
                 // Reputation-scaled underutilization threshold
-                if days_idle < idle_threshold || total_games >= games_threshold {
+                if !dead_wage && (days_idle < idle_threshold || total_games >= games_threshold) {
                     continue;
                 }
 
@@ -231,14 +251,15 @@ impl Club {
                 let main_avg_level = asset_ctx.squad_avg_level();
 
                 // Wealthy clubs within squad limits: only list truly unwanted players
-                if wealthy_within_limits && level >= 50 {
+                if wealthy_within_limits && level >= 50 && !dead_wage {
                     continue;
                 }
 
                 // Protect quality players who are competitive with the main
                 // team, regardless of age — don't list a first-team-level
-                // player just because they're 31.
-                if level >= main_avg_level.saturating_sub(10) && age < 35 {
+                // player just because they're 31. Seasons of not being
+                // picked are the coach's verdict on that level already.
+                if level >= main_avg_level.saturating_sub(10) && age < 35 && !dead_wage {
                     continue;
                 }
 
@@ -252,8 +273,12 @@ impl Club {
                 match asset_ctx.classify_in_squad(player, date, team.team_type) {
                     SquadAssetClass::CorePlayer
                     | SquadAssetClass::FirstTeamUseful
-                    | SquadAssetClass::RotationUseful
                     | SquadAssetClass::UnknownNeedsEvaluation => continue,
+                    // Credible depth is worth carrying for a season, not
+                    // for a career: once the wage has been dead for years
+                    // the rotation label is the club's excuse, not its plan.
+                    SquadAssetClass::RotationUseful if !dead_wage => continue,
+                    SquadAssetClass::RotationUseful => {}
                     SquadAssetClass::ProspectDevelopment => {
                         // …unless he is the club's own first choice in
                         // that shirt. The class is minted from a squad
@@ -299,13 +324,21 @@ impl Club {
                     loan_players.push(SquadDecision::new(
                         ti,
                         player.id,
-                        SquadDecision::UNDERUTILIZED_TOP_CLUB,
+                        if dead_wage {
+                            SquadDecision::DEAD_WAGE
+                        } else {
+                            SquadDecision::UNDERUTILIZED_TOP_CLUB
+                        },
                     ));
                 } else {
                     transfer_players.push(SquadDecision::new(
                         ti,
                         player.id,
-                        SquadDecision::UNDERUTILIZED,
+                        if dead_wage {
+                            SquadDecision::DEAD_WAGE
+                        } else {
+                            SquadDecision::UNDERUTILIZED
+                        },
                     ));
                 }
             }

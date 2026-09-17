@@ -2354,13 +2354,11 @@ impl Actors {
                 let there = tracks
                     .players
                     .get_mut(&actor.id)
-                    .and_then(|track| {
-                        track.position_ahead(now + contact.delay as f64 * 1000.0)
-                    })
+                    .and_then(|track| track.position_ahead(now + contact.delay as f64 * 1000.0))
                     .map(|[x, y, z]| Field::to_world(x, y, z))
                     .unwrap_or(transform.translation);
-                let range = Vec2::new(there.x, there.z)
-                    .distance(Vec2::new(contact.at.x, contact.at.z));
+                let range =
+                    Vec2::new(there.x, there.z).distance(Vec2::new(contact.at.x, contact.at.z));
                 if receiver.is_none_or(|(_, best)| range < best) {
                     receiver = Some((actor.id, range));
                 }
@@ -2370,16 +2368,23 @@ impl Actors {
             // who is nearest it, which is a frame behind for the reason the
             // topple below is; and not while it is in somebody's gloves.
             if let Some(ball) = ball_position.filter(|_| ball_state.held_by.is_none()) {
-                let reach =
-                    Vec2::new(ball.x - transform.translation.x, ball.z - transform.translation.z)
-                        .length();
+                let reach = Vec2::new(
+                    ball.x - transform.translation.x,
+                    ball.z - transform.translation.z,
+                )
+                .length();
                 let dribbling = ball_state.velocity.length() < Self::LOOSE
                     && reach < Self::AT_HIS_FEET
                     && ball_state.nearest.is_some_and(|(id, _)| id == actor.id);
                 let meeting = actor.meeting();
                 if dribbling || meeting.is_some() {
                     let (own, approach) = meeting.unwrap_or((actor.ball_at_his_feet(), 0.0));
-                    led = Some((actor.id, transform.transform_point(own), approach, dribbling));
+                    led = Some((
+                        actor.id,
+                        transform.transform_point(own),
+                        approach,
+                        dribbling,
+                    ));
                 }
             }
 
@@ -3369,8 +3374,7 @@ impl Actors {
             // past the leash, as a velocity. See [`PlayerActor::gain_ground`]
             // and [`PlayerActor::tread`]. Across a seek or a teleport the
             // leash is simply put down again where he is.
-            let stepping =
-                actor.gain_ground(position, playback.seeked || teleported) / match_delta;
+            let stepping = actor.gain_ground(position, playback.seeked || teleported) / match_delta;
             actor.gather_pace(stepping, pace, match_delta, playback.seeked);
 
             // **WHICH WAY HE IS ACTUALLY GOING.**
@@ -3402,7 +3406,11 @@ impl Actors {
             // Off the leash as well, for the same reason: a man the engine
             // is holding on a spot has no direction, and reading one off
             // the jitter turned him to face each twitch of it.
-            let travelling = if playback.seeked { Vec3::ZERO } else { stepping };
+            let travelling = if playback.seeked {
+                Vec3::ZERO
+            } else {
+                stepping
+            };
             let settling = if playback.seeked {
                 1.0
             } else {
@@ -4676,8 +4684,8 @@ impl PlayerActor {
         // Two filters in cascade lag a steady acceleration by the sum of
         // their windows, so the gap between them is the acceleration over
         // the pace window alone.
-        let urge = ((self.tread - self.speed) / Actors::PACE_RESPONSE / Actors::DRIVING)
-            .clamp(-1.0, 1.0);
+        let urge =
+            ((self.tread - self.speed) / Actors::PACE_RESPONSE / Actors::DRIVING).clamp(-1.0, 1.0);
         if seeked {
             self.accelerating = urge;
             Actors::DRIVE_SPRING.snap(&mut self.drive, &mut self.drive_rate, urge);
@@ -5071,8 +5079,7 @@ impl PlayerActor {
             // however gently the first sample says he left the ground — see
             // [`KeeperFlight`], which is the same answer the topple reads.
             if self.air <= 0.0 {
-                self.bounce =
-                    climb < Actors::HOP_CLIMB && self.declared == KeeperFlight::Unknown;
+                self.bounce = climb < Actors::HOP_CLIMB && self.declared == KeeperFlight::Unknown;
             } else if self.bounce
                 && (self.height > Actors::HOP_CEILING
                     || (self.air <= Actors::LAUNCH_WINDOW && climb >= Actors::HOP_CLIMB))
@@ -5297,7 +5304,11 @@ impl PlayerActor {
         let trapping = self
             .kick
             .is_some_and(|kick| kick.kind == Strike::Trap && kick.swing < 0.0);
-        if trapping { arriving } else { coming.or(arriving) }
+        if trapping {
+            arriving
+        } else {
+            coming.or(arriving)
+        }
     }
 
     /// **Where he meets a ball arriving with this velocity**, and with which
@@ -6129,7 +6140,10 @@ mod flight {
     fn a_split_step_is_a_bounce_not_a_dive() {
         let frames = bounce(&SPLIT_STEP, 0.3, 0);
         let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
-        assert!(dived < 0.05, "a split-step was drawn as a dive ({dived:.2})");
+        assert!(
+            dived < 0.05,
+            "a split-step was drawn as a dive ({dived:.2})"
+        );
         // Up: frames 1-4 are the ones above the bar.
         let hopped = frames[1..5].iter().map(|f| f.1).fold(0.0, f32::max);
         assert!(hopped > 0.5, "the hop never came on ({hopped:.2})");
@@ -6171,9 +6185,16 @@ mod flight {
             0.02, 0.04, 0.05, 0.14, 0.28, 0.38, 0.42, 0.40, 0.32, 0.20, 0.08, 0.0, 0.0,
         ];
         let frames = bounce(&PUSHED_OFF, 9.0, 0);
-        assert!(frames[2].1 > 0.5, "the hop never came on ({:.2})", frames[2].1);
+        assert!(
+            frames[2].1 > 0.5,
+            "the hop never came on ({:.2})",
+            frames[2].1
+        );
         let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
-        assert!(dived > 0.9, "the dive out of the hop never came on ({dived:.2})");
+        assert!(
+            dived > 0.9,
+            "the dive out of the hop never came on ({dived:.2})"
+        );
         assert!(
             frames[7].1 < 0.1,
             "still drawn hopping at the top of a dive ({:.2})",
@@ -6197,7 +6218,10 @@ mod flight {
         ] {
             let frames = bounce(series, 9.0, 0);
             let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
-            assert!(dived > 0.9, "the {name} dive was not drawn as one ({dived:.2})");
+            assert!(
+                dived > 0.9,
+                "the {name} dive was not drawn as one ({dived:.2})"
+            );
             // A frame or two of hop before the second sample settles it is
             // the push-off and is allowed; at the top of the flight there
             // must be none of it left.
@@ -6207,9 +6231,15 @@ mod flight {
                 .max_by(|a, b| series[a.0].partial_cmp(&series[b.0]).unwrap())
                 .map(|(_, f)| f.1)
                 .unwrap();
-            assert!(apex < 0.05, "the {name} dive is still hopping at its apex ({apex:.2})");
+            assert!(
+                apex < 0.05,
+                "the {name} dive is still hopping at its apex ({apex:.2})"
+            );
             let landed = frames.iter().map(|f| f.2).fold(0.0, f32::max);
-            assert!(landed < 1e-3, "the {name} dive landed into a split-step crouch");
+            assert!(
+                landed < 1e-3,
+                "the {name} dive landed into a split-step crouch"
+            );
         }
     }
     /// **A ball that comes OFF him is not drawn as a ball he caught.**
@@ -8235,7 +8265,7 @@ mod ground {
     #[test]
     fn a_runner_puts_his_foot_on_the_grass() {
         let flat = boot(1.0, still()).y;
-        for speed in [1.0f32, 1.8, 3.0, 4.5, 6.0, 7.5] {
+        for speed in [1.0f32, 1.8, 3.0, 4.5, 6.0, 7.5, 8.25, 8.75] {
             let mut lowest = f32::MAX;
             for phase in 0..120 {
                 let gait = drawn(speed, phase as f32 * TAU / 120.0, Vec2::Y);
@@ -8274,7 +8304,16 @@ mod ground {
     fn the_planted_foot_carries_the_ground_across_its_whole_stance() {
         /// How close to the turf counts as planted, in metres.
         const DOWN: f32 = 0.025;
-        for (speed, floor) in [(1.2f32, 0.70f32), (2.6, 0.75), (4.0, 0.95), (6.0, 1.05)] {
+        // Flight does not require a planted foot to overtake the turf. Check
+        // both directions of slip, including the faster substitution runs.
+        for (speed, floor) in [
+            (1.2f32, 0.70f32),
+            (2.6, 0.75),
+            (4.0, 0.90),
+            (6.0, 0.90),
+            (8.25, 0.90),
+            (8.75, 0.90),
+        ] {
             let (stride, _) = Actors::stride_of(WALKER, speed, Vec2::Y);
             let rate = PI * speed / stride;
             let flat = boot(1.0, still()).y;
@@ -8291,9 +8330,9 @@ mod ground {
             }
             let mean = carried.iter().sum::<f32>() / carried.len().max(1) as f32;
             assert!(
-                mean > floor,
+                (floor..1.25).contains(&mean),
                 "at {speed:.1} m/s his planted foot carries {:.0}% of the ground he \
-                 covers, against a floor of {:.0}%",
+                 covers, expected {:.0}%–125%",
                 mean * 100.0,
                 floor * 100.0
             );
@@ -8935,7 +8974,10 @@ pub(crate) mod replayed {
         /// Callers treat an unknown as nobody's opponent, which under-counts
         /// by at most the handful of minutes a sub is on for and never
         /// invents an opponent that is not there.
-        pub fn sides(tracks: &mut ReplayTracks, start: f64) -> std::collections::HashMap<u32, bool> {
+        pub fn sides(
+            tracks: &mut ReplayTracks,
+            start: f64,
+        ) -> std::collections::HashMap<u32, bool> {
             let ids: Vec<u32> = tracks.players.keys().copied().collect();
             let mut sides = std::collections::HashMap::new();
             for id in ids {
@@ -9455,10 +9497,8 @@ mod keeper {
                     + (Actors::PIVOT_RATE.1 - Actors::PIVOT_RATE.0) * eased)
                     * frame;
                 let response = 1.0 - (-frame / Actors::TURN_RESPONSE).exp();
-                let turn_toward = |heading: f32, want: Vec3| match Vec3::new(
-                    want.x, 0.0, want.z,
-                )
-                .try_normalize()
+                let turn_toward = |heading: f32, want: Vec3| match Vec3::new(want.x, 0.0, want.z)
+                    .try_normalize()
                 {
                     Some(want) => {
                         let wanted = want.x.atan2(want.z);
@@ -9485,9 +9525,8 @@ mod keeper {
                     let to_ball = Vec3::new(b.x - position.x, 0.0, b.z - position.z);
                     if let Some(to_ball) = to_ball.try_normalize() {
                         let bearing = to_ball.x.atan2(to_ball.z);
-                        let off = |heading: f32| {
-                            ((bearing - heading + PI).rem_euclid(TAU) - PI).abs()
-                        };
+                        let off =
+                            |heading: f32| ((bearing - heading + PI).rem_euclid(TAU) - PI).abs();
                         live_frames += 1;
                         let in_the_box = picture.closest_opponent(actor.is_home, position)
                             <= Field::PENALTY_AREA_DEPTH;
@@ -9523,8 +9562,7 @@ mod keeper {
                                         .try_normalize()
                                         .map(|w| off(w.x.atan2(w.z)))
                                 };
-                                if let (Some(a), Some(b)) =
-                                    (asked_off(want), asked_off(loose_want))
+                                if let (Some(a), Some(b)) = (asked_off(want), asked_off(loose_want))
                                 {
                                     opening.push(a);
                                     loose_opening.push(b);
@@ -10611,7 +10649,10 @@ mod arrival {
         assert!(actor.arm_balance_rate.length() < 1e-4);
         actor.turn = 1.0;
         actor.balance_arms(FRAME, false);
-        assert!(actor.arm_balance.x < 0.0, "arms must lag outward during a right turn");
+        assert!(
+            actor.arm_balance.x < 0.0,
+            "arms must lag outward during a right turn"
+        );
     }
 
     #[test]
@@ -11259,7 +11300,10 @@ mod receptions {
         );
         let (foot, at) = actor.meeting_side(Vec3::new(0.0, 0.0, -20.0));
         assert_eq!(foot, Complexion::footedness(7));
-        assert!(at.x.abs() > 0.05 && at.y > 0.3, "dead ahead is met at {at:?}");
+        assert!(
+            at.x.abs() > 0.05 && at.y > 0.3,
+            "dead ahead is met at {at:?}"
+        );
     }
 
     #[test]

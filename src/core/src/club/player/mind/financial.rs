@@ -128,11 +128,15 @@ impl SubMind for FinancialMind {
                 evidence.insert(GoalEvidence::CONTRACT_RUNNING_DOWN);
             }
 
+            // The claim is only as good as his part in the team: a man the
+            // side is built around argues from strength, a man watching
+            // from the stand argues from the wage bill.
+            let claim = 0.4 + 0.6 * (s.starter_ratio / 0.5).clamp(0.0, 1.0);
             organs.goals.pursue(
                 GoalKind::BePaidWhatImWorth,
                 GoalOrigin::Grievance,
                 evidence,
-                self.grievance(),
+                self.grievance() * claim,
                 today,
             );
             // The leverage is in the last year of a deal, and he knows it.

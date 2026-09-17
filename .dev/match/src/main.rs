@@ -1432,6 +1432,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        overlooked: Vec::new(),
         coach_snapshot: None,
     }
 }
@@ -1510,6 +1511,7 @@ fn make_squad_viewer(
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        overlooked: Vec::new(),
         coach_snapshot: None,
     };
 
@@ -1890,6 +1892,7 @@ fn league_squad(t: &LeagueTeam) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        overlooked: Vec::new(),
         coach_snapshot: None,
     }
 }
@@ -3058,6 +3061,7 @@ impl MixedQualityHarness {
             penalty_taker_id: None,
             free_kick_taker_id: None,
             selection_omissions: Vec::new(),
+            overlooked: Vec::new(),
             coach_snapshot: None,
         }
     }
@@ -3279,6 +3283,7 @@ impl SubstitutionCensus {
                 penalty_taker_id: None,
                 free_kick_taker_id: None,
                 selection_omissions: Vec::new(),
+                overlooked: Vec::new(),
                 coach_snapshot: None,
             }
         };
@@ -4084,6 +4089,7 @@ fn make_squad_calibrated(team_id: u32, level: u8) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: Vec::new(),
+        overlooked: Vec::new(),
         coach_snapshot: None,
     }
 }

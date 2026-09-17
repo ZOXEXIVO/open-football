@@ -2437,6 +2437,23 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             player.on_match_dropped_with_context(rotation_brief.applied(omitted.context.clone()));
         }
     }
+
+    // The rest of the roster: fit, named nowhere, and not newsworthy
+    // enough for an explained omission. Nothing is narrated, but the
+    // match still counts against them — without this a reserve the
+    // manager never picks kept a neutral starter share for years and
+    // read as "playing" to every model that asks.
+    for &pid in &side.overlooked {
+        if side.main.contains(&pid)
+            || side.substitutes.contains(&pid)
+            || side.selection_omissions.iter().any(|o| o.player_id == pid)
+        {
+            continue;
+        }
+        if let Some(player) = data.player_mut(pid) {
+            player.on_match_overlooked(is_friendly);
+        }
+    }
 }
 
 /// Decides whether a policy omission was pre-briefed by the coaching

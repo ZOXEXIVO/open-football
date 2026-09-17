@@ -43,6 +43,12 @@ pub struct PlayerSelectionResult {
     /// missed, regulars demoted, force-selected players overlooked, …).
     /// Empty when nothing notable happened.
     pub omissions: Vec<OmittedPlayer>,
+    /// Every fit player on the selecting team's own roster who was not
+    /// named in the XI or on the bench — newsworthy or not. The
+    /// omissions above explain the notable cases; this is the plain
+    /// register the playing-time bookkeeping reads, so a reserve nobody
+    /// ever picks still accrues the matches he was overlooked for.
+    pub overlooked: Vec<u32>,
 }
 
 pub struct SelectionContext {
@@ -504,11 +510,36 @@ impl SquadSelector {
         }
         .build();
 
+        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
+
         PlayerSelectionResult {
             main_squad,
             substitutes,
             omissions,
+            overlooked,
         }
+    }
+
+    /// The selecting team's own fit players who were left out altogether.
+    /// Borrowed reserves are not "overlooked" by a squad that does not own
+    /// them — their own side's fixtures keep their books.
+    fn overlooked_on_roster(
+        team: &Team,
+        available: &[&Player],
+        main_squad: &[MatchPlayer],
+        substitutes: &[MatchPlayer],
+    ) -> Vec<u32> {
+        let named: HashSet<u32> = main_squad
+            .iter()
+            .chain(substitutes.iter())
+            .map(|p| p.id)
+            .collect();
+        let own: HashSet<u32> = team.players.players().iter().map(|p| p.id).collect();
+        available
+            .iter()
+            .map(|p| p.id)
+            .filter(|id| own.contains(id) && !named.contains(id))
+            .collect()
     }
 
     // ========== ROTATION SELECTION ==========
@@ -678,10 +709,12 @@ impl SquadSelector {
         // Rotation matches (friendlies / dev leagues) don't generate
         // morale-relevant drop events — every player is in line for a
         // run-out and an omission carries no professional sting.
+        let overlooked = Self::overlooked_on_roster(team, &available, &main_squad, &substitutes);
         PlayerSelectionResult {
             main_squad,
             substitutes,
             omissions: Vec::new(),
+            overlooked,
         }
     }
 

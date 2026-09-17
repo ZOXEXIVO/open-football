@@ -405,6 +405,12 @@ impl MatchViewer {
                     // Behind the act it reads, so the sheet leaves on the frame
                     // the camera turns rather than the one after it.
                     TeamSheet::follow_ceremony.after(Lineup::hold),
+                    // …and reads the size the card was last laid out at, which
+                    // is a frame behind whatever a resize did to the window.
+                    // Every frame rather than on a resize event: the canvas on
+                    // a phone follows the URL bar, and a size arrived at
+                    // between two events is still a size the card has to fit.
+                    TeamSheet::fit_frame,
                     Lineup::pose
                         .after(Actors::take_the_field)
                         .before(Actors::animate),
@@ -631,7 +637,12 @@ impl MatchViewer {
                         .before(Playback::end_frame),
                     Scoreboard::refresh
                         .after(Aftermath::follow_playhead)
-                        .after(FullTime::follow_playhead),
+                        .after(FullTime::follow_playhead)
+                        // The sheets' own cue, so the corner lights on the
+                        // frame the card leaves rather than the one after it —
+                        // the same reason `TeamSheet::follow_ceremony` sits
+                        // behind it.
+                        .after(Lineup::hold),
                 ),
             )
             // The engine-facing overlays only exist when the page asked for

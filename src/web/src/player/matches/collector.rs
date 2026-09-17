@@ -576,6 +576,7 @@ mod tests {
             substitutes: substitutes.to_vec(),
             substitutes_used: used.to_vec(),
             selection_omissions: Vec::new(),
+            overlooked: Vec::new(),
             starter_slots: Vec::new(),
         }
     }

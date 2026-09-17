@@ -6824,3 +6824,34 @@ fn capped_veteran_retires_from_international_football_once() {
         0
     );
 }
+
+/// A fit man named nowhere: the club's match still counts against him —
+/// the start share decays and the overlooked fixture lands in the
+/// eligible-match denominator — but nothing is narrated, and a friendly
+/// leaves the books alone.
+#[test]
+fn an_overlooked_official_match_moves_the_books_quietly() {
+    let mut p = build_player(
+        PlayerPositionType::MidfielderCenter,
+        PersonAttributes::default(),
+    );
+    let before = p.happiness.recent_events.len();
+
+    p.on_match_overlooked(true);
+    assert_eq!(
+        p.happiness.starter_ratio, 0.5,
+        "a friendly is not an opportunity"
+    );
+    assert_eq!(p.happiness.eligible_official_matches_since_join, 0);
+
+    p.on_match_overlooked(false);
+    assert!(p.happiness.starter_ratio < 0.5);
+    assert_eq!(p.happiness.eligible_official_matches_since_join, 1);
+    assert_eq!(p.happiness.left_out_since_join, 1);
+    assert_eq!(p.happiness.appearances_tracked, 1);
+    assert_eq!(
+        p.happiness.recent_events.len(),
+        before,
+        "being overlooked is bookkeeping, not a grievance in his diary"
+    );
+}

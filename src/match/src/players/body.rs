@@ -956,6 +956,9 @@ impl Physique {
     /// down three times does not stay agreed — see the note on
     /// `Physique::CRADLE`.
     pub const ANKLE: Vec3 = Vec3::new(0.0, -Self::SHIN + 0.005, 0.035);
+    /// Ankle joint to the sole of the boot, the same figure `skeleton::boot`
+    /// and [`Self::underside`] measure the turf against.
+    pub const SOLE: f32 = 0.038;
     /// Hip joint to the sole of the boot, straight-legged: the lever a
     /// stride swings through.
     ///
@@ -963,7 +966,7 @@ impl Physique {
     /// so it is the crossing between the stride model in
     /// [`crate::players::actors::Actors::stride_of`] and the geometry here —
     /// and, like [`Self::CRADLE`], a number that has to be one number.
-    pub const LEG: f32 = Self::THIGH + Self::SHIN - 0.005 + 0.038;
+    pub const LEG: f32 = Self::THIGH + Self::SHIN - 0.005 + Self::SOLE;
     /// Hip to the base of the neck.
     pub const TORSO: f32 = 0.58;
     /// Shoulder sockets sit inside the chest, beneath the sloping shoulder.
@@ -2471,6 +2474,52 @@ pub struct Joint {
     origin: Vec3,
 }
 
+/// **The four joins of a running foot's cycle**, in radians of it, for one
+/// leg with its mid-stance at π: where it lands, lifts, reaches its furthest
+/// point behind and its furthest point ahead. See [`Joint::run_path`], which
+/// draws the path between them; the knee's fold and the body's settle onto
+/// the leg read their timing from here so the three cannot disagree.
+#[derive(Clone, Copy)]
+struct Footfall {
+    planted: f32,
+    leaving: f32,
+    behind: f32,
+    ahead: f32,
+}
+
+impl Footfall {
+    /// For a stride whose swing amplitude puts the foot `reach` metres
+    /// either side of the hips per unit of the path — see [`Joint::footfall`].
+    fn of(reach: f32) -> Self {
+        let contact = (Joint::SWEEP / reach).clamp(0.6, 2.4);
+        let touchdown = contact * Joint::TOUCHDOWN_SHARE;
+        let off = (2.0 * Joint::LINGER / reach).clamp(0.4, 1.8);
+        let planted = PI - touchdown;
+        let leaving = PI + contact - touchdown;
+        Footfall {
+            planted,
+            leaving,
+            behind: leaving + off,
+            ahead: planted + TAU - Joint::LANDING,
+        }
+    }
+
+    /// How long the foot is on the turf, in radians of the cycle.
+    fn contact(self) -> f32 {
+        self.leaving - self.planted
+    }
+
+    /// How far ahead of the hips the foot lands, in units of the swing.
+    fn touchdown(self) -> f32 {
+        PI - self.planted
+    }
+
+    /// …and how far behind them it lifts.
+    fn lift_off(self) -> f32 {
+        self.leaving - PI
+    }
+}
+
 /// How a player is moving right now, in the only two terms the pose needs:
 /// where in the stride they are, and how hard they are running.
 #[derive(Clone, Copy)]
@@ -3084,34 +3133,53 @@ impl Joint {
     /// as a share — see [`Joint::stepping`], where the flight phase is
     /// bounded by it.
     ///
-    /// ⚠ **It is the same claim as the 105% floor at 6 m/s in
-    /// `the_planted_foot_carries_the_ground_across_its_whole_stance`**, and
-    /// the two have to be read together: that test measures what the boot
-    /// does with the ground while it is down, and a runner's foot genuinely
-    /// goes back faster than the turf because for part of the cycle neither
-    /// foot is on it. At 0.10 the measured figure came out at 104% and the
-    /// foot skated by a hair.
-    const FLIGHT_BONUS: f32 = 0.14;
+    /// Zero: the run's flight lives in [`Joint::run_path`] now, and a
+    /// planted foot that outruns the turf is a skate whatever it is called.
+    const FLIGHT_BONUS: f32 = 0.0;
     /// **How far the knee folds through the recovery**, standing and per
     /// unit of stride — the heel coming up behind him.
     ///
-    /// ⚠ **Was (0.16, 1.55), and at that a sprinter's heel cleared the grass
-    /// by sixteen centimetres.** Measured over the cycle at six metres a
-    /// second, the knee peaked at 73° and the trailing leg left the ground
-    /// and came through it nearly straight — rendered side-on, both legs
-    /// were sticks scissoring under a body, which is the single picture the
-    /// word "robot" describes. A runner at that pace folds his knee past a
-    /// right angle and his heel comes up most of the way to his seat, and
-    /// it is the fold, more than the reach, that the eye reads a run by. At
-    /// these the peak is 105° and the heel clears thirty centimetres, and the
-    /// leading leg still lands within ten degrees of straight because the
-    /// curve is cubed rather than squared — see [`Joint::tucked`].
-    ///
-    /// ⚠ The STANDING term is untouched. It is what softens one knee of a
-    /// man standing still, and every relative test in this crate measures
-    /// its boots against that man: raise it and the reference pose moves
-    /// under all of them at once.
-    const KNEE_FLEX: (f32, f32) = (0.16, 2.30);
+    /// ⚠ The STANDING term is what softens one knee of a man standing still,
+    /// and every relative test in this crate measures its boots against
+    /// that man. The walking term is the second; the running term the
+    /// third, blended in on [`Joint::loading`] — it sits on top of
+    /// [`Joint::KNEE_RUN`], so at six metres a second the fold peaks near
+    /// 90° and at the recorded substitution pace a little under 100°.
+    const KNEE_FLEX: (f32, f32, f32) = (0.16, 2.30, 1.75);
+    /// …capped, in units of stride, so the heel stops short of the seat at
+    /// the paces the recording holds a man at for most of a match.
+    const RECOVERY_MAX: f32 = 0.68;
+    /// **The knee a running leg never straightens past**, in radians, at a
+    /// full run. A runner lands on a bent knee and leaves on one; the leg
+    /// that locks straight in the air in front of him is the goose-step.
+    const KNEE_RUN: f32 = 0.25;
+    /// **How far the planted foot sweeps under him**, in metres, before the
+    /// leg runs out of reach and it has to lift — the contact a leg this
+    /// long can carry with the hips down where a run holds them. The same
+    /// distance at every pace, so the contact is a shorter share of a faster
+    /// stride, which is what a duty factor does.
+    const SWEEP: f32 = 0.50;
+    /// …and how much of it is in front of him: he lands a little nearer his
+    /// hips than he leaves.
+    const TOUCHDOWN_SHARE: f32 = 0.44;
+    /// **How much further back the foot goes after it lifts**, in metres,
+    /// decelerating off the turf's rate while the heel comes up. In metres
+    /// like the sweep, so a long-strided man's heel is never asked to go
+    /// further behind him than a folded leg reaches — past that the hip
+    /// solve saturates and the foot goes up instead, seventy centimetres
+    /// into the air.
+    const LINGER: f32 = 0.28;
+    /// …and how long the foot takes to get back onto the turf's rate before
+    /// it lands, in radians of the cycle: the paw back onto the grass.
+    const LANDING: f32 = 0.50;
+    /// Where in the swing the knee is deepest, as a share of the whip from
+    /// the back peak to the front one — while the foot is still well behind
+    /// him, so the thigh is near vertical under a folded knee rather than
+    /// hoisted in front of him by one.
+    const TUCK_AT: f32 = 0.35;
+    /// How far ahead of a landing, and behind a lift-off, the body starts to
+    /// settle onto the leg — in radians of the cycle. See [`Joint::planted`].
+    const SETTLE_RAMP: f32 = 0.80;
     /// …and how much of it varies from one step to the next, as a share.
     /// See [`Gait::jitter`].
     const KNEE_JITTER: f32 = 0.07;
@@ -4079,7 +4147,7 @@ impl Joint {
                 // **…and that is the WALK.** A run is the opposite picture —
                 // see [`Joint::loaded`] — and the two are blended on
                 // [`Joint::loading`]: lowest over the loaded stance knee by
-                // exactly what that knee costs ([`Joint::sink`]), highest
+                // exactly what that knee costs ([`Joint::settle`]), highest
                 // with both feet off the grass by [`Joint::FLIGHT_LIFT`].
                 let stepping = Self::stepping(gait);
                 let loading = Self::loading(gait);
@@ -4087,14 +4155,12 @@ impl Joint {
                 // feet — the doubled cycle, since both legs take a stance.
                 let stance = 0.5 + 0.5 * (gait.phase * 2.0).cos();
                 let vault = -Self::BOB * stepping * gait.spring * (1.0 - stance) * (1.0 - loading);
-                // ⚠ The sink is NOT scaled by the loading: the knee it is
-                // worked from already is, so it is exact at every point of
-                // the blend, and scaling it again would leave a jogger's
-                // planted foot half its own sink into the turf.
-                let compress =
-                    Self::FLIGHT_LIFT * stepping * gait.spring * (1.0 - stance) * loading
-                        - Self::sink(gait) * stance;
-                let bob = vault + compress + Self::sole_settle(gait) * stance;
+                // The run settles him onto whichever leg is planted, by
+                // exactly what that leg's reach falls short of a straight one,
+                // and lifts him between them. See [`Joint::settle`].
+                let (settle, flight) = Self::settle(gait);
+                let bob = vault + Self::FLIGHT_LIFT * stepping * gait.spring * flight * loading
+                    - settle * loading;
                 // Breathing, for a player who is not running. Fades out as he
                 // does, where the stride bob takes over.
                 let breathe =
@@ -5497,9 +5563,22 @@ impl Joint {
     /// side-step, still sitting in the forward run — which is **93% of the
     /// frames an outfielder moves in**.
     ///
-    /// Blended toward a rounded triangle, which keeps a constant rate
-    /// through stance and eases the foot's reversal at each end.
-    fn striding(leg: f32) -> f32 {
+    /// A walk and a run are different curves — [`Joint::walk_path`] and
+    /// [`Joint::run_path`] — blended on [`Joint::loading`]. Both pass
+    /// mid-stance at the rate [`Joint::stride_gain`] pays for.
+    fn striding(gait: Gait, leg: f32) -> f32 {
+        let walk = Self::walk_path(leg);
+        let loading = Self::loading(gait);
+        if loading <= 0.0 {
+            return walk;
+        }
+        walk + (Self::run_path(leg, Self::footfall(gait)) - walk) * loading
+    }
+
+    /// **The walk**: a sinusoid blended toward a rounded triangle, which
+    /// keeps a constant rate through the long stance a walk has and eases
+    /// the foot's reversal at each end.
+    fn walk_path(leg: f32) -> f32 {
         let sine = leg.sin();
         let angle = sine.asin();
         let distance = FRAC_PI_2 - angle.abs();
@@ -5514,7 +5593,98 @@ impl Joint {
         } else {
             angle * (2.0 / PI)
         };
-        sine + (triangle - sine) * Self::STRIDE_SHAPE
+        sine + (triangle - sine) * Self::WALK_SHAPE
+    }
+    const WALK_SHAPE: f32 = 0.55;
+    /// …and the rate it passes mid-stance at, per unit of amplitude.
+    const WALK_RATE: f32 = 1.0 - Self::WALK_SHAPE + Self::WALK_SHAPE * 2.0 / PI;
+
+    /// **The run**: the foot sweeps back under him at exactly the turf's
+    /// rate for the whole of a `contact`, decelerates off it behind him as
+    /// the heel comes up, whips through, and reaches out ahead only as far
+    /// as it is about to land — slowing back onto the turf's rate before it
+    /// gets there.
+    ///
+    /// ⚠ **This is the difference between a run and the symmetric wave the
+    /// walk uses.** A sinusoid's forward peak is as far ahead as its back
+    /// peak is behind, and the leg has to be straight to get there, so the
+    /// foot reached its furthest point 17 cm off the grass with the knee
+    /// locked and then dragged back a third of a metre through the air to
+    /// land — the goose-step every report about the run described — while
+    /// the thigh sat at forty degrees for a third of the cycle waiting for
+    /// it. A runner's swing is not symmetric: the foot lingers behind him
+    /// with the knee folded, comes through late and fast, and is already
+    /// moving backwards when it lands.
+    ///
+    /// In units of the swing amplitude, so the stance slope is exactly −1
+    /// and [`Joint::stride_gain`] is 1 for a run. Four pieces, every join
+    /// matching value, rate and acceleration: the stance line, a smoothstep
+    /// corner off it, a raised-cosine pulse of rate through the swing whose
+    /// area is the whole distance from the back peak to the front one, and
+    /// a smoothstep corner back onto the line.
+    fn run_path(leg: f32, fall: Footfall) -> f32 {
+        let off = fall.behind - fall.leaving;
+        let on = fall.planted + TAU - fall.ahead;
+        let travel = fall.contact() + (off + on) * 0.5;
+        let p = (leg - fall.planted).rem_euclid(TAU) + fall.planted;
+        if p < fall.leaving {
+            fall.touchdown() - (p - fall.planted)
+        } else if p < fall.behind {
+            let t = (p - fall.leaving) / off;
+            -fall.lift_off() - off * (t - t * t * t + t * t * t * t * 0.5)
+        } else if p < fall.ahead {
+            // The rate through the swing is `t³(1−t)²`, which peaks three
+            // fifths of the way along: the foot comes through late and
+            // fast, and its position is that rate's integral — evaluated
+            // from whichever end is nearer, because the polynomial cancels
+            // to a few bits at the far one and the noise reads as a jolt.
+            let t = (p - fall.behind) / (fall.ahead - fall.behind);
+            let through = if t < 0.5 {
+                t * t * t * t * (15.0 - 24.0 * t + 10.0 * t * t)
+            } else {
+                let u = 1.0 - t;
+                1.0 - u * u * u * (20.0 - 45.0 * u + 36.0 * u * u - 10.0 * u * u * u)
+            };
+            -fall.lift_off() - off * 0.5 + travel * through
+        } else {
+            let t = (p - fall.ahead) / on;
+            fall.touchdown() + on * 0.5 - on * (t * t * t - t * t * t * t * 0.5)
+        }
+    }
+
+    /// **The timing of this stride's footfalls**: the ground one unit of
+    /// the path covers is what turns the [`Joint::SWEEP`] and the
+    /// [`Joint::LINGER`] into shares of the cycle, so the contact is a
+    /// shorter share of a faster stride and the heel never goes further
+    /// back than the leg reaches.
+    fn footfall(gait: Gait) -> Footfall {
+        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait);
+        Footfall::of(Physique::LEG * amplitude.sin())
+    }
+
+    /// **Whether this leg is the planted one**, 0..1, and the nearest point
+    /// of its contact: on for the contact [`Joint::run_path`] keeps the foot
+    /// on the turf, and ramped in and out over [`Joint::SETTLE_RAMP`] either
+    /// side so the body comes down onto the leg before it lands and lets go
+    /// after it lifts. The ramps shrink when a slow stride's contact would
+    /// otherwise let the two legs claim him at once.
+    fn planted(gait: Gait, leg: f32) -> (f32, f32) {
+        let fall = Self::footfall(gait);
+        let ramp = Self::SETTLE_RAMP.min((PI - fall.contact()) * 0.5).max(0.05);
+        let x = leg.rem_euclid(TAU) - PI;
+        if x < -fall.touchdown() {
+            (
+                Actors::ease((x + fall.touchdown() + ramp) / ramp),
+                fall.planted,
+            )
+        } else if x > fall.lift_off() {
+            (
+                Actors::ease((fall.lift_off() + ramp - x) / ramp),
+                fall.leaving,
+            )
+        } else {
+            (1.0, PI + x)
+        }
     }
 
     /// Steady periodic response of a damped angular spring driven by the
@@ -5584,20 +5754,6 @@ impl Joint {
         free + (planted - free) * support
     }
 
-    /// Flattening the boot increases its vertical reach below the ankle.
-    /// Pay for that height at support, using the same sole as the rig's
-    /// ground-contact landmarks, so the new roll cannot bury the foot.
-    fn sole_settle(gait: Gait) -> f32 {
-        let stepping = Self::stepping(gait);
-        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * stepping + gait.stance;
-        let shin = (Self::swinging(gait, PI, amplitude) + Self::DRIVE_HIP * gait.drive)
-            * gait.course.y
-            + Self::tucking(gait, PI)
-            + Self::CARRY_KNEE * gait.carrying;
-        let free = (Self::ANKLE_PLANTAR - Self::ANKLE_DORSI) * 0.5 * stepping;
-        0.038 * ((shin + Self::ankle_pitch(gait, PI)).cos() - (shin + free).cos())
-    }
-
     /// **How far this knee is folded through the FORWARD stride**, in
     /// radians: the whole knee, which is two folds that happen at opposite
     /// ends of the cycle for opposite reasons.
@@ -5614,36 +5770,56 @@ impl Joint {
     /// one, so the hip that puts a straight foot on the mark puts a bent one
     /// somewhere else. See the two-link solve there.
     fn tucking(gait: Gait, leg: f32) -> f32 {
-        Self::tucked(leg, Self::stepping(gait), gait.jitter.y) + Self::loaded(gait, leg)
+        Self::tucked(gait, leg) + Self::loaded(gait, leg)
     }
 
-    /// …with the stride's share handed in, so that the same expression at
-    /// zero is the knee a man STANDING there holds. [`Joint::swinging`]
-    /// needs both and they have to be one function.
+    /// The same expression at no stride is the knee a man STANDING there
+    /// holds. [`Joint::swinging`] needs both and they have to be one function.
     ///
-    /// ⚠ **Cubed, and it was squared.** The power is what narrows the fold to
-    /// the part of the cycle it belongs to — a plain cosine leaves the
-    /// leading leg bent on touchdown, which reads as a stumble rather than a
-    /// stride — and the fold has been made much deeper (see
-    /// [`Joint::KNEE_FLEX`]), so it has to be narrower again or the deeper
-    /// fold arrives at the front of the stride with it. Cubed, the leading
-    /// leg lands within ten degrees of straight and the trailing one leaves
-    /// the ground the same, and the whole of the extra depth goes where a
-    /// runner's does: into the heel coming up behind him.
-    fn tucked(leg: f32, stepping: f32, jitter: f32) -> f32 {
-        // Fold quickly after push-off, then let the lower leg unfold later
-        // than the thigh. A symmetric fold makes both links reverse as a
-        // pair. The periodic warp keeps velocity continuous at cycle wrap.
+    /// A walk folds the knee in a narrow cubed-cosine bump that peaks as
+    /// the leg passes under him and is gone by the time it reaches out. A
+    /// run is a different shape and is blended in on [`Joint::loading`]:
+    /// the fold comes up fast off the lift-off, peaks with the heel behind
+    /// him — where [`Joint::run_path`] still has the foot — and unfolds
+    /// SLOWLY, so the knee is still forty degrees bent at the front of the
+    /// swing and twenty as the foot lands. That, and the [`Joint::KNEE_RUN`]
+    /// it never straightens past, is what keeps the leg out of the locked
+    /// kick a symmetric fold gave it. The two halves are different widths,
+    /// which costs a continuous acceleration at the peak and nothing else.
+    fn tucked(gait: Gait, leg: f32) -> f32 {
+        let stepping = Self::stepping(gait);
+        let loading = Self::loading(gait);
         let recovery = leg - Self::TUCK_LEAD;
-        let recovery = recovery - 0.22 * stepping * (1.0 - recovery.cos());
-        let tuck = (0.5 + 0.5 * recovery.cos()).powi(3);
+        let warped = recovery - 0.22 * stepping * (1.0 - recovery.cos());
+        let walk = (0.5 + 0.5 * warped.cos()).powi(3);
+        let fold = if loading <= 0.0 {
+            walk
+        } else {
+            // Timed off the foot path itself: the fold starts as the foot
+            // lifts, peaks [`Joint::TUCK_AT`] of the way through the whip,
+            // and is gone as the foot lands — so the two cannot disagree
+            // about where in the cycle the leg is.
+            let fall = Self::footfall(gait);
+            let peak = fall.behind + Self::TUCK_AT * (fall.ahead - fall.behind);
+            let x = (leg - peak + PI).rem_euclid(TAU) - PI;
+            let run = if x < 0.0 {
+                let u = (-x / (peak - fall.leaving)).min(1.0);
+                0.5 + 0.5 * (PI * u).cos()
+            } else {
+                let u = (x / (fall.planted + TAU - peak)).min(1.0);
+                0.5 + 0.5 * (PI * u).cos()
+            };
+            walk + (run - walk) * loading
+        };
+        let flex = Self::KNEE_FLEX.1 + (Self::KNEE_FLEX.2 - Self::KNEE_FLEX.1) * loading;
         Self::KNEE_REST
-            + (Self::KNEE_FLEX.0 + Self::KNEE_FLEX.1 * stepping)
-                * (1.0 + Self::KNEE_JITTER * jitter)
-                * tuck
+            + Self::KNEE_RUN * loading
+            + (Self::KNEE_FLEX.0 + flex * stepping.min(Self::RECOVERY_MAX))
+                * (1.0 + Self::KNEE_JITTER * gait.jitter.y)
+                * fold
     }
-    /// Where in the cycle the fold is deepest, and how soft a knee is with no
-    /// stride in it at all.
+    /// Where in the cycle a WALKING fold is deepest, and how soft a knee is
+    /// with no stride in it at all.
     const TUCK_LEAD: f32 = -0.2;
     const KNEE_REST: f32 = 0.07;
     /// **How far the stance knee gives under him**, in radians at this
@@ -5669,11 +5845,21 @@ impl Joint {
     /// [`Joint::sink`] — a bent knee is a shorter leg, and a shorter leg with
     /// the hips left where they were is a foot in the air.
     fn loaded(gait: Gait, leg: f32) -> f32 {
-        let load = (0.5 - 0.5 * leg.cos()).powi(2);
-        Self::LOAD_KNEE * Self::loading(gait) * Self::stepping(gait) * load
+        let u = (leg.rem_euclid(TAU) - PI) / Self::LOAD_WIDTH;
+        if u.abs() >= 1.0 {
+            return 0.0;
+        }
+        Self::LOAD_KNEE * Self::loading(gait) * (1.0 - u * u).powi(2)
     }
-    /// The give in the stance knee at mid-stance, at a flat sprint.
-    const LOAD_KNEE: f32 = 0.90;
+    /// The give in the stance knee at mid-stance, on top of the run's
+    /// standing bend — about forty degrees between them, at any pace a
+    /// footballer runs at. A knee that is deeper at a sprint than at a jog is
+    /// a myth; what changes with pace is the swing, not the stance.
+    const LOAD_KNEE: f32 = 0.45;
+    /// …and how far either side of mid-stance it reaches, in radians: a
+    /// little wider than the contact, so it is nearly gone by the time the
+    /// foot lifts.
+    const LOAD_WIDTH: f32 = 0.70;
 
     /// **How much of a RUN this is, as against a walk**, 0..1.
     ///
@@ -5698,39 +5884,56 @@ impl Joint {
     /// first, a run above the second. 1.1 and 3.0 m/s.
     const LOADING: (f32, f32) = (0.18, 0.50);
 
-    /// **How far the hips have to come down for the planted foot to stay on
-    /// the grass at mid-stance**, in metres, given the knee this gait puts
-    /// under him there.
+    /// **How far the hips come down onto the planted leg**, in metres, and
+    /// how much of the cycle he is in flight, 0..1.
     ///
-    /// Worked off the same two links the hip solve uses rather than tuned as
-    /// a number, because a number has to be re-tuned every time the knee
-    /// changes and the foot is either in the turf or above it by however
-    /// much the tuning is out. At mid-stance the stride wants the foot
-    /// directly under the hip, so [`Joint::swinging`] puts the thigh forward
-    /// by exactly the angle the shin sits back at, and the vertical reach of
-    /// the leg is what the two cosines say. The difference from a standing
-    /// leg is the drop.
-    ///
-    /// Measured against the SAME leg with the loading taken out — not
-    /// against a standing one — so the loaded foot lands exactly where the
-    /// unloaded one always has, whatever the standing reference happens to
-    /// be. And through the ankle's own forward offset ([`Physique::ANKLE`]),
-    /// which a shin tilted back carries downward: left out, the sink came
-    /// seven millimetres deep at a sprint, which is half the tolerance
-    /// `a_runner_puts_his_foot_on_the_grass` allows.
-    fn sink(gait: Gait) -> f32 {
-        let settled = Actors::ease(Self::stepping(gait) / Self::STRIDE_SETTLE);
-        let extent = |knee: f32| {
-            let along = Self::THIGH_LINK + Self::SHIN_LINK * knee.cos();
-            let out = Self::SHIN_LINK * knee.sin();
-            let thigh = -out.atan2(along) * settled;
-            let shin = thigh + knee;
-            Self::THIGH_LINK * thigh.cos()
-                + Self::SHIN_LINK * shin.cos()
-                + Physique::ANKLE.z * shin.sin()
-        };
-        let unloaded = Self::tucked(PI, Self::stepping(gait), gait.jitter.y);
-        (extent(unloaded) - extent(unloaded + Self::loaded(gait, PI))).max(0.0)
+    /// Nothing in this rig used to work out how long the stance leg was and
+    /// settle the body onto it: the hips rode at one height and the foot was
+    /// on the grass only where a leg swung straight under them reached it —
+    /// a fifth of the cycle, with the rest spent pattering in the air. This
+    /// is that settle, exact at every point of the contact, worked off the
+    /// same hip, knee and ankle the leg is drawn with rather than tuned as a
+    /// number: the leg's vertical reach against a straight standing one is
+    /// the drop, and whichever leg [`Joint::planted`] says is down is the
+    /// one he is settled onto. Between them he is lifted, by
+    /// [`Joint::FLIGHT_LIFT`], off the ground neither foot is touching.
+    fn settle(gait: Gait) -> (f32, f32) {
+        let mut drop = 0.0;
+        let mut planted = 0.0;
+        for leg in [gait.phase, gait.phase + PI] {
+            // Through the ramps the drop is the one the leg needs at the
+            // edge of its contact, faded — not the one it needs where it is,
+            // which grows as the knee folds and pulled him DOWN as the foot
+            // lifted. The foot itself lands on the ramp exactly the same.
+            let (weight, at) = Self::planted(gait, leg);
+            if weight <= 0.0 {
+                continue;
+            }
+            planted += weight;
+            drop += weight * Self::shortfall(gait, at);
+        }
+        (drop, (1.0 - planted).max(0.0))
+    }
+
+    /// **How far this leg's sole falls short of the grass**, in metres, with
+    /// the hips at their standing height: the vertical reach of a straight
+    /// leg, less the reach of the hip, knee and ankle this gait puts under
+    /// him — through the ankle's own forward offset ([`Physique::ANKLE`]),
+    /// which a shin tilted back carries downward, and through the sole's
+    /// drop under the roll of the boot.
+    fn shortfall(gait: Gait, leg: f32) -> f32 {
+        let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait) + gait.stance;
+        let thigh =
+            (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.drive) * gait.course.y;
+        let shin = thigh + Self::tucking(gait, leg) + Self::CARRY_KNEE * gait.carrying;
+        let sole = shin + Self::ankle_pitch(gait, leg);
+        let reach = Self::THIGH_LINK * thigh.cos() - Physique::ANKLE.y * shin.cos()
+            + Physique::ANKLE.z * shin.sin()
+            + Physique::SOLE * sole.cos();
+        let standing = Self::THIGH_LINK - Physique::ANKLE.y * Self::KNEE_REST.cos()
+            + Physique::ANKLE.z * Self::KNEE_REST.sin()
+            + Physique::SOLE * Self::KNEE_REST.cos();
+        (standing - reach).max(0.0)
     }
 
     /// **What the stagger costs him in height**, in metres: a straight leg
@@ -5744,7 +5947,8 @@ impl Joint {
             return 0.0;
         }
         let reach = |amplitude: f32| {
-            (amplitude.sin() * Self::stride_gain() * Self::striding(gait.phase)).clamp(-0.95, 0.95)
+            (amplitude.sin() * Self::stride_gain(gait) * Self::striding(gait, gait.phase))
+                .clamp(-0.95, 0.95)
         };
         let lift = |along: f32| Physique::LEG * (1.0 - (1.0 - along * along).sqrt());
         lift(reach(Self::HIP_SWING.0 + gait.stance)) - lift(reach(Self::HIP_SWING.0))
@@ -5768,25 +5972,13 @@ impl Joint {
     /// much bigger. Exactly the bookkeeping [`Joint::TREAD_GAIN`] does for
     /// the lateral gait, and for the same reason.
     ///
-    /// ⚠ **It is paid in FULL, and it used to be paid at 0.8.**
-    ///
-    /// The discount was there because [`Joint::stepping`]'s flight term —
-    /// `run · spring`, unbounded and `max`ed against the ground — was paying
-    /// for the same shortfall a second time, and the two together put a
-    /// sprinter's thighs 111° apart, which is past what a body reaches.
-    ///
-    /// The flight term is now a bounded bonus ON the ground rather than a
-    /// claim of its own, so it no longer pays for anything and the re-fit has
-    /// to. Left at 0.8 the planted foot carried 99% of the ground at six
-    /// metres a second against a floor of 105 — it skated, which is the
-    /// failure this whole model exists to prevent and the reason the
-    /// shortened stride could not simply be taken out of the swing.
-    fn stride_gain() -> f32 {
-        let full = 1.0 / (1.0 - Self::STRIDE_SHAPE + Self::STRIDE_SHAPE * 2.0 / PI);
-        1.0 + (full - 1.0) * Self::STRIDE_GAIN
+    /// Blended exactly as [`Joint::striding`] blends the two paths, so the
+    /// planted foot passes mid-stance at the body's speed at every point of
+    /// the walk-to-run transition. The run's own rate there is 1.
+    fn stride_gain(gait: Gait) -> f32 {
+        let loading = Self::loading(gait);
+        1.0 / (Self::WALK_RATE + (1.0 - Self::WALK_RATE) * loading)
     }
-    const STRIDE_GAIN: f32 = 1.0;
-    const STRIDE_SHAPE: f32 = 0.55;
 
     /// **The hip angle that puts the FOOT where the stride wants it**, given
     /// the knee it is going to be drawn with.
@@ -5809,7 +6001,7 @@ impl Joint {
     /// `asin(want / R) − φ`, and at `k = 0` it collapses to exactly the
     /// straight-stick expression this replaces.
     fn swinging(gait: Gait, leg: f32, amplitude: f32) -> f32 {
-        let want = amplitude.sin() * Self::stride_gain() * Self::striding(leg);
+        let want = amplitude.sin() * Self::stride_gain(gait) * Self::striding(gait, leg);
         let knee = Self::tucking(gait, leg);
         let along = Self::THIGH_LINK + Self::SHIN_LINK * knee.cos();
         let out = Self::SHIN_LINK * knee.sin();
@@ -7645,7 +7837,7 @@ pub(crate) mod preview {
 mod tests {
     #[test]
     fn supporting_sole_stays_level_as_the_shin_moves_over_it() {
-        for speed in [1.4, 3.0, 6.0, 7.5] {
+        for speed in [1.4, 3.0, 6.0, 7.5, 8.25, 8.75] {
             for side in [-1.0, 1.0] {
                 for offset in [-0.4, 0.0, 0.4] {
                     let phase = PI + offset + if side < 0.0 { PI } else { 0.0 };
@@ -7666,7 +7858,7 @@ mod tests {
     #[test]
     fn recovery_and_ankle_motion_are_continuous_through_the_cycle() {
         let h = 0.002;
-        for speed in [1.4, 3.0, 6.0, 7.5] {
+        for speed in [1.4, 3.0, 6.0, 7.5, 8.25, 8.75] {
             let gait = striding_at(speed, 0.0);
             for index in 0..720 {
                 let phase = index as f32 * TAU / 720.0;
@@ -7688,21 +7880,68 @@ mod tests {
     fn stride_reversals_have_continuous_velocity_and_acceleration() {
         use super::*;
         let h = 0.004;
-        for peak in [FRAC_PI_2, 3.0 * FRAC_PI_2] {
-            for phase in [peak - 0.35, peak, peak + 0.35] {
-                let at = Joint::striding(phase);
-                let before = Joint::striding(phase - h);
-                let after = Joint::striding(phase + h);
+        for speed in [1.4, 2.0, 3.0, 6.0, 8.75] {
+            let gait = striding_at(speed, 0.0);
+            for index in 0..720 {
+                let phase = index as f32 * TAU / 720.0;
+                let at = Joint::striding(gait, phase);
+                let before = Joint::striding(gait, phase - h);
+                let after = Joint::striding(gait, phase + h);
                 let incoming = (at - before) / h;
                 let outgoing = (after - at) / h;
                 assert!(
                     (incoming - outgoing).abs() < 0.04,
-                    "foot velocity jumps at {phase}: {incoming} -> {outgoing}"
+                    "foot velocity jumps at {speed} m/s, phase {phase}: {incoming} -> {outgoing}"
                 );
-                let a = (at - 2.0 * before + Joint::striding(phase - 2.0 * h)) / (h * h);
-                let b = (Joint::striding(phase + 2.0 * h) - 2.0 * after + at) / (h * h);
-                assert!((a - b).abs() < 0.5, "foot acceleration jumps: {a} -> {b}");
+                let a = (at - 2.0 * before + Joint::striding(gait, phase - 2.0 * h)) / (h * h);
+                let b = (Joint::striding(gait, phase + 2.0 * h) - 2.0 * after + at) / (h * h);
+                assert!(
+                    (a - b).abs() < 0.5,
+                    "foot acceleration jumps at {speed} m/s, phase {phase}: {a} -> {b}"
+                );
             }
+        }
+    }
+
+    /// **The run's foot path carries the ground for the whole contact and
+    /// lands moving backwards.** Measured on the path itself, in units of
+    /// the swing: the rate is −1 across the contact, the foot never reaches
+    /// further ahead than a bent knee can put it, and the back peak is the
+    /// further of the two.
+    #[test]
+    fn a_running_foot_lingers_behind_and_lands_pawing_back() {
+        use super::*;
+        for speed in [3.0, 6.0, 8.75] {
+            let gait = striding_at(speed, 0.0);
+            let fall = Joint::footfall(gait);
+            let touchdown = fall.touchdown();
+            let h = 0.002;
+            let mut ahead = f32::MIN;
+            let mut behind = f32::MAX;
+            for index in 0..720 {
+                let phase = index as f32 * TAU / 720.0;
+                let at = Joint::run_path(phase, fall);
+                ahead = ahead.max(at);
+                behind = behind.min(at);
+                let x = phase.rem_euclid(TAU) - PI;
+                if x > -touchdown && x < fall.lift_off() {
+                    let rate = (Joint::run_path(phase + h, fall)
+                        - Joint::run_path(phase - h, fall))
+                        / (2.0 * h);
+                    assert!(
+                        (rate + 1.0).abs() < 1e-3,
+                        "at {speed} m/s the planted foot runs at {rate} at phase {phase}"
+                    );
+                }
+            }
+            assert!(
+                ahead < touchdown + Joint::LANDING,
+                "at {speed} m/s the foot reaches {ahead} ahead against a landing at {touchdown}"
+            );
+            assert!(
+                -behind > ahead,
+                "at {speed} m/s the foot reaches further ahead ({ahead}) than behind ({behind})"
+            );
         }
     }
 
@@ -11286,8 +11525,44 @@ mod tests {
     fn striding_at(speed: f32, phase: f32) -> Gait {
         let mut gait = running((speed / Actors::SPRINT).clamp(0.0, 1.0));
         gait.phase = phase;
-        gait.carry_ground = Actors::stride_of(7, speed, Vec2::Y).1;
+        let (stride, ground) = Actors::stride_of(7, speed, Vec2::Y);
+        gait.carry_ground = ground;
+        gait.cadence = speed * PI / stride;
         gait
+    }
+
+    #[test]
+    fn running_recovery_stays_below_a_high_knee_pose() {
+        // Include the substitution run, player variation and both ends of
+        // the per-step knee variation. Checking the thigh direction avoids
+        // Euler angles wrapping a deeply bent knee back below 90 degrees.
+        for speed in [1.4, 3.0, 6.0, 8.25, 8.75] {
+            let mut highest_knee = 0.0_f32;
+            let mut highest_boot = 0.0_f32;
+            for id in 1..=24 {
+                for jitter in [-1.0, 1.0] {
+                    let mut gait = striding_at(speed, 0.0);
+                    gait.carry_ground = Actors::stride_of(id, speed, Vec2::Y).1;
+                    gait.spring = Complexion::spring(id);
+                    gait.jitter.y = jitter;
+                    for frame in 0..120 {
+                        gait.phase = frame as f32 * TAU / 120.0;
+                        let thigh = step_of(Limb::Hip, 1.0, Vec3::ZERO, gait).rotation * -Vec3::Y;
+                        highest_knee = highest_knee.max(thigh.z.atan2(-thigh.y));
+                        highest_boot = highest_boot.max(boot(1.0, gait).y);
+                    }
+                }
+            }
+            assert!(
+                highest_knee < 55.0_f32.to_radians(),
+                "at {speed} m/s the thigh lifts {:.1} degrees",
+                highest_knee.to_degrees()
+            );
+            assert!(
+                highest_boot < 0.55,
+                "at {speed} m/s the recovering boot rises {highest_boot:.3} m"
+            );
+        }
     }
 
     /// **One whole stride, twelve frames of it, side-on and from behind the
@@ -11363,16 +11638,14 @@ mod tests {
     ///
     /// The picture says whether it looks right; this says by how much. The
     /// numbers that decided the September 2026 leg model came off this
-    /// table — a 73° peak knee and a heel sixteen centimetres off the grass
-    /// at six metres a second, against the 105° and thirty a runner shows —
-    /// and the mid-stance line at the bottom is the one check on
+    /// table. The mid-stance line at the bottom checks
     /// [`Joint::sink`] that does not go through a tolerance: the socket has
     /// to have come down by exactly what the loaded knee cost.
     #[test]
     #[ignore = "prints; run by hand when the run cycle changes"]
     fn measure_cycle() {
         let flat = boot(1.0, still()).y;
-        for speed in [1.4f32, 3.0, 6.0] {
+        for speed in [1.4f32, 3.0, 6.0, 8.25, 8.75] {
             println!("speed {speed:.1} m/s");
             println!(
                 "  {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
@@ -11393,7 +11666,10 @@ mod tests {
             let knee_at = Vec3::new(0.0, -Physique::THIGH, 0.0);
             let spine_at = Vec3::new(0.0, Physique::HIP, 0.0);
             let shoulder_at = Vec3::new(Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
-            let pitch = |transform: Transform| transform.rotation.to_euler(EulerRot::YXZ).1;
+            let pitch = |transform: Transform| {
+                let forward = transform.rotation * Vec3::Z;
+                (-forward.y).atan2(forward.z)
+            };
             for index in 0..24 {
                 let phase = index as f32 * TAU / 24.0;
                 let gait = striding_at(speed, phase);
@@ -11422,15 +11698,21 @@ mod tests {
                 );
             }
             let gait = striding_at(speed, PI);
+            let fall = Joint::footfall(gait);
             println!(
-                "  mid-stance: socket y {:.4} (standing {:.4}), sink {:.4}, loading {:.3}, \
-                 stepping {:.3}, knee {:.1}°",
+                "  mid-stance: socket y {:.4} (standing {:.4}), settle {:.4}, loading {:.3}, \
+                 stepping {:.3}, knee {:.1}°, contact {:.2} rad ({:.0}% of the cycle, \
+                 {:+.2}/{:+.2} m)",
                 step(Limb::Hip, 1.0, hip_at, gait).translation.y,
                 Physique::HIP,
-                Joint::sink(gait),
+                Joint::settle(gait).0,
                 Joint::loading(gait),
                 Joint::stepping(gait),
                 Joint::tucking(gait, PI).to_degrees(),
+                fall.contact(),
+                100.0 * fall.contact() / TAU,
+                boot(1.0, striding_at(speed, fall.planted)).z,
+                boot(1.0, striding_at(speed, fall.leaving)).z,
             );
         }
     }

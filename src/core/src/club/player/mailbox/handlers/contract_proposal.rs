@@ -1,3 +1,4 @@
+use crate::club::mind::verdict::{MindOption, ReasonSet};
 use crate::club::player::agent::PlayerAgent;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::{
@@ -11,6 +12,7 @@ use crate::club::player::calculators::{
 /// here so existing call sites keep their import path.
 pub use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::mailbox::{PlayerContractAsk, RejectionReason};
+use crate::club::player::mind::GoalKind;
 use crate::handlers::AcceptContractHandler;
 use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
@@ -223,6 +225,23 @@ impl ProcessContractHandler {
                     &proposal,
                     RejectionReason::StatusBelowExpectation,
                 );
+                log_rejection(player, &proposal, now);
+                return;
+            }
+        }
+
+        // The mind's own verdict on putting pen to paper. A man who has
+        // resolved to go — years without a shirt, a club he has decided he
+        // is leaving — does not sign more of them however the offer is
+        // dressed, and the money argument below never gets heard.
+        const MIND_REFUSAL_BAR: f32 = -0.5;
+        if player.contract.is_some() {
+            let verdict = player.mind.deliberate(MindOption::SignContract);
+            if verdict.net() <= MIND_REFUSAL_BAR {
+                let reason = Self::refusal_reason(&verdict);
+                result.contract.contract_rejected = true;
+                record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
+                Self::emit_rejected_contract_offer(player, &proposal, reason);
                 log_rejection(player, &proposal, now);
                 return;
             }
@@ -590,6 +609,21 @@ impl ProcessContractHandler {
         }
     }
 
+    /// What a refusal that came from the mind is about: the loudest
+    /// argument against signing names it.
+    fn refusal_reason(verdict: &ReasonSet) -> RejectionReason {
+        let loudest = verdict
+            .as_slice()
+            .iter()
+            .filter(|r| r.weight < 0.0)
+            .min_by(|a, b| a.weight.total_cmp(&b.weight))
+            .map(|r| r.goal);
+        match loudest {
+            Some(GoalKind::PlayFirstTeamFootball) => RejectionReason::WantsFirstTeamFootball,
+            _ => RejectionReason::AmbitionMismatch,
+        }
+    }
+
     /// Emit a visible [`RejectedContractOffer`] event after the player /
     /// agent turned down a proposal. The morale hit lives here rather
     /// than at every reject branch above so the cause-evidence wiring
@@ -626,6 +660,9 @@ impl ProcessContractHandler {
             RejectionReason::NoReleaseClause => ContractEventEvidence::RejectedOverReleaseClause,
             RejectionReason::ShortContract => ContractEventEvidence::RejectedOverLength,
             RejectionReason::AmbitionMismatch => ContractEventEvidence::RejectedOverAmbition,
+            RejectionReason::WantsFirstTeamFootball => {
+                ContractEventEvidence::RejectedOverPlayingTime
+            }
         };
 
         let mut cctx = ContractEventContext::new(ContractEventKind::OfferRejectedByPlayer)

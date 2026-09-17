@@ -210,6 +210,11 @@ pub struct FieldSquad {
     /// `Player::on_match_dropped_with_context` with the right
     /// explanation. Empty when nothing notable happened.
     pub selection_omissions: Vec<OmittedPlayer>,
+    /// Own-roster players who were fit and named nowhere. The post-match
+    /// dispatcher books the overlooked match against each of them without
+    /// narrating it — see `Player::on_match_overlooked`.
+    #[serde(default)]
+    pub overlooked: Vec<u32>,
     /// Slot each starter was assigned at kickoff. Drives the post-
     /// match coach-memory observation's `role_fit` reading so a
     /// player pressed into an emergency role (e.g. a midfielder
@@ -230,6 +235,7 @@ impl FieldSquad {
             substitutes: Vec::new(),
             substitutes_used: Vec::new(),
             selection_omissions: Vec::new(),
+            overlooked: Vec::new(),
             starter_slots: Vec::new(),
         }
     }
@@ -241,6 +247,7 @@ impl FieldSquad {
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
             substitutes_used: Vec::new(),
             selection_omissions: squad.selection_omissions.clone(),
+            overlooked: squad.overlooked.clone(),
             starter_slots: squad
                 .main_squad
                 .iter()

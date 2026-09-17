@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "El papel ofrecido no se ajustaba a sus expectativas.",
   "contract_evidence_rejected_over_release_clause": "El acuerdo no incluía la cláusula de rescisión que quería.",
   "contract_evidence_rejected_over_length": "La duración del contrato no le convenía.",
+  "contract_evidence_rejected_over_playing_time": "No quiso comprometerse a más años sin fútbol en el primer equipo.",
   "contract_evidence_rejected_over_ambition": "El proyecto del club no encajaba con su ambición.",
   "private_talk_reason_playing_time": "No está contento con sus minutos de juego.",
   "private_talk_reason_contract": "Tiene dudas sin resolver sobre su contrato.",

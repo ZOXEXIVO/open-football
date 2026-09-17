@@ -153,7 +153,12 @@ impl Club {
                         ),
                     );
                 }
-                if level >= floor && !listed && (!loan_intent || clears_by_margin) {
+                // A group at its depth cap has no vacancy: the newcomer has
+                // to be clearly better than the man he would displace, or
+                // the surplus pass sends one of them straight back down and
+                // the two keep swapping places week after week.
+                let displaces = !bar.full(group) || clears_by_margin;
+                if level >= floor && !listed && (!loan_intent || clears_by_margin) && displaces {
                     moves.push(PendingMove {
                         from: ti,
                         to: main_idx,
@@ -208,7 +213,9 @@ impl Club {
     /// Phase 1b: positional-surplus demotion from the first team.
     ///
     /// Enforce a depth cap per position group on the main team. Players
-    /// ranked beyond the cap (by current ability) are surplus: offer them out
+    /// ranked beyond the cap — by the same observable level the promotion
+    /// bar reads, so the two passes cannot disagree about who the worst man
+    /// in a group is — are surplus: offer them out
     /// and push them down the progression so they can get match practice in
     /// reserve/youth. Loan-ins count against the cap (they occupy a slot) but
     /// are never demoted — they belong to another club.
@@ -228,7 +235,7 @@ impl Club {
                 .map(|p| {
                     (
                         p.id,
-                        p.player_attributes.current_ability,
+                        AbilityEstimator::observable_level(p),
                         p.age(date),
                         p.is_on_loan(),
                         // Manager-pinned players and signings still inside

@@ -333,7 +333,13 @@ impl PlayerSquadStatus {
             // permanently un-moveable senior whose contract renewed forever.
             // Backup is the right label for the same reason the arm above
             // demotes to it: this squad does not own first-team standing.
-            PlayerSquadStatus::NotYetSet => PlayerSquadStatus::MainBackupPlayer,
+            // A youth label is minted at nineteen and nowhere else. Kept
+            // past that it outlived the boy it described: a "prospect" of
+            // twenty-four whom every renewal, listing and release path
+            // still read as one.
+            PlayerSquadStatus::NotYetSet
+            | PlayerSquadStatus::HotProspectForTheFuture
+            | PlayerSquadStatus::DecentYoungster => PlayerSquadStatus::MainBackupPlayer,
             other => other.clone(),
         }
     }

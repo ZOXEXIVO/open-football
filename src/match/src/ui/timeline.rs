@@ -140,11 +140,13 @@ impl Timeline {
     /// Read next door as well: [`crate::ui::touch`] lays its controls out clear
     /// of the bar, and cuts this band out of the canvas so that a finger
     /// reaching for the scrub rail does not also swing the camera.
-    pub const BAR_HEIGHT: f32 = 56.0;
+    pub const BAR_HEIGHT: f32 = 44.0;
     const TRACK_HEIGHT: f32 = 8.0;
     /// Height of the invisible band around the rail that actually takes the
-    /// clicks. A full touch target surrounds the thin visual rail.
-    const TRACK_BAND: f32 = 44.0;
+    /// clicks. It fills all but a hair of the bar: the strip is furniture
+    /// laid over the picture, so the bar is sized to the touch target rather
+    /// than the target padded out to fill a bar.
+    const TRACK_BAND: f32 = 40.0;
     const KNOB_SIZE: f32 = 13.0;
     /// A goal's pin on the rail, and a chance's. Both stay inside
     /// [`Self::TRACK_BAND`], which is the click target and is not allowed to

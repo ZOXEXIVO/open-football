@@ -1992,8 +1992,6 @@ impl Pitch {
         seed: u32,
         throng: Option<Throng>,
     ) {
-        /// Fraction of the way up the lit walkway runs.
-        const TIER: f32 = 0.35;
         /// How far above the back row the cull still counts a camera as being
         /// inside the bank.
         ///
@@ -2106,7 +2104,7 @@ impl Pitch {
             // it lands on the second step, which is not a tier break but a
             // stripe painted across a low wall — and reads as one.
             if Stature::tiered(terrace.rows) {
-                let tier = terrace.rows as f32 * TIER;
+                let tier = terrace.rows as f32 * Stature::TIER;
                 bank.spawn((
                     Mesh3d(Self::stock(
                         meshes,

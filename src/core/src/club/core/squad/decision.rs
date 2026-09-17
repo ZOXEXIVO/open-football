@@ -38,6 +38,7 @@ impl SquadDecision {
         "dec_reason_needs_first_team_minutes";
     pub(in crate::club::core) const LACK_PLAYING_TIME: &'static str =
         "dec_reason_lack_playing_time";
+    pub(in crate::club::core) const DEAD_WAGE: &'static str = "dec_reason_dead_wage";
 
     pub(in crate::club::core) fn new(
         team_idx: usize,

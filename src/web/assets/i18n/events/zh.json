@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "所提供的角色不符合他的期待。",
   "contract_evidence_rejected_over_release_clause": "合約中缺少他想要的解約條款。",
   "contract_evidence_rejected_over_length": "合約年限不符合他的想法。",
+  "contract_evidence_rejected_over_playing_time": "他不願再簽下更多無法為一線隊出場的年頭。",
   "contract_evidence_rejected_over_ambition": "球會的規劃無法匹配他的企圖心。",
   "private_talk_reason_playing_time": "他對自己的出場時間感到不滿。",
   "private_talk_reason_contract": "他對自己的合約仍有未解的疑慮。",

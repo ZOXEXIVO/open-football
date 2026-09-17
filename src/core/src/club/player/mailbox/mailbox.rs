@@ -154,6 +154,9 @@ pub enum RejectionReason {
     NoReleaseClause,
     NoSweetener,
     AmbitionMismatch,
+    /// He would not sign on for more years without first-team
+    /// football.
+    WantsFirstTeamFootball,
 }
 
 #[derive(Debug, Clone)]

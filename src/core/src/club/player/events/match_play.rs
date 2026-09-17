@@ -97,6 +97,23 @@ impl Player {
         self.on_match_dropped_with_context(ctx);
     }
 
+    /// The club played and he was fit and named nowhere, with nothing
+    /// about it worth a line in his diary. The books still move: a zero
+    /// start-share sample, and one more official match he was available
+    /// for and overlooked.
+    pub fn on_match_overlooked(&mut self, is_friendly: bool) {
+        if is_friendly {
+            return;
+        }
+        const ALPHA: f32 = 0.25;
+        self.happiness.starter_ratio *= 1.0 - ALPHA;
+        self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
+        if !self.player_attributes.is_injured {
+            self.happiness.note_official_non_appearance(true);
+        }
+        self.evaluate_role_transition(None);
+    }
+
     /// Same as [`Self::on_match_dropped`] but carries the structured
     /// selection-explanation payload built by the squad selector. The
     /// stored event therefore knows the scope (left out / dropped to

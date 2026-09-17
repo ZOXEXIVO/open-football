@@ -452,6 +452,7 @@ pub fn rejection_reason_token(reason: RejectionReason) -> &'static str {
         RejectionReason::NoReleaseClause => "no_release_clause",
         RejectionReason::NoSweetener => "no_sweetener",
         RejectionReason::AmbitionMismatch => "ambition_mismatch",
+        RejectionReason::WantsFirstTeamFootball => "wants_first_team_football",
     }
 }
 

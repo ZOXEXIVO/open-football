@@ -1023,6 +1023,24 @@ impl CareerMind {
                 }
             }
 
+            MindOption::SignContract => {
+                // A man who has decided to go does not sign on. The loan
+                // want is left out on purpose: a club re-signs a boy and
+                // then lends him, and he agrees to both.
+                let wants_out = [
+                    GoalKind::LeaveThisClub,
+                    GoalKind::BeAllowedToLeave,
+                    GoalKind::StepUpToABiggerClub,
+                    GoalKind::FindANewChallenge,
+                ]
+                .into_iter()
+                .map(|kind| organs.goals.pressure_of(kind))
+                .fold(0.0f32, f32::max);
+                if wants_out > 0.1 {
+                    reasons.push(GoalKind::LeaveThisClub, -wants_out);
+                }
+            }
+
             MindOption::Retire => {
                 let winding_down = organs.goals.pressure_of(GoalKind::RetireOnMyTerms);
                 if winding_down > 0.1 {

@@ -338,6 +338,7 @@ mod tests {
             substitutes: vec![],
             substitutes_used: vec![],
             selection_omissions: vec![],
+            overlooked: vec![],
             starter_slots: vec![],
         };
         details.right_team_players = FieldSquad {
@@ -346,6 +347,7 @@ mod tests {
             substitutes: vec![],
             substitutes_used: vec![],
             selection_omissions: vec![],
+            overlooked: vec![],
             starter_slots: vec![],
         };
         for (pid, stats) in per_player_stats {

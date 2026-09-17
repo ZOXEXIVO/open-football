@@ -19,6 +19,9 @@ pub struct MatchSquad {
     /// the manager picked instead and why. Empty for rotation /
     /// friendly squads, or when nothing notable happened.
     pub selection_omissions: Vec<OmittedPlayer>,
+    /// Own-roster players fit for selection and named nowhere — see
+    /// [`crate::r#match::squad::PlayerSelectionResult::overlooked`].
+    pub overlooked: Vec<u32>,
     /// Live-match snapshot of the head coach's persistent state —
     /// memory store, perception profile, and strategy for this
     /// fixture. Populated at squad-construction time by the team

@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "Предложенная роль не соответствует его ожиданиям.",
   "contract_evidence_rejected_over_release_clause": "В контракте не было нужного ему пункта об отступных.",
   "contract_evidence_rejected_over_length": "Срок контракта его не устроил.",
+  "contract_evidence_rejected_over_playing_time": "Он не захотел подписывать ещё несколько лет без игр за основной состав.",
   "contract_evidence_rejected_over_ambition": "Проект клуба не соответствует его амбициям.",
   "private_talk_reason_playing_time": "Он недоволен игровым временем.",
   "private_talk_reason_contract": "У него остались нерешённые вопросы по контракту.",

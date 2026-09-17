@@ -591,11 +591,15 @@ impl TeamBehaviour {
             // ── Check 1: Youth prospect wants real football (loan request) ──
             // Young players with prospect status who aren't getting meaningful
             // first-team football should request loans for development.
+            // The label is the club's word for a boy not yet in the side;
+            // an age-group squad is the same fact without the word. A
+            // youth label expires at twenty, so a twenty-two-year-old
+            // parked in the under-23s would otherwise have no channel.
             let is_prospect = matches!(
                 squad_status,
                 Some(PlayerSquadStatus::HotProspectForTheFuture)
                     | Some(PlayerSquadStatus::DecentYoungster)
-            );
+            ) || (!main_team && !reserve_team);
 
             if is_prospect && age >= 19 && age <= 23 {
                 // Priority increases with age — a 22yo prospect is more urgent than a 19yo

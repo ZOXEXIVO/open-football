@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "提示された役割が期待に沿わなかった。",
   "contract_evidence_rejected_over_release_clause": "望んでいた解除条項が契約に含まれていなかった。",
   "contract_evidence_rejected_over_length": "契約期間が本人に合わなかった。",
+  "contract_evidence_rejected_over_playing_time": "トップチームで出場できない年月をさらに重ねる契約には応じなかった。",
   "contract_evidence_rejected_over_ambition": "クラブの構想が彼の野心に合わなかった。",
   "private_talk_reason_playing_time": "出場時間に不満を抱えている。",
   "private_talk_reason_contract": "契約について未解決の懸念がある。",

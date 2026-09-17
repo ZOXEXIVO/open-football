@@ -68,6 +68,7 @@ use crate::app::config::ViewerConfig;
 use crate::app::stage::Backdrop;
 use crate::art::typeface::Faces;
 use crate::broadcast::Grip;
+use crate::broadcast::lineup::Lineup;
 use crate::players::aftermath::Aftermath;
 use crate::recording::playback::Playback;
 use crate::ui::plate::Plate;
@@ -76,9 +77,9 @@ use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak};
 use bevy::ui::FocusPolicy;
 
-/// The bug itself, so [`Scoreboard::refresh`] can take it off the screen for
-/// the card that supersedes it. Two readings of the same score, one of them
-/// over the other in the corner, is worse than either alone.
+/// The bug itself, so [`Scoreboard::refresh`] can take it off the screen for a
+/// card that supersedes it. Two namings of the same fixture, one of them over
+/// the other in the corner, is worse than either alone.
 #[derive(Component)]
 pub struct ScoreBug;
 
@@ -269,14 +270,16 @@ impl Scoreboard {
     ///
     /// Behind [`Aftermath::follow_playhead`], which is what resolves the
     /// window the flash is drawn over — reading last frame's would leave the
-    /// bug a frame behind a scrub. And behind [`FullTime::follow_playhead`],
-    /// which is what decides whether there is a card on the screen for the bug
-    /// to stand down for.
+    /// bug a frame behind a scrub. And behind the two systems that decide
+    /// whether there is a card on the screen for the bug to stand down for:
+    /// [`Lineup::hold`] at the start and [`FullTime::follow_playhead`] at the
+    /// end.
     pub fn refresh(
         config: Res<ViewerConfig>,
         playback: Res<Playback>,
         aftermath: Res<Aftermath>,
         card: Res<FullTime>,
+        lineup: Res<Lineup>,
         bug: Single<&mut Visibility, With<ScoreBug>>,
         mut digits: Query<(
             &mut ScoreDigit,
@@ -285,13 +288,17 @@ impl Scoreboard {
             &mut BackgroundColor,
         )>,
     ) {
-        // The card is the same score, larger, and it carries the names as
-        // well. Two of them on one screen reads as a fault in one of them.
-        bug.into_inner().set_if_neq(if card.showing() {
-            Visibility::Hidden
-        } else {
-            Visibility::Inherited
-        });
+        // Whenever a card has the picture, the corner is quiet: the team sheets
+        // over the walk-out and the full-time card both name the two clubs
+        // larger than the bug does, and a second naming of the same fixture
+        // underneath one of them reads as a fault in it. The bug is what says
+        // the score when nothing else on the screen is saying it.
+        bug.into_inner()
+            .set_if_neq(if card.showing() || lineup.presenting() {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            });
 
         let (home, away) = Self::tally(&config, playback.time_ms);
 

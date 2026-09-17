@@ -336,6 +336,12 @@ impl Stature {
         least + (most - least) * size
     }
 
+    /// What is left of an end out in its corners, where the massing has
+    /// finished giving way — the floor under [`Self::behind_goal`], and the
+    /// number [`Gathering`] reads it back through to ask how far out of the
+    /// kop a place is.
+    pub const FLANK: f32 = 0.25;
+
     /// **How much of an end's support is gathered at a given point across it**,
     /// `0` at the middle of the bank and `1` at either corner.
     ///
@@ -357,11 +363,9 @@ impl Stature {
         /// giving way, as a share of the half-width of the bank.
         const CORE: f32 = 0.34;
         const CORNER: f32 = 0.86;
-        /// What is left of it out in the corners.
-        const FLANK: f32 = 0.25;
 
         let out = ((across.abs() - CORE) / (CORNER - CORE)).clamp(0.0, 1.0);
-        1.0 - (1.0 - FLANK) * (out * out * (3.0 - 2.0 * out))
+        1.0 - (1.0 - Self::FLANK) * (out * out * (3.0 - 2.0 * out))
     }
 
     /// **What share of a bank is on its feet** rather than in its seat.
@@ -387,6 +391,16 @@ impl Stature {
         };
         least + (most - least) * self.standing
     }
+
+    /// **How far up a bank the tier break is**, as a share of its rows.
+    ///
+    /// Deliberately not the crest: the camera looks UP at these from below
+    /// their top, so a line drawn along the crest is never in shot and a third
+    /// of the way up is. [`Pitch`](crate::scene::pitch::Pitch) paints the lit
+    /// walkway on it and [`Gathering`] sells the blocks either side of it as
+    /// separate tiers, which is the same fact twice: it is the gangway that
+    /// divides the stand.
+    pub const TIER: f32 = 0.35;
 
     /// Whether a bank of `rows` is deep enough for the lit walkway that splits
     /// the tiers to mean anything.
@@ -750,8 +764,8 @@ impl Crowd {
     /// than as a crowd — the same reason the seats behind them are jittered.
     const SPREAD: f32 = 0.12;
 
-    /// **How unevenly a crowd is spread**, as the swing either side of the
-    /// ground's occupancy.
+    /// **How unevenly the DAYLIGHT in a bank is spread**, as the swing either
+    /// side of the gaps [`Gathering`] leaves in this part of it.
     ///
     /// Nobody arrives at a ground and is dealt a seat at random, which is what
     /// an independent draw per place amounts to and what this used to be: an
@@ -760,12 +774,25 @@ impl Crowd {
     /// come in twos and fours and sit together; a block sells out while the
     /// one beside it does not; a corner nobody wants stays empty all season.
     ///
-    /// One, so the local density runs from half the ground's average to half
-    /// again above it. At a near sell-out that reads as a full stand with a
-    /// few thinner patches — the clamp at the top does the work — and at a
-    /// half-empty one it reads as knots of people with daylight between them,
-    /// which is what a poorly attended match actually looks like.
-    const CLUMPING: f32 = 1.0;
+    /// The two are a pair and not a duplicate. [`Gathering`] says which PARTS
+    /// of a stand the gate fills, and this says that nobody fills them tidily;
+    /// left to itself the first would hand every block its exact share and
+    /// read as a gradient painted on a wall.
+    ///
+    /// ⚠ **It moves the gaps, not the people**, which is why it is applied to
+    /// what is left empty rather than to the density. A block that is sold out
+    /// has nothing to clump: swung the other way about, the one part of the
+    /// ground that is never anything but rammed — the column behind the goal —
+    /// came out with holes punched through it by noise, and no amount of
+    /// massing upstream could fill them back in.
+    ///
+    /// That is also why it can be worth more than one. The old swing was
+    /// capped there because half again above a four-fifths density is a
+    /// density of six fifths, and everything past the clamp was thrown away;
+    /// against the daylight there is no such ceiling, and a corner where the
+    /// people are in knots with real gaps between them is what a poorly
+    /// attended stand actually looks like.
+    const CLUMPING: f32 = 1.6;
 
     /// The two scales it varies over, in slots across and rows up: whole
     /// blocks of a stand, and knots of people inside them.
@@ -814,7 +841,10 @@ impl Crowd {
         // ends with a seat at each end instead of with a gap of whatever the
         // division left over.
         let spacing = run / slots as f32;
-        let occupancy = stature.occupancy();
+        // Which parts of this bank the gate fills, which is not all of it
+        // evenly: an occupancy is an average over the concrete rather than a
+        // description of any one step of it.
+        let gathering = Gathering::over(stand, stature.occupancy(), seed, terrace.rows, slots);
         let allegiance = stature.allegiance(stand);
         let afoot = stature.on_their_feet(stand);
         // Whose colours this bank wears at all. An end belongs to one support
@@ -837,7 +867,7 @@ impl Crowd {
         let (mut seated, mut standing) = (0usize, 0usize);
         for row in 0..terrace.rows {
             for slot in 0..slots {
-                if Self::taken(seed, occupancy, row, slot).is_none() {
+                if Self::taken(seed, &gathering, row, slot).is_none() {
                     continue;
                 }
                 seated += 1;
@@ -854,8 +884,8 @@ impl Crowd {
             for slot in 0..slots {
                 // Whether anybody is here at all, against the density of THIS
                 // corner of the bank rather than the ground's average — see
-                // [`Self::CLUMPING`].
-                let Some(roll) = Self::taken(seed, occupancy, row, slot) else {
+                // [`Gathering`] and [`Self::CLUMPING`].
+                let Some(roll) = Self::taken(seed, &gathering, row, slot) else {
                     continue;
                 };
 
@@ -997,11 +1027,17 @@ impl Crowd {
     /// that fills them, and the two have to agree exactly or the reservation
     /// is wrong in the direction that costs a doubling. Tested against the
     /// density of THIS corner of the bank rather than the ground's average —
-    /// see [`Self::CLUMPING`].
-    fn taken(seed: u32, occupancy: f32, row: usize, slot: usize) -> Option<u32> {
+    /// which is two separate facts about the place, in this order:
+    ///
+    /// - **which part of the bank it is in**, because the gaps in a crowd are
+    ///   not spread over the stand evenly — see [`Gathering`];
+    /// - **and where inside that they actually fall**, because they do not
+    ///   land tidily either — see [`Self::CLUMPING`].
+    fn taken(seed: u32, gathering: &Gathering, row: usize, slot: usize) -> Option<u32> {
         let roll = Self::hash(seed, row as u32, slot as u32);
-        let here = occupancy
-            * (1.0 - Self::CLUMPING * 0.5 + Self::CLUMPING * Self::clumping(seed, row, slot));
+        let here = 1.0
+            - (1.0 - gathering.at(row, slot))
+                * (1.0 - Self::CLUMPING * 0.5 + Self::CLUMPING * Self::clumping(seed, row, slot));
         (Self::unit(roll) < here.clamp(0.0, 1.0)).then_some(roll)
     }
 
@@ -1057,6 +1093,206 @@ impl Crowd {
     /// The low byte of a hash as 0..1.
     fn unit(hash: u32) -> f32 {
         (hash & 0xFF) as f32 / 255.0
+    }
+}
+
+/// **Which parts of a bank fill up, and which are what is left over.**
+///
+/// [`Stature::occupancy`] says what share of a ground has somebody in it and
+/// nothing at all about WHERE — and spread evenly the gaps fall in the one
+/// place a real crowd never leaves them, which is the middle of an end at the
+/// same density as the corner nobody wanted. A ground four fifths full is not
+/// four fifths full everywhere. It is rammed in the column square behind the
+/// goal, front step to back, and half empty in the front corners, and that
+/// difference is most of what says from a hundred metres which end of the
+/// ground you are looking at.
+///
+/// **A ground sells its best places first, and the gate says how far down the
+/// list it gets.** That is the whole model, and it is one mechanism rather
+/// than a rule per kind of fixture: the places are ordered by what they are
+/// worth to sit in, the good ones fill to the brim, and the shortfall — all of
+/// it — lands on the worst. So a sell-out is full in the corners too; an
+/// ordinary Saturday has a solid kop and a thin front corner; and an under-18s
+/// game at the training ground puts its forty people behind the goal and
+/// leaves the rest of the concrete bare, all off the same two numbers.
+///
+/// **And it is not a smooth thing.** A stand is lettered into blocks with a
+/// gangway between them and it sells in blocks, so the parts of it that fill
+/// have edges: a section that went out entire next to one that did not. See
+/// [`Self::selling`], which is the whole of what a touchline has instead of a
+/// kop.
+///
+/// It is fitted rather than assumed — see [`Self::over`] — so a bank still
+/// seats the gate it was handed however steeply the people in it are banked up
+/// behind the goal. Scaling the occupancy by a fixed shape cannot do that: a
+/// bank at four fifths has no room to be half as full again anywhere, so the
+/// massing would be lost to the clamp and the crowd would come out smaller
+/// than the gate.
+struct Gathering {
+    /// What a place LOSES out in the corner of the bank, and what it loses
+    /// again for being down on the front step out there.
+    ///
+    /// Both are paid for being out of the goalmouth and neither is paid inside
+    /// it — see [`Self::worth`], which is the whole shape of a kop in one
+    /// line. **Behind a goal the view is made by how far round the goal a
+    /// place is**: the column square behind it looks down the length of the
+    /// pitch and sees all of it whether it is on the front step or at the
+    /// back, and the corner is out past the flag looking at the side of a net
+    /// over the heads in front. Height only starts to matter once you are out
+    /// there, and by the corner flag it matters a great deal. **A touchline
+    /// looks ACROSS the pitch instead**: every place in it sees the whole of
+    /// it at any height, and all that is left to thin is the ends of the stand
+    /// running out past the corners.
+    corner: f32,
+    stooping: f32,
+    /// What a block of this stand loses by not selling — see
+    /// [`Self::selling`]. It is the difference between an end and a main
+    /// stand: an end IS one block and it goes out in one piece, and a
+    /// touchline is a dozen of them sold separately to a dozen sets of
+    /// people, some of which do not go out at all.
+    unsold: f32,
+    /// Whose blocks these are. A bank has to sell the same ones on every
+    /// load, and a different set from the bank next to it.
+    seed: u32,
+    rows: usize,
+    slots: usize,
+    /// How far down that list of places this gate reaches: everything worth
+    /// more than the reciprocal of it is full.
+    reach: f32,
+}
+
+impl Gathering {
+    /// Halvings of the search that fits [`Self::reach`] to the gate. Twenty
+    /// takes it to a millionth of the span, which is well inside one
+    /// spectator.
+    const STEPS: usize = 20;
+
+    /// How wide one lettered block of a stand is, in places: about seventeen
+    /// metres of seating.
+    ///
+    /// Only the width, because the other bound is not a number — it is the
+    /// gangway, and the bank already knows where that is. A block is closed at
+    /// the back by [`Stature::TIER`], the same line
+    /// [`Pitch`](crate::scene::pitch::Pitch) paints the lit walkway along, so
+    /// the seam in the crowd falls where the stand visibly divides instead of
+    /// halfway up a tier. Left as a row count it also drew a stripe up an
+    /// untiered terrace, which has no gangway to draw one on.
+    const BLOCK: usize = 24;
+
+    /// Salt, so whether a block sold is independent of everything else drawn
+    /// off its seats — the trap `Crowd::COMPLEXION` documents.
+    const SOLD: u32 = 0x3D4B_9E17;
+
+    /// Fits the shape to the bank and to the crowd in it.
+    ///
+    /// A search rather than a division, because the good places run out: past
+    /// a certain gate the middle of the bank is already full and every further
+    /// ticket has to go somewhere worse, which a single scale factor cannot
+    /// say. Bisection on a sum that only rises as `reach` does.
+    ///
+    /// Fitted over the places the bank actually HAS. A five-step terrace and a
+    /// thirty-row bowl are the same curve sampled over different grids, and a
+    /// constant worked out for one of them would quietly resize the other's
+    /// crowd.
+    fn over(stand: Stand, occupancy: f32, seed: u32, rows: usize, slots: usize) -> Self {
+        let (corner, stooping, unsold) = match stand {
+            Stand::HomeEnd | Stand::AwayEnd => (0.50, 0.28, 0.18),
+            Stand::Side => (0.22, 0.00, 0.62),
+        };
+        let mut gathering = Gathering {
+            corner,
+            stooping,
+            unsold,
+            seed,
+            rows,
+            slots,
+            reach: 0.0,
+        };
+
+        // What every place in the bank is worth, held rather than recomputed
+        // inside the search: it is two smoothsteps a place and the search
+        // reads the lot twenty times over.
+        let worth: Vec<f32> = (0..rows)
+            .flat_map(|row| (0..slots).map(move |slot| (row, slot)))
+            .map(|(row, slot)| gathering.worth(row, slot))
+            .collect();
+        let places = worth.len() as f32;
+
+        // Nought seats nobody and the reciprocal of the worst place in the
+        // bank fills it to the last seat, so the gate is between them.
+        let (mut low, mut high) = (0.0, 1.0 / ((1.0 - unsold) * (1.0 - corner - stooping)));
+        for _ in 0..Self::STEPS {
+            let reach = (low + high) * 0.5;
+            let seated: f32 = worth.iter().map(|worth| (worth * reach).min(1.0)).sum();
+            if seated / places < occupancy {
+                low = reach;
+            } else {
+                high = reach;
+            }
+        }
+        gathering.reach = (low + high) * 0.5;
+        gathering
+    }
+
+    /// **How full this part of the bank is**, 0..1 — the local density the
+    /// ground's average is made of.
+    fn at(&self, row: usize, slot: usize) -> f32 {
+        (self.worth(row, slot) * self.reach).min(1.0)
+    }
+
+    /// What a place is worth to sit in: **1 anywhere in the column square
+    /// behind the goal**, front step to back, and down to
+    /// `1 - corner - stooping` out in the front corner.
+    ///
+    /// The column is the shape, and the two losses hang off it rather than
+    /// standing beside it. Written as a height term TIMES an across term — the
+    /// obvious way round — the front rows of the goalmouth thin out with
+    /// everything else, and the one block of a ground that is never anything
+    /// but rammed comes out patchy at the bottom.
+    ///
+    /// How far out of that column a place is comes from
+    /// [`Stature::behind_goal`], read back through its own floor, so the people
+    /// and the colours they wear thin over exactly the same ground — a kop
+    /// painted in club colours with nobody sitting in it is worse than either
+    /// fault on its own.
+    fn worth(&self, row: usize, slot: usize) -> f32 {
+        let across = (slot as f32 + 0.5) / self.slots as f32 * 2.0 - 1.0;
+        let low = 1.0 - (row as f32 + 0.5) / self.rows as f32;
+        let out = (1.0 - Stature::behind_goal(across)) / (1.0 - Stature::FLANK);
+        self.selling(row, slot) * (1.0 - out * (self.corner + self.stooping * low))
+    }
+
+    /// **Whether this block of the stand sold**: 1 for one that went out,
+    /// down to `1 - unsold` for one that did not.
+    ///
+    /// Nobody sells a stand a seat at a time. It is lettered into blocks with
+    /// a gangway between them, and they go out as blocks — to season ticket
+    /// holders, to a members' ballot, to whoever took the allocation — so what
+    /// is left over at kick-off is left over a block at a time. That is the
+    /// whole difference between an end and a main stand, and it is why a
+    /// touchline had no character at all: an end is ONE block and it goes out
+    /// in one piece, and a touchline is a dozen sold to a dozen sets of
+    /// people, two of which did not go.
+    ///
+    /// ⚠ **It is worth, not daylight.** Dropped into the scatter instead —
+    /// which is where it plainly belongs, since it is the thing that makes a
+    /// stand look untidy — the people in a block that did not sell are simply
+    /// deleted and the ground comes out short. Here the fit sees a block
+    /// nobody wanted, and the gate that would have been in it goes to the
+    /// blocks that did sell: the stand is exactly as full as it was and the
+    /// crowd in it has moved.
+    ///
+    /// Squared, so that most blocks go out and a few plainly do not. A draw
+    /// read straight gives every block a different middling fullness, which is
+    /// a gradient again — just a jagged one.
+    fn selling(&self, row: usize, slot: usize) -> f32 {
+        let upper = Stature::tiered(self.rows) && row as f32 >= self.rows as f32 * Stature::TIER;
+        let roll = Crowd::unit(Crowd::hash(
+            self.seed ^ Self::SOLD,
+            u32::from(upper),
+            (slot / Self::BLOCK) as u32,
+        ));
+        1.0 - self.unsold * roll * roll
     }
 }
 
@@ -2174,6 +2410,196 @@ mod tests {
         );
         // …and the corners are not bare. A kop thins, it does not stop.
         assert!(corners > 0.05, "the corners came out empty of colour: {corners}");
+    }
+
+    /// **An end fills from behind the goal and from the back, not evenly.**
+    ///
+    /// The companion to [`an_end_is_massed_behind_its_goal`], which measures
+    /// the same bank for COLOUR: a kop that is the club's colours at one
+    /// density all the way across is a printed sheet, and a kop that is the
+    /// same number of PEOPLE all the way across is a different printed sheet.
+    ///
+    /// Counted in vertices rather than in figures, as
+    /// [`the_crowd_gathers_rather_than_spreading_evenly`] does and for the
+    /// same reason, and bucketed up the bank off DEPTH rather than off height
+    /// so a man on his feet is counted on the step he is standing on.
+    #[test]
+    fn an_end_fills_from_behind_its_goal() {
+        const ACROSS: usize = 6;
+        const UP: usize = 2;
+        let terrace = Terrace {
+            length: 100.0,
+            ..terrace(14)
+        };
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        // Four fifths full: room for the empty fifth to gather somewhere.
+        let stature = Stature::of(&venue(30_000, 24_000, 9_000, false));
+
+        let mesh = Crowd::fill(&terrace, stature, Stand::HomeEnd, &palette, 9, Throng::FULL)
+            .expect("a bank this size holds a crowd");
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("the crowd carries no positions");
+        };
+
+        let mut census = [[0usize; ACROSS]; UP];
+        for point in points {
+            let along = ((point[0] / terrace.length + 0.5) * ACROSS as f32) as usize;
+            let back = (point[2] - terrace.from) / (terrace.tread * terrace.rows as f32);
+            let up = (back * UP as f32) as usize;
+            census[up.min(UP - 1)][along.min(ACROSS - 1)] += 1;
+        }
+
+        let goal = (census[UP - 1][2] + census[UP - 1][3]) as f32 * 0.5;
+        let corners = (census[0][0] + census[0][ACROSS - 1]) as f32 * 0.5;
+        assert!(
+            goal > corners * 1.5,
+            "the crowd is not massed behind the goal: {goal} at the back of the middle against              {corners} in the front corners. {census:?}"
+        );
+        // …and the corners still have people in them. An end thins out there;
+        // it does not stop, and a hole in a stand reads as a broken stand.
+        let busiest = census.iter().flatten().copied().max().unwrap_or(0) as f32;
+        assert!(
+            corners > busiest * 0.3,
+            "the front corners came out bare: {corners} against {busiest}. {census:?}"
+        );
+    }
+
+    /// **The column square behind the goal is rammed, front step to back.**
+    ///
+    /// The one hard edge in this file's crowd, and it is a hard edge because
+    /// it was marked on a screenshot rather than derived: the block that has
+    /// to be at a hundred per cent is a vertical stripe about a third of the
+    /// way out from the middle of the bank, and it runs the full height of the
+    /// stand. Anything that thins the front of it — a height term multiplied
+    /// through the whole bank being the obvious way to write this and the
+    /// wrong one — takes the one part of a ground that is never anything but
+    /// rammed and makes it patchy at the bottom.
+    #[test]
+    fn the_goalmouth_column_is_rammed_front_to_back() {
+        let (rows, slots) = (30usize, 160usize);
+        // Every seed, because the blocks are drawn off it: an end whose
+        // goalmouth happens to sit in a block the draw did not sell is exactly
+        // the failure this is here to catch.
+        for seed in 1..=16 {
+            let gathering = Gathering::over(Stand::HomeEnd, 0.84, seed, rows, slots);
+
+            // A third of the way out either side of the middle, which is the
+            // width of the mark: the whole of it, on every step.
+            for row in 0..rows {
+                for slot in [slots / 2, slots / 2 - slots / 6, slots / 2 + slots / 6] {
+                    let packed = gathering.at(row, slot);
+                    assert!(
+                        packed > 0.99,
+                        "seed {seed}: row {row} of the goalmouth column is only {packed} full \
+                         at slot {slot}"
+                    );
+                }
+            }
+
+            // …and the bank outside it is nothing like it, or the mark means
+            // nothing: a stand that is a hundred per cent everywhere is the
+            // flat one this replaced.
+            let corner = gathering.at(0, 0);
+            assert!(
+                corner < 0.6,
+                "seed {seed}: the front corner is {corner} full, which is no thinner than the kop"
+            );
+        }
+    }
+
+    /// **A touchline sells in blocks, and it shows.**
+    ///
+    /// What a main stand has instead of a kop. An end is one block and it goes
+    /// out in one piece, so its character is the massing behind the goal; a
+    /// touchline is a dozen blocks sold to a dozen sets of people, and what
+    /// says so from across the ground is that some of them went out entire and
+    /// one of them did not.
+    ///
+    /// Measured as a STEP rather than as a spread, because a spread is what
+    /// the smooth thinning gives too. The biggest change from one place to the
+    /// next has to be far larger than the average one: a stand that varies but
+    /// only gradually is the gradient painted on a wall this replaced.
+    #[test]
+    fn a_touchline_sells_in_blocks() {
+        let (rows, slots) = (34usize, 200usize);
+        let mut steps = Vec::new();
+        for seed in 1..=16 {
+            let gathering = Gathering::over(Stand::Side, 0.84, seed, rows, slots);
+
+            let row = rows / 2;
+            let along: Vec<f32> = (0..slots).map(|slot| gathering.at(row, slot)).collect();
+            let jumps: Vec<f32> = along.windows(2).map(|by| (by[1] - by[0]).abs()).collect();
+            let biggest = jumps.iter().copied().fold(0.0f32, f32::max);
+            let usual = jumps.iter().sum::<f32>() / jumps.len() as f32;
+            steps.push(biggest);
+
+            assert!(
+                biggest > usual * 20.0,
+                "seed {seed}: the fullest a touchline steps is {biggest} against {usual} place \
+                 to place, which is a gradient rather than a block"
+            );
+        }
+
+        // …and the step is worth seeing. A seam of a per cent is a seam
+        // nobody will ever find on a stand a hundred metres away.
+        let smallest = steps.iter().copied().fold(f32::MAX, f32::min);
+        assert!(
+            smallest > 0.08,
+            "the plainest block seam in sixteen grounds is only {smallest}"
+        );
+    }
+
+    /// **Gathering a crowd does not change how big it is.**
+    ///
+    /// The whole of [`Gathering`] rests on the fit: out by a tenth, every
+    /// ground in the game seats a tenth more or fewer people than the gate it
+    /// was handed, and nothing else in this file would say so. Checked across
+    /// the band [`Stature`] can hand it and on banks from a village terrace to
+    /// a great bowl, because the fit is done over the places a bank HAS.
+    #[test]
+    fn gathering_a_crowd_does_not_change_how_big_it_is() {
+        for stand in [Stand::HomeEnd, Stand::AwayEnd, Stand::Side] {
+            for occupancy in [Stature::SPARSEST, 0.5, 0.82, Stature::FULLEST] {
+                for (rows, slots) in [(5usize, 40usize), (34, 190), (1, 3)] {
+                    let gathering = Gathering::over(stand, occupancy, 5, rows, slots);
+                    let mut total = 0.0;
+                    for row in 0..rows {
+                        for slot in 0..slots {
+                            total += gathering.at(row, slot);
+                        }
+                    }
+                    let seated = total / (rows * slots) as f32;
+                    assert!(
+                        (seated - occupancy).abs() < 1e-3,
+                        "a {rows}x{slots} bank asked for {occupancy} seats {seated}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// **A sell-out is full in the corners too.**
+    ///
+    /// The other end of the same mechanism, and the thing a fixed shape gets
+    /// wrong: massing is what a ground does with the people it is SHORT of,
+    /// so as the gate rises the gradient has to flatten of its own accord
+    /// rather than keep carving a hole in a stand somebody paid to sit in.
+    #[test]
+    fn a_full_house_is_full_in_the_corners() {
+        let (rows, slots) = (30usize, 160usize);
+        let worst = |occupancy: f32| {
+            let gathering = Gathering::over(Stand::HomeEnd, occupancy, 5, rows, slots);
+            gathering.at(0, 0) / occupancy
+        };
+        assert!(
+            worst(Stature::FULLEST) > worst(Stature::SPARSEST) * 1.4,
+            "the corners do not fill as the ground does: {} at a sell-out against {} at an \
+             empty one",
+            worst(Stature::FULLEST),
+            worst(Stature::SPARSEST)
+        );
     }
 
     /// **A crowd arrives in knots, not as an even sprinkle.**

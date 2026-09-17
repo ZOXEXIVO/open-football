@@ -524,6 +524,7 @@
   "dec_reason_contract_expiring": "Sözleşmesi bitiyor, serbest ayrılmadan önce ücret aranıyor",
   "dec_reason_contract_stalemate": "Sözleşme görüşmeleri tıkandı — tekrarlanan retlerin ardından listeye alındı",
   "dec_reason_financial_relief": "Maaş yükünü azaltmak için kiraya verildi",
+  "dec_reason_dead_wage": "Sezonlardır ilk takımda oynamadan maaş alıyor",
   "dec_reason_lack_playing_time": "Bu sezon yetersiz oynama süresi",
   "dec_reason_loan_playing_time": "Düzenli oynama süresi için kiralık",
   "dec_reason_low_ability_surplus": "Düşük yetenek, ihtiyaç fazlası",

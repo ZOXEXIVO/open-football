@@ -135,7 +135,8 @@ impl TeamBehaviour {
                 // Cooldown prevents a fresh raise refiring inside the
                 // 14-day jealousy window from the same signer.
                 let gap = (1.0 - ratio).clamp(0.25, 0.9);
-                let magnitude = -((gap - 0.25) * 6.0 + 1.5).min(5.0);
+                let magnitude =
+                    -((gap - 0.25) * 6.0 + 1.5).min(5.0) * Self::wage_claim(player, today);
                 let context = HappinessEventContext::new(
                     HappinessEventCause::WageJealousy,
                     HappinessEventSeverity::from_magnitude(magnitude),
@@ -152,6 +153,23 @@ impl TeamBehaviour {
                 );
             }
         }
+    }
+
+    /// How much of a case a player has about money, 0.3..1, read off how
+    /// much of the club's football he is actually part of: a regular
+    /// trailing a new signing has a grievance, a spectator has an opinion.
+    /// Full until the club has played enough for the share to mean
+    /// anything.
+    fn wage_claim(player: &Player, today: NaiveDate) -> f32 {
+        let opp = player.playing_time_opportunity(today);
+        if opp.eligible_official_matches_since_join < 8 {
+            return 1.0;
+        }
+        let inclusion = opp.player_starts_since_join
+            + opp.player_sub_apps_since_join
+            + opp.player_unused_bench_since_join;
+        let share = inclusion as f32 / opp.eligible_official_matches_since_join as f32;
+        0.3 + 0.7 * (share / 0.5).clamp(0.0, 1.0)
     }
 
     /// Monthly audit of inbound loanees — did the borrowing club actually
@@ -2723,11 +2741,12 @@ impl BackupCareerAnxiety {
 
         let age = player.age(today);
         let is_goalkeeper = player.position().is_goalkeeper();
-        // Under-24s belong to the prospect / development-loan pathway;
-        // past the late-career line the veteran audit owns the story — a
-        // 36-year-old #2 keeper seeing out his career is real life.
-        let late_career_age = if is_goalkeeper { 37 } else { 34 };
-        if age < 24 || age >= late_career_age {
+        // Past the late-career line the veteran audit owns the story — a
+        // 36-year-old #2 keeper seeing out his career is real life. Below
+        // it the restlessness curve decides how much a spectator minds;
+        // youth is a discount on it, not a closed door.
+        let (_, prime_end, fade_end) = StuckCareerScan::career_phases(is_goalkeeper);
+        if age as f32 >= fade_end {
             return None;
         }
 
@@ -2737,7 +2756,6 @@ impl BackupCareerAnxiety {
         // the career #2's story, never the #3's (the Pinsoglio case). A
         // younger third keeper still dreams; the reserve / prospect
         // pathways own his route out.
-        let (_, prime_end, _) = StuckCareerScan::career_phases(is_goalkeeper);
         if is_goalkeeper && keepers_clearly_ahead >= 2 && (age as f32) > prime_end {
             return None;
         }

@@ -523,6 +523,7 @@
   "dec_reason_contract_expiring": "Contrat expirant, recherche d'indemnité avant départ libre",
   "dec_reason_contract_stalemate": "Négociations de prolongation rompues — listé après plusieurs refus",
   "dec_reason_financial_relief": "Prêt pour réduire la masse salariale",
+  "dec_reason_dead_wage": "Payé depuis des saisons sans jouer en équipe première",
   "dec_reason_lack_playing_time": "Temps de jeu insuffisant cette saison",
   "dec_reason_loan_playing_time": "Prêt pour obtenir du temps de jeu régulier",
   "dec_reason_low_ability_surplus": "Niveau faible, excédentaire",

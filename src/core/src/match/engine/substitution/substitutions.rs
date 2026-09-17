@@ -1759,6 +1759,7 @@ mod tests {
             penalty_taker_id: None,
             free_kick_taker_id: None,
             selection_omissions: vec![],
+            overlooked: vec![],
             coach_snapshot: None,
         }
     }

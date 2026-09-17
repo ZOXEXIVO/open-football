@@ -685,6 +685,16 @@ impl CompetitiveMind {
                 }
             }
 
+            MindOption::SignContract => {
+                // Signing on for more years of what he has now. Wanting to
+                // be somewhere he plays is the argument against, and the
+                // only one this faculty has.
+                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
+                if needs_games > 0.1 {
+                    reasons.push(GoalKind::PlayFirstTeamFootball, -needs_games);
+                }
+            }
+
             MindOption::Retire => {
                 if self.self_belief() < -0.5 {
                     reasons.push(GoalKind::RetireOnMyTerms, -self.self_belief() * 0.6);

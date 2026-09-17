@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "Le rôle proposé ne correspondait pas à ses attentes.",
   "contract_evidence_rejected_over_release_clause": "Le contrat ne comportait pas la clause libératoire qu’il souhaitait.",
   "contract_evidence_rejected_over_length": "La durée du contrat ne lui convenait pas.",
+  "contract_evidence_rejected_over_playing_time": "Il a refusé de s'engager pour de nouvelles années sans jouer en équipe première.",
   "contract_evidence_rejected_over_ambition": "Le projet du club ne correspondait pas à son ambition.",
   "private_talk_reason_playing_time": "Il n’est pas satisfait de son temps de jeu.",
   "private_talk_reason_contract": "Il a des préoccupations non réglées au sujet de son contrat.",

@@ -768,6 +768,7 @@
   "contract_evidence_rejected_over_role": "Die angebotene Rolle entsprach nicht seinen Erwartungen.",
   "contract_evidence_rejected_over_release_clause": "Dem Vertrag fehlte die von ihm gewünschte Ausstiegsklausel.",
   "contract_evidence_rejected_over_length": "Die Vertragslaufzeit passte ihm nicht.",
+  "contract_evidence_rejected_over_playing_time": "Er wollte sich nicht für weitere Jahre ohne Einsätze in der ersten Mannschaft binden.",
   "contract_evidence_rejected_over_ambition": "Das Projekt des Vereins passte nicht zu seiner Ambition.",
   "private_talk_reason_playing_time": "Er ist mit seiner Spielzeit unzufrieden.",
   "private_talk_reason_contract": "Er hat offene Fragen zu seinem Vertrag.",

@@ -113,6 +113,7 @@ fn squad(team_id: u32, base_id: u32) -> MatchSquad {
         penalty_taker_id: None,
         free_kick_taker_id: None,
         selection_omissions: vec![],
+        overlooked: vec![],
         coach_snapshot: None,
     }
 }

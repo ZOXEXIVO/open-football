@@ -88,7 +88,9 @@ impl MainSquadDepth {
 /// Snapshotted once per pass: the thresholds used to be closures re-walking
 /// the whole main squad for every player in every other squad.
 pub(in crate::club::core) struct PromotionBar {
-    groups: [(PlayerFieldPositionGroup, u8, bool); PlayerFieldPositionGroup::COUNT],
+    /// Per group: the floor, whether the first team is a body short, and
+    /// whether it is already at its depth cap.
+    groups: [(PlayerFieldPositionGroup, u8, bool, bool); PlayerFieldPositionGroup::COUNT],
 }
 
 impl PromotionBar {
@@ -113,7 +115,8 @@ impl PromotionBar {
                 } else {
                     worst.saturating_add(1)
                 };
-                (group, floor, short)
+                let full = count >= group.main_depth_cap();
+                (group, floor, short, full)
             }),
         }
     }
@@ -121,9 +124,20 @@ impl PromotionBar {
     pub(in crate::club::core) fn floor(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.groups
             .iter()
-            .find(|(g, _, _)| *g == group)
-            .map(|(_, floor, _)| *floor)
+            .find(|(g, _, _, _)| *g == group)
+            .map(|(_, floor, _, _)| *floor)
             .unwrap_or(u8::MAX)
+    }
+
+    /// Is the group already at the depth the surplus pass trims to? A
+    /// promotion into it displaces somebody, so it has to be clearly
+    /// earned — otherwise the two men swap places every week.
+    pub(in crate::club::core) fn full(&self, group: PlayerFieldPositionGroup) -> bool {
+        self.groups
+            .iter()
+            .find(|(g, _, _, _)| *g == group)
+            .map(|(_, _, _, full)| *full)
+            .unwrap_or(false)
     }
 
     /// Is the first team a body short in this group? A promotion into a hole
@@ -132,8 +146,8 @@ impl PromotionBar {
     pub(in crate::club::core) fn main_short(&self, group: PlayerFieldPositionGroup) -> bool {
         self.groups
             .iter()
-            .find(|(g, _, _)| *g == group)
-            .map(|(_, _, short)| *short)
+            .find(|(g, _, _, _)| *g == group)
+            .map(|(_, _, short, _)| *short)
             .unwrap_or(false)
     }
 }
