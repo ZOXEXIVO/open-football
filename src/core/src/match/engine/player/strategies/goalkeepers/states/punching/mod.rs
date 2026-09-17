@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperSweepLimit,
 };
@@ -22,6 +23,13 @@ const MIN_PUNCH_TICKS: u64 = 22;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPunchingState {}
+
+impl GoalkeeperPunchingState {
+    /// The lowest ball a fist plays. A ball at the chest is caught and one
+    /// at the shins is kicked or dived on; the punch is the contact for a
+    /// ball at his head or above, where the hands are behind it.
+    pub const FLOOR: f32 = AerialReach::HEAD;
+}
 
 impl StateProcessingHandler for GoalkeeperPunchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -58,19 +66,15 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             ));
         }
 
-        // Out of reach on arrival: he has already made his contact — this
-        // is the route the physics parry uses, and the ball is out there
-        // BECAUSE he punched it. Hold the follow-through and get up.
-        //
-        // The bar this replaces was `2.0 * (0.85 + …)` — **21 to 39
-        // CENTIMETRES**, written when units were being read as metres. A
-        // ball that close is in his chest, not at the end of a fist, so it
-        // was true of essentially every punch and sent him to `Jumping`
-        // instead: a standing vertical leap, on the spot, right after he
-        // had already made contact. That is the keeper hopping in the air
-        // for no reason after a parry. `effective_punch_distance` is the
-        // engine's own number for a fist's reach (8-28u, i.e. 1-3.5 m).
-        if ctx.ball().distance() > prof.effective_punch_distance {
+        // The physics save has already made this contact. It resolves the
+        // shot, sends the spill / tip / rebound on its way at a metre or
+        // two a second and THEN puts him in this state to show the parry —
+        // so on his entry tick the ball is still within a fist's reach,
+        // and rolling again struck it a second time: a ground shot spilled
+        // at 0.12 m went 7 m up and 14 m back up the pitch off the same
+        // keeper. A ball that came off him is his follow-through, and so
+        // is one already beyond his reach.
+        if ctx.ball().came_off_me() || ctx.ball().distance() > prof.effective_punch_distance {
             return None;
         }
 
@@ -79,12 +83,15 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         // passed the check and the punch resolved against a ball no
         // keeper could touch — the delivery trace showed corner-won
         // crosses being "punched" out of their flight at z 5.4-6.5 m.
-        // The leap ceiling is the honest vertical bar.
+        // The leap ceiling is the honest vertical bar — and [`Self::FLOOR`]
+        // the other one, or a crowded six-yard box had him fisting a ball
+        // off the turf.
         let ball_z = ctx.tick_context.positions.ball.position.z;
-        if ball_z
-            > crate::r#match::goalkeepers::states::common::KeeperAerialClaim::leap_ceiling(
-                ctx.player.skills.physical.jumping,
-            )
+        if ball_z < Self::FLOOR
+            || ball_z
+                > crate::r#match::goalkeepers::states::common::KeeperAerialClaim::leap_ceiling(
+                    ctx.player.skills.physical.jumping,
+                )
         {
             return None;
         }
@@ -156,9 +163,12 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
                 .try_normalize(1e-4)
                 .unwrap_or(outward_dir);
             // Flatter and shorter than the kicked clearance: a punch is
-            // struck off the fist under pressure, so it goes up 6-10 m
-            // and travels 15-25 m rather than clearing the halfway line.
-            let punch_apex = 6.0 + prof.aerial_command * 4.0;
+            // struck off the fist under pressure, so it goes up 3-5 m and
+            // travels 15-25 m rather than clearing the halfway line. That
+            // is a launch near 40°; the 6-10 m apex it replaces left the
+            // fist at 58° over the same ground, which on screen was a ball
+            // popping straight up and dropping.
+            let punch_apex = 3.0 + prof.aerial_command * 2.0;
             let punch_vz = Ball::launch_speed_for_apex(punch_apex);
             let punch_range = 120.0 + prof.aerial_command * 80.0; // 15 - 25 m
             let hang = Ball::hang_ticks(punch_vz).max(1.0);

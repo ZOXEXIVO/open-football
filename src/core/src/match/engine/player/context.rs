@@ -865,6 +865,11 @@ pub struct BallMetadata {
     /// shot-spacing cooldown during box scrambles. 0 = none yet.
     pub last_rebound_tick: u64,
 
+    /// The last man the ball came off WITHOUT him controlling it — a parry,
+    /// a spill, a block, a fumbled claim. `None` after a controlled touch:
+    /// a catch, a pass, a first touch that stuck.
+    pub rebounded_off: Option<u32>,
+
     /// Who the live pass is meant for, if one is in the air.
     ///
     /// The claim rules already give this player sole right to take the
@@ -1009,6 +1014,10 @@ impl BallMetadata {
         self.cached_shot_target = field.ball.cached_shot_target;
         self.pass_origin_restart = field.ball.pass_origin_restart;
         self.last_rebound_tick = field.ball.last_rebound_tick;
+        self.rebounded_off = field
+            .ball
+            .last_touch_player_id
+            .filter(|_| !field.ball.last_touch_was_controlled);
         self.pass_target = field.ball.pass_target_player_id;
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
         self.delivered_by = field.ball.own_delivery_player();
@@ -1057,6 +1066,7 @@ impl From<&MatchField> for BallMetadata {
             cached_shot_target: None,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             last_rebound_tick: 0,
+            rebounded_off: None,
             pass_target: None,
             recollect_blocked_player: None,
             delivered_by: None,

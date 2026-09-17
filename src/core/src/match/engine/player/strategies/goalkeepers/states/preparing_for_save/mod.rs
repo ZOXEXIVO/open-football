@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperDebug,
     KeeperOneOnOne, KeeperPenaltyStance, KeeperRestPosition, KeeperSetPieceStance,
@@ -438,7 +439,9 @@ impl GoalkeeperPreparingForSaveState {
         let ball_speed = ball_velocity.norm();
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        if ball_distance > PUNCH_DISTANCE {
+        // Nothing below his head is punched, however crowded the box —
+        // the crowd branch below has no height in it.
+        if ball_distance > PUNCH_DISTANCE || ball_position.z < GoalkeeperPunchingState::FLOOR {
             return false;
         }
 

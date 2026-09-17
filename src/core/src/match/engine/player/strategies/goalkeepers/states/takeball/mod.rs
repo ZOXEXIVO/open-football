@@ -24,8 +24,9 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // to be handed a keeper in possession and pass him on to
         // `Distributing` a tick later, which is two states of dithering
         // over a ball he could simply have picked up. See
-        // [`KeeperFeetDecision`].
-        if ctx.player.has_ball(ctx) {
+        // [`KeeperFeetDecision`]. His but beyond his feet is still the
+        // chase: nothing draws it to him (`Ball::move_to`).
+        if ctx.ball().at_my_feet() {
             // A GOAL KICK is a dead ball from the floor: the hands are out
             // of it, and the only choice is the one made when he placed it
             // — long off the run-up, or short from standing. This used to
@@ -97,7 +98,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // same statement about whose ball it is. See [`KeeperDelivery`];
         // the restart taker is exempt inside the predicate, so a keeper
         // walking to his own goal kick is untouched by this.
-        if ctx.ball().is_owned() {
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
             Self::note_exit(ctx, 1);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,

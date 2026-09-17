@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
 use crate::r#match::goalkeepers::states::common::{
@@ -417,9 +418,13 @@ impl PlayerFieldPositionGroup {
             return false;
         }
 
-        // Ball must actually be loose.
+        // An owned ball is loose to nobody — except its owner, whose ball
+        // beyond his feet is his to go and collect: `Ball::move_to` no
+        // longer draws it to him. One in his gloves is already on him.
         if tick_context.ball.is_owned {
-            return false;
+            return tick_context.ball.current_owner == Some(player.id)
+                && !tick_context.ball.held_in_hands
+                && !Ball::at_feet(tick_context.positions.ball.position, player.position);
         }
 
         // A ball OUT OF PLAY is loose in the sense this test means and in

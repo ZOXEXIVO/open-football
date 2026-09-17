@@ -4079,9 +4079,9 @@ impl PlayerEventDispatcher {
         // Nothing has to be written, because two pieces of machinery
         // already do the job between them:
         //
-        // * `Ball::move_to` draws an owned ball to its owner at
-        //   `BALL_TRACK_SPEED` (1.5 u/tick), so a typical 6u tackle gap
-        //   closes in four ticks — 40 ms, and drawn every frame of it;
+        // * a ball beyond his feet is his to collect — the TakeBall
+        //   override sends him to it (`should_force_takeball`), so a
+        //   typical 6u tackle gap is a stride he takes, not a pull;
         // * `check_ball_ownership`'s "owner too far" test only strips
         //   possession from a ball that is MOVING (`ball_speed_sq >
         //   MIN_VELOCITY_FOR_DISTANCE_CHECK`) and moving AWAY, and the

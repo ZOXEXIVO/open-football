@@ -50,13 +50,16 @@ use super::goal_celebration_tests::squad;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::common_states::{ChasePath, LooseBallChase};
 use crate::r#match::engine::ball::ball::{
-    BallRoll, CONTROL_DISTANCE, GROUND_FRICTION, LOOSE_CLAIM_DISTANCE,
+    Ball, BallRoll, CONTROL_DISTANCE, GROUND_FRICTION, LOOSE_CLAIM_DISTANCE,
 };
 use crate::r#match::engine::result::Score;
+use crate::r#match::events::EventCollection;
+use crate::r#match::midfielders::states::{MidfielderState, MidfielderTakeBallState};
+use crate::r#match::player::state::PlayerState;
 use crate::r#match::position_ball::BallFieldData;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, PlayerSide,
-    SteeringBehavior,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -855,5 +858,320 @@ fn the_tables_are_consistent() {
             assert!(best.cost <= row.cost, "{best:?} vs {row:?}");
         }
         assert_eq!(tick_context.chase.cost_of(row.id), Some(row.cost));
+    }
+}
+
+/// A field with one home outfielder on `at` and everybody else parked in a
+/// far corner, so nothing but him is near the ball. Returns `(field,
+/// context, his id)`.
+fn field_with_a_man_at(at: Vector3<f32>) -> (MatchField, MatchContext, u32) {
+    let home = squad(1, 100);
+    let away = squad(2, 200);
+    let players = MatchPlayerCollection::from_squads(&home, &away);
+    let mut field = MatchField::new(840, 545, home, away);
+    let mut context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
+    context.total_match_time = 10 * 60 * 1000;
+    let man = field
+        .players
+        .iter()
+        .find(|p| {
+            p.side == Some(PlayerSide::Left)
+                && !p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| p.id)
+        .expect("the home side has outfielders");
+    for player in field.players.iter_mut() {
+        player.position = if player.id == man {
+            at
+        } else {
+            Vector3::new(30.0, 30.0, 0.0)
+        };
+    }
+    (field, context, man)
+}
+
+fn move_player(field: &mut MatchField, id: u32, to: Vector3<f32>) {
+    field
+        .players
+        .iter_mut()
+        .find(|p| p.id == id)
+        .expect("the player is on the field")
+        .position = to;
+}
+
+/// **A ball granted ahead of him rolls on; he runs onto it.**
+///
+/// Every reception is granted 0.25-1.9 m from the man, and the ball used
+/// to be drawn back onto him at 1.5 u/tick from there — 85 reversals of a
+/// median 33 cm inside one 30 ms frame per 90 min, off a recorded match.
+/// The ball keeps its own motion until it is at his feet, and only then
+/// is it on him.
+#[test]
+fn a_ball_granted_ahead_of_him_rolls_on_and_he_runs_onto_it() {
+    let (mut field, _context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    field.ball.position = Vector3::new(605.0, 272.0, 0.0);
+    field.ball.velocity = Vector3::new(0.4, 0.0, 0.0);
+    field.ball.current_owner = Some(man);
+    let mut players = field.players.clone();
+
+    let mut last_x = field.ball.position.x;
+    for _ in 0..20 {
+        field.ball.update_velocity();
+        field.ball.move_to_with_players(&players);
+        assert!(
+            field.ball.position.x > last_x,
+            "the ball was pulled back toward him: {last_x:.2} -> {:.2}",
+            field.ball.position.x
+        );
+        assert!(
+            field.ball.velocity.x > 0.0 && field.ball.velocity.x <= 0.4 + 1e-4,
+            "the roll was interfered with: {:?}",
+            field.ball.velocity
+        );
+        last_x = field.ball.position.x;
+    }
+    assert_eq!(
+        field.ball.current_owner,
+        Some(man),
+        "still his while it is inside the tracking cap"
+    );
+
+    // He gets there: inside a foot of it, it is on him.
+    let ball = field.ball.position;
+    let him = Vector3::new(ball.x - 1.0, ball.y, 0.0);
+    players
+        .iter_mut()
+        .find(|p| p.id == man)
+        .expect("the man is on the field")
+        .position = him;
+    field.ball.update_velocity();
+    field.ball.move_to_with_players(&players);
+    assert!(
+        (field.ball.position.x - him.x).abs() < 1e-3
+            && (field.ball.position.y - him.y).abs() < 1e-3,
+        "at his feet the ball should be on him, it is at {:?}",
+        field.ball.position
+    );
+    assert_eq!(field.ball.velocity, Vector3::zeros());
+}
+
+/// A ball in a keeper's gloves is still brought into his body: that is his
+/// arms, not a force on the ball.
+#[test]
+fn a_ball_in_his_gloves_is_still_brought_into_his_body() {
+    let (mut field, _context, _man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    let (keeper, at) = field
+        .players
+        .iter()
+        .find(|p| {
+            p.side == Some(PlayerSide::Left) && p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| (p.id, p.position))
+        .expect("the home side has a goalkeeper");
+    field.ball.position = Vector3::new(at.x + 6.0, at.y, 1.5);
+    field.ball.velocity = Vector3::zeros();
+    field.ball.current_owner = Some(keeper);
+    field.ball.held_in_hands = true;
+    let players = field.players.clone();
+    for _ in 0..6 {
+        field.ball.move_to_with_players(&players);
+    }
+    assert!(
+        Ball::at_feet(field.ball.position, at),
+        "a caught ball six units from him was left out there: {:?}",
+        field.ball.position
+    );
+}
+
+/// **A man whose ball is beyond his feet is sent to collect it**, and only
+/// then. Nothing else closes that gap any more.
+#[test]
+fn a_man_whose_ball_is_beyond_his_feet_is_sent_to_collect_it() {
+    let (mut field, context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    field.ball.velocity = Vector3::zeros();
+    field.ball.current_owner = Some(man);
+    let sent = |field: &MatchField| {
+        let tick_context = GameTickContext::new(field, &context.players);
+        let player = field
+            .players
+            .iter()
+            .find(|p| p.id == man)
+            .expect("the man is on the field");
+        PlayerFieldPositionGroup::should_force_takeball(
+            player.tactical_position.current_position.position_group(),
+            player,
+            &context,
+            &tick_context,
+        )
+    };
+
+    field.ball.position = Vector3::new(606.0, 272.0, 0.0);
+    assert!(
+        sent(&field),
+        "his ball is six units away and nobody sends him to it"
+    );
+
+    field.ball.position = Vector3::new(601.0, 272.0, 0.0);
+    assert!(
+        !sent(&field),
+        "the ball is at his feet and he is still sent to fetch it"
+    );
+
+    field.ball.position = Vector3::new(606.0, 272.0, 1.2);
+    field.ball.held_in_hands = true;
+    assert!(!sent(&field), "a ball in his gloves is on him");
+    field.ball.held_in_hands = false;
+
+    field.ball.current_owner = Some(110);
+    assert!(!sent(&field), "somebody else's ball is not his to collect");
+}
+
+/// TakeBall stays with the chase until the ball is at his feet, not until
+/// it is merely his — otherwise the override re-enters it every tick.
+#[test]
+fn take_ball_keeps_chasing_his_own_ball_until_it_is_at_his_feet() {
+    let (mut field, context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    field.ball.velocity = Vector3::zeros();
+    field.ball.current_owner = Some(man);
+    let decide = |field: &MatchField| {
+        let players = field.players.clone();
+        let tick_context = GameTickContext::new(field, &context.players);
+        let player = players
+            .iter()
+            .find(|p| p.id == man)
+            .expect("the man is on the field");
+        let ctx = StateProcessingContext {
+            in_state_time: 3,
+            player,
+            context: &context,
+            tick_context: &tick_context,
+        };
+        MidfielderTakeBallState::default()
+            .process(&ctx)
+            .and_then(|result| result.state)
+    };
+
+    field.ball.position = Vector3::new(606.0, 272.0, 0.0);
+    assert_eq!(
+        decide(&field),
+        None,
+        "he gave up the chase with his ball six units away"
+    );
+
+    field.ball.position = Vector3::new(601.0, 272.0, 0.0);
+    assert_eq!(
+        decide(&field),
+        Some(PlayerState::Midfielder(MidfielderState::Running)),
+        "the ball is at his feet and he is still chasing it"
+    );
+}
+
+/// **A team-mate standing over his ball does not take it off him; an
+/// opponent does.** With nothing dragging the ball to its owner he spends
+/// a few ticks closing the last stride, and the ownership scan used to
+/// hand the ball to whoever was within a stride of it in the meantime.
+#[test]
+fn a_team_mate_standing_over_his_ball_does_not_take_it_off_him() {
+    let (mut field, context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    let other = |field: &MatchField, side: PlayerSide| {
+        field
+            .players
+            .iter()
+            .find(|p| {
+                p.side == Some(side)
+                    && p.id != man
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .map(|p| p.id)
+            .expect("both sides have outfielders")
+    };
+    let mate = other(&field, PlayerSide::Left);
+    let foe = other(&field, PlayerSide::Right);
+    let over_the_ball = Vector3::new(609.0, 273.0, 0.0);
+    let far_away = Vector3::new(30.0, 30.0, 0.0);
+    field.ball.position = Vector3::new(608.0, 272.0, 0.0);
+    field.ball.velocity = Vector3::zeros();
+    field.ball.current_owner = Some(man);
+    field.ball.flags.in_flight_state = 0;
+    let scan = |field: &mut MatchField| {
+        field.ball.claim_cooldown = 0;
+        let players = field.players.clone();
+        let mut events = EventCollection::with_capacity(8);
+        field
+            .ball
+            .process_ownership(&context, &players, &mut events);
+        field.ball.current_owner
+    };
+
+    move_player(&mut field, mate, over_the_ball);
+    assert_eq!(
+        scan(&mut field),
+        Some(man),
+        "a team-mate standing over it took his ball"
+    );
+
+    move_player(&mut field, mate, far_away);
+    move_player(&mut field, foe, over_the_ball);
+    assert_eq!(
+        scan(&mut field),
+        Some(foe),
+        "an opponent standing over a ball its owner has not reached must win it"
+    );
+}
+
+/// **A pass arriving within a stride is touched onto his feet; one going
+/// away from him is not pulled back.**
+///
+/// The touch is the only thing that may turn a ball toward its owner, and
+/// it turns it at a controlled pace: never faster than the ball arrived
+/// and no faster than a firm touch. A ball already past him is his to
+/// chase, and rolls on.
+#[test]
+fn a_pass_arriving_within_a_stride_is_touched_onto_his_feet() {
+    let (mut field, _context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    let players = field.players.clone();
+
+    // Coming to him, passing three units beside him.
+    field.ball.position = Vector3::new(596.0, 275.0, 0.0);
+    field.ball.velocity = Vector3::new(1.5, 0.0, 0.0);
+    field.ball.current_owner = Some(man);
+    let mut arrived = None;
+    for tick in 0..40 {
+        field.ball.update_velocity();
+        field.ball.move_to_with_players(&players);
+        let speed = (field.ball.velocity.x.powi(2) + field.ball.velocity.y.powi(2)).sqrt();
+        assert!(
+            speed <= 1.5 + 1e-4,
+            "the touch put pace on the ball: {speed:.2}"
+        );
+        if Ball::at_feet(field.ball.position, Vector3::new(600.0, 272.0, 0.0)) {
+            arrived = Some(tick);
+            break;
+        }
+    }
+    let arrived = arrived.expect("a pass within a stride of him never reached his feet");
+    assert!(
+        arrived <= 20,
+        "the touch took {arrived} ticks to bring a ball five units in"
+    );
+    // The next tick it is on him.
+    field.ball.update_velocity();
+    field.ball.move_to_with_players(&players);
+    assert_eq!(field.ball.velocity, Vector3::zeros());
+    assert_eq!(field.ball.position, Vector3::new(600.0, 272.0, 0.0));
+
+    // Going away from him, already beyond his reach: no touch, no pull.
+    field.ball.position = Vector3::new(606.0, 272.0, 0.0);
+    field.ball.velocity = Vector3::new(1.0, 0.0, 0.0);
+    field.ball.current_owner = Some(man);
+    for _ in 0..10 {
+        let before = field.ball.position.x;
+        field.ball.update_velocity();
+        field.ball.move_to_with_players(&players);
+        assert!(
+            field.ball.position.x > before,
+            "a ball past him was pulled back: {before:.2} -> {:.2}",
+            field.ball.position.x
+        );
     }
 }

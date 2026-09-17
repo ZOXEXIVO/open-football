@@ -11,18 +11,16 @@ pub struct ForwardTakeBallState {}
 
 impl StateProcessingHandler for ForwardTakeBallState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // If WE own the ball, TakeBall is the wrong state — transition
-        // to Running so the "has ball" paths in Running can pick
-        // Shooting/Passing/Dribbling. Guards against a race where
-        // ownership got assigned mid-tick but `is_owned` wasn't
-        // refreshed before the dispatcher.
-        if ctx.player.has_ball(ctx) {
+        // His and at his feet — TakeBall is the wrong state. Transition
+        // to Running so the "has ball" paths can pick Shooting / Passing /
+        // Dribbling. His but beyond his feet is still a chase: nothing
+        // draws it to him (`Ball::move_to`), he has to get there.
+        if ctx.ball().at_my_feet() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
-        // Ball got claimed (by anyone). Running state handles "someone else
-        // has it" — for teammates: off-ball movement; for opponents: engage
-        // via Pressing. Hand off there instead of duplicating here.
-        if ctx.ball().is_owned() {
+        // Somebody else has it. Running handles that — for teammates:
+        // off-ball movement; for opponents: engage via Pressing.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 

@@ -1812,7 +1812,7 @@ impl Ball {
         // revoked in a two-tick cycle (claim → this check clears it → the
         // dispatcher's loose-ball override forces `TakeBall` → claim …)
         // while the ball sat still under his feet.
-        const MAX_OWNERSHIP_DISTANCE: f32 = 2.0; // Maximum distance to maintain ownership (tightened)
+        const MAX_OWNERSHIP_DISTANCE: f32 = Ball::AT_FEET;
         const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
         const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 0.5; // Check distance if ball is moving at all
 
@@ -2033,24 +2033,26 @@ impl Ball {
         // Check if current owner is nearby
         if let Some(current_owner_id) = self.current_owner {
             let current_owner_nearby = nearby_slice.contains(&current_owner_id);
+            let owner_team_id = context.players.by_id(current_owner_id).map(|p| p.team_id);
+            let opponent_nearby = owner_team_id.is_some_and(|team_id| {
+                nearby_slice.iter().any(|&id| {
+                    context
+                        .players
+                        .by_id(id)
+                        .is_some_and(|p| p.team_id != team_id)
+                })
+            });
 
-            if current_owner_nearby {
-                let owner_team_id = context.players.by_id(current_owner_id).map(|p| p.team_id);
-
-                let opponent_nearby = owner_team_id.is_some_and(|team_id| {
-                    nearby_slice.iter().any(|&id| {
-                        context
-                            .players
-                            .by_id(id)
-                            .is_some_and(|p| p.team_id != team_id)
-                    })
-                });
-
-                if !opponent_nearby {
-                    self.ownership_duration += 1;
-                    return;
-                }
-            } else {
+            // Nobody from the other side at the ball: it stays his. That
+            // covers an owner still on his way to it — `Ball::move_to` no
+            // longer drags the ball to him, so a team-mate standing over it
+            // while he closes the last stride is not a reason to take it
+            // off him. An opponent over it is: he got there first.
+            if !opponent_nearby {
+                self.ownership_duration += 1;
+                return;
+            }
+            if !current_owner_nearby {
                 self.previous_owner = self.current_owner;
                 self.current_owner = None;
             }

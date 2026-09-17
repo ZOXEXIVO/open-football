@@ -374,8 +374,8 @@ impl Ball {
         /// 1.45 m before it will put it in his arms.
         const CARRY_HEIGHT: f32 = 1.15;
         /// How fast the ball closes the last stride onto the man picking it
-        /// up, in units per tick — `Ball::move_to`'s own `BALL_TRACK_SPEED`,
-        /// which is what carries a ball along with its owner.
+        /// up, in units per tick — the rate `Ball::move_to` brings a ball
+        /// into a keeper's gloves.
         ///
         /// ⚠ **The carry used to start by writing the ball onto him**, and
         /// [`AwaitedRestart::REACH`] is 12 u, so it started with a jump of

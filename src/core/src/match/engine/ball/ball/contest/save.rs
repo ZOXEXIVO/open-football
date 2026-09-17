@@ -1735,8 +1735,8 @@ impl Ball {
             // Stopping it where it was caught and letting the ordinary
             // owner-tracking draw it in is both continuous and true to what
             // happened: he takes it at full stretch and brings it into his
-            // body over the next tenth of a second (`Ball::move_to`,
-            // `BALL_TRACK_SPEED` and `CARRY_RATE`). Nobody can take it off
+            // body over the next tenth of a second (`Ball::move_to`'s glove
+            // rate and `CARRY_RATE`). Nobody can take it off
             // him meanwhile — `held_in_hands` is raised below and
             // `check_ball_ownership` returns on it — and `move_to` will not
             // disown it for the distance either, for the same reason.

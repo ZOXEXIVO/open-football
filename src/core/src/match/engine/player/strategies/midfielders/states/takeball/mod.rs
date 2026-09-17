@@ -11,16 +11,18 @@ pub struct MidfielderTakeBallState {}
 
 impl StateProcessingHandler for MidfielderTakeBallState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // WE own the ball → TakeBall is the wrong state. Drop to
-        // Running so the ball-on-foot paths can pick Pass / Dribble.
-        if ctx.player.has_ball(ctx) {
+        // His and at his feet → TakeBall is the wrong state. Drop to
+        // Running so the ball-on-foot paths can pick Pass / Dribble. His
+        // but beyond his feet is still a chase: nothing draws it to him
+        // (`Ball::move_to`), he has to get there.
+        if ctx.ball().at_my_feet() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
         }
-        // Ball got claimed. Running handles teammate/opponent ownership —
-        // hand off there instead of duplicating the dispatch here.
-        if ctx.ball().is_owned() {
+        // Somebody else has it. Running handles teammate/opponent
+        // ownership — hand off there instead of duplicating the dispatch.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

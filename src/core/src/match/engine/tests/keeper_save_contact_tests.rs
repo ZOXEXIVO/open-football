@@ -14,9 +14,12 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::result::Score;
+use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    MatchContext, MatchField, MatchPlayerCollection, PlayerSide, ShotTarget,
-    events::EventCollection,
+    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide, ShotTarget,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    events::{Event, EventCollection},
 };
 use nalgebra::Vector3;
 
@@ -228,5 +231,157 @@ fn a_ball_taken_at_full_stretch_is_drawn_in_rather_than_teleported() {
     assert!(
         arrived >= 8,
         "a three-metre gather took {arrived} ticks — that is a teleport with extra steps"
+    );
+}
+
+/// The Right side's keeper on `at`, everyone else out of the way. Returns
+/// `(id, team)`.
+fn right_keeper_alone_at(field: &mut MatchField, at: Vector3<f32>) -> (u32, u32) {
+    let keeper = field
+        .players
+        .iter_mut()
+        .find(|p| {
+            p.side == Some(PlayerSide::Right)
+                && p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| {
+            p.position = at;
+            (p.id, p.team_id)
+        })
+        .expect("the away side has a goalkeeper");
+    for player in field.players.iter_mut() {
+        if player.id != keeper.0 {
+            player.position = Vector3::new(60.0, 40.0, 0.0);
+        }
+    }
+    keeper
+}
+
+/// The tick the keeper ARRIVES in `Punching` — the one on which the state
+/// decides whether there is a contact left to make.
+fn punch_entry_tick(
+    field: &MatchField,
+    context: &MatchContext,
+    keeper_id: u32,
+) -> Option<StateChangeResult> {
+    let players = field.players.clone();
+    let tick_context = GameTickContext::new(field, &context.players);
+    let player = players
+        .iter()
+        .find(|p| p.id == keeper_id)
+        .expect("the keeper is on the field");
+    let ctx = StateProcessingContext {
+        in_state_time: 0,
+        player,
+        context,
+        tick_context: &tick_context,
+    };
+    GoalkeeperPunchingState::default().process(&ctx)
+}
+
+/// **A parry is ONE contact.**
+///
+/// The physics save resolves the shot and sends the spill on its way; the
+/// keeper is then put into `Punching` so that the parry is SEEN. That state
+/// rolls a fresh punch on the tick it is entered whenever a ball is within
+/// a fist's reach — and a spill that has just left his gloves at a metre a
+/// second always is. Off a recorded match: a ground shot spilled at 0.12 m
+/// was struck again on the same tick and looped 7 m into the air, 14 m
+/// back up the pitch, off a keeper who had already made his save.
+///
+/// The same ball off an opponent's boot is a delivery, and he may put a
+/// fist through that.
+#[test]
+fn the_punch_state_does_not_strike_a_ball_that_just_came_off_him() {
+    let (mut field, context) = kickoff();
+    let (keeper_id, keeper_team) =
+        right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
+    let tick = context.current_tick();
+
+    // The spill exactly as `try_save_shot` leaves it: a metre a second
+    // across the ground, off his hands, uncontrolled.
+    field.ball.position = Vector3::new(809.0, 243.0, 0.12);
+    field.ball.velocity = Vector3::new(-1.0, -0.5, 0.0);
+    field.ball.current_owner = None;
+    field.ball.previous_owner = Some(keeper_id);
+    field.ball.flags.in_flight_state = 10;
+    field.ball.record_touch(keeper_id, keeper_team, tick, false);
+
+    assert!(
+        punch_entry_tick(&field, &context, keeper_id).is_none(),
+        "the keeper struck his own spill a second time"
+    );
+
+    // Off an opponent, at head height: a ball he has yet to touch.
+    field.ball.position.z = 2.0;
+    field.ball.previous_owner = Some(110);
+    field.ball.record_touch(110, 1, tick, false);
+
+    assert!(
+        punch_entry_tick(&field, &context, keeper_id).is_some(),
+        "a delivery within a fist's reach was left alone"
+    );
+}
+
+/// **Nothing below his head is punched.** A ball at the waist is caught,
+/// gathered or dived on; the punch state had a ceiling and no floor, so a
+/// crowded box could have him fisting a ball off the turf.
+#[test]
+fn a_ball_below_his_head_is_not_punched() {
+    let (mut field, context) = kickoff();
+    let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
+    field.ball.position = Vector3::new(809.0, 243.0, 1.0);
+    field.ball.velocity = Vector3::new(-1.0, -0.5, 0.0);
+    field.ball.current_owner = None;
+    field.ball.previous_owner = Some(110);
+    field
+        .ball
+        .record_touch(110, 1, context.current_tick(), false);
+
+    assert!(
+        punch_entry_tick(&field, &context, keeper_id).is_none(),
+        "he fisted a ball at his waist"
+    );
+
+    field.ball.position.z = GoalkeeperPunchingState::FLOOR + 0.1;
+    assert!(
+        punch_entry_tick(&field, &context, keeper_id).is_some(),
+        "a ball at his head was left alone"
+    );
+}
+
+/// **A punch is a clearance, not a lob.** It leaves the fist nearer 40°
+/// than the 58° a 6-10 m apex over 15-25 m gave, which on screen was a
+/// ball popping straight up and dropping.
+#[test]
+fn a_punch_leaves_the_fist_flatter_than_it_climbs() {
+    let (mut field, context) = kickoff();
+    let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
+    field.ball.position = Vector3::new(809.0, 243.0, 2.0);
+    field.ball.velocity = Vector3::new(-1.0, -0.5, -0.05);
+    field.ball.current_owner = None;
+    field.ball.previous_owner = Some(110);
+    field
+        .ball
+        .record_touch(110, 1, context.current_tick(), false);
+
+    // The contact is a roll with at least a one-in-five chance; sixty
+    // entries without one would be a broken state, not bad luck.
+    let launch = (0..60)
+        .find_map(|_| {
+            let mut result = punch_entry_tick(&field, &context, keeper_id)?;
+            result.events.drain().find_map(|event| match event {
+                Event::PlayerEvent(PlayerEvent::ClearBall(_, velocity)) => Some(velocity),
+                _ => None,
+            })
+        })
+        .expect("sixty punch entries produced no contact");
+
+    // x/y in game units per tick, z in metres per tick: 1u = 0.125 m.
+    let across_metres = (launch.x * launch.x + launch.y * launch.y).sqrt() * 0.125;
+    let angle = launch.z.atan2(across_metres).to_degrees();
+    assert!(
+        (25.0..45.0).contains(&angle),
+        "the punch left the fist at {angle:.0} degrees: {launch:?}"
     );
 }

@@ -144,6 +144,10 @@ pub struct Ball {
     /// apex census wants to count. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub settled_vz: f32,
+    /// Diagnostic only: this fall's control is already in the census, so
+    /// the per-tick re-aim in `take_control_of_the_flight` books it once.
+    #[cfg(feature = "match-logs")]
+    pub control_noted: bool,
     /// The goalkeeper knock-chain currently open on this ball, if any —
     /// see [`knock_diag`]. Diagnostic only, and a property of the ball
     /// rather than of a keeper because a chain is a run of contacts with
@@ -796,6 +800,27 @@ impl Ball {
     /// [`Ball::settling_out_of_the_air`].
     pub const DECK: f32 = 0.1;
 
+    /// Inside this an owned ball is at its owner's feet and moves with him.
+    /// Beyond it the ball is still his, but he has to go and get it —
+    /// nothing draws a ball across the grass to a man.
+    ///
+    /// A quarter of a metre, and the snap onto him inside it is the whole
+    /// of what may move a ball to a man. Measured on recorded matches, a
+    /// half-metre radius doubled the reversals it was meant to remove —
+    /// the snap IS a reversal for a ball coming from behind him — so the
+    /// last stride is his to take, and the first touch
+    /// (`Ball::first_touch_toward`) is what brings an arriving ball in.
+    pub const AT_FEET: f32 = 2.0;
+
+    /// Is a ball at `ball` at the feet of a man standing at `man`? Planar,
+    /// so a keeper's held ball at chest height still counts.
+    #[inline]
+    pub fn at_feet(ball: Vector3<f32>, man: Vector3<f32>) -> bool {
+        let dx = ball.x - man.x;
+        let dy = ball.y - man.y;
+        dx * dx + dy * dy <= Self::AT_FEET * Self::AT_FEET
+    }
+
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
         let x = field_width / 2.0;
         let y = field_height / 2.0;
@@ -809,6 +834,8 @@ impl Ball {
             spin: Vector3::zeros(),
             #[cfg(feature = "match-logs")]
             settled_vz: 0.0,
+            #[cfg(feature = "match-logs")]
+            control_noted: false,
             #[cfg(feature = "match-logs")]
             knock_chain: None,
             #[cfg(feature = "match-logs")]

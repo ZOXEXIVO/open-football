@@ -1,4 +1,4 @@
-use crate::r#match::engine::ball::ball::HandlingVerdict;
+use crate::r#match::engine::ball::ball::{Ball, HandlingVerdict};
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{BallSide, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
@@ -229,6 +229,25 @@ impl<'b> BallOperationsImpl<'b> {
     #[inline]
     pub fn previous_owner_id(&self) -> Option<u32> {
         self.ctx.tick_context.ball.last_owner
+    }
+
+    /// Did the ball last come off THIS player uncontrolled — his own parry,
+    /// spill, block or fumbled claim? That contact is already made; whatever
+    /// he does next is its follow-through, not a fresh strike.
+    #[inline]
+    pub fn came_off_me(&self) -> bool {
+        self.ctx.tick_context.ball.rebounded_off == Some(self.ctx.player.id)
+    }
+
+    /// His AND at his feet. An owned ball beyond [`Ball::AT_FEET`] is one
+    /// he still has to go and collect.
+    #[inline]
+    pub fn at_my_feet(&self) -> bool {
+        self.owner_id() == Some(self.ctx.player.id)
+            && Ball::at_feet(
+                self.ctx.tick_context.positions.ball.position,
+                self.ctx.player.position,
+            )
     }
 
     /// Check if the current player has had stable possession long enough to make controlled actions
