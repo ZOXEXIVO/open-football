@@ -630,12 +630,9 @@ impl ShortlistPass {
                 // put a name in front of him that he has already answered.
                 // An emergency overrides him — a squad that cannot field a
                 // side takes who it can get.
-                if manager
-                    .filter(|coach| coach.id != 0)
-                    .is_some_and(|coach| {
-                        coach.affinity_for(r.player_id, date) <= DossierTuning::AFFINITY_VETO
-                    })
-                    && !fit.is_emergency()
+                if manager.filter(|coach| coach.id != 0).is_some_and(|coach| {
+                    coach.affinity_for(r.player_id, date) <= DossierTuning::AFFINITY_VETO
+                }) && !fit.is_emergency()
                 {
                     return None;
                 }

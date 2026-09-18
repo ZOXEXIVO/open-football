@@ -971,6 +971,7 @@ impl SimulatorData {
                         .map(|c| c.squad_status.clone())
                         .unwrap_or(PlayerSquadStatus::NotYetSet),
                     days_on_market: p.days_available(now).min(i16::MAX as i64) as i16,
+                    market_resignation: p.market_resignation(now),
                 }
             });
 

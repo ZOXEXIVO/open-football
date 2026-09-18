@@ -5,9 +5,7 @@ use chrono::NaiveDate;
 
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::TransferTrace;
-use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-};
+use crate::transfers::pipeline::{LoanOutReason, LoanOutStatus};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{Club, Person, PlayerStatusType, ReputationLevel, TransferItem};
@@ -23,6 +21,12 @@ pub(in crate::club::core) struct SquadDecision {
     pub team_idx: usize,
     pub player_id: u32,
     pub reason: &'static str,
+    /// What a loan would be FOR. Every loan route states its own, and it
+    /// travels with the candidate all the way to the borrower — the
+    /// minutes bar, the destination reach and the parent's wage subsidy
+    /// all read it. Meaningless on a transfer decision, where the i18n
+    /// `reason` is the whole story.
+    pub purpose: LoanOutReason,
 }
 
 impl SquadDecision {
@@ -49,6 +53,22 @@ impl SquadDecision {
             team_idx,
             player_id,
             reason,
+            purpose: LoanOutReason::Surplus,
+        }
+    }
+
+    /// A loan decision, with the purpose the route actually has in mind.
+    pub(in crate::club::core) fn loan(
+        team_idx: usize,
+        player_id: u32,
+        reason: &'static str,
+        purpose: LoanOutReason,
+    ) -> Self {
+        SquadDecision {
+            team_idx,
+            player_id,
+            reason,
+            purpose,
         }
     }
 }
@@ -80,7 +100,6 @@ impl Club {
         // Process loan recommendations
         for decision in loan_players {
             let (team_idx, player_id) = (decision.team_idx, decision.player_id);
-            let team_name = self.teams.teams[team_idx].name.clone();
 
             let loan_fee = if rep_multiplier > 0.0 {
                 let player_value = self.teams.teams[team_idx]
@@ -93,6 +112,7 @@ impl Club {
                 0.0
             };
 
+            let team_name = self.teams.teams[team_idx].name.clone();
             let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
                 Some(p) => p,
                 None => continue,
@@ -115,15 +135,19 @@ impl Club {
                 loan_fee
             );
 
-            self.transfer_plan
+            // The pathway owns the candidate. Every loan route dispatches
+            // here with its real purpose, so nothing downstream has to
+            // guess why the club is lending him out.
+            self.on_pathway_loan_staged(player_id, decision.purpose, date);
+            if let Some(candidate) = self
+                .transfer_plan
                 .loan_out_candidates
-                .push(LoanOutCandidate {
-                    player_id,
-                    reason: LoanOutReason::LackOfPlayingTime,
-                    status: LoanOutStatus::Listed,
-                    loan_fee,
-                    preferred_destination: LoanDestinationPreference::Any,
-                });
+                .iter_mut()
+                .find(|c| c.player_id == player_id)
+            {
+                candidate.status = LoanOutStatus::Listed;
+                candidate.loan_fee = loan_fee;
+            }
         }
 
         // Process transfer recommendations
@@ -144,24 +168,7 @@ impl Club {
                 None => continue,
             };
 
-            player.statuses.add(date, PlayerStatusType::Lst);
-            // The badge is the visible half of the decision; the contract
-            // flag is the durable half. The flag survives the listing
-            // pass's badge reconciliation, blocks renewal offers, and tells
-            // the pass this is a club decision to materialise without a
-            // second history row. Without it the badge was stripped the
-            // first time the pass ran, the renewal manager saw a clean
-            // player and re-signed him, and this audit listed him again
-            // every window.
-            if let Some(contract) = player.contract.as_mut() {
-                contract.is_transfer_listed = true;
-            }
-            player.decision_history.add(
-                date,
-                "dec_board_transfer_listed".to_string(),
-                decision.reason.to_string(),
-                "dec_decided_board".to_string(),
-            );
+            player.on_listed_by_club(decision.reason, date);
             // The board's own listing pass — including the wage-relief sale,
             // which arrives here tagged `dec_reason_wage_relief`. Every other
             // listing entry point reports itself to the funnel trace; without

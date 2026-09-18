@@ -10,6 +10,10 @@
 //! both feed a softening curve (the seller drops the asking price, the
 //! player relaxes his wage demand) as the failed weeks accumulate.
 //!
+//! The player brings his own clock to that curve: seasons without
+//! first-team football ([`FootballDrought`]) resign him to a step down
+//! before the market has declined him once.
+//!
 //! The market-exposure *scoring* lives in
 //! [`crate::transfers::scouting::exposure`]; this module owns only the
 //! durable state and the reason taxonomy, exactly as `free_agent_market`
@@ -18,8 +22,10 @@
 
 use chrono::{Duration, NaiveDate};
 
+use crate::club::player::StuckCareerScan;
+use crate::club::player::mind::CareerArc;
 use crate::club::player::player::Player;
-use crate::{PlayerSquadStatus, PlayerStatusType};
+use crate::{Person, PlayerSquadStatus, PlayerStatusType, TeamType};
 
 /// Statuses that advertise a signed player as available to the market.
 /// A player carrying any of these is "on the market" for the purposes of
@@ -128,7 +134,10 @@ impl AvailabilityBlockReason {
 /// 1.0 = fully resigned, he will consider any club that offers regular
 /// football. It is the player's own reading of the situation: weeks of
 /// silence after his club put him up for sale (or he asked to go), no
-/// place in the plans, scans that found no taker. The plausibility
+/// place in the plans, scans that found no taker — and, before any of
+/// that, the seasons he has already gone without football
+/// ([`FootballDrought`]), which lower his sights on the day he is
+/// listed rather than half a year later. The plausibility
 /// level gates, the personal-terms resistance, and the scouting realism
 /// band all consume it, so a benched player at a big club *gradually*
 /// lowers his sights toward clubs where he would actually play instead
@@ -168,14 +177,18 @@ impl MarketResignation {
 
     /// Pure resignation curve. `days_on_market` is time under an active
     /// availability status; `failed_scans` is the consecutive dry
-    /// circulation scans from [`AvailabilityMarketState`]. Continuous in
-    /// every axis — no cliffs.
+    /// circulation scans from [`AvailabilityMarketState`]; `drought` is
+    /// [`FootballDrought::score`], the same ramp already served on the
+    /// bench, so whichever clock has run further sets where he starts.
+    /// Continuous in every axis — no cliffs.
     pub fn compute(
         days_on_market: i64,
         squad_status: Option<&PlayerSquadStatus>,
         failed_scans: u16,
+        drought: f32,
     ) -> f32 {
-        let time = ((days_on_market as f32 - Self::GRACE_DAYS) / Self::RAMP_DAYS).clamp(0.0, 1.0);
+        let unsold = ((days_on_market as f32 - Self::GRACE_DAYS) / Self::RAMP_DAYS).clamp(0.0, 1.0);
+        let time = unsold.max(drought.clamp(0.0, 1.0));
         if time <= 0.0 {
             return 0.0;
         }
@@ -195,6 +208,77 @@ impl MarketResignation {
         let pace = (0.55 + 0.35 * urgency + 0.10 * scans).clamp(0.0, 1.0);
         let eased = time.powf(1.0 / pace.max(0.2));
         eased.clamp(0.0, 1.0)
+    }
+}
+
+/// Seasons without first-team football at this club, as the player
+/// himself counts them: the completed ones off the ledger
+/// ([`StuckCareerScan`], read through the squad he is registered with,
+/// so a B side's minutes do not count), and the one in progress off his
+/// live start share. What resigns a man to a step down before anyone
+/// has listed him — he has to play somewhere to be worth anything, to
+/// the club and to himself.
+#[derive(Debug, Clone, Copy)]
+pub struct FootballDrought {
+    pub stuck_years: u16,
+    /// Registered with the first team. Below it the live share is a B
+    /// side's football and says nothing about being picked.
+    pub in_first_team: bool,
+    pub starter_ratio: f32,
+    pub appearances_tracked: u8,
+    pub age: u8,
+}
+
+impl FootballDrought {
+    /// Full seasons without football that leave him ready for any club
+    /// that will play him.
+    const SEASONS_TO_RESIGN: f32 = 2.0;
+    /// Start share below which he is not being picked — the line the
+    /// transfer-desire pass draws for "breaking through".
+    const BENCHED_SHARE: f32 = 0.40;
+    /// Matches the start-share EMA needs before it is trusted at all.
+    const MIN_TRACKED_APPS: u8 = 6;
+    /// Tracked matches that make the season in progress a full one.
+    const SEASON_APPS: f32 = 30.0;
+    /// The age from which a season out of the first team starts to
+    /// count, and the age at which it counts in full — the years a boy
+    /// is still meant to be in an age-group side.
+    const YOUTH_FROM: f32 = 17.0;
+    const YOUTH_TO: f32 = 20.0;
+
+    pub fn read(player: &Player, today: NaiveDate) -> Self {
+        let squad_tier = player
+            .squad_standing_view
+            .map_or(TeamType::Main, |view| view.squad_tier);
+        FootballDrought {
+            stuck_years: StuckCareerScan::of_in_squad(player, today, squad_tier)
+                .map_or(0, |scan| scan.stuck_years),
+            in_first_team: matches!(squad_tier, TeamType::Main),
+            starter_ratio: player.happiness.starter_ratio,
+            appearances_tracked: player.happiness.appearances_tracked,
+            age: player.age(today),
+        }
+    }
+
+    /// 0..1. The season in progress is weighted by how much of it he has
+    /// sat through, so six quiet weeks at a new club say nothing; the
+    /// completed seasons count only while he is still not being picked —
+    /// a man who has claimed the shirt this year has nothing left to be
+    /// resigned about.
+    pub fn score(&self) -> f32 {
+        if self.appearances_tracked < Self::MIN_TRACKED_APPS {
+            return 0.0;
+        }
+        let sat_through = (self.appearances_tracked as f32 / Self::SEASON_APPS).clamp(0.0, 1.0);
+        let not_picked = if self.in_first_team {
+            (1.0 - self.starter_ratio / Self::BENCHED_SHARE).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let grown = ((self.age as f32 - Self::YOUTH_FROM) / (Self::YOUTH_TO - Self::YOUTH_FROM))
+            .clamp(0.0, 1.0);
+        let seasons = not_picked * sat_through * (self.stuck_years as f32 + 1.0);
+        (grown * seasons / Self::SEASONS_TO_RESIGN).clamp(0.0, 1.0)
     }
 }
 
@@ -322,16 +406,30 @@ impl Player {
     }
 
     /// Live read of the player's [`MarketResignation`] curve. Non-zero
-    /// only while he is genuinely on the permanent market — listed (`Lst`)
-    /// or formally requesting out (`Req`); a merely unhappy or loan-listed
-    /// player keeps his full expectations for a permanent move. The days
-    /// anchor is his earliest active availability status, so a long-
-    /// unsettled player who is then listed resigns from where his sit
-    /// actually began, not from the paperwork date.
+    /// while he is genuinely on the permanent market — listed (`Lst`) or
+    /// formally requesting out (`Req`) — or while his own football has
+    /// dried up ([`FootballDrought`]); a merely unhappy or loan-listed
+    /// player who is still being picked keeps his full expectations for
+    /// a permanent move. The days anchor is his earliest active
+    /// availability status, so a long-unsettled player who is then
+    /// listed resigns from where his sit actually began, not from the
+    /// paperwork date.
     pub fn market_resignation(&self, today: NaiveDate) -> f32 {
         let listed = self.statuses.has(PlayerStatusType::Lst);
         let requested = self.statuses.has(PlayerStatusType::Req);
-        if !listed && !requested {
+        let drought = self.football_drought(today);
+        // A man who has DECIDED to drop a level, or to go home and
+        // finish there, has already lowered his sights — that is what
+        // the arc is. Without this a `Loa`-only player accrued no
+        // resignation at all, so the one population whose whole plan is
+        // a step down was the one the step-down model could not see.
+        let plan_resignation = match self.mind.career.plan.map(|plan| plan.arc) {
+            Some(CareerArc::StepDownToPlay) | Some(CareerArc::FinishAtHome) => {
+                self.mind.career.plan.map(|p| p.strength).unwrap_or(0.0)
+            }
+            _ => 0.0,
+        };
+        if !listed && !requested && drought <= 0.0 && plan_resignation <= 0.0 {
             return 0.0;
         }
         let failed_scans = self
@@ -342,7 +440,13 @@ impl Player {
             self.days_available(today),
             self.contract.as_ref().map(|c| &c.squad_status),
             failed_scans,
+            drought.max(plan_resignation),
         )
+    }
+
+    /// [`FootballDrought::score`] for this player today.
+    pub fn football_drought(&self, today: NaiveDate) -> f32 {
+        FootballDrought::read(self, today).score()
     }
 
     /// Record that a circulation scan found no plausible taker, stamping
@@ -365,8 +469,9 @@ mod tests {
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills,
+        PlayerSkills, PlayerStatCompetitionKind, PlayerStatLedgerEntry, PlayerStatistics,
     };
+    use chrono::Datelike;
 
     /// Fixtures for the availability-market state tests. Wrapped in a unit
     /// struct per project convention (no free functions).
@@ -394,10 +499,14 @@ mod tests {
         }
 
         fn player(today: NaiveDate) -> Player {
+            Self::player_aged(today, 26)
+        }
+
+        fn player_aged(today: NaiveDate, age: i32) -> Player {
             let mut attrs = PlayerAttributes::default();
             attrs.current_ability = 130;
             attrs.potential_ability = 140;
-            let birth = today.checked_sub_signed(Duration::days(26 * 365)).unwrap();
+            let birth = NaiveDate::from_ymd_opt(today.year() - age, 1, 1).unwrap();
             PlayerBuilder::new()
                 .id(1)
                 .full_name(FullName::new("Test".to_string(), "Player".to_string()))
@@ -414,6 +523,47 @@ mod tests {
                 .player_attributes(attrs)
                 .build()
                 .unwrap()
+        }
+
+        fn league_season(year: u16, starts: u16) -> PlayerStatLedgerEntry {
+            PlayerStatLedgerEntry {
+                seq_id: 0,
+                season_start_year: year,
+                team_slug: "t".into(),
+                team_name: "T".into(),
+                team_reputation: 6_000,
+                league_slug: "l".into(),
+                league_name: "L".into(),
+                competition_kind: PlayerStatCompetitionKind::League,
+                competition_slug: "l".into(),
+                is_loan: false,
+                transfer_fee: None,
+                coverage_days: None,
+                spell_end: None,
+                statistics: PlayerStatistics {
+                    played: starts,
+                    ..Default::default()
+                },
+            }
+        }
+
+        /// A homegrown man who has sat through this season, with `stuck`
+        /// completed seasons of the same behind him and a full one before
+        /// those.
+        fn benched(today: NaiveDate, age: i32, stuck: u16) -> Player {
+            let mut p = Self::player_aged(today, age);
+            p.happiness.starter_ratio = 0.0;
+            p.happiness.appearances_tracked = 40;
+            let last = today.year() as u16 - 1;
+            for year in (last + 1 - stuck)..=last {
+                p.statistics_history
+                    .season_ledger
+                    .push(Self::league_season(year, 1));
+            }
+            p.statistics_history
+                .season_ledger
+                .push(Self::league_season(last - stuck, 25));
+            p
         }
     }
 
@@ -537,13 +687,106 @@ mod tests {
     fn resignation_scales_with_role_urgency_and_dry_scans() {
         // Pure-core check: an unwanted player resigns faster than a listed
         // key man on the same clock, and dry scans accelerate both.
-        let unwanted = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 0);
-        let key_man = MarketResignation::compute(200, Some(&PlayerSquadStatus::KeyPlayer), 0);
+        let unwanted = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 0, 0.0);
+        let key_man = MarketResignation::compute(200, Some(&PlayerSquadStatus::KeyPlayer), 0, 0.0);
         assert!(unwanted > key_man);
-        let scanned = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 12);
+        let scanned = MarketResignation::compute(200, Some(&PlayerSquadStatus::NotNeeded), 12, 0.0);
         assert!(scanned > unwanted);
         // Fully saturated case stays bounded.
-        assert!(MarketResignation::compute(2000, Some(&PlayerSquadStatus::NotNeeded), 30) <= 1.0);
+        assert!(
+            MarketResignation::compute(2000, Some(&PlayerSquadStatus::NotNeeded), 30, 0.0) <= 1.0
+        );
+    }
+
+    /// The force behind a sale: a man who has not played does not need a
+    /// listing, or months unsold, before he will drop a level to play.
+    #[test]
+    fn seasons_without_football_lower_his_sights_before_any_listing() {
+        let today = AvailabilityFixtures::d(2026, 6, 15);
+        let stuck = AvailabilityFixtures::benched(today, 26, 2);
+        assert!(!stuck.is_market_available());
+        let resigned = stuck.market_resignation(today);
+        assert!(resigned >= 0.99, "two seasons on the bench: {resigned}");
+
+        // The same seasons behind a man now starting every week resign
+        // him to nothing: he has claimed the shirt.
+        let mut claimed = AvailabilityFixtures::benched(today, 26, 2);
+        claimed.happiness.starter_ratio = 0.6;
+        assert_eq!(claimed.market_resignation(today), 0.0);
+
+        // His first season on the bench takes him half the way.
+        let first = AvailabilityFixtures::benched(today, 26, 0);
+        let mid = first.market_resignation(today);
+        assert!(mid > 0.3 && mid < 0.6, "{mid}");
+    }
+
+    /// A boy in an age-group side is where he belongs; the same season
+    /// starts to count as he outgrows it.
+    #[test]
+    fn a_youth_season_counts_only_once_he_has_outgrown_the_age_group() {
+        let today = AvailabilityFixtures::d(2026, 6, 15);
+        let boy = AvailabilityFixtures::benched(today, 17, 0);
+        assert_eq!(boy.market_resignation(today), 0.0);
+        let older = AvailabilityFixtures::benched(today, 19, 0);
+        let grown = AvailabilityFixtures::benched(today, 21, 0);
+        assert!(older.market_resignation(today) > 0.0);
+        assert!(grown.market_resignation(today) > older.market_resignation(today));
+    }
+
+    #[test]
+    fn drought_needs_a_season_sat_through_by_a_man_not_being_picked() {
+        let base = FootballDrought {
+            stuck_years: 0,
+            in_first_team: true,
+            starter_ratio: 0.0,
+            appearances_tracked: 40,
+            age: 25,
+        };
+        assert_eq!(
+            FootballDrought {
+                appearances_tracked: 3,
+                ..base
+            }
+            .score(),
+            0.0,
+            "six quiet weeks say nothing"
+        );
+        assert!(
+            FootballDrought {
+                appearances_tracked: 12,
+                ..base
+            }
+            .score()
+                < base.score()
+        );
+        assert!((base.score() - 0.5).abs() < 1e-6, "{}", base.score());
+        assert_eq!(
+            FootballDrought {
+                stuck_years: 1,
+                ..base
+            }
+            .score(),
+            1.0
+        );
+        assert_eq!(
+            FootballDrought {
+                starter_ratio: 0.4,
+                ..base
+            }
+            .score(),
+            0.0,
+            "a man being picked has no drought"
+        );
+        assert_eq!(
+            FootballDrought {
+                starter_ratio: 1.0,
+                in_first_team: false,
+                ..base
+            }
+            .score(),
+            0.5,
+            "a B side's starts are not first-team football"
+        );
     }
 
     #[test]

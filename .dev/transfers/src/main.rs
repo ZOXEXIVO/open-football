@@ -55,6 +55,33 @@
 //!                                 in the U20 is a different world, not a
 //!                                 different policy. The baseline arm for
 //!                                 the loan asset census.
+//!   * `OF_LOAN_AGREEMENT_OFF`   — the LOAN AGREEMENT: the four continuous
+//!                                 terms (parent willingness, borrower
+//!                                 appetite, player consent, affordability)
+//!                                 that replaced the conjunctive gate stack.
+//!                                 Disarmed, the destination funnel is the
+//!                                 HEAD cluster again — room, minutes, the
+//!                                 level floors and the guard's verdict, each
+//!                                 a hard `continue`. The baseline arm for
+//!                                 every loan volume table.
+//!   * `OF_LOAN_ROUTE_OFF`      — the ROUTE half of a loan's geography: the
+//!                                 corridor between the lending league and
+//!                                 the borrowing one. Disarmed, a loan is
+//!                                 priced on the player's passport alone, and
+//!                                 a J-League club borrows a Brazilian from
+//!                                 Russia as readily as from Brazil. The
+//!                                 baseline arm for the LOAN routes table.
+//!   * `OF_CORRIDOR_FLOOR_OFF`   — the corridor FLOOR: a pair a card names
+//!                                 never reads below its own derived prior.
+//!                                 Disarmed, a card weight replaces the prior,
+//!                                 and since every weight is normalised by its
+//!                                 list's maximum that inverts the model on
+//!                                 two thirds of the pairs any card names.
+//!                                 Moves the PERMANENT market and the
+//!                                 free-agent and scouting layers, not just
+//!                                 loans — read `corridor_overlap`, the
+//!                                 foreign-share table and free-agent
+//!                                 visibility across it.
 //!
 //! `OF_TRACE_PLAYER=<id>` prints one funnel line per stage for that
 //! player, to stderr.
@@ -4147,7 +4174,7 @@ struct HarnessUsage;
 
 impl HarnessUsage {
     /// Env switches, in the order the design's Part III runs them.
-    const ARMS: [(&'static str, &'static str); 4] = [
+    const ARMS: [(&'static str, &'static str); 6] = [
         (
             "OF_HOME_REACH_OFF",
             "a club sees only what its own scouts cover — no compatriot reach",
@@ -4164,6 +4191,16 @@ impl HarnessUsage {
             "OF_LOAN_GUARD_OFF",
             "no loan asset guard: destinations priced as they were before the \
              Yamal campaign (placement / promotion / label fixes stay on)",
+        ),
+        (
+            "OF_LOAN_ROUTE_OFF",
+            "a loan is priced on the player's passport alone — no corridor \
+             between the lending league and the borrowing one",
+        ),
+        (
+            "OF_CORRIDOR_FLOOR_OFF",
+            "a card weight replaces the derived prior instead of raising it, \
+             so naming a pair can make it less of a corridor than silence",
         ),
     ];
 
@@ -4467,6 +4504,23 @@ impl CorridorCensus {
     /// Import capacity below which a league is not one that signs names
     /// from another continent.
     const LOW_CAPACITY: f32 = 0.2;
+    /// Corridor bands a cross-border loan's ROUTE falls into, strongest
+    /// first. Set from the shipped cards rather than picked: Argentina →
+    /// Spain and Brazil → Portugal read 1.000, Russia → Turkey 0.408, Spain →
+    /// Portugal 0.245, England → the Eredivisie 0.183, Italy → Romania 0.067
+    /// — the weakest route real loans actually use. Below that last figure
+    /// are the pairs no loan should join: Russia → Japan 0.085, Argentina →
+    /// Indonesia 0.082, Turkey → Japan 0.037, England → Japan 0.023.
+    const ROUTE_BANDS: [f32; 3] = [0.30, 0.15, 0.06];
+    const ROUTE_BAND_LABELS: [&'static str; 4] = [
+        ">= 0.30  worked route",
+        "0.15-0.30  known",
+        "0.06-0.15  thin",
+        "<  0.06  no business",
+    ];
+    /// Corridor below which a route is worth naming in the census by volume.
+    /// The band boundary, so the table and the bands cannot disagree.
+    const THIN_LOAN_ROUTE: f32 = Self::ROUTE_BANDS[2];
     /// Reputation step up that makes a signing a "step up", and the step
     /// down that makes the exit a dump.
     const STEP_UP: i32 = 1500;
@@ -4481,6 +4535,7 @@ impl CorridorCensus {
         println!("\n== corridor census (day {day}) ==");
         Self::print_matrix(data, &moves, &countries);
         Self::print_kind_matrix(data, &moves, &countries);
+        Self::print_loan_routes(data, &moves, &countries);
         Self::print_returning_flow(&moves, &countries);
         Self::print_implausible(data, &moves, &countries);
         Self::print_import_capacity(data, &countries);
@@ -4791,6 +4846,120 @@ impl CorridorCensus {
             "  WORLD cross-border moves: {}   [free overlap should sit AT OR ABOVE permanent]",
             world_line.join("  "),
         );
+    }
+
+    /// Where a borrowed player's PARENT club plays.
+    ///
+    /// Every table above this one reads a move as `nationality → destination`,
+    /// and for a purchase that is the whole geography. A LOAN is business
+    /// between two clubs that outlives the signature, so the route the passport
+    /// cannot see — which league lent him — is the half that decides whether it
+    /// happened. Read on the passport alone, a Brazilian borrowed from Zenit
+    /// and a Brazilian borrowed from Flamengo are the same row on Japan's card,
+    /// and a J-League side taking a season-long loan from the RPL registers as
+    /// textbook geography. This is the view that tells them apart.
+    fn print_loan_routes(
+        data: &SimulatorData,
+        moves: &[CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        let mut routes: HashMap<(u32, u32), usize> = HashMap::new();
+        let mut bands = [0usize; Self::ROUTE_BANDS.len() + 1];
+        let mut third_bands = [0usize; Self::ROUTE_BANDS.len() + 1];
+        let mut total = 0usize;
+        let mut going_home = 0usize;
+        let mut third_country = 0usize;
+        for m in moves.iter().filter(|m| m.kind == MoveGeographyKind::Loan) {
+            if !countries.contains_key(&m.from_country) || !countries.contains_key(&m.to_country) {
+                continue;
+            }
+            total += 1;
+            *routes.entry((m.from_country, m.to_country)).or_default() += 1;
+            // Home is the one cross-border loan route that answers to the
+            // player rather than to the two leagues, so it is never off-route
+            // however little business the two do — and counting it in the
+            // bands below would read a Brazilian leaving Russia for Brazil as
+            // the Russia → Brazil corridor, which is not what happened.
+            if m.nationality == m.to_country {
+                going_home += 1;
+                continue;
+            }
+            let route =
+                MarketAffinity::corridor_strength(&data.market_map, m.from_country, m.to_country);
+            let band = Self::ROUTE_BANDS
+                .iter()
+                .position(|bar| route >= *bar)
+                .unwrap_or(Self::ROUTE_BANDS.len());
+            bands[band] += 1;
+            // The THIRD-COUNTRY cohort: he is not from the league lending him
+            // and not going home, so the lender's own corridor is the only
+            // thing that put these two clubs in a room. An Argentine leaving
+            // Argentina is his own country's export whatever the destination;
+            // a Brazilian leaving RUSSIA is Russia's business with the
+            // destination, and nothing about his passport says the two
+            // leagues have ever spoken. The aggregate above is dominated by
+            // the first kind and hides the second entirely.
+            if m.nationality != m.from_country {
+                third_country += 1;
+                third_bands[band] += 1;
+            }
+        }
+
+        println!("\n-- LOAN routes: the league that LENT him, not his passport --");
+        println!(
+            "  cross-border loans: {total}   of them going home: {going_home} ({:.1}%)",
+            Self::share(going_home, total) * 100.0,
+        );
+        // Continents are the WRONG axis here and the first cut of this table
+        // used them: Argentina → Spain and Brazil → Portugal are both
+        // cross-continent and both the most ordinary loans in football. The
+        // corridor is the axis, and the bottom band is the finding.
+        println!("  the rest, by the corridor between the two leagues:");
+        for (i, label) in Self::ROUTE_BAND_LABELS.iter().enumerate() {
+            println!(
+                "    {label:<28} {:>5} ({:.1}%)",
+                bands[i],
+                Self::share(bands[i], total - going_home) * 100.0,
+            );
+        }
+        println!(
+            "  of those, THIRD-COUNTRY (lent by a league he is not from):              {third_country} ({:.1}%)",
+            Self::share(third_country, total - going_home) * 100.0,
+        );
+        for (i, label) in Self::ROUTE_BAND_LABELS.iter().enumerate() {
+            println!(
+                "    {label:<28} {:>5} ({:.1}%)",
+                third_bands[i],
+                Self::share(third_bands[i], third_country) * 100.0,
+            );
+        }
+        println!("    [this cohort is what OF_LOAN_ROUTE_OFF moves]");
+
+        let mut ranked: Vec<((u32, u32), usize)> = routes.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let line = |(from, to): &(u32, u32), count: &usize| {
+            println!(
+                "    {:>3} -> {:<3} {count:>5} loans   corridor {:.3}",
+                Self::code(countries, *from),
+                Self::code(countries, *to),
+                MarketAffinity::corridor_strength(&data.market_map, *from, *to),
+            );
+        };
+        println!("  busiest routes:");
+        for (pair, count) in ranked.iter().take(Self::TOP_DESTINATIONS) {
+            line(pair, count);
+        }
+        println!("  busiest routes the two leagues do not work:");
+        for (pair, count) in ranked
+            .iter()
+            .filter(|(pair, _)| {
+                MarketAffinity::corridor_strength(&data.market_map, pair.0, pair.1)
+                    < Self::THIN_LOAN_ROUTE
+            })
+            .take(Self::TOP_DESTINATIONS)
+        {
+            line(pair, count);
+        }
     }
 
     /// How readily each country's clubs sign names from outside their own

@@ -15,10 +15,12 @@ use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
 
 use crate::club::player::language::LanguageProfile;
-use crate::club::player::mind::GoalKind;
+use crate::club::player::mind::{GoalKind, MindClock};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::loan::agreement::LoanMoney;
+use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::pipeline::LoanDestinationPreference;
 use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
@@ -237,6 +239,15 @@ impl PlayerView {
                 .pressure_of(GoalKind::StayAtThisClub)
                 .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
                 .clamp(0.0, 1.0),
+            // The parent's own side of a loan, staged where his club is
+            // still in scope — a borrowing country cannot read any of
+            // the three from its own borrow.
+            loan_willingness: LoanAssetGuard::willingness_for(club, player, date),
+            career_plan: player.mind.career.plan_view(MindClock::day(date)),
+            parent_subsidy: LoanMoney::parent_desire(
+                player.pathway_stage(),
+                player.plan.as_ref().and_then(|p| p.loan_purpose),
+            ),
             player_name: player.full_name.to_string(),
             club_name: club.name.clone(),
             position: player.position(),

@@ -13,9 +13,11 @@
 
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin, GoalStatus};
-use super::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEpisode};
+use super::organs::memory::{ActorRef, EpisodeKind, EpochDay, FactClaim, MindEpisode};
+use super::plan::{CareerArc, CareerPlan, CareerPlanView, CareerPlanner, PlanStage};
 use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
+use crate::club::player::happiness::LoanSpellVerdict;
 
 /// Where a player is in his working life. Held rather than derived, so
 /// it can lag the calendar — which is how people actually experience
@@ -80,6 +82,9 @@ pub struct CareerMind {
     level_slow_x10: u16,
     /// Weeks he has judged himself to be standing still. Saturates.
     pub stagnant_weeks: u8,
+    /// The arc he is living out, and the deadline he gave it. One at a
+    /// time — see [`CareerPlan`].
+    pub plan: Option<CareerPlan>,
 }
 
 impl CareerMind {
@@ -202,6 +207,11 @@ impl SubMind for CareerMind {
         if by_age > self.stage {
             self.stage = by_age;
         }
+
+        // The arc, before the wants. Everything below forms goals; the
+        // plan is what orders them, and it pushes its own goal on the
+        // stack so the two can never disagree about where he is going.
+        self.consider_his_plan(view, organs);
 
         // ── The end of it ───────────────────────────────────────
         if self.is_winding_down() {
@@ -606,6 +616,285 @@ impl CareerMind {
     }
 }
 
+impl CareerMind {
+    /// Days a plan holds before it is reviewed when nothing about it set
+    /// a deadline of its own.
+    const PLAN_REVIEW_DAYS: u16 = CareerPlan::DEFAULT_REVIEW_DAYS;
+
+    /// The arc, reviewed and re-formed.
+    ///
+    /// Three things in order, and the order is the design: a deadline
+    /// that has arrived is answered before anything new is considered; a
+    /// live plan pushes its own goal onto the stack; and only then does
+    /// a rival arc get a chance to displace it — by a clear margin,
+    /// because a plan that changes every time a week goes badly is not
+    /// a plan.
+    fn consider_his_plan(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        let s = view.situation;
+        let today = view.today();
+        let runway = s.career_runway();
+        let at_home = !s.is_abroad;
+        let home_desire = organs.goals.pressure_of(GoalKind::GoHome);
+
+        if let Some(plan) = self.plan {
+            if CareerPlanner::is_answered(&plan, s) {
+                self.plan = None;
+            } else if plan.review_due(today) {
+                self.plan = CareerPlanner::review(&plan, s, today);
+            }
+        }
+
+        let candidate = CareerPlanner::arc_for(s, home_desire);
+        match (self.plan, candidate) {
+            (Some(current), Some((arc, _, strength))) if current.arc == arc => {
+                // The same circumstances, still there. They harden it.
+                if let Some(plan) = self.plan.as_mut() {
+                    plan.strength = plan.strength.max(strength);
+                }
+            }
+            (Some(current), Some((arc, origin, strength)))
+                if strength > current.strength + CareerPlan::SWITCH_MARGIN =>
+            {
+                self.plan = Some(CareerPlan::new(
+                    arc,
+                    origin,
+                    strength,
+                    today,
+                    Self::PLAN_REVIEW_DAYS,
+                    runway,
+                    at_home,
+                ));
+            }
+            (None, Some((arc, origin, strength))) => {
+                self.plan = Some(CareerPlan::new(
+                    arc,
+                    origin,
+                    strength,
+                    today,
+                    Self::PLAN_REVIEW_DAYS,
+                    runway,
+                    at_home,
+                ));
+            }
+            _ => {}
+        }
+
+        let Some(plan) = self.plan else {
+            return;
+        };
+        // The plan is the arc; the goal is how loudly he is living it.
+        // Pushing it here is what keeps the two from ever disagreeing,
+        // and it is the only write the plan makes to the stack.
+        let goal = Self::goal_for(plan.arc);
+        organs
+            .goals
+            .pursue(goal, plan.origin, GoalEvidence::EMPTY, plan.strength, today);
+        organs
+            .goals
+            .set_urgency(goal, plan.deadline_pressure(today).max(s.career_spent()));
+
+        // …and the ladder that want has climbed IS how far along the
+        // arc he is. A plan does not need a second escalation model.
+        let stage = match organs.goals.status_of(goal) {
+            GoalStatus::Voiced | GoalStatus::Pressing => PlanStage::Asking,
+            GoalStatus::Active => PlanStage::Committed,
+            _ => PlanStage::Forming,
+        };
+        if let Some(plan) = self.plan.as_mut() {
+            plan.escalate(stage);
+            // Whatever rung the want is at, a man who is actually away
+            // is acting on it.
+            if s.is_on_loan && plan.arc == CareerArc::ProveOnLoan {
+                plan.escalate(PlanStage::Acting);
+            }
+        }
+    }
+
+    /// The want each arc is lived through. One-to-one, so the arc is
+    /// always legible in the goal stack and the escalation ladder the
+    /// mind already has is the plan's own.
+    fn goal_for(arc: CareerArc) -> GoalKind {
+        match arc {
+            CareerArc::BreakThroughHere => GoalKind::WinBackMyPlace,
+            CareerArc::ProveOnLoan => GoalKind::GoOutOnLoan,
+            CareerArc::ClaimMyPlace => GoalKind::ProveMyselfAtMyParentClub,
+            CareerArc::StepUp => GoalKind::StepUpToABiggerClub,
+            CareerArc::StepDownToPlay => GoalKind::PlayFirstTeamFootball,
+            CareerArc::SettleAtMyLevel => GoalKind::StayAtThisClub,
+            CareerArc::FinishAtHome => GoalKind::GoHome,
+            CareerArc::StayAndLead => GoalKind::BecomeAClubLegend,
+        }
+    }
+
+    /// A spell has ended and the parent has read it. The arc answers
+    /// the verdict rather than waiting for its own deadline — this is
+    /// the milestone the plan exists for.
+    pub fn on_loan_spell_reviewed(
+        &mut self,
+        verdict: LoanSpellVerdict,
+        runway: f32,
+        at_home: bool,
+        today: EpochDay,
+    ) {
+        let Some(plan) = self.plan else {
+            // He went out without a plan of his own. Coming home with a
+            // record IS one.
+            if verdict.is_positive() {
+                self.plan = Some(CareerPlan::new(
+                    CareerArc::ClaimMyPlace,
+                    GoalOrigin::SelfDrive,
+                    0.5,
+                    today,
+                    CareerPlan::CLAIM_REVIEW_DAYS,
+                    runway,
+                    at_home,
+                ));
+            }
+            return;
+        };
+        self.plan = Some(CareerPlanner::after_loan(
+            &plan, verdict, runway, at_home, today,
+        ));
+    }
+
+    /// He has moved. Whatever arc he was living out was about a club he
+    /// no longer plays for — a claim on a shirt somebody else now wears,
+    /// a step up he has just taken — so it resolves, and the next weekly
+    /// think forms one from where he actually is.
+    ///
+    /// **A loan return is not this.** He comes back to the club that
+    /// owns him, the plan is the thing that carried him through the
+    /// spell, and its milestone is the verdict rather than the move.
+    pub fn on_club_change(&mut self) {
+        self.plan = None;
+    }
+
+    /// The plan he is carrying, flattened for everything outside the
+    /// mind.
+    #[inline]
+    pub fn plan_view(&self, today: EpochDay) -> CareerPlanView {
+        self.plan
+            .as_ref()
+            .map(|plan| CareerPlanView::of(plan, today))
+            .unwrap_or_default()
+    }
+}
+
+impl CareerMind {
+    /// What a career says about a decision.
+    ///
+    /// Called through [`SubMind::weigh`]; kept here so the deliberation
+    /// rules sit beside the state they read.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::JoinClub(club_id) => {
+                let club = ActorRef::club(club_id);
+
+                // The ten-year return, and the whole point of the memory
+                // organ: a player offered his old club is not choosing
+                // between two strangers. What he made of the place lasts
+                // long after the episodes that taught it to him.
+                let broke_through = organs.memory.believes(FactClaim::BrokeThroughHere, club);
+                let won_everything = organs.memory.believes(FactClaim::WonEverythingHere, club);
+                let sold_against_will = organs
+                    .memory
+                    .believes(FactClaim::WasSoldAgainstMyWill, club);
+                let discarded = organs.memory.believes(FactClaim::DiscardedMe, club);
+                let never_played = organs.memory.believes(FactClaim::NeverPlayedHere, club);
+
+                if broke_through > 0.1 || won_everything > 0.1 {
+                    reasons.push(
+                        GoalKind::PlayForMyBoyhoodClub,
+                        broke_through.max(won_everything),
+                    );
+                }
+                if sold_against_will > 0.1 {
+                    // Not a refusal. A grudge against a club he made his
+                    // name at is an argument he has with himself, and
+                    // plenty of players go back anyway.
+                    reasons.push(GoalKind::LeaveThisClub, -sold_against_will * 0.7);
+                }
+                if discarded > 0.1 || never_played > 0.1 {
+                    reasons.push(
+                        GoalKind::PlayFirstTeamFootball,
+                        -discarded.max(never_played),
+                    );
+                }
+
+                // And what he currently wants out of where he is.
+                let step_up = organs.goals.pressure_of(GoalKind::StepUpToABiggerClub);
+                let challenge = organs.goals.pressure_of(GoalKind::FindANewChallenge);
+                if step_up > 0.1 {
+                    reasons.push(GoalKind::StepUpToABiggerClub, step_up);
+                }
+                if challenge > 0.1 {
+                    reasons.push(GoalKind::FindANewChallenge, challenge);
+                }
+            }
+
+            MindOption::RequestTransfer => {
+                let wants_out = organs.goals.wants_to_leave();
+                if wants_out > 0.1 {
+                    reasons.push(GoalKind::LeaveThisClub, wants_out);
+                }
+                // Wanting to get better is an argument for moving only
+                // once the two rungs below it have gone unanswered —
+                // which is what having them as separate wants buys.
+                let coach = organs.goals.pressure_of(GoalKind::WorkWithABetterCoach);
+                if coach > 0.5 {
+                    reasons.push(GoalKind::WorkWithABetterCoach, coach * 0.6);
+                }
+            }
+
+            MindOption::StayAndFight => {
+                if self.improvement() > 0.1 {
+                    // Whatever else is wrong, he is getting better here.
+                    reasons.push(GoalKind::KeepImproving, self.improvement());
+                }
+                let stalled = organs.goals.pressure_of(GoalKind::KeepImproving);
+                if stalled > 0.3 {
+                    reasons.push(GoalKind::KeepImproving, -stalled * 0.5);
+                }
+            }
+
+            MindOption::SignContract => {
+                // A man who has decided to go does not sign on. The loan
+                // want is left out on purpose: a club re-signs a boy and
+                // then lends him, and he agrees to both.
+                let wants_out = [
+                    GoalKind::LeaveThisClub,
+                    GoalKind::BeAllowedToLeave,
+                    GoalKind::StepUpToABiggerClub,
+                    GoalKind::FindANewChallenge,
+                ]
+                .into_iter()
+                .map(|kind| organs.goals.pressure_of(kind))
+                .fold(0.0f32, f32::max);
+                if wants_out > 0.1 {
+                    reasons.push(GoalKind::LeaveThisClub, -wants_out);
+                }
+            }
+
+            MindOption::Retire => {
+                let winding_down = organs.goals.pressure_of(GoalKind::RetireOnMyTerms);
+                if winding_down > 0.1 {
+                    reasons.push(GoalKind::RetireOnMyTerms, winding_down);
+                }
+                // A man still winning things does not stop.
+                if self.honours > 0 && !self.is_winding_down() {
+                    reasons.push(GoalKind::WinATrophy, -0.5);
+                }
+            }
+
+            _ => {}
+        }
+
+        reasons
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::MindTickContext;
@@ -942,119 +1231,44 @@ mod tests {
         };
         assert_eq!(view.today(), MindClock::day(tick.today));
     }
-}
+    #[test]
+    fn a_loan_return_keeps_the_arc_and_the_verdict_decides_it() {
+        let mut mind = CareerMind::default();
+        let day = MindClock::day(tick().today);
+        mind.plan = Some(CareerPlan::new(
+            CareerArc::ProveOnLoan,
+            GoalOrigin::Survival,
+            0.6,
+            day,
+            CareerPlan::DEFAULT_REVIEW_DAYS,
+            0.8,
+            true,
+        ));
 
-impl CareerMind {
-    /// What a career says about a decision.
-    ///
-    /// Called through [`SubMind::weigh`]; kept here so the deliberation
-    /// rules sit beside the state they read.
-    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
+        mind.on_loan_spell_reviewed(LoanSpellVerdict::Standout, 0.8, true, day + 300);
 
-        match option {
-            MindOption::JoinClub(club_id) => {
-                let club = ActorRef::club(club_id);
+        let plan = mind
+            .plan
+            .expect("the arc survives the drive home by construction");
+        assert_eq!(plan.arc, CareerArc::ClaimMyPlace);
+    }
 
-                // The ten-year return, and the whole point of the memory
-                // organ: a player offered his old club is not choosing
-                // between two strangers. What he made of the place lasts
-                // long after the episodes that taught it to him.
-                let broke_through = organs.memory.believes(FactClaim::BrokeThroughHere, club);
-                let won_everything = organs.memory.believes(FactClaim::WonEverythingHere, club);
-                let sold_against_will = organs
-                    .memory
-                    .believes(FactClaim::WasSoldAgainstMyWill, club);
-                let discarded = organs.memory.believes(FactClaim::DiscardedMe, club);
-                let never_played = organs.memory.believes(FactClaim::NeverPlayedHere, club);
-
-                if broke_through > 0.1 || won_everything > 0.1 {
-                    reasons.push(
-                        GoalKind::PlayForMyBoyhoodClub,
-                        broke_through.max(won_everything),
-                    );
-                }
-                if sold_against_will > 0.1 {
-                    // Not a refusal. A grudge against a club he made his
-                    // name at is an argument he has with himself, and
-                    // plenty of players go back anyway.
-                    reasons.push(GoalKind::LeaveThisClub, -sold_against_will * 0.7);
-                }
-                if discarded > 0.1 || never_played > 0.1 {
-                    reasons.push(
-                        GoalKind::PlayFirstTeamFootball,
-                        -discarded.max(never_played),
-                    );
-                }
-
-                // And what he currently wants out of where he is.
-                let step_up = organs.goals.pressure_of(GoalKind::StepUpToABiggerClub);
-                let challenge = organs.goals.pressure_of(GoalKind::FindANewChallenge);
-                if step_up > 0.1 {
-                    reasons.push(GoalKind::StepUpToABiggerClub, step_up);
-                }
-                if challenge > 0.1 {
-                    reasons.push(GoalKind::FindANewChallenge, challenge);
-                }
-            }
-
-            MindOption::RequestTransfer => {
-                let wants_out = organs.goals.wants_to_leave();
-                if wants_out > 0.1 {
-                    reasons.push(GoalKind::LeaveThisClub, wants_out);
-                }
-                // Wanting to get better is an argument for moving only
-                // once the two rungs below it have gone unanswered —
-                // which is what having them as separate wants buys.
-                let coach = organs.goals.pressure_of(GoalKind::WorkWithABetterCoach);
-                if coach > 0.5 {
-                    reasons.push(GoalKind::WorkWithABetterCoach, coach * 0.6);
-                }
-            }
-
-            MindOption::StayAndFight => {
-                if self.improvement() > 0.1 {
-                    // Whatever else is wrong, he is getting better here.
-                    reasons.push(GoalKind::KeepImproving, self.improvement());
-                }
-                let stalled = organs.goals.pressure_of(GoalKind::KeepImproving);
-                if stalled > 0.3 {
-                    reasons.push(GoalKind::KeepImproving, -stalled * 0.5);
-                }
-            }
-
-            MindOption::SignContract => {
-                // A man who has decided to go does not sign on. The loan
-                // want is left out on purpose: a club re-signs a boy and
-                // then lends him, and he agrees to both.
-                let wants_out = [
-                    GoalKind::LeaveThisClub,
-                    GoalKind::BeAllowedToLeave,
-                    GoalKind::StepUpToABiggerClub,
-                    GoalKind::FindANewChallenge,
-                ]
-                .into_iter()
-                .map(|kind| organs.goals.pressure_of(kind))
-                .fold(0.0f32, f32::max);
-                if wants_out > 0.1 {
-                    reasons.push(GoalKind::LeaveThisClub, -wants_out);
-                }
-            }
-
-            MindOption::Retire => {
-                let winding_down = organs.goals.pressure_of(GoalKind::RetireOnMyTerms);
-                if winding_down > 0.1 {
-                    reasons.push(GoalKind::RetireOnMyTerms, winding_down);
-                }
-                // A man still winning things does not stop.
-                if self.honours > 0 && !self.is_winding_down() {
-                    reasons.push(GoalKind::WinATrophy, -0.5);
-                }
-            }
-
-            _ => {}
-        }
-
-        reasons
+    #[test]
+    fn a_move_resolves_the_arc_it_was_about() {
+        let mut mind = CareerMind::default();
+        mind.plan = Some(CareerPlan::new(
+            CareerArc::ClaimMyPlace,
+            GoalOrigin::SelfDrive,
+            0.6,
+            100,
+            CareerPlan::CLAIM_REVIEW_DAYS,
+            0.8,
+            true,
+        ));
+        mind.on_club_change();
+        assert!(
+            mind.plan.is_none(),
+            "a claim on a shirt somebody else now wears is not a plan"
+        );
     }
 }

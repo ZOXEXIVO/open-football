@@ -266,7 +266,7 @@ impl TeamBehaviourResult {
                     }
                 };
                 if TalkFeedGate::feed_worthy(&talk.talk_type, talk.success, talk.morale_change) {
-                    let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type);
+                    let topic = ManagerInteractionTopicMapper::from_talk(&talk.talk_type, player);
                     let tone = ManagerInteractionToneMapper::from_interaction(&talk.tone);
                     let acceptance = ManagerInteractionAcceptanceMapper::from_outcome(
                         talk.success,
@@ -1141,15 +1141,94 @@ impl TalkFeedGate {
     }
 }
 
+/// What the manager has to point at when he takes a player aside to say
+/// well done: competitive minutes and the form they produced, or a
+/// session on the training ground that stood out. Neither, and there is
+/// no conversation — praise with nothing behind it told a reserve who
+/// had never been picked how well he had been playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PraiseGrounds {
+    /// He has been playing, and playing well.
+    Form,
+    /// Nothing to watch on a Saturday, but the way he has gone about his
+    /// work is worth a word.
+    Application,
+}
+
+impl PraiseGrounds {
+    /// Recency-weighted competitive minutes over the trailing month
+    /// below which the manager has not seen him play. Roughly half a
+    /// match last week, or a full one a fortnight back.
+    const MINUTES_SEEN: f32 = 45.0;
+
+    /// Match-rating EMA at which a run is worth mentioning.
+    const FORM_BAR: f32 = 7.0;
+
+    /// How recently a standout session has to have happened for the
+    /// training ground to be the thing praised. Matches the `GoodForm`
+    /// interaction cooldown, so what earns the word is always something
+    /// that happened since the last time the manager gave him one.
+    const APPLICATION_WINDOW_DAYS: u16 = 14;
+
+    pub(crate) fn read(player: &Player) -> Option<Self> {
+        if player.load.minutes_last_30 >= Self::MINUTES_SEEN
+            && player.load.form_rating >= Self::FORM_BAR
+        {
+            return Some(PraiseGrounds::Form);
+        }
+        player
+            .happiness
+            .has_recent_event(
+                &HappinessEventType::GoodTraining,
+                Self::APPLICATION_WINDOW_DAYS,
+            )
+            .then_some(PraiseGrounds::Application)
+    }
+
+    fn topic(self) -> ManagerInteractionTopic {
+        match self {
+            PraiseGrounds::Form => ManagerInteractionTopic::Performance,
+            PraiseGrounds::Application => ManagerInteractionTopic::Attitude,
+        }
+    }
+
+    /// Where the conversation sits against the week's problems. Praise is
+    /// what a manager does when nothing else needs saying, so it stays
+    /// below every grievance talk; a run of form outranks a good week's
+    /// training, and a motivator gets to it sooner than a coach who never
+    /// thinks to.
+    pub(crate) fn talk_priority(self, motivating: u8) -> u8 {
+        let base = match self {
+            PraiseGrounds::Form => 45,
+            PraiseGrounds::Application => 30,
+        };
+        base + motivating.min(20) / 2
+    }
+
+    /// Morale above which a man does not need telling. A run of form
+    /// carries further than a good week on the training pitch.
+    pub(crate) fn morale_ceiling(self) -> f32 {
+        match self {
+            PraiseGrounds::Form => 85.0,
+            PraiseGrounds::Application => 80.0,
+        }
+    }
+}
+
 struct ManagerInteractionTopicMapper;
 
 impl ManagerInteractionTopicMapper {
-    fn from_talk(talk: &ManagerTalkType) -> ManagerInteractionTopic {
+    fn from_talk(talk: &ManagerTalkType, player: &Player) -> ManagerInteractionTopic {
         match talk {
             ManagerTalkType::PlayingTimeTalk | ManagerTalkType::PlayingTimeRequest => {
                 ManagerInteractionTopic::PlayingTime
             }
-            ManagerTalkType::Praise => ManagerInteractionTopic::Performance,
+            // The praise is about whatever the manager can point to. With
+            // nothing to point to it is his attitude by default, never his
+            // performances.
+            ManagerTalkType::Praise => PraiseGrounds::read(player)
+                .unwrap_or(PraiseGrounds::Application)
+                .topic(),
             // Morale / motivational chats are about the player's state of
             // mind, not his performances — mapping them to Performance
             // made a failed pep talk render as performance criticism.
@@ -1201,6 +1280,125 @@ impl ManagerInteractionAcceptanceMapper {
         } else {
             PlayerAcceptance::Ambivalent
         }
+    }
+}
+
+#[cfg(test)]
+mod praise_grounds_tests {
+    //! The praise a manager gives has to be about something he saw.
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    struct Fixtures;
+
+    impl Fixtures {
+        fn player() -> Player {
+            PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("T".into(), "One".into()))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes {
+                    adaptability: 12.0,
+                    ambition: 12.0,
+                    controversy: 5.0,
+                    loyalty: 10.0,
+                    pressure: 12.0,
+                    professionalism: 12.0,
+                    sportsmanship: 12.0,
+                    temperament: 12.0,
+                    consistency: 12.0,
+                    important_matches: 12.0,
+                    dirtiness: 5.0,
+                })
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap()
+        }
+    }
+
+    /// The reported bug: a player with no minutes at all — not even a
+    /// friendly — was praised "for his recent performance" every
+    /// fortnight, because the talk was proposed off a conduct rung and
+    /// the topic was hard-wired to Performance.
+    #[test]
+    fn a_man_who_has_not_played_has_no_performance_to_praise() {
+        let mut player = Fixtures::player();
+        player.behaviour.state = crate::PersonBehaviourState::Good;
+
+        assert_eq!(PraiseGrounds::read(&player), None);
+        assert_eq!(
+            ManagerInteractionTopicMapper::from_talk(&ManagerTalkType::Praise, &player),
+            ManagerInteractionTopic::Attitude,
+        );
+    }
+
+    /// A standout session is a real thing to praise — and it is praise
+    /// for his attitude, not for performances nobody watched.
+    #[test]
+    fn training_that_stood_out_is_praised_as_application() {
+        let mut player = Fixtures::player();
+        player
+            .happiness
+            .add_event(HappinessEventType::GoodTraining, 3.0);
+
+        assert_eq!(
+            PraiseGrounds::read(&player),
+            Some(PraiseGrounds::Application)
+        );
+        assert_eq!(
+            ManagerInteractionTopicMapper::from_talk(&ManagerTalkType::Praise, &player),
+            ManagerInteractionTopic::Attitude,
+        );
+    }
+
+    /// Minutes plus a rating worth mentioning is the one case that
+    /// earns the performance line.
+    #[test]
+    fn a_run_of_form_is_praised_as_performance() {
+        let mut player = Fixtures::player();
+        player.load.minutes_last_30 = 270.0;
+        player.load.form_rating = 7.6;
+
+        assert_eq!(PraiseGrounds::read(&player), Some(PraiseGrounds::Form));
+        assert_eq!(
+            ManagerInteractionTopicMapper::from_talk(&ManagerTalkType::Praise, &player),
+            ManagerInteractionTopic::Performance,
+        );
+    }
+
+    /// Form is minutes AND rating: a hot streak that has gone stale
+    /// while he sat out a month stops being the thing praised.
+    #[test]
+    fn a_stale_hot_streak_is_no_longer_a_performance() {
+        let mut player = Fixtures::player();
+        player.load.minutes_last_30 = 8.0;
+        player.load.form_rating = 8.2;
+
+        assert_eq!(PraiseGrounds::read(&player), None);
+    }
+
+    /// Praise never outranks a grievance conversation, whoever the
+    /// manager is.
+    #[test]
+    fn praise_sits_below_every_problem_talk() {
+        assert!(PraiseGrounds::Form.talk_priority(20) < 60);
+        assert!(
+            PraiseGrounds::Application.talk_priority(20) < PraiseGrounds::Form.talk_priority(0)
+        );
     }
 }
 

@@ -462,13 +462,17 @@ impl InterestDraw {
 pub(in crate::transfers) struct LoanApproachMemory;
 
 impl LoanApproachMemory {
-    /// Days a club leaves a target alone after moving for him once.
-    const FIRST_REBUFF_DAYS: i64 = 24;
+    /// Days a club leaves a target alone after being told no. Stamped
+    /// on a REBUFF, not on every approach: an approach that is still
+    /// live is already held off by the negotiation itself, and barring
+    /// the pair for a month on top of that was most of why a club and a
+    /// target only ever met once a window.
+    const FIRST_REBUFF_DAYS: i64 = 10;
     /// Each further approach for the same player adds this much again, so a
     /// club that keeps being told no gives up on him for the window.
-    const REPEAT_REBUFF_DAYS: i64 = 30;
+    const REPEAT_REBUFF_DAYS: i64 = 20;
     /// Ceiling, so a target is never blacklisted permanently.
-    const MAX_REBUFF_DAYS: i64 = 150;
+    const MAX_REBUFF_DAYS: i64 = 90;
     /// How long a standoff row survives past its own deadline, carrying the
     /// approach tally so the next look escalates rather than restarting at the
     /// first-rebuff length. Past this the club has simply forgotten the

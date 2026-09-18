@@ -21,7 +21,7 @@ use crate::{
     TeamType, TrainingIntensity, TrainingType,
 };
 use chrono::Weekday;
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use std::slice::Iter;
 use std::slice::IterMut;
 
@@ -1343,19 +1343,19 @@ impl Staff {
         }
     }
     fn process_relationships(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
-        if ctx.simulation.date.hour() == 12 {
-            // Small random relationship events
-            if rand::random::<f32>() < 0.1 {
-                result.relationship_event = Some(RelationshipEvent::PositiveInteraction);
-                self.add_event(StaffEventType::PositiveInteraction);
-            } else if rand::random::<f32>() < 0.05 && self.job_satisfaction < 40.0 {
-                result.relationship_event = Some(RelationshipEvent::Conflict);
-                self.add_event(StaffEventType::Conflict);
-            } else if rand::random::<f32>() < 0.02 && self.job_satisfaction > 70.0 {
-                result.relationship_event = Some(RelationshipEvent::TrustBuilt);
-                self.add_event(StaffEventType::TrustBuilt);
-            }
+        if !ctx.simulation.is_week_beginning() {
+            return;
         }
+        let Some(event) = StaffWeekAmongThePlayers::roll(self.job_satisfaction) else {
+            return;
+        };
+        self.add_event(match event {
+            RelationshipEvent::PositiveInteraction => StaffEventType::PositiveInteraction,
+            RelationshipEvent::Conflict => StaffEventType::Conflict,
+            RelationshipEvent::MentorshipStarted => StaffEventType::MentorshipStarted,
+            RelationshipEvent::TrustBuilt => StaffEventType::TrustBuilt,
+        });
+        result.relationship_event = Some(event);
     }
 
     fn evaluate_performance(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
@@ -1785,6 +1785,53 @@ pub enum RelationshipEvent {
     TrustBuilt,
 }
 
+/// One staff member's week among the players, rolled every Monday.
+///
+/// Which way it goes slides off his job satisfaction rather than
+/// stepping over it: a settled coach builds things, a disillusioned one
+/// breaks them, and every reading in between is reachable. Nothing
+/// happening is by far the commonest week.
+pub struct StaffWeekAmongThePlayers;
+
+impl StaffWeekAmongThePlayers {
+    /// An ordinary good week with somebody. The floor keeps it possible
+    /// for a coach who hates the job — he still has to take sessions.
+    const POSITIVE: f32 = 0.10;
+    const POSITIVE_FLOOR: f32 = 0.4;
+    /// Friction, at zero satisfaction and fading to nothing as the job
+    /// stops grating.
+    const CONFLICT: f32 = 0.05;
+    /// The two heavier turns, which need a coach who is invested:
+    /// taking somebody under his wing, and a real step up in a working
+    /// relationship.
+    const MENTORSHIP: f32 = 0.015;
+    const TRUST: f32 = 0.02;
+
+    fn roll(job_satisfaction: f32) -> Option<RelationshipEvent> {
+        let warmth = (job_satisfaction / 100.0).clamp(0.0, 1.0);
+        let odds = [
+            (RelationshipEvent::Conflict, Self::CONFLICT * (1.0 - warmth)),
+            (
+                RelationshipEvent::MentorshipStarted,
+                Self::MENTORSHIP * warmth,
+            ),
+            (RelationshipEvent::TrustBuilt, Self::TRUST * warmth),
+            (
+                RelationshipEvent::PositiveInteraction,
+                Self::POSITIVE * (Self::POSITIVE_FLOOR + (1.0 - Self::POSITIVE_FLOOR) * warmth),
+            ),
+        ];
+        let mut roll = rand::random::<f32>();
+        for (event, chance) in odds {
+            if roll < chance {
+                return Some(event);
+            }
+            roll -= chance;
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum StaffLicenseType {
     ContinentalPro,
@@ -2057,5 +2104,53 @@ mod tests {
                 "a man with the crowd behind him does not quit on a bad week"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod staff_week_among_the_players_tests {
+    use super::*;
+
+    /// The pass hung off `date.hour() == 12` for a clock that never
+    /// leaves midnight, so no staff member ever had a week with
+    /// anybody. Whatever else it does, it has to produce something.
+    #[test]
+    fn a_settled_coach_eventually_has_a_week_worth_recording() {
+        let any = (0..400).any(|_| StaffWeekAmongThePlayers::roll(80.0).is_some());
+        assert!(any);
+    }
+
+    /// The old code stepped over job satisfaction at 40 and 70. It
+    /// slides now, and the direction is the whole point: a coach who
+    /// likes the job does not pick fights.
+    #[test]
+    fn a_happy_coach_never_picks_a_fight() {
+        for _ in 0..2_000 {
+            assert!(!matches!(
+                StaffWeekAmongThePlayers::roll(100.0),
+                Some(RelationshipEvent::Conflict)
+            ));
+        }
+    }
+
+    /// And a disillusioned one never takes anybody under his wing.
+    #[test]
+    fn a_disillusioned_coach_invests_in_nobody() {
+        for _ in 0..2_000 {
+            assert!(!matches!(
+                StaffWeekAmongThePlayers::roll(0.0),
+                Some(RelationshipEvent::MentorshipStarted) | Some(RelationshipEvent::TrustBuilt)
+            ));
+        }
+    }
+
+    /// Most weeks nothing happens. A pass that fired every week for
+    /// every staff member is how the feed filled with noise before.
+    #[test]
+    fn most_weeks_are_quiet() {
+        let happened = (0..4_000)
+            .filter(|_| StaffWeekAmongThePlayers::roll(100.0).is_some())
+            .count();
+        assert!(happened < 4_000 / 4, "{happened} of 4000");
     }
 }

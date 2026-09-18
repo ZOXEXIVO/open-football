@@ -30,11 +30,13 @@ use log::debug;
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::{Language, LanguageProfile};
-use crate::club::player::mind::GoalKind;
+use crate::club::player::mind::{GoalKind, MindClock};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::{SquadEvidenceSource, TransferMoveStage, TransferPlausibilityVerdict};
+use crate::transfers::loan::agreement::LoanMoney;
+use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::loan::interest::InterestDraw;
 use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
@@ -902,6 +904,7 @@ impl ScoutingPass {
                 .map(|c| c.squad_status.clone())
                 .unwrap_or(PlayerSquadStatus::NotYetSet),
             days_on_market: player.days_available(current_date).min(i16::MAX as i64) as i16,
+            market_resignation: player.market_resignation(current_date),
         };
         // Real fee headroom (transfer budget × the negotiation
         // fee-gate multiplier), so a funded club can scout up to
@@ -1884,6 +1887,12 @@ impl ScoutingPass {
                 .pressure_of(GoalKind::StayAtThisClub)
                 .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
                 .clamp(0.0, 1.0),
+            loan_willingness: LoanAssetGuard::willingness_for(club, player, date),
+            career_plan: player.mind.career.plan_view(MindClock::day(date)),
+            parent_subsidy: LoanMoney::parent_desire(
+                player.pathway_stage(),
+                player.plan.as_ref().and_then(|p| p.loan_purpose),
+            ),
             player_name: player.full_name.to_string(),
             club_name: club.name.clone(),
             position: player.position(),

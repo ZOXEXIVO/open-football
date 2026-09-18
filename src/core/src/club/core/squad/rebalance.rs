@@ -598,54 +598,6 @@ impl Club {
         }
         None
     }
-
-    /// Move players without a contract (loan returnees) from main team to reserve.
-    /// Loan returns land on teams[0] (main) — staff then moves them to reserve for assessment.
-    pub(in crate::club::core) fn move_loan_returns_to_reserve(&mut self, date: NaiveDate) {
-        let Some(main_idx) = self.teams.main_index() else {
-            return;
-        };
-
-        let reserve_idx = self
-            .teams
-            .index_of_type(TeamType::Reserve)
-            .or_else(|| self.teams.index_of_type(TeamType::B))
-            .or_else(|| self.teams.index_of_type(TeamType::Second));
-
-        // No reserve team: they stay on main.
-        let Some(reserve_idx) = reserve_idx else {
-            return;
-        };
-
-        // Find main team players with no contract (returned from loan).
-        // Force-selected players stay on main even if their contract slot
-        // is empty — the manager has pinned them in.
-        let to_move: Vec<u32> = self.teams.teams[main_idx]
-            .players
-            .iter()
-            .filter(|p| p.contract.is_none() && !p.is_force_match_selection)
-            .map(|p| p.id)
-            .collect();
-
-        // Close the Main spell and open one on the reserve/Second team so
-        // the player's appearances there land under the right history row
-        // instead of leaking into the stale active Main entry.
-        let from_info = self.teams.teams[main_idx].history_info();
-        let to_info = self.teams.teams[reserve_idx].history_info();
-        let from_senior = self.teams.teams[main_idx].team_type.is_own_team();
-        let to_senior = self.teams.teams[reserve_idx].team_type.is_own_team();
-
-        for player_id in to_move {
-            if let Some(mut player) = self.teams.teams[main_idx].players.take_player(&player_id) {
-                debug!(
-                    "loan return -> reserve: {} moved to {}",
-                    player.full_name, self.teams.teams[reserve_idx].name
-                );
-                player.on_intra_club_move(&from_info, &to_info, from_senior, to_senior, date);
-                self.teams.teams[reserve_idx].players.add(player);
-            }
-        }
-    }
 }
 
 #[cfg(test)]

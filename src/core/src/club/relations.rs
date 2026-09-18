@@ -720,6 +720,11 @@ pub struct StaffRelation {
 }
 
 impl StaffRelation {
+    /// Authority a player extends to a coach he has no history with,
+    /// and the line `CoachPlayerBond::conflict_risk` treats as
+    /// undamaged. Only a disciplinary or tactical exchange moves it.
+    pub const NEUTRAL_AUTHORITY: f32 = 50.0;
+
     pub fn calculate_coaching_multiplier(&self) -> f32 {
         let base = 1.0;
         let respect_bonus = (self.authority_respect / 100.0) * 0.3;
@@ -734,7 +739,7 @@ impl Relationship for StaffRelation {
     fn new_neutral() -> Self {
         StaffRelation {
             level: 0.0,
-            authority_respect: 50.0,
+            authority_respect: Self::NEUTRAL_AUTHORITY,
             trust_in_abilities: 50.0,
             personal_bond: 30.0,
             receptiveness: 50.0,

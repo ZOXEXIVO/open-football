@@ -40,6 +40,7 @@ use std::cmp::Ordering;
 
 pub(in crate::transfers) mod processor {
     use crate::club::player::language::LanguageProfile;
+    use crate::club::player::mind::CareerPlanView;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
@@ -125,8 +126,8 @@ pub(in crate::transfers) mod processor {
         /// on the market. Drives the staleness widening of the scouting
         /// realism band.
         pub days_on_market: i16,
-        /// Continuous 0..1 market resignation of a listed / requested
-        /// player ([`crate::club::player::transfer::MarketResignation`]).
+        /// Continuous 0..1 market resignation of a listed / requested /
+        /// benched player ([`crate::club::player::transfer::MarketResignation`]).
         /// Snapshotted at pool-build time so foreign buyers read the same
         /// curve a domestic live lookup would.
         pub market_resignation: f32,
@@ -273,6 +274,14 @@ pub(in crate::transfers) mod processor {
         /// once when the pool is built.
         pub leave_pressure: f32,
         pub stay_pressure: f32,
+        /// How willing his club is to lend him out at all, 0..1, the arc
+        /// he is living out, and what his club would keep paying of his
+        /// wage. Staged here because a borrowing country cannot reach
+        /// into his club's squad to read any of the three — the same
+        /// reason `leave_pressure` travels.
+        pub loan_willingness: f32,
+        pub career_plan: CareerPlanView,
+        pub parent_subsidy: f32,
         /// His parent has posted him to the world as a man who would go
         /// home. Set only for LOAN candidates (see
         /// `LoanPipeline::broadcast_listed_loans`) so this never
@@ -1143,6 +1152,25 @@ pub enum LoanDestinationPreference {
 }
 
 impl LoanOutReason {
+    /// What the club would say the loan is FOR. Carried all the way to
+    /// the squad page, because "out on loan" without a purpose is the
+    /// half of the sentence nobody can act on.
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            LoanOutReason::NeedsGameTime => "loan_reason_needs_game_time",
+            LoanOutReason::BlockedByBetterPlayer => "loan_reason_blocked_by_better",
+            LoanOutReason::Surplus => "loan_reason_surplus",
+            LoanOutReason::FinancialRelief => "loan_reason_financial_relief",
+            LoanOutReason::LackOfPlayingTime => "loan_reason_lack_of_playing_time",
+            LoanOutReason::PostInjuryFitness => "loan_reason_post_injury_fitness",
+            LoanOutReason::DevelopmentPathway => "loan_reason_development_pathway",
+            LoanOutReason::BlockedByDepth => "loan_reason_blocked_by_depth",
+            LoanOutReason::NeedsFirstTeamMinutes => "loan_reason_needs_first_team_minutes",
+            LoanOutReason::AssetValueProtection => "loan_reason_asset_value_protection",
+            LoanOutReason::UnsettledAbroad => "loan_reason_unsettled_abroad",
+        }
+    }
+
     /// True for loan reasons whose entire point is GAME TIME. The
     /// borrower-side minutes gate runs at its stricter "development" bar
     /// for these so the player doesn't just swap one bench for another —

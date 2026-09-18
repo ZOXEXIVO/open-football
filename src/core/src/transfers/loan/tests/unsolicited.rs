@@ -256,40 +256,61 @@ fn foreign_development_band_tracks_age() {
     assert!(!ForeignUnsolicitedLoanTarget::is_development(24));
 }
 
+/// The destination floors are prices now, not walls. A young keeper
+/// dropping from a giant (rep 8000) to a tiny club (rep 400) used to
+/// fail both the squad-average floor and the reputation-drop floor
+/// outright — the case that left U18/U20 keepers stranded. He is
+/// discounted for it instead, which is what lets the move happen at all.
 #[test]
-fn development_loan_bypasses_level_floors() {
-    // A young keeper (low CA) dropping from a giant parent (rep 8000,
-    // best keeper 145) to a tiny club (avg 90, rep 400) would fail both
-    // the squad-average floor and the reputation-drop floor — but as a
-    // development loan he clears the level gate, because the caller's
-    // minutes gate is the real "will he play here" check. This is the
-    // case that left U18/U20 keepers stranded.
-    assert!(UnsolicitedLoanTarget::clears_level_gate(
-        90,
-        &Fx::level(60, 145, 8000, 400, true)
-    ));
+fn a_raw_youngsters_deep_drop_is_discounted_rather_than_refused() {
+    let deep = BorrowerAppetite::of(&LevelFx::reading(0.0, 400.0 / 8000.0, 0.1));
+    assert!(
+        deep.level_floor > 0.0,
+        "the old floors made this exactly zero"
+    );
+    assert!(deep.score > 0.0);
 }
 
+/// …and a near-ready player taking the same drop is discounted harder,
+/// because the floors he is held to rise with how ready he already is.
 #[test]
-fn cover_loan_keeps_level_floors() {
-    // Non-development cover: both floors still apply.
-    // Far below the borrower's squad average → blocked by the floor.
-    assert!(!UnsolicitedLoanTarget::clears_level_gate(
-        90,
-        &Fx::level(60, 145, 8000, 3000, false)
-    ));
-    // Near the borrower's level AND a plausible (raw-player) rep drop
-    // from a giant → allowed.
-    assert!(UnsolicitedLoanTarget::clears_level_gate(
-        90,
-        &Fx::level(86, 130, 8000, 3000, false)
-    ));
-    // Near level, but a non-raw player dropping from a giant to a
-    // minnow is implausible → blocked by the reputation gate.
-    assert!(!UnsolicitedLoanTarget::clears_level_gate(
-        118,
-        &Fx::level(120, 125, 8000, 500, false)
-    ));
+fn a_ready_player_pays_more_for_the_same_drop() {
+    let raw = BorrowerAppetite::of(&LevelFx::reading(0.0, 0.3, 0.5));
+    let ready = BorrowerAppetite::of(&LevelFx::reading(1.0, 0.3, 0.5));
+    assert!(ready.level_floor < raw.level_floor);
+}
+
+/// A peer-level destination pays nothing at all for the level.
+#[test]
+fn a_peer_level_destination_is_not_discounted() {
+    let peer = BorrowerAppetite::of(&LevelFx::reading(1.0, 0.95, 0.95));
+    assert_eq!(peer.level_floor, 1.0);
+}
+
+/// Fixtures for the level term: one reading with everything but the two
+/// ratios and the readiness held neutral, so each test moves one thing.
+struct LevelFx;
+
+impl LevelFx {
+    fn reading(readiness: f32, standing_ratio: f32, league_ratio: f32) -> BorrowerReading {
+        BorrowerReading {
+            base_by_tier: 1.0,
+            season_phase: 1.0,
+            group: PlayerFieldPositionGroup::Goalkeeper,
+            count: 2,
+            ideal_depth: 3,
+            best_here: 90,
+            candidate: 90,
+            clearly_better_ahead: 0,
+            allowed_ahead: 1,
+            band_here: 0.9,
+            band_target: 0.9,
+            readiness,
+            standing_ratio,
+            league_ratio,
+            need: 0.6,
+        }
+    }
 }
 
 /// B4 — the compatriot sweep saw nobody over 23.

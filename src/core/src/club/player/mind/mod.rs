@@ -65,6 +65,7 @@ mod integration;
 // Re-exported here so every `club::player::mind::organs::…` path — and
 // every `super::organs::…` inside a faculty — keeps working unchanged.
 pub use crate::club::mind::organs;
+pub mod plan;
 pub mod professional;
 pub mod situation;
 pub mod social;
@@ -73,6 +74,7 @@ pub mod submind;
 pub use career::{CareerMind, CareerStage};
 pub use competitive::CompetitiveMind;
 pub use financial::FinancialMind;
+pub use plan::{CareerArc, CareerPlan, CareerPlanView, CareerPlanner, PlanStage};
 pub use professional::ProfessionalMind;
 pub use situation::{MindSituation, NationalStanding};
 pub use social::SocialMind;
@@ -586,11 +588,14 @@ impl PlayerMind {
 
         // Belonging is about a place and does not travel; the read of a
         // manager is about a person and is reset when it becomes someone
-        // else. The career and financial faculties carry over untouched
-        // — a career is continuous, and being underpaid is not settled
-        // by changing employer.
+        // else. The career faculty carries its trajectory over untouched
+        // — a career is continuous — but the ARC it was living out was
+        // about the club he has left, so that resolves with the goals.
+        // Being underpaid is not settled by changing employer, so the
+        // financial faculty is untouched.
         self.social.on_club_change();
         self.professional.on_club_change();
+        self.career.on_club_change();
     }
 
     /// Census for the `.dev/mind` harness and the player profile UI.

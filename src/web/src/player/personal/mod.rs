@@ -72,6 +72,10 @@ pub struct PlayerPersonalTemplate {
     pub favorite_clubs: Vec<FavoriteClubDto>,
     pub player_info: PlayerInfoDto,
     pub reputation: ReputationDto,
+    /// The arc he is living out — the thing that orders the wants
+    /// below. `None` for a man who has decided nothing, which is most
+    /// footballers most weeks.
+    pub career_plan: Option<CareerPlanDto>,
     /// What he is after, loudest first.
     pub wants: Vec<MindWantDto>,
     /// What he remembers about this club. `None` for a player who has
@@ -280,6 +284,7 @@ pub async fn player_personal_action(
         today,
         &i18n,
     );
+    let career_plan = CareerPlanCard::of(player, today, &i18n);
 
     let player_info = get_player_info(player, today, &i18n);
     let reputation = ReputationLadder::rows(player, &i18n);
@@ -356,6 +361,7 @@ pub async fn player_personal_action(
         favorite_clubs,
         player_info,
         reputation,
+        career_plan,
         wants,
         mind,
     }
@@ -932,6 +938,78 @@ mod factor_sentiment_tests {
     fn positive_bands() {
         assert_eq!(FactorSentiment::i18n_key(3.0), "factor_positive");
         assert_eq!(FactorSentiment::i18n_key(6.0), "factor_strong_positive");
+    }
+}
+
+/// The arc a player is living out, as the profile page shows it.
+///
+/// Read next to the wants rather than instead of them: the wants are
+/// what he is after this month, and this is the shape they are in
+/// service of. A reader who can see both can tell a boy asking for a
+/// loan because he is sulking from one asking because he means to come
+/// back and take the shirt.
+pub struct CareerPlanDto {
+    /// "Prove himself on loan", "Claim his place", …
+    pub arc: String,
+    /// How far along it he is, and whether anybody has heard him say it.
+    pub stage: String,
+    pub unspoken: bool,
+    /// The date he privately gave it, when the deadline is close enough
+    /// to be worth showing.
+    pub deadline: Option<String>,
+    /// What he will accept for the next move, in plain words.
+    pub band_floor: String,
+    /// What the club made of his last spell away, when there was one.
+    pub last_verdict: Option<String>,
+    /// Where the club has him on its own pathway — the other side of the
+    /// same conversation.
+    pub pathway: String,
+}
+
+/// Builds it.
+struct CareerPlanCard;
+
+impl CareerPlanCard {
+    /// Below this the deadline is too far off to be news.
+    const DEADLINE_SHOWN_FROM: f32 = 0.25;
+
+    fn of(player: &Player, today: NaiveDate, i18n: &I18n) -> Option<CareerPlanDto> {
+        let plan = player.mind.career.plan?;
+        let day = mind::MindClock::day(today);
+        Some(CareerPlanDto {
+            arc: i18n.t(plan.arc.as_i18n_key()).to_string(),
+            stage: i18n.t(plan.stage.as_i18n_key()).to_string(),
+            unspoken: !plan.stage.is_asking(),
+            deadline: (plan.deadline_pressure(day) >= Self::DEADLINE_SHOWN_FROM).then(|| {
+                i18n.t("mind_deadline").replace(
+                    "{date}",
+                    &mind::MindClock::date(plan.review_on)
+                        .format("%d.%m.%Y")
+                        .to_string(),
+                )
+            }),
+            band_floor: i18n.t(Self::band_key(plan.band_floor)).to_string(),
+            last_verdict: player
+                .plan
+                .as_ref()
+                .and_then(|p| p.last_verdict)
+                .map(|verdict| i18n.t(verdict.as_i18n_key()).to_string()),
+            pathway: i18n.t(player.pathway_stage().as_i18n_key()).to_string(),
+        })
+    }
+
+    /// The lowest level he will drop to, said the way a reader thinks
+    /// about it rather than as a number.
+    fn band_key(floor: f32) -> &'static str {
+        if floor >= 0.85 {
+            "career_band_floor_upward"
+        } else if floor >= 0.5 {
+            "career_band_floor_same_level"
+        } else if floor >= 0.0 {
+            "career_band_floor_one_level"
+        } else {
+            "career_band_floor_anywhere"
+        }
     }
 }
 

@@ -22,7 +22,7 @@ use crate::club::staff::StaffCollection;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::model::TeamCoachingScores;
 use crate::utils::DateUtils;
-use crate::{Player, PlayerPositionType};
+use crate::{Player, PlayerPositionType, TeamType};
 
 /// Builds [`SquadStandingView`] snapshots for a whole squad.
 pub struct SquadStandingViewBuilder;
@@ -49,6 +49,7 @@ impl SquadStandingViewBuilder {
         staffs: &StaffCollection,
         captain: Option<u32>,
         vice_captain: Option<u32>,
+        squad_tier: TeamType,
         today: NaiveDate,
     ) {
         if players.is_empty() {
@@ -148,6 +149,7 @@ impl SquadStandingViewBuilder {
                 } else {
                     outfield_ceiling
                 },
+                squad_tier,
             });
         }
     }
@@ -194,6 +196,7 @@ mod tests {
             &StaffCollection::new(Vec::new()),
             None,
             None,
+            TeamType::Main,
             today(),
         );
     }
@@ -284,6 +287,20 @@ mod tests {
             first, second,
             "a rank that flickers reads as losing and winning his place every week"
         );
+    }
+
+    #[test]
+    fn the_view_names_the_squad_he_is_registered_with() {
+        let mut squad = vec![player(1, PlayerPositionType::Striker, 120, 2005)];
+        SquadStandingViewBuilder::refresh(
+            &mut squad,
+            &StaffCollection::new(Vec::new()),
+            None,
+            None,
+            TeamType::U21,
+            today(),
+        );
+        assert_eq!(view(&squad, 1).squad_tier, TeamType::U21);
     }
 
     #[test]

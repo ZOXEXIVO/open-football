@@ -2712,8 +2712,6 @@ struct BackupCareerAnxiety {
 impl BackupCareerAnxiety {
     /// A player must clear this desire score before the dream fires.
     const EMIT_THRESHOLD: f32 = 0.52;
-    /// Post-transfer settling window before a stuck-career story exists.
-    const SETTLED_DAYS: i64 = 540;
 
     fn evaluate(
         player: &Player,
@@ -2763,7 +2761,7 @@ impl BackupCareerAnxiety {
         // Still settling in after a move — no stuck story yet. Homegrown
         // players (never transferred) pass.
         if StuckCareerScan::club_tenure_days(player, today)
-            .map(|d| d < Self::SETTLED_DAYS)
+            .map(|d| d < StuckCareerScan::TENURE_FOR_A_STUCK_STORY)
             .unwrap_or(false)
         {
             return None;

@@ -36,11 +36,13 @@
 //! [`OfferView`] and a [`PlayerStance`] and ask [`PlayerOfferAppraisal`].
 //! Nothing else scores a player's willingness.
 
+use crate::PlayerFieldPositionGroup;
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::language::LanguageProfile;
-use crate::club::player::mind::{GoalKind, MindSituation, PlayerMind};
+use crate::club::player::mind::{CareerPlanView, EpochDay, GoalKind, MindSituation, PlayerMind};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::PromisedSquadStatus;
+use crate::transfers::squad::LevelBand;
 use crate::transfers::squad::minutes::PlayingTimeExpectation;
 
 /// What is being offered — a move, or a season somewhere else.
@@ -110,6 +112,11 @@ pub struct OfferView {
     /// The buyer is the club that sold him, and how sharply that still
     /// stings, 0..1. Zero for everybody else.
     pub returning_to_seller: f32,
+    /// What he would BE at the buying club, as a
+    /// [`crate::transfers::squad::LevelBand`]. `None` when the caller
+    /// cannot read the buyer's own standard — the plan term then pays
+    /// nothing rather than guessing at a level.
+    pub band_offered: Option<f32>,
 }
 
 impl OfferView {
@@ -133,6 +140,7 @@ impl OfferView {
             deadline_urgency: 0.0,
             release_clause_triggered: false,
             returning_to_seller: 0.0,
+            band_offered: None,
         }
     }
 }
@@ -175,11 +183,19 @@ pub struct PlayerStance {
     /// `player_importance`, the ONE importance formula the appraisal reads
     /// on both paths.
     pub importance: f32,
+    /// What he looks like from outside, 1..200. 0 when unknown, which is
+    /// what stands the plan term down rather than guessing at a level.
+    pub own_level: u8,
+    /// The shirt he is judged in — read only alongside
+    /// [`Self::own_level`], to place him in a club's own bands.
+    pub position_group: PlayerFieldPositionGroup,
     /// Rolling share of recent competitive matches started, 0..1.
     pub starter_ratio: f32,
     /// How far short of what his role implies he is falling, −1..+1.
     pub playing_time_gap: f32,
-    /// How long the market has been declining him at his level, 0..1.
+    /// How far he has lowered his sights, 0..1 — months the market has
+    /// declined him at his level, or seasons without football that
+    /// resigned him before it could.
     pub market_resignation: f32,
 
     // ── Where his life is ───────────────────────────────────────
@@ -219,6 +235,10 @@ pub struct PlayerStance {
     /// `SecureMyFuture` — the man with a deal running down values money
     /// more, which is already how the goal is formed.
     pub secure_future_pressure: f32,
+    /// The arc he is living out, flattened — see [`CareerPlanView`].
+    /// This is what makes a step down readable as a move he MEANT to
+    /// make rather than one he is being talked into.
+    pub plan: CareerPlanView,
 
     // ── What he makes of THIS buyer ─────────────────────────────
     //
@@ -259,6 +279,8 @@ impl PlayerStance {
             big_stage_inclination: 0.0,
             nt_stake: 0.0,
             importance: 0.55,
+            own_level: 0,
+            position_group: PlayerFieldPositionGroup::Midfielder,
             starter_ratio: 0.5,
             playing_time_gap: 0.0,
             market_resignation: 0.0,
@@ -271,6 +293,7 @@ impl PlayerStance {
             requested: false,
             listed_by_club: false,
             leave_pressure: 0.0,
+            plan: CareerPlanView::none(),
             at_favourite_club: false,
             stay_pressure: 0.0,
             secure_future_pressure: 0.0,
@@ -337,6 +360,8 @@ impl PlayerStance {
         self.adaptability_drive = (situation.adaptability / 20.0).clamp(0.0, 1.0);
         self.nt_stake = situation.tournament_pressure();
         self.starter_ratio = situation.starter_ratio;
+        self.own_level = situation.own_level;
+        self.position_group = situation.position_group;
         self.playing_time_gap = situation.playing_time_gap();
         self.days_at_club = situation.days_at_club;
         self
@@ -350,7 +375,8 @@ impl PlayerStance {
     /// `mood_desire` is the legacy mood channel (a recent `WantsReturnHome`
     /// event, or raw cultural isolation) so a player whose mind has not yet
     /// formed the want is not read as perfectly settled.
-    pub fn with_mind(mut self, mind: &PlayerMind, mood_desire: f32) -> Self {
+    pub fn with_mind(mut self, mind: &PlayerMind, mood_desire: f32, today: EpochDay) -> Self {
+        self.plan = mind.career.plan_view(today);
         self.return_home_desire = mind
             .pressure_of(GoalKind::GoHome)
             .max(mood_desire)
@@ -386,6 +412,15 @@ impl PlayerStance {
     pub fn with_tenure(mut self, days_at_club: u16) -> Self {
         self.days_at_club = days_at_club;
         self
+    }
+
+    /// What he would BE at a club of this standing — the reading both
+    /// his own plan and a club's pathway are written in. `None` until
+    /// somebody has taken a look at him.
+    pub fn band_at(&self, club_reputation_score: f32) -> Option<f32> {
+        (self.own_level > 0).then(|| {
+            LevelBand::at_reputation(self.own_level, self.position_group, club_reputation_score)
+        })
     }
 
     /// Is the destination his own country?
@@ -464,6 +499,8 @@ pub struct Appraisal {
     pub push: f32,
     pub attachment: f32,
     pub memory: f32,
+    /// How well the move serves the arc he is living out, −1..1.
+    pub plan_fit: f32,
     /// The wage at which `U + ε == 0`, given everything else. His demand.
     pub reservation_wage: u32,
     /// `ε` — his private disposition on this negotiation, drawn once.
@@ -523,7 +560,7 @@ impl Appraisal {
     pub fn explain(&self) -> String {
         format!(
             "U={:+.3} (M{:+.3} S{:+.3} R{:+.3} P{:+.3} H{:+.3} D{:+.3} A{:+.3} F{:+.3}) \
-             eps={:+.3} w_m={:.2} reservation={}",
+             N{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
             self.utility,
             self.money,
             self.sport,
@@ -533,6 +570,7 @@ impl Appraisal {
             self.push,
             self.attachment,
             self.memory,
+            self.plan_fit,
             self.disposition,
             self.money_weight,
             self.reservation_wage,
@@ -561,8 +599,21 @@ pub struct AppraisalConfig {
     pub money_secure_future: f32,
     /// Ceiling on the money weight.
     pub money_cap: f32,
-    /// A loan is temporary: money and sport at half weight.
-    pub loan_factor: f32,
+    /// A loan is temporary, so the wage barely moves and the money term
+    /// with it …
+    pub loan_money_factor: f32,
+    /// … but the football is the whole point of the season, and the drop
+    /// is as real as a permanent one. What compensates it is the plan,
+    /// not a discount on the drop.
+    pub loan_sport_factor: f32,
+
+    /// How much a destination that serves the arc he is living out is
+    /// worth to him. Zero for a man with no plan — the other axes own
+    /// the decision then.
+    pub plan_fit: f32,
+    /// How hard the deadline he gave his own plan pushes him toward
+    /// taking what is on the table.
+    pub plan_deadline_push: f32,
 
     /// Sporting weight floor and the share the career runway carries.
     pub sport_runway_base: f32,
@@ -657,7 +708,11 @@ impl Default for AppraisalConfig {
             money_contract: 0.25,
             money_secure_future: 0.15,
             money_cap: 1.00,
-            loan_factor: 0.5,
+            loan_money_factor: 0.3,
+            loan_sport_factor: 1.0,
+
+            plan_fit: 0.35,
+            plan_deadline_push: 0.20,
 
             sport_runway_base: 0.45,
             sport_runway_span: 0.55,
@@ -796,7 +851,7 @@ impl PlayerOfferAppraisal {
             + cfg.money_secure_future * stance.secure_future_pressure)
             .clamp(cfg.money_base, cfg.money_cap);
         if loan {
-            money_weight *= cfg.loan_factor;
+            money_weight *= cfg.loan_money_factor;
         }
         let offered = offer.offered_wage.max(Self::WAGE_FLOOR);
         let money = money_weight * (offered / anchor).ln() as f32;
@@ -810,7 +865,7 @@ impl PlayerOfferAppraisal {
             let up = -drop;
             let appetite = cfg.sport_upside_base
                 + cfg.sport_upside_span * stance.big_stage_inclination.clamp(0.0, 1.0);
-            let temporary = if loan { cfg.loan_factor } else { 1.0 };
+            let temporary = if loan { cfg.loan_sport_factor } else { 1.0 };
             up * appetite * temporary
         };
 
@@ -880,6 +935,19 @@ impl PlayerOfferAppraisal {
         let home = home_weight
             * (cfg.home_base + (1.0 - cfg.home_base) * stance.return_home_desire.clamp(0.0, 1.0));
 
+        // ── N · plan ────────────────────────────────────────────
+        //
+        // Does this move serve the arc he is living out? A step down is
+        // a different decision for a man who has decided to go down and
+        // play than for one being talked into it, and this is the only
+        // term that can tell them apart. Silent — and exactly zero —
+        // for a man with no plan, or an offer whose level the caller
+        // could not read.
+        let plan_fit = offer
+            .band_offered
+            .map(|band| cfg.plan_fit * stance.plan.fit_for(band))
+            .unwrap_or(0.0);
+
         // ── D · push ────────────────────────────────────────────
         let push = (cfg.push_soft * f32::from(stance.available_soft)
             + cfg.push_unhappy * f32::from(stance.unhappy)
@@ -888,8 +956,12 @@ impl PlayerOfferAppraisal {
             + cfg.push_contract * stance.contract_pressure
             + cfg.push_bench * (-stance.playing_time_gap).max(0.0)
             + cfg.push_goals * stance.leave_pressure
-            + cfg.push_deadline * offer.deadline_urgency.clamp(0.0, 1.0))
-        .clamp(0.0, cfg.push_cap);
+            + cfg.push_deadline * offer.deadline_urgency.clamp(0.0, 1.0)
+            // His own deadline, not the window's. A man whose plan is
+            // nearly out of time takes the move he would have haggled
+            // over in August.
+            + cfg.plan_deadline_push * stance.plan.deadline_pressure)
+            .clamp(0.0, cfg.push_cap);
 
         // ── A · attachment ──────────────────────────────────────
         let long_service =
@@ -907,7 +979,7 @@ impl PlayerOfferAppraisal {
             - cfg.memory_returning_to_seller * offer.returning_to_seller.clamp(0.0, 1.0)
             + cfg.memory_agent * stance.agent_bias.clamp(-1.0, 1.0);
 
-        let utility = money + sport + role + place + home + push - attachment + memory;
+        let utility = money + sport + role + place + home + push - attachment + memory + plan_fit;
 
         // The wage that makes `U + ε == 0`, given everything else — his
         // demand, and the number the buyer's wage power is compared with.
@@ -925,6 +997,7 @@ impl PlayerOfferAppraisal {
             push,
             attachment,
             memory,
+            plan_fit,
             reservation_wage: reservation as u32,
             disposition,
             money_weight,
@@ -960,7 +1033,7 @@ impl PlayerOfferAppraisal {
             + cfg.sport_importance_span * stance.importance.clamp(0.0, 1.0);
         let resignation =
             1.0 - cfg.sport_resignation_relief * stance.market_resignation.clamp(0.0, 1.0);
-        let temporary = if loan { cfg.loan_factor } else { 1.0 };
+        let temporary = if loan { cfg.loan_sport_factor } else { 1.0 };
         runway * ambition * nt * importance * resignation * temporary
     }
 
@@ -976,6 +1049,7 @@ impl PlayerOfferAppraisal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::player::mind::{CareerArc, PlanStage};
 
     /// The Part V money-move profile: a Premier League key player weighing
     /// a Gulf offer. Drop 0.40, prestige drop 0.6, English bridge language,
@@ -1322,8 +1396,12 @@ mod tests {
         assert!(a.utility < 0.0, "{}", a.explain());
     }
 
+    /// A loan is not a small permanent move. The wage barely changes, so
+    /// the money axis is discounted hard; the football is a whole season
+    /// at the level on offer, so the drop costs exactly what it would on
+    /// a permanent deal. What pays for it is the plan, not a discount.
     #[test]
-    fn a_loan_halves_the_money_and_the_sport() {
+    fn a_loan_discounts_the_money_and_not_the_football() {
         let stance = PlayerStance::neutral();
         let permanent = OfferView {
             offered_wage: 2_000_000.0,
@@ -1336,8 +1414,64 @@ mod tests {
         };
         let p = appraise(&stance, &permanent);
         let l = appraise(&stance, &loan);
-        assert!((l.money - p.money * 0.5).abs() < 1e-4);
-        assert!((l.sport - p.sport * 0.5).abs() < 1e-4);
+        assert!(l.money.abs() < p.money.abs(), "the wage hardly moves");
+        assert!(
+            (l.sport - p.sport).abs() < 1e-4,
+            "a season below his level is a season below his level"
+        );
+    }
+
+    /// The plan is what makes a step down readable as a move he meant to
+    /// make. The same offer, to the same man, with and without one.
+    #[test]
+    fn a_plan_pays_for_the_drop_it_was_written_for() {
+        let drop = OfferView {
+            kind: OfferKind::Loan,
+            offered_wage: 1_000_000.0,
+            sporting_drop: 0.35,
+            band_offered: Some(0.9),
+            ..OfferView::neutral()
+        };
+        let no_plan = PlayerStance::neutral();
+        let mut planned = PlayerStance::neutral();
+        planned.plan = CareerPlanView {
+            arc: Some(CareerArc::ProveOnLoan),
+            stage: Some(PlanStage::Asking),
+            band_floor: -0.2,
+            band_target: 0.9,
+            deadline_pressure: 0.5,
+            attempts: 0,
+            strength: 0.6,
+        };
+
+        let without = appraise(&no_plan, &drop);
+        let with = appraise(&planned, &drop);
+        assert_eq!(without.plan_fit, 0.0, "no plan, no term");
+        assert!(with.plan_fit > 0.0, "the destination is what he asked for");
+        assert!(with.utility > without.utility);
+    }
+
+    /// …and it refuses one below the floor he set himself, which is what
+    /// keeps the term from being a blanket yes to any move.
+    #[test]
+    fn a_destination_under_his_own_floor_is_argued_against() {
+        let too_low = OfferView {
+            kind: OfferKind::Loan,
+            offered_wage: 1_000_000.0,
+            band_offered: Some(0.0),
+            ..OfferView::neutral()
+        };
+        let mut planned = PlayerStance::neutral();
+        planned.plan = CareerPlanView {
+            arc: Some(CareerArc::ClaimMyPlace),
+            stage: Some(PlanStage::Committed),
+            band_floor: 0.6,
+            band_target: 1.0,
+            deadline_pressure: 0.0,
+            attempts: 0,
+            strength: 0.6,
+        };
+        assert!(appraise(&planned, &too_low).plan_fit < 0.0);
     }
 
     #[test]

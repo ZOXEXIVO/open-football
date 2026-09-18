@@ -430,6 +430,7 @@ impl Team {
             &self.staffs,
             self.captain_id,
             self.vice_captain_id,
+            self.team_type,
             week_date,
         );
 

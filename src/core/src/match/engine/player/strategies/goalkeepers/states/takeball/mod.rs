@@ -26,7 +26,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // over a ball he could simply have picked up. See
         // [`KeeperFeetDecision`]. His but beyond his feet is still the
         // chase: nothing draws it to him (`Ball::move_to`).
-        if ctx.ball().at_my_feet() {
+        if ctx.ball().mine_to_play() {
             // A GOAL KICK is a dead ball from the floor: the hands are out
             // of it, and the only choice is the one made when he placed it
             // — long off the run-up, or short from standing. This used to

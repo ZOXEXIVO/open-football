@@ -485,7 +485,11 @@ impl<'a> ClubScan<'a> {
         // single-observation confidence and put the meeting bar out of reach.
         let obs_count = assignment
             .scout_staff_id
-            .and_then(|sid| self.club.transfer_plan.find_monitoring(sid, target.player_id))
+            .and_then(|sid| {
+                self.club
+                    .transfer_plan
+                    .find_monitoring(sid, target.player_id)
+            })
             .map(|m| m.times_watched as u32)
             .unwrap_or_else(|| {
                 assignment

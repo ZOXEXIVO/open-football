@@ -4,7 +4,7 @@ use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::{CompletedTransfer, TransferType};
-use crate::{Club, Player, TeamType};
+use crate::{Club, Player, PlayerPlan, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -21,6 +21,7 @@ impl Club {
     ) -> (Vec<CompletedTransfer>, Vec<Player>) {
         let mut transfers = Vec::new();
         let mut released_players: Vec<Player> = Vec::new();
+        let club_id = self.id;
 
         // Clean the youth squads FIRST: promote overage youth up the
         // progression (and into the main team) so room frees up before we
@@ -91,6 +92,10 @@ impl Club {
                     youth_count
                 );
                 for mut player in graduated {
+                    // Graduation day is the club writing down what it
+                    // means to do with him — every contracted player has
+                    // a pathway, and his starts here.
+                    player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
                     // Assign native languages based on player's nationality
                     if player.languages.is_empty() {
                         player.languages = Language::from_country_code(country_code)

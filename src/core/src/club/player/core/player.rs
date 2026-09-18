@@ -1,4 +1,5 @@
 use crate::PlayerSquadStatus;
+use crate::TeamType;
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::builder::PlayerBuilder;
@@ -132,6 +133,9 @@ pub struct SquadStandingView {
     /// keeper. What decides whether staying here is still teaching him
     /// anything.
     pub coaching_ceiling: u8,
+    /// The squad he is registered with. Whether the minutes on his
+    /// ledger were first-team football at all is read through it.
+    pub squad_tier: TeamType,
 }
 
 impl SquadStandingView {
@@ -1386,6 +1390,8 @@ impl Player {
             recent_rating: self
                 .statistics
                 .average_rating_realistic(self.position().position_group()),
+            position_group: self.position().position_group(),
+            football_drought: self.football_drought(now),
 
             // The calendar is filled by the caller that has the country
             // context; `u8::MAX` is "no tournament in view", which is

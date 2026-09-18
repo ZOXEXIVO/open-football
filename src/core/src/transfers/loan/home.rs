@@ -34,7 +34,7 @@
 
 use super::LoanDestinationPreference;
 use crate::Player;
-use crate::club::player::mind::{GoalKind, MindSituation};
+use crate::club::player::mind::{CareerArc, GoalKind, MindSituation};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::context::HomeLeagueTable;
 use crate::transfers::ScoutingRegion;
@@ -102,17 +102,38 @@ pub struct HomePull {
 }
 
 impl HomePull {
-    /// A year in the side, playing this share of the matches, is a man who
-    /// has settled — whatever he was saying when he arrived.
-    pub const SETTLED_TENURE_DAYS: u16 = 365;
+    /// A season in the side, playing this share of the matches, is a man
+    /// who has settled — whatever he was saying when he arrived. The
+    /// same tenure every other "is he stuck here" reading uses.
+    pub const SETTLED_TENURE_DAYS: u16 = StuckCareerScan::TENURE_FOR_A_STUCK_STORY as u16;
     pub const SETTLED_STARTER_SHARE: f32 = 0.4;
 
     /// Read him, at the point the mind has already built its picture.
+    ///
+    /// Three channels, read as a MAX: the want, the mood, and — since
+    /// the arc exists — the plan. A man living out `FinishAtHome` has
+    /// decided where he means to end up, which is a stronger statement
+    /// than any mood; a man on `ProveOnLoan` who would rather do it
+    /// among his own people is the commonest loan home in the game, and
+    /// the two together are what a parent posts to the world.
     pub fn read(player: &Player, situation: &MindSituation, date: NaiveDate) -> Self {
+        let plan = player.mind.career.plan;
+        let plan_desire = match plan.map(|p| p.arc) {
+            Some(CareerArc::FinishAtHome) => plan.map(|p| p.strength).unwrap_or(0.0),
+            // He is going somewhere to play, and where he plays is a
+            // question his passport has an answer to. Half weight: it is
+            // a preference on a move he wants anyway, not the reason for
+            // it.
+            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => {
+                plan.map(|p| p.strength * 0.5).unwrap_or(0.0)
+            }
+            _ => 0.0,
+        };
         let desire = player
             .mind
             .pressure_of(GoalKind::GoHome)
             .max(PlayerStanceBuilder::home_mood_desire(player, situation))
+            .max(plan_desire)
             .clamp(0.0, 1.0);
         // The want clears itself. A move resets `days_at_club`, and a year
         // of regular football answers the question the posting asked — so

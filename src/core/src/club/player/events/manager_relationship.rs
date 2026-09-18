@@ -26,21 +26,81 @@ use super::MatchOutcome;
 use super::MatchParticipation;
 use super::scaling;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::person::Person;
 use crate::club::player::player::Player;
+use crate::club::relations::StaffRelation;
 use crate::club::staff::coach::PlannedRole;
 use crate::{
-    BigMatchDecision, BigMatchKind, BigMatchSelectionContext, ClubDirectionContext,
+    BigMatchDecision, BigMatchKind, BigMatchSelectionContext, ChangeType, ClubDirectionContext,
     ClubDirectionEvidence, ClubDirectionKind, HappinessEventCause, HappinessEventContext,
-    HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
-    InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
+    HappinessEventEvidence, HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity,
+    HappinessEventType,
+    InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage, ManagerCriticismReason,
     ManagerInteractionEventContext, ManagerInteractionTone, ManagerInteractionTopic,
     MatchSelectionContext, NewSigningThreatContext, NewSigningThreatReason, PlayerAcceptance,
     PlayerSquadStatus, PrivateTalkReason, PrivateTalkRequestContext, RivalThreatResponse,
-    RoleStatusEventContext, RoleStatusKind, SelectionDecisionScope, SelectionOmissionReason,
-    SelectionRole, SubstitutionFrustrationContext, SubstitutionFrustrationKind,
+    RelationshipChange, RelationshipEvent, RoleStatusEventContext, RoleStatusKind,
+    SelectionDecisionScope, SelectionOmissionReason, SelectionRole,
+    SubstitutionFrustrationContext, SubstitutionFrustrationKind, SupportEventContext,
+    SupportSetting, SupportSource, SupportTrigger,
 };
 use crate::club::mind::organs::memory::{ActorRef, EncodingInputs, EpisodeKind, FactClaim};
 use chrono::NaiveDate;
+
+/// One side of the weekly manager-trust read, split by the kind of
+/// evidence behind it so the row can say what the aggregate was made
+/// of. None of the arc's signals are performances — they are promises,
+/// words and the team sheet — so a hard-wired `Performance` topic told
+/// a man frozen out of the squad that the manager's changing view of
+/// him concerned his recent performance level.
+struct ManagerTrustLedger {
+    /// What the manager has said to him.
+    word: f32,
+    /// What the manager has promised him, and whether it held.
+    promise: f32,
+    /// What the team sheet has said, which says it louder.
+    selection: f32,
+}
+
+impl ManagerTrustLedger {
+    fn backing(player: &Player) -> Self {
+        ManagerTrustLedger {
+            word: player.count_recent(&HappinessEventType::ManagerPraise, 60) as f32 * 0.75
+                + player.count_recent(&HappinessEventType::ManagerEncouragement, 60) as f32 * 0.75,
+            promise: player.count_recent(&HappinessEventType::PromiseKept, 90) as f32 * 1.5,
+            selection: player.count_recent(&HappinessEventType::WonStartingPlace, 90) as f32 * 1.0,
+        }
+    }
+
+    fn erosion(player: &Player) -> Self {
+        ManagerTrustLedger {
+            word: player.count_recent(&HappinessEventType::ManagerCriticism, 60) as f32 * 0.5,
+            promise: player.count_recent(&HappinessEventType::PromiseBroken, 90) as f32 * 2.0,
+            selection: player.count_recent(&HappinessEventType::MatchDropped, 45) as f32 * 0.5
+                + player.count_recent(&HappinessEventType::LostStartingPlace, 90) as f32 * 1.5
+                + player.count_recent(&HappinessEventType::UnhappyWithTacticalRole, 90) as f32
+                    * 1.5,
+        }
+    }
+
+    fn total(&self) -> f32 {
+        self.word + self.promise + self.selection
+    }
+
+    /// What the row is about: whichever kind of evidence carried it.
+    /// Ties go to the team sheet, then to the promise — a manager's
+    /// words are the weakest of the three and never the headline when
+    /// something harder says the same thing.
+    fn topic(&self) -> ManagerInteractionTopic {
+        if self.selection >= self.promise && self.selection >= self.word {
+            ManagerInteractionTopic::PlayingTime
+        } else if self.promise >= self.word {
+            ManagerInteractionTopic::PromiseFollowUp
+        } else {
+            ManagerInteractionTopic::Other
+        }
+    }
+}
 
 /// Result of a private-talk detection pass. The driver is "what's the
 /// dominant grievance", computed from the player's recent event history
@@ -337,34 +397,32 @@ impl Player {
             return;
         }
 
-        let positive: f32 = self.count_recent(&HappinessEventType::PromiseKept, 90) as f32 * 1.5
-            + self.count_recent(&HappinessEventType::ManagerPraise, 60) as f32 * 0.75
-            + self.count_recent(&HappinessEventType::ManagerEncouragement, 60) as f32 * 0.75
-            + self.count_recent(&HappinessEventType::WonStartingPlace, 90) as f32 * 1.0;
-        let negative: f32 = self.count_recent(&HappinessEventType::PromiseBroken, 90) as f32 * 2.0
-            + self.count_recent(&HappinessEventType::ManagerCriticism, 60) as f32 * 0.5
-            + self.count_recent(&HappinessEventType::MatchDropped, 45) as f32 * 0.5
-            + self.count_recent(&HappinessEventType::LostStartingPlace, 90) as f32 * 1.5
-            + self.count_recent(&HappinessEventType::UnhappyWithTacticalRole, 90) as f32 * 1.5;
+        let positive = ManagerTrustLedger::backing(self);
+        let negative = ManagerTrustLedger::erosion(self);
 
-        let delta = positive - negative;
+        let delta = positive.total() - negative.total();
         // Higher gate than a single-event drop — this is an aggregate
         // mood, not a one-off reaction.
         if delta >= 3.0 {
-            self.emit_manager_trust_growing(positive, negative);
+            self.emit_manager_trust_growing(positive.total(), negative.total(), positive.topic());
         } else if delta <= -3.0 {
-            self.emit_manager_trust_eroding(positive, negative);
+            self.emit_manager_trust_eroding(positive.total(), negative.total(), negative.topic());
         }
     }
 
-    fn emit_manager_trust_growing(&mut self, positive: f32, negative: f32) {
+    fn emit_manager_trust_growing(
+        &mut self,
+        positive: f32,
+        negative: f32,
+        topic: ManagerInteractionTopic,
+    ) {
         let base = HappinessConfig::default()
             .catalog
             .magnitude(HappinessEventType::ManagerTrustGrowing);
         let delta = (positive - negative).clamp(3.0, 12.0);
         let magnitude = base * (delta / 6.0).clamp(0.6, 1.6);
         let ctx_inner = ManagerInteractionEventContext::new(
-            ManagerInteractionTopic::Performance,
+            topic,
             ManagerInteractionTone::Supportive,
             PlayerAcceptance::Motivated,
         )
@@ -385,14 +443,19 @@ impl Player {
         );
     }
 
-    fn emit_manager_trust_eroding(&mut self, positive: f32, negative: f32) {
+    fn emit_manager_trust_eroding(
+        &mut self,
+        positive: f32,
+        negative: f32,
+        topic: ManagerInteractionTopic,
+    ) {
         let base = HappinessConfig::default()
             .catalog
             .magnitude(HappinessEventType::ManagerTrustEroding);
         let delta = (negative - positive).clamp(3.0, 12.0);
         let magnitude = base * (delta / 6.0).clamp(0.6, 1.6);
         let ctx_inner = ManagerInteractionEventContext::new(
-            ManagerInteractionTopic::Performance,
+            topic,
             ManagerInteractionTone::Stern,
             PlayerAcceptance::Discouraged,
         )
@@ -1203,5 +1266,432 @@ impl BigMatchClassifier {
             return Some(BigMatchKind::Derby);
         }
         None
+    }
+}
+
+impl Player {
+    // ───────────────────────────────────────────────────────────
+    // Staff relationship moments
+    // ───────────────────────────────────────────────────────────
+
+    /// A member of the coaching staff had a moment with him this week —
+    /// a good one, a bust-up, a word that started something.
+    ///
+    /// The working relationship and the rapport move whoever it was.
+    /// Whether it also reaches his events feed does not: only the man
+    /// who picks the side changes what he believes about his own
+    /// standing, so only the head coach's word is written up as the
+    /// manager backing him. Any other coach's good week is a working
+    /// relationship warming, which is what it is.
+    pub fn on_staff_relationship_moment(
+        &mut self,
+        staff_id: u32,
+        event: RelationshipEvent,
+        today: NaiveDate,
+    ) {
+        let from_the_manager = self
+            .squad_standing_view
+            .is_some_and(|view| view.head_coach_id != 0 && view.head_coach_id == staff_id);
+
+        match event {
+            RelationshipEvent::PositiveInteraction => {
+                self.absorb_staff_moment(staff_id, ChangeType::CoachingSuccess, 0.5, today);
+                if from_the_manager {
+                    let trigger = self.encouragement_trigger(today);
+                    self.emit_manager_encouragement(
+                        staff_id,
+                        trigger,
+                        SupportSetting::PrivateTalk,
+                        1.5,
+                    );
+                }
+            }
+            RelationshipEvent::MentorshipStarted => {
+                self.absorb_staff_moment(staff_id, ChangeType::PersonalSupport, 0.8, today);
+                if from_the_manager {
+                    self.emit_manager_encouragement(
+                        staff_id,
+                        SupportTrigger::LeadershipMoment,
+                        SupportSetting::TrainingGround,
+                        2.0,
+                    );
+                }
+            }
+            RelationshipEvent::TrustBuilt => {
+                self.absorb_staff_moment(staff_id, ChangeType::CoachingSuccess, 0.6, today);
+                if from_the_manager {
+                    self.emit_coach_tactical_trust(staff_id);
+                }
+            }
+            RelationshipEvent::Conflict => {
+                // A relationship in good repair does not produce a
+                // flashpoint. Read through the player-side terms the
+                // bond's `conflict_risk` is built from.
+                if self.bond_absorbs_friction(staff_id) {
+                    return;
+                }
+                self.absorb_staff_moment(staff_id, ChangeType::TacticalDisagreement, -0.3, today);
+                if from_the_manager {
+                    self.emit_coach_flashpoint(staff_id);
+                }
+            }
+        }
+    }
+
+    /// Move the working relationship and the rapport by the same amount
+    /// in the same direction, so the two ways a coach reaches a player —
+    /// a scheduled talk and a moment on the training pitch — agree about
+    /// what a good or bad exchange is worth.
+    fn absorb_staff_moment(
+        &mut self,
+        staff_id: u32,
+        change_type: ChangeType,
+        amount: f32,
+        today: NaiveDate,
+    ) {
+        let change = if amount >= 0.0 {
+            RelationshipChange::positive(change_type, amount)
+        } else {
+            RelationshipChange::negative(change_type, amount.abs())
+        };
+        self.relations
+            .update_staff_relationship(staff_id, change, today);
+
+        let rapport_amount = (amount.abs() * 4.0).round() as i16;
+        if rapport_amount > 0 {
+            if amount >= 0.0 {
+                self.rapport.on_positive(staff_id, today, rapport_amount);
+            } else {
+                self.rapport.on_negative(staff_id, today, rapport_amount);
+            }
+        }
+    }
+
+    /// True when the relationship is in good enough repair that a
+    /// week's friction does not become an incident.
+    ///
+    /// Read off the axes the player owns, each against its own neutral
+    /// — a warm relation, undamaged authority, rapport on the credit
+    /// side and a coach whose promises have held. They are the same
+    /// terms `CoachPlayerBond::conflict_risk` weighs; the bond itself
+    /// needs the `&Staff` this context cannot hold.
+    fn bond_absorbs_friction(&self, staff_id: u32) -> bool {
+        let Some(relation) = self.relations.get_staff(staff_id) else {
+            return false;
+        };
+        relation.level > 0.0
+            && relation.authority_respect >= StaffRelation::NEUTRAL_AUTHORITY
+            && self.rapport.score(staff_id) > 0
+            && self.happiness.factors.promise_trust >= 0.0
+    }
+
+    /// What the manager had reason to say. Read from the player's own
+    /// state so the row names the occasion — an arm round the shoulder
+    /// after a bad spell, a word for a boy, a well done for a man in
+    /// form — instead of filing another contentless line.
+    fn encouragement_trigger(&self, today: NaiveDate) -> SupportTrigger {
+        if self
+            .happiness
+            .has_recent_event(&HappinessEventType::InjuryReturn, 30)
+        {
+            return SupportTrigger::ReturningFromInjury;
+        }
+        if self.happiness.morale < 35.0 {
+            return SupportTrigger::PoorMorale;
+        }
+        if self.age(today) <= 20 {
+            return SupportTrigger::YoungPlayerConfidence;
+        }
+        if self.load.minutes_last_30 > 0.0 && self.load.form_rating >= 7.2 {
+            return SupportTrigger::HighRating;
+        }
+        SupportTrigger::Generic
+    }
+
+    fn emit_manager_encouragement(
+        &mut self,
+        staff_id: u32,
+        trigger: SupportTrigger,
+        setting: SupportSetting,
+        magnitude: f32,
+    ) {
+        let support = SupportEventContext::new(SupportSource::Manager, setting, trigger)
+            .with_speaker_staff_id(staff_id);
+
+        let mut ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerSupport,
+            HappinessEventSeverity::from_magnitude(magnitude),
+            match setting {
+                SupportSetting::TrainingGround => HappinessEventScope::TrainingGround,
+                SupportSetting::DressingRoom => HappinessEventScope::DressingRoom,
+                _ => HappinessEventScope::Personal,
+            },
+        )
+        .with_support_context(support);
+
+        if self.happiness.morale < 35.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::PoorMoraleBeforeTalk);
+        }
+        if self.attributes.professionalism >= 15.0 {
+            ctx = ctx.with_evidence(HappinessEventEvidence::HighProfessionalism);
+        }
+        if let Some(relation) = self.relations.get_staff(staff_id) {
+            if relation.level >= 50.0 {
+                ctx = ctx
+                    .with_evidence(HappinessEventEvidence::ManagerTrust)
+                    .with_evidence(HappinessEventEvidence::StrongCoachRapport);
+            } else if relation.level <= -25.0 {
+                ctx = ctx.with_evidence(HappinessEventEvidence::WeakCoachRapport);
+            }
+        }
+
+        let ctx = ctx.with_follow_up(HappinessEventFollowUp::ManagerTrustRising);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ManagerEncouragement,
+            magnitude,
+            None,
+            ctx,
+        );
+    }
+
+    fn emit_coach_tactical_trust(&mut self, staff_id: u32) {
+        let mctx = ManagerInteractionEventContext::new(
+            ManagerInteractionTopic::Tactical,
+            ManagerInteractionTone::Calm,
+            PlayerAcceptance::Motivated,
+        )
+        .with_manager_staff_id(staff_id);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::ManagerSupport,
+            HappinessEventSeverity::Minor,
+            HappinessEventScope::TrainingGround,
+        )
+        .with_manager_interaction_context(mctx);
+        let magnitude = HappinessConfig::default()
+            .catalog
+            .magnitude(HappinessEventType::ManagerTacticalInstruction);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ManagerTacticalInstruction,
+            magnitude,
+            None,
+            ctx,
+        );
+    }
+
+    fn emit_coach_flashpoint(&mut self, staff_id: u32) {
+        let mctx = ManagerInteractionEventContext::new(
+            ManagerInteractionTopic::Tactical,
+            ManagerInteractionTone::Stern,
+            PlayerAcceptance::Resented,
+        )
+        .with_manager_staff_id(staff_id)
+        .with_criticism_reason(ManagerCriticismReason::IgnoredTacticalInstruction);
+        let ctx = HappinessEventContext::new(
+            HappinessEventCause::TacticalDisagreement,
+            HappinessEventSeverity::Moderate,
+            HappinessEventScope::TrainingGround,
+        )
+        .with_manager_interaction_context(mctx)
+        .with_follow_up(HappinessEventFollowUp::ManagerInterventionRisk);
+        self.happiness.add_event_with_context(
+            HappinessEventType::ManagerCriticism,
+            -2.0,
+            None,
+            ctx,
+        );
+    }
+}
+
+#[cfg(test)]
+mod manager_trust_ledger_tests {
+    //! The trust arc's row has to say what the arc was made of.
+    use super::*;
+
+    struct Fixtures;
+
+    impl Fixtures {
+        fn ledger(word: f32, promise: f32, selection: f32) -> ManagerTrustLedger {
+            ManagerTrustLedger {
+                word,
+                promise,
+                selection,
+            }
+        }
+    }
+
+    /// The reported shape: a man who has only ever been spoken to. The
+    /// topic used to be `Performance` whatever carried the arc, so his
+    /// feed claimed a discussion of performances he had never given.
+    #[test]
+    fn words_alone_never_claim_a_performance() {
+        let topic = Fixtures::ledger(3.0, 0.0, 0.0).topic();
+        assert_eq!(topic, ManagerInteractionTopic::Other);
+        assert_ne!(topic, ManagerInteractionTopic::Performance);
+    }
+
+    #[test]
+    fn the_team_sheet_carries_the_row_when_it_is_the_loudest_evidence() {
+        assert_eq!(
+            Fixtures::ledger(0.5, 1.5, 3.0).topic(),
+            ManagerInteractionTopic::PlayingTime
+        );
+    }
+
+    #[test]
+    fn a_promise_track_record_reads_as_a_follow_up() {
+        assert_eq!(
+            Fixtures::ledger(0.5, 4.0, 1.0).topic(),
+            ManagerInteractionTopic::PromiseFollowUp
+        );
+    }
+
+    #[test]
+    fn the_total_is_every_family_summed() {
+        assert_eq!(Fixtures::ledger(1.0, 2.0, 3.0).total(), 6.0);
+    }
+}
+
+#[cfg(test)]
+mod staff_relationship_moment_tests {
+    //! Who spoke decides what the player takes from it.
+    use super::*;
+    use crate::club::player::SquadStandingView;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+
+    const HEAD_COACH: u32 = 7;
+    const FITNESS_COACH: u32 = 9;
+
+    struct Fixtures;
+
+    impl Fixtures {
+        fn today() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2030, 6, 1).unwrap()
+        }
+
+        fn player() -> Player {
+            let mut player = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("T".into(), "One".into()))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes {
+                    adaptability: 12.0,
+                    ambition: 12.0,
+                    controversy: 5.0,
+                    loyalty: 10.0,
+                    pressure: 12.0,
+                    professionalism: 12.0,
+                    sportsmanship: 12.0,
+                    temperament: 12.0,
+                    consistency: 12.0,
+                    important_matches: 12.0,
+                    dirtiness: 5.0,
+                })
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            player.squad_standing_view = Some(SquadStandingView {
+                head_coach_id: HEAD_COACH,
+                ..SquadStandingView::default()
+            });
+            player
+        }
+
+        fn feed_rows(player: &Player) -> usize {
+            player.happiness.recent_events.len()
+        }
+    }
+
+    /// The reported class: a staff member who has no say over the team
+    /// sheet must not file a row claiming the manager backed him. The
+    /// working relationship still moves — that is the point of the pass.
+    #[test]
+    fn a_fitness_coachs_good_week_is_a_relationship_not_a_headline() {
+        let mut player = Fixtures::player();
+        player.on_staff_relationship_moment(
+            FITNESS_COACH,
+            RelationshipEvent::PositiveInteraction,
+            Fixtures::today(),
+        );
+
+        assert_eq!(Fixtures::feed_rows(&player), 0);
+        assert!(player.relations.get_staff(FITNESS_COACH).is_some());
+        assert!(player.rapport.score(FITNESS_COACH) > 0);
+    }
+
+    /// The man who picks the side is the one whose word counts.
+    #[test]
+    fn the_head_coachs_good_week_reaches_the_feed() {
+        let mut player = Fixtures::player();
+        player.on_staff_relationship_moment(
+            HEAD_COACH,
+            RelationshipEvent::PositiveInteraction,
+            Fixtures::today(),
+        );
+
+        assert_eq!(Fixtures::feed_rows(&player), 1);
+        assert_eq!(
+            player.happiness.recent_events[0].event_type,
+            HappinessEventType::ManagerEncouragement
+        );
+        assert!(player.rapport.score(HEAD_COACH) > 0);
+    }
+
+    /// The row names the occasion rather than filing another
+    /// contentless "encouraged by the manager".
+    #[test]
+    fn the_word_is_filed_as_whatever_the_manager_had_reason_to_say() {
+        let today = Fixtures::today();
+
+        let mut low = Fixtures::player();
+        low.happiness.morale = 20.0;
+        assert_eq!(low.encouragement_trigger(today), SupportTrigger::PoorMorale);
+
+        let mut in_form = Fixtures::player();
+        in_form.load.minutes_last_30 = 270.0;
+        in_form.load.form_rating = 7.6;
+        assert_eq!(
+            in_form.encouragement_trigger(today),
+            SupportTrigger::HighRating
+        );
+
+        let nothing_in_particular = Fixtures::player();
+        assert_eq!(
+            nothing_in_particular.encouragement_trigger(today),
+            SupportTrigger::Generic
+        );
+    }
+
+    /// A relationship in good repair absorbs a week's friction instead
+    /// of turning it into a dressing-room incident.
+    #[test]
+    fn a_healthy_relationship_absorbs_friction() {
+        let mut player = Fixtures::player();
+        let today = Fixtures::today();
+        for _ in 0..20 {
+            player.on_staff_relationship_moment(
+                HEAD_COACH,
+                RelationshipEvent::PositiveInteraction,
+                today,
+            );
+        }
+        let before = Fixtures::feed_rows(&player);
+
+        player.on_staff_relationship_moment(HEAD_COACH, RelationshipEvent::Conflict, today);
+
+        assert!(player.bond_absorbs_friction(HEAD_COACH));
+        assert_eq!(Fixtures::feed_rows(&player), before);
     }
 }

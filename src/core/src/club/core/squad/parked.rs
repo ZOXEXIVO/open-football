@@ -12,6 +12,7 @@ use chrono::NaiveDate;
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
+use crate::transfers::pipeline::LoanOutReason;
 use crate::{Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
 
 use super::decision::SquadDecision;
@@ -58,9 +59,6 @@ impl Club {
         /// Observable level within this much of the first team's promotion
         /// bar means he is genuine cover, not a forgotten man.
         const PROMOTION_REACH: u8 = 6;
-        /// He must have had a full season down there before this fires —
-        /// a player just demoted may yet win his place back.
-        const SETTLED_DAYS: i64 = 300;
 
         // The reserve side still has to field a team on Saturday. Track
         // how many uncommitted players each group has left so the pass
@@ -103,7 +101,7 @@ impl Club {
             // A recent arrival — or a recent demotion — has not yet had the
             // season that would make this a verdict rather than a guess.
             if StuckCareerScan::club_tenure_days(player, date)
-                .is_some_and(|days| days < SETTLED_DAYS)
+                .is_some_and(|days| days < StuckCareerScan::TENURE_FOR_A_STUCK_STORY)
             {
                 continue;
             }
@@ -139,20 +137,22 @@ impl Club {
             match asset_ctx.classify_in_squad(player, date, team.team_type) {
                 SquadAssetClass::CorePlayer | SquadAssetClass::FirstTeamUseful => continue,
                 SquadAssetClass::ProspectDevelopment => {
-                    loan_players.push(SquadDecision::new(
+                    loan_players.push(SquadDecision::loan(
                         team_idx,
                         player.id,
                         SquadDecision::NEEDS_FIRST_TEAM_MINUTES,
+                        LoanOutReason::NeedsFirstTeamMinutes,
                     ));
                 }
                 SquadAssetClass::RotationUseful
                 | SquadAssetClass::UnknownNeedsEvaluation
                 | SquadAssetClass::TrueSurplus => {
                     if age <= LOAN_VIABLE_MAX_AGE {
-                        loan_players.push(SquadDecision::new(
+                        loan_players.push(SquadDecision::loan(
                             team_idx,
                             player.id,
                             SquadDecision::NEEDS_FIRST_TEAM_MINUTES,
+                            LoanOutReason::NeedsFirstTeamMinutes,
                         ));
                     } else {
                         transfer_players.push(SquadDecision::new(

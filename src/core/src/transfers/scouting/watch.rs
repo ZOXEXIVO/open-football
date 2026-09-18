@@ -1040,6 +1040,7 @@ mod breakout_watch_tests {
     use crate::club::academy::ClubAcademy;
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::CareerPlanView;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
@@ -1206,6 +1207,9 @@ mod breakout_watch_tests {
                 adaptability: 12,
                 leave_pressure: 0.0,
                 stay_pressure: 0.0,
+                loan_willingness: 1.0,
+                career_plan: CareerPlanView::none(),
+                parent_subsidy: 0.0,
                 player_name: "Foreign Star".into(),
                 club_name: "Big Foreign Club".into(),
                 position: PlayerPositionType::MidfielderRight,

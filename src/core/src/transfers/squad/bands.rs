@@ -5,7 +5,62 @@
 //! snapping to the same tier. Everything here is a function of a reputation
 //! SCORE (0..1) and a position group — no club, no player, no world.
 
-use crate::{PlayerFieldPositionGroup, ReputationLevel};
+use crate::{ClubLevelAnchor, PlayerFieldPositionGroup, ReputationLevel};
+
+/// How good a club is for a player of a given level — one continuous
+/// reading, shared by the player's own plan and the club's pathway.
+///
+/// 1.0 is a starter here, 0.0 rotation depth, −0.5 out of his depth, 1.5
+/// too good for the place. Because both sides speak it, "drop one level to
+/// play" is a band delta rather than a reputation-tier step, and the same
+/// sentence means the same thing to a nineteen-year-old at a giant and a
+/// thirty-year-old in a second division.
+pub struct LevelBand;
+
+impl LevelBand {
+    /// Out of his depth at the bottom, plainly too good at the top.
+    pub const MIN: f32 = -1.0;
+    pub const MAX: f32 = 2.0;
+
+    /// A division, in band terms. The step a loan normally asks a player
+    /// to take, and the width every band tolerance is written against.
+    pub const ONE_LEVEL: f32 = 0.6;
+
+    /// The band `level` occupies at a club with this anchor.
+    pub fn of(level: u8, group: PlayerFieldPositionGroup, anchor: &ClubLevelAnchor) -> f32 {
+        let key = anchor.key_floor(group) as f32;
+        let rotation = anchor.rotation_floor(group) as f32;
+        let span = (key - rotation).max(1.0);
+        ((level as f32 - rotation) / span).clamp(Self::MIN, Self::MAX)
+    }
+
+    /// The same reading against a club known only by its reputation
+    /// `overall_score` (0..1) — the cross-border and summary paths.
+    pub fn at_reputation(level: u8, group: PlayerFieldPositionGroup, score: f32) -> f32 {
+        Self::of(level, group, &ClubLevelAnchor::for_reputation(score))
+    }
+
+    /// How well a band matches what somebody meant him to be playing at,
+    /// 1.0 for a match and 0.0 a full level away.
+    pub fn fit(band: f32, target: f32) -> f32 {
+        1.0 - ((band - target).abs() / Self::ONE_LEVEL).clamp(0.0, 1.0)
+    }
+
+    /// How ready a player already is for his parent club's own first
+    /// team, 0..1 — measured against the parent's best in his position,
+    /// which is the standard he is actually judged by there. An unknown
+    /// parent standard reads as fully raw, which is what stands the
+    /// destination floors down.
+    pub fn readiness_of(ability: u8, parent_best_in_group: u8) -> f32 {
+        if parent_best_in_group == 0 {
+            return 0.0;
+        }
+        const RAW_RATIO: f32 = 0.60;
+        const READY_RATIO: f32 = 0.90;
+        let ratio = ability as f32 / parent_best_in_group as f32;
+        ((ratio - RAW_RATIO) / (READY_RATIO - RAW_RATIO)).clamp(0.0, 1.0)
+    }
+}
 
 /// The ability bands a club recruits in.
 pub(crate) struct TierBands;

@@ -19,6 +19,7 @@
                     <th class="sq-inf"></th>
                     <th class="sq-name">{{ i18n.t("name") }}</th>
                     <th>{{ i18n.t("position") }}</th>
+                    <th class="sq-pathway">{{ i18n.t("pathway") }}</th>
                     <th class="sq-nat">{{ i18n.t("nat") }}</th>
                     <th class="sq-age">{{ i18n.t("age") }}</th>
                     <th class="sq-ability">{{ i18n.t("ability") }}</th>
@@ -62,6 +63,7 @@
                         </a>{% if player.is_captain %}&nbsp;<span class="sq-cap-dot" title="{{ i18n.t("captain") }}"></span>{% endif %}{% if player.is_vice_captain %}&nbsp;<span class="sq-vice-dot" title="{{ i18n.t("vice_captain") }}"></span>{% endif %}
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
+                    <td class="sq-pathway"{% if let Some(note) = player.pathway_note %} title="{{ note }}"{% endif %}>{{ player.pathway }}{% if player.pathway_note.is_some() %}<span class="sq-pathway-note"></span>{% endif %}</td>
                     <td class="sq-nat">
                         <a href="/{{ lang }}/countries/{{ player.country_slug }}">
                             <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>

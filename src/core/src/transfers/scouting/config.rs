@@ -394,6 +394,9 @@ pub struct RealismTarget {
     /// Days the player has carried a market-availability status; 0 when not
     /// on the market. Drives [`Self::market_staleness`].
     pub days_on_market: i16,
+    /// The player's own [`MarketResignation`] read, 0..1 — runs ahead of
+    /// `days_on_market` for a man listed after seasons without football.
+    pub market_resignation: f32,
 }
 
 impl RealismTarget {
@@ -411,7 +414,10 @@ impl RealismTarget {
 
     /// How stale the player's PERMANENT-market availability is, 0..1 — the
     /// same grace-then-ramp clock the seller's fee-floor erosion and the
-    /// player's own resignation run on ([`MarketResignation`]). Non-zero
+    /// player's own resignation run on ([`MarketResignation`]), or that
+    /// resignation itself where it has run further — a man listed after
+    /// seasons without football is reachable from further down on the
+    /// day he is listed. Non-zero
     /// only for a transfer-listed player: it widens the attainability band
     /// and the affordability read below, because a long-unsold listing is
     /// precisely the cut-price, lowered-sights target a smaller club can
@@ -423,9 +429,10 @@ impl RealismTarget {
         if !self.is_listed {
             return 0.0;
         }
-        ((self.days_on_market as f32 - MarketResignation::GRACE_DAYS)
+        let unsold = ((self.days_on_market as f32 - MarketResignation::GRACE_DAYS)
             / MarketResignation::RAMP_DAYS)
-            .clamp(0.0, 1.0)
+            .clamp(0.0, 1.0);
+        unsold.max(self.market_resignation.clamp(0.0, 1.0))
     }
 }
 
@@ -703,6 +710,7 @@ impl ScoutingConfig {
                 is_loan_listed: target.is_loan_listed,
                 squad_status: target.seller_ctx.squad_status.clone(),
                 days_on_market: target.seller_ctx.days_on_market,
+                market_resignation: target.seller_ctx.market_resignation,
             },
             buyer_fee_capacity,
         )
@@ -852,6 +860,7 @@ mod tests {
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerSquadStatus;
     use crate::club::player::language::LanguageProfile;
+    use crate::club::player::mind::CareerPlanView;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
@@ -874,6 +883,7 @@ mod tests {
         estimated_value: f64,
         squad_status: PlayerSquadStatus,
         days_on_market: i16,
+        market_resignation: f32,
     }
 
     impl Default for Target {
@@ -890,6 +900,7 @@ mod tests {
                 estimated_value: 1_500_000.0,
                 squad_status: PlayerSquadStatus::FirstTeamRegular,
                 days_on_market: 0,
+                market_resignation: 0.0,
             }
         }
     }
@@ -915,6 +926,9 @@ mod tests {
                 adaptability: 12,
                 leave_pressure: 0.0,
                 stay_pressure: 0.0,
+                loan_willingness: 1.0,
+                career_plan: CareerPlanView::none(),
+                parent_subsidy: 0.0,
                 player_name: "Test".to_string(),
                 club_name: "Test Club".to_string(),
                 position: PlayerPositionType::Goalkeeper,
@@ -958,7 +972,7 @@ mod tests {
                     is_unhappy: false,
                     in_debt: false,
                     days_on_market: self.days_on_market,
-                    market_resignation: 0.0,
+                    market_resignation: self.market_resignation,
                     club_matches_played: 0,
                     big_stage_inclination: 0.0,
                     is_marketed: false,
@@ -1284,6 +1298,26 @@ mod tests {
             !c.is_target_realistic(buyer, &loan_only, 0.0),
             "loan-only staleness must not widen the permanent realism band"
         );
+    }
+
+    /// A man listed after seasons without football brings his own clock:
+    /// the band a fresh listing would not reach is open on day one.
+    #[test]
+    fn a_resigned_player_is_reachable_the_day_he_is_listed() {
+        let c = ScoutingConfig::default();
+        let listed = |resignation: f32| {
+            Target {
+                world_rep: 4000,
+                is_listed: true,
+                days_on_market: 0,
+                market_resignation: resignation,
+                ..Target::default()
+            }
+            .build()
+        };
+        let buyer = 2000;
+        assert!(!c.is_target_realistic(buyer, &listed(0.0), 0.0));
+        assert!(c.is_target_realistic(buyer, &listed(1.0), 0.0));
     }
 
     #[test]

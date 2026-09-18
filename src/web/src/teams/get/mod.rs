@@ -87,8 +87,43 @@ pub struct TeamPlayer {
     pub average_rating: String,
     pub is_captain: bool,
     pub is_vice_captain: bool,
+    /// Where the club has him on its development pathway — its own
+    /// stated intention for him, as opposed to what his squad label
+    /// happens to say.
+    pub pathway: String,
+    /// For a man who is away: what the loan is FOR, and what the club
+    /// has made of it so far.
+    pub pathway_note: Option<String>,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
+}
+
+/// The club's own intention for a player, as the squad list shows it.
+struct PathwayCell;
+
+impl PathwayCell {
+    fn label(player: &Player, i18n: &I18n) -> String {
+        i18n.t(player.pathway_stage().as_i18n_key()).to_string()
+    }
+
+    /// The purpose the loan was arranged for, and the verdict the club
+    /// has on the last one. Only worth a line for a man who is away or
+    /// has just come back.
+    fn note(player: &Player, i18n: &I18n) -> Option<String> {
+        let plan = player.plan.as_ref()?;
+        let purpose = plan
+            .loan_purpose
+            .map(|reason| i18n.t(reason.as_i18n_key()).to_string());
+        let verdict = plan
+            .last_verdict
+            .map(|verdict| i18n.t(verdict.as_i18n_key()).to_string());
+        match (purpose, verdict) {
+            (Some(purpose), Some(verdict)) => Some(format!("{purpose} — {verdict}")),
+            (Some(purpose), None) => Some(purpose),
+            (None, Some(verdict)) => Some(verdict),
+            (None, None) => None,
+        }
+    }
 }
 
 pub async fn team_get_action(
@@ -198,6 +233,8 @@ pub async fn team_get_action(
                 average_rating: season_stats.display_average_rating(),
                 is_captain: captain_id == Some(p.id),
                 is_vice_captain: vice_captain_id == Some(p.id),
+                pathway: PathwayCell::label(p, &i18n),
+                pathway_note: PathwayCell::note(p, &i18n),
                 status: PlayerStatusDto::new(p.statuses.get()),
             }
         })
@@ -275,6 +312,8 @@ pub async fn team_get_action(
                             average_rating: season_stats.display_average_rating(),
                             is_captain: false,
                             is_vice_captain: false,
+                            pathway: PathwayCell::label(player, &i18n),
+                            pathway_note: PathwayCell::note(player, &i18n),
                             status: PlayerStatusDto::new(player.statuses.get()),
                         });
                     }

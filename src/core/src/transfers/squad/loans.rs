@@ -12,6 +12,8 @@
 //! the fourth choice would not.
 
 use super::*;
+use crate::club::player::mind::MindClock;
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::squad::SquadReviewPass;
 
 /// The loan-out scan.
@@ -127,9 +129,17 @@ impl LoanOutScan {
         }
     }
 
-    /// The reasons a man is not loanable at all — his own contract, the
-    /// manager's pin, his standing in the side, his age, his loan history, the
-    /// window he arrived in, and the plan the club bought him under.
+    /// The reasons a man cannot be loaned out at all.
+    ///
+    /// Physical only, now: he is already away, he has no contract to
+    /// lend, he is with his country, his manager has pinned him, or the
+    /// club committed to him this window. Everything that used to sit
+    /// here and was a JUDGEMENT rather than a fact — thirty and over,
+    /// fifteen appearances, two previous spells, a first-team label, the
+    /// club's own first choice — is priced in
+    /// [`ParentWillingness`] instead, because each of them is a reason a
+    /// club is less likely to lend somebody rather than a reason it
+    /// cannot.
     fn blocked(
         player: &Player,
         player_info: &SquadPlayerInfo,
@@ -137,100 +147,71 @@ impl LoanOutScan {
         date: NaiveDate,
         current_window: Option<(NaiveDate, NaiveDate)>,
     ) -> bool {
-        // Skip players already on loan
-        if player.is_on_loan() {
+        if player.is_on_loan() || player.contract.is_none() {
             return true;
         }
 
         // Manager-pinned: never propose a loan-out, regardless of
-        // philosophy / playing-time / surplus signals. The pin is
-        // the manager's decision; the AI must respect it. A free
-        // agent (no contract) cannot be loaned anyway, but the pin
-        // must not block any future move either.
-        if player.is_force_match_selection && player.contract.is_some() {
-            return true;
-        }
-
-        // Central core-player protection: a key / first-team / inferred-
-        // core player is never loaned out automatically (the Litvinov
-        // case — a KeyPlayer must not be farmed out for early-season
-        // low minutes). RotationUseful / ProspectDevelopment / surplus
-        // players fall through to the normal, calibration-sensitive
-        // logic below.
-        if player_info.asset_class.is_first_team_protected() {
-            debug!(
-                "Loan-out skipped: player {} is a protected first-team asset ({})",
-                player_info.player_id,
-                player_info.asset_class.label()
-            );
-            return true;
-        }
-
-        // …and the same protection read off STANDING rather than off a
-        // label. The asset class above is minted from
-        // `contract.squad_status`, which a teenager gets on his birth
-        // year, so a nineteen-year-old first-choice forward walked
-        // through it as `ProspectDevelopment`. A club does not loan out
-        // the man who starts for it — unless he has asked to go, which
-        // is his decision and not the club's.
-        if LoanAssetGuard::parent_holds_for(club, player, date) {
+        // philosophy / playing-time / surplus signals. The pin is the
+        // manager's decision; the AI must respect it.
+        if player.is_force_match_selection {
             return true;
         }
 
         // A player away on international duty isn't being benched by a
         // club choice — his low minutes are an artefact of the call-up,
-        // not evidence he is unwanted. Never loan-list on that basis.
+        // not evidence he is unwanted.
         if player.statuses.is_on_international_duty() {
             return true;
         }
 
-        // Players aged 30+ should not be loaned — they should be sold or released.
-        // Loaning older players is unrealistic in real football.
-        if player_info.age >= 30 {
-            return true;
-        }
-
-        // Players loaned out 2+ times should be sold, not loaned again.
-        // Repeated loans from the same parent club are unrealistic.
-        let previous_loan_count = player
-            .statistics_history
-            .items
-            .iter()
-            .filter(|h| h.is_loan)
-            .count();
-        if previous_loan_count >= 2 {
-            return true;
-        }
-
-        // Players who are regular contributors (15+ appearances) should not
-        // be loaned out — they're getting enough game time already.
-        if player_info.appearances >= 15 {
-            return true;
-        }
-
-        // Same-window protection: signed during this open window → can't be loaned out
-        if let (Some(transfer_date), Some((window_start, window_end))) =
-            (player.last_transfer_date, current_window)
-        {
-            if transfer_date >= window_start && transfer_date <= window_end {
-                return true;
-            }
-        }
-
-        // Club has a signing plan for this player — don't loan them out
-        // until they've been properly evaluated (enough time + appearances).
-        // Development plans are the exception: loaning IS the plan.
-        if let Some(ref plan) = player.plan {
-            let total_apps = player_info.appearances;
-            if !plan.is_evaluated(date, total_apps)
-                && !plan.is_expired(date)
-                && plan.role != PlayerPlanRole::Development
+        // Same-window protection: the club committed to him weeks ago
+        // and has not yet had a chance to be wrong about it. A
+        // development pathway is the exception, because loaning him IS
+        // the commitment.
+        let on_a_development_pathway = player
+            .plan
+            .as_ref()
+            .map(|plan| plan.role == PlayerPlanRole::Development)
+            .unwrap_or(false);
+        if !on_a_development_pathway {
+            if let (Some(transfer_date), Some((window_start, window_end))) =
+                (player.last_transfer_date, current_window)
             {
-                return true;
+                if transfer_date >= window_start && transfer_date <= window_end {
+                    return true;
+                }
+            }
+            // …and the evaluation window it bought him. A club that just
+            // signed a man does not lend him out because a depth cap says
+            // so.
+            if let Some(ref plan) = player.plan {
+                let appearances = player.statistics.played + player.statistics.played_subs;
+                if !plan.is_evaluated(date, appearances) && !plan.is_expired(date) {
+                    return true;
+                }
             }
         }
 
-        false
+        // And the one reading that is about the club's position rather
+        // than the player's paperwork: below this it is not refusing a
+        // destination, it is refusing the conversation. His own side of
+        // it — a request, a listing, a plan pushing for a season away —
+        // lifts the hold his standing would otherwise put on him.
+        let opened = player.statuses.has(PlayerStatusType::Req)
+            || player.statuses.has(PlayerStatusType::Loa)
+            || player
+                .mind
+                .career
+                .plan_view(MindClock::day(date))
+                .loan_push()
+                >= ParentWillingness::PLAN_OPENS_AT;
+        let willingness = ParentWillingness::held_as_first_team(
+            LoanAssetGuard::willingness_for(club, player, date),
+            player_info.asset_class.is_first_team_protected(),
+            opened,
+        );
+        willingness < ParentWillingness::ENTERTAINS
     }
 
     /// His place in the pecking order, and the cushion it buys him. `None`
@@ -293,14 +274,10 @@ impl LoanOutScan {
             .unwrap_or(player_info.current_ability);
         // Depth cushion: extra CA-below-group-average the player needs
         // to exceed before any "surplus / lack of minutes" branch will
-        // fire. Rank 0 (main) needs a massive deficit; rank 3+ needs
-        // the normal amount. Scales smoothly; no hard cliff.
-        let depth_cushion: i16 = match rank {
-            0 => 25,
-            1 => 12,
-            2 => 5,
-            _ => 0,
-        };
+        // fire. Halved from the ladder it replaced — the hold on a
+        // club's own first choice is priced in [`ParentWillingness`]
+        // now, so the cushion no longer has to do that job twice.
+        let depth_cushion = ParentWillingness::depth_cushion(rank);
 
         Some(GroupDepth {
             group,

@@ -29,7 +29,7 @@
 use chrono::NaiveDate;
 
 use crate::club::team::squad::SquadAssetClass;
-use crate::{ClubPhilosophy, PlayerFieldPositionGroup};
+use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
 
 /// Why a club would sell a player. Ordered by how loudly it says so, which
 /// is only used to name the strongest motive on an entry — the score itself
@@ -48,6 +48,11 @@ pub enum SellMotive {
     SurplusByPlan,
     /// He wants to go.
     PlayerPushing,
+    /// The club's own pathway has him down as a fee. The one motive
+    /// that is a DECISION rather than a circumstance — a trading club
+    /// sells its best player on purpose, at the top of his curve, and
+    /// nothing else in this list could express that.
+    PathwayMature,
 }
 
 /// One player as the selling club sees him.
@@ -80,6 +85,8 @@ pub struct AssetRow {
     pub renewal_blocked: bool,
     /// True while a recent signing is still protected from resale.
     pub signing_protected: bool,
+    /// Where the club's own pathway has him.
+    pub stage: PathwayStage,
     /// True while the player is unavailable for reasons that make a sale
     /// impossible right now (long-term injury).
     pub unsellable: bool,
@@ -261,8 +268,23 @@ impl AssetLedger {
     pub fn asking_for(row: &AssetRow) -> f64 {
         row.estimated_value.max(0.0)
             * Self::role_premium(row)
+            * Self::pathway_premium(row.stage)
             * Self::runway_curve(row.contract_months_remaining)
             * Self::age_trajectory(row.age, row.group)
+    }
+
+    /// What the club's own decision does to the price.
+    ///
+    /// A player it means to cash in is one it is selling from strength —
+    /// it has a successor, it is in no hurry, and it prices him
+    /// accordingly. One it has finished with is one every buyer knows it
+    /// has finished with.
+    fn pathway_premium(stage: PathwayStage) -> f64 {
+        match stage {
+            PathwayStage::SellAtPeak => Self::SELL_AT_PEAK_PREMIUM,
+            PathwayStage::MoveOn => Self::MOVE_ON_DISCOUNT,
+            _ => 1.0,
+        }
     }
 
     /// The premium the shirt he wears puts on his price.
@@ -329,6 +351,11 @@ impl AssetLedger {
             (1.0 - ((a - peak) as f64) * 0.13).max(0.25)
         }
     }
+
+    /// What a club selling from strength adds to the price …
+    const SELL_AT_PEAK_PREMIUM: f64 = 1.15;
+    /// … and what one every buyer knows has finished with him loses.
+    const MOVE_ON_DISCOUNT: f64 = 0.85;
 
     pub fn peak_sale_age(group: PlayerFieldPositionGroup) -> u8 {
         match group {
@@ -447,6 +474,24 @@ impl AssetLedger {
             } + (roster_pressure as f32) * disposability * 0.30;
             score.add(surplus_term, SellMotive::SurplusByPlan);
 
+            // ── The club's own plan for him ──
+            // A trading club does not wait for a decline or a running
+            // contract to sell its best player; it decides, and the
+            // decision lives on his pathway. Held apart from the peak
+            // term above because that one is a circumstance and this
+            // one is a policy — a club with no policy scores nothing
+            // here whatever anybody's age is.
+            let pathway_term = match row.stage {
+                PathwayStage::SellAtPeak => 0.35 * asset_weight,
+                PathwayStage::Starter | PathwayStage::Core
+                    if trader && row.age + 1 >= Self::peak_sale_age(row.group) =>
+                {
+                    0.20 * asset_weight
+                }
+                _ => 0.0,
+            };
+            score.add(pathway_term, SellMotive::PathwayMature);
+
             // ── He is pushing ──
             let push_term = if row.is_transfer_requested {
                 0.60
@@ -504,6 +549,7 @@ mod asking_price_tests {
                 renewal_blocked: false,
                 signing_protected: false,
                 unsellable: false,
+                stage: PathwayStage::Starter,
             }
         }
     }
@@ -604,6 +650,7 @@ mod sell_list_tests {
                 renewal_blocked: false,
                 signing_protected: false,
                 unsellable: false,
+                stage: PathwayStage::Starter,
             }
         }
     }
@@ -709,5 +756,105 @@ mod sell_list_tests {
             .collect();
         let list = AssetLedger::build(&rows, &Fx::ctx(), Fx::date());
         assert!(list.len() <= AssetLedger::MAX_ENTRIES);
+    }
+}
+
+#[cfg(test)]
+mod sell_at_peak_tests {
+    use super::*;
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap()
+        }
+
+        /// A twenty-six-year-old first-team man on a long contract at a
+        /// club with money: nothing about his circumstances says sell.
+        fn row(stage: PathwayStage) -> AssetRow {
+            AssetRow {
+                player_id: 1,
+                group: PlayerFieldPositionGroup::Midfielder,
+                age: 26,
+                contract_months_remaining: Some(48),
+                estimated_value: 10_000_000.0,
+                annual_wage: 1_000_000.0,
+                asset_class: SquadAssetClass::FirstTeamUseful,
+                observable_level: 140,
+                squad_average_level: 130,
+                believed_ceiling: 145,
+                group_rank: 0,
+                is_transfer_requested: false,
+                stage_pull: 0.0,
+                renewal_blocked: false,
+                signing_protected: false,
+                unsellable: false,
+                stage,
+            }
+        }
+
+        fn ctx(philosophy: ClubPhilosophy) -> LedgerContext {
+            LedgerContext {
+                philosophy,
+                annual_wages: 40_000_000.0,
+                wage_budget: 80_000_000.0,
+                brief_envelope: 0.0,
+                available_budget: 50_000_000.0,
+                squad_size: 24,
+                max_squad_size: 28,
+                in_debt: false,
+            }
+        }
+    }
+
+    /// The decision IS the motive. Nothing about this man's age, contract
+    /// or standing says sell; his club has decided to, and before the
+    /// pathway existed there was no term in the model that could say so.
+    #[test]
+    fn a_club_that_has_decided_to_cash_him_in_puts_him_on_the_list() {
+        let holding = AssetLedger::build(
+            &[Fx::row(PathwayStage::Starter)],
+            &Fx::ctx(ClubPhilosophy::DevelopAndSell),
+            Fx::date(),
+        );
+        assert!(
+            holding.is_empty(),
+            "a settled starter at a trading club is not automatically for sale"
+        );
+
+        let selling = AssetLedger::build(
+            &[Fx::row(PathwayStage::SellAtPeak)],
+            &Fx::ctx(ClubPhilosophy::DevelopAndSell),
+            Fx::date(),
+        );
+        let entry = selling.first().expect("the decision reaches the sell list");
+        assert_eq!(entry.motive, SellMotive::PathwayMature);
+    }
+
+    /// …and a club that is not a trader has no such decision to make, so
+    /// the same man scores nothing for it.
+    #[test]
+    fn the_motive_is_a_policy_not_an_age() {
+        let peak_but_not_trading = AssetLedger::build(
+            &[AssetRow {
+                age: AssetLedger::peak_sale_age(PlayerFieldPositionGroup::Midfielder) - 1,
+                ..Fx::row(PathwayStage::Starter)
+            }],
+            &Fx::ctx(ClubPhilosophy::SignToCompete),
+            Fx::date(),
+        );
+        assert!(peak_but_not_trading.is_empty());
+    }
+
+    /// Selling from strength is worth something on the price, and being
+    /// finished with a man costs something.
+    #[test]
+    fn the_pathway_moves_the_asking_price_both_ways() {
+        let held = AssetLedger::asking_for(&Fx::row(PathwayStage::Starter));
+        let peak = AssetLedger::asking_for(&Fx::row(PathwayStage::SellAtPeak));
+        let done = AssetLedger::asking_for(&Fx::row(PathwayStage::MoveOn));
+        assert!(peak > held);
+        assert!(done < held);
     }
 }

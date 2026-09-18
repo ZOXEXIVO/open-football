@@ -14,6 +14,7 @@ mod depth;
 mod goalkeeping;
 mod loans;
 mod parked;
+mod pathway;
 mod promotion;
 mod rebalance;
 mod trim;

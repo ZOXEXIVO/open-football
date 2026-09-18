@@ -224,6 +224,7 @@ pub use club::{
     PlayerMailboxResult,
     PlayerMessage,
     PlayerMessageType,
+    PathwayStage,
     PlayerPlan,
     PlayerPlanRole,
     PlayerPosition,

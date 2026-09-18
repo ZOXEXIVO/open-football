@@ -41,7 +41,9 @@ use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::mind::{CareerArc, CareerPlanView, MindClock};
 use crate::transfers::gate::{EffectivePlayerReputation, thresholds};
+use crate::transfers::loan::agreement::{ParentReading, ParentWillingness};
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::{
     Club, ClubLevelAnchor, Person, Player, PlayerFieldPositionGroup, PlayerStatusType,
@@ -203,6 +205,9 @@ pub struct LoanAssetGuard {
     seller_advertised: bool,
     player_effective_rep: i16,
     listing_resignation: f32,
+    /// How firmly he has decided he is dropping a level, 0..1 — the arcs
+    /// whose whole point is playing somewhere smaller.
+    plan_widening: f32,
 }
 
 impl LoanAssetGuard {
@@ -241,9 +246,9 @@ impl LoanAssetGuard {
     const RENOWN_YOUTH_WIDENING: f32 = 0.8;
     /// Seller engagement lost when the parent will not send him there at
     /// all …
-    const REFUSAL_UNTOUCHABLE: f32 = -80.0;
+    const REFUSAL_UNTOUCHABLE: f32 = -60.0;
     /// … when the borrower sits below the verdict's own floor …
-    const REFUSAL_BELOW_REACH: f32 = -40.0;
+    const REFUSAL_BELOW_REACH: f32 = -25.0;
     /// … and the most a merely expensive-for-them destination costs.
     const REFUSAL_CAPACITY_SPAN: f32 = -25.0;
 
@@ -278,6 +283,7 @@ impl LoanAssetGuard {
             seller_advertised,
             player_effective_rep,
             listing_resignation,
+            plan_widening: 0.0,
         }
     }
 
@@ -333,30 +339,96 @@ impl LoanAssetGuard {
                 true,
             ),
             listing_resignation: player.market_resignation(date),
+            plan_widening: Self::plan_widening_of(player, date),
         })
     }
 
-    /// The destination-independent veto on its own: would this club
-    /// entertain a loan of this player AT ALL?
+    /// How far the arc he is living out has already reconciled him to a
+    /// smaller club.
+    fn plan_widening_of(player: &Player, date: NaiveDate) -> f32 {
+        let plan = player.mind.career.plan_view(MindClock::day(date));
+        match plan.arc {
+            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => plan.strength,
+            _ => 0.0,
+        }
+    }
+
+    /// The parent's own position on lending him out, 0..1 — the
+    /// destination-independent half every loan-INTENT pass needs, and
+    /// those passes run before any destination exists.
     ///
-    /// The money terms need a borrower and are settled in
-    /// [`Self::assess`]; this is the half every loan-INTENT pass needs,
-    /// and those passes run before any destination exists. False whenever
-    /// the parent side cannot be read, and false on the
-    /// `OF_LOAN_GUARD_OFF` arm, so it only ever prevents an intent.
-    pub fn parent_holds_for(club: &Club, player: &Player, date: NaiveDate) -> bool {
+    /// This used to be a boolean veto (`parent_holds`) applied at five
+    /// call sites, which is what made the club's own first choice
+    /// unloanable however loudly he asked to go. The same reading is
+    /// still taken — it is the `starter_hold` term — but it is priced
+    /// now rather than enforced, and everything else the parent knows
+    /// about him is priced beside it. 1.0 whenever the parent side
+    /// cannot be read at all, and on the `OF_LOAN_GUARD_OFF` arm, so it
+    /// only ever restrains an intent.
+    pub fn willingness_for(club: &Club, player: &Player, date: NaiveDate) -> f32 {
         if MarketSwitches::loan_guard_off() {
-            return false;
+            return 1.0;
         }
         // Value and the parent's competition are money / destination
-        // terms, which `parent_holds` does not read — so neither is
+        // terms, which none of the readings below touch — so neither is
         // resolved here, and the half-built guard is used for nothing
         // else. The valuation matters: this runs per player per day on
         // the country listing pass.
-        Self::from_parts(club, player, date, 0, 0.0)
-            .map(|guard| guard.parent_holds())
-            .unwrap_or(false)
+        let Some(guard) = Self::from_parts(club, player, date, 0, 0.0) else {
+            return 1.0;
+        };
+        ParentWillingness::of(&guard.parent_reading(club, player, date)).score
     }
+
+    /// Everything the parent can see about him, gathered from the club
+    /// that owns him.
+    fn parent_reading(&self, club: &Club, player: &Player, date: NaiveDate) -> ParentReading {
+        let group = self.group;
+        // Across every squad the club owns, because the question the
+        // term asks is "can this club still field sides in this shirt",
+        // and the answer runs through the whole building — the reserve
+        // keeper is the first team's cover and the youth keeper is his.
+        // Zero means the caller is holding a squad the club's own
+        // rosters do not contain, which is no view rather than an empty
+        // position group.
+        let group_count = club
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .filter(|p| p.position().position_group() == group && !p.is_on_loan())
+            .count();
+        // A rolling start share is only worth reading once he has played
+        // enough for it to mean anything; before that the neutral 0.5
+        // says "not enough football to judge", exactly as it does in the
+        // mind's own picture.
+        let starter_share = if player.happiness.appearances_tracked >= Self::TRACKED_APPS {
+            player.happiness.starter_ratio
+        } else {
+            0.5
+        };
+        let plan = player.plan.as_ref();
+        ParentReading {
+            first_choice: self.first_choice(),
+            starter_share,
+            runway: ((34.0_f32 - self.age as f32) / 12.0).clamp(0.0, 1.0),
+            loans_used: plan.map(|p| p.loans_used).unwrap_or(0),
+            group_count,
+            group_min_needed: group.typical_starters(),
+            rank: self.parent_rank,
+            stage: player.pathway_stage(),
+            philosophy: club.philosophy,
+            plan_push: player
+                .mind
+                .career
+                .plan_view(MindClock::day(date))
+                .loan_push(),
+            requested: self.player_requested,
+            advertised: self.seller_advertised,
+        }
+    }
+
+    /// Matches the mind's own bar for trusting a rolling start share.
+    const TRACKED_APPS: u8 = 6;
 
     /// Approximate the parent side across a border, from the facts a
     /// cross-country player summary carries.
@@ -403,7 +475,18 @@ impl LoanAssetGuard {
             seller_advertised,
             player_effective_rep,
             listing_resignation: 0.0,
+            plan_widening: 0.0,
         }
+    }
+
+    /// The summary path's own plan reading — a borrowing country cannot
+    /// reach his mind, so the arc travels on the summary instead.
+    pub fn with_plan(mut self, plan: CareerPlanView) -> Self {
+        self.plan_widening = match plan.arc {
+            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => plan.strength,
+            _ => 0.0,
+        };
+        self
     }
 
     /// Where he stands at his own club, 0..1.25: 0 at the rotation floor,
@@ -464,15 +547,38 @@ impl LoanAssetGuard {
     /// band is simply wider, because a season in men's football is worth
     /// more to him than his name is.
     pub fn renown_gap_tolerated(age: u8, listing_resignation: f32) -> f32 {
+        Self::renown_gap_tolerated_with(age, listing_resignation, 0.0)
+    }
+
+    /// The same band, widened by a man's own decision to drop.
+    ///
+    /// The gap the band measures is a statement about his NAME, and a
+    /// player who has decided he is going down a level to play has
+    /// already made his peace with what that says about him. Nothing
+    /// else in the model could express it: resignation is what months on
+    /// the market do TO him, and this is what he has chosen.
+    pub fn renown_gap_tolerated_with(age: u8, listing_resignation: f32, plan_widening: f32) -> f32 {
         let youth = ((Self::DEVELOPMENT_AGE.saturating_sub(age)) as f32 / Self::RENOWN_AGE_SPAN)
             .clamp(0.0, 1.0);
         thresholds::REP_STEP_DOWN_GAP as f32 * (1.0 + Self::RENOWN_YOUTH_WIDENING * youth)
             + listing_resignation.clamp(0.0, 1.0) * thresholds::LOAN_RENOWN_RESIGNATION_SPAN
+            + plan_widening.clamp(0.0, 1.0) * Self::RENOWN_PLAN_SPAN
     }
 
-    /// This player's own renown band, at his age and market resignation.
+    /// How far a man's own plan to drop a level widens his renown band,
+    /// at full commitment. A division's worth of reputation.
+    const RENOWN_PLAN_SPAN: f32 = 1_500.0;
+
+    /// How far he has lowered his own sights, 0..1.
+    #[inline]
+    pub fn listing_resignation(&self) -> f32 {
+        self.listing_resignation
+    }
+
+    /// This player's own renown band, at his age, his market resignation
+    /// and the arc he is living out.
     pub fn renown_band(&self) -> f32 {
-        Self::renown_gap_tolerated(self.age, self.listing_resignation)
+        Self::renown_gap_tolerated_with(self.age, self.listing_resignation, self.plan_widening)
     }
 
     /// How far a loan could reach on the PARENT side alone — his standing

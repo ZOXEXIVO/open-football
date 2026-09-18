@@ -1175,3 +1175,63 @@ fn a_pass_arriving_within_a_stride_is_touched_onto_his_feet() {
         );
     }
 }
+
+/// **A ball coming to him inside his reach is his to play where he
+/// stands.** The first touch brings it in, so he is not sent to fetch it
+/// and TakeBall hands him back to his deciding state — a receiver who was
+/// sent to fetch every arriving pass lost the first-time shot.
+#[test]
+fn a_ball_coming_to_him_is_his_to_play_where_he_stands() {
+    let (mut field, context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
+    // Eight units out and closing on him at pass pace.
+    field.ball.position = Vector3::new(592.0, 275.0, 0.0);
+    field.ball.velocity = Vector3::new(1.2, -0.3, 0.0);
+    field.ball.current_owner = Some(man);
+
+    let tick_context = GameTickContext::new(&field, &context.players);
+    let player = field
+        .players
+        .iter()
+        .find(|p| p.id == man)
+        .expect("the man is on the field");
+    assert!(
+        !PlayerFieldPositionGroup::should_force_takeball(
+            player.tactical_position.current_position.position_group(),
+            player,
+            &context,
+            &tick_context,
+        ),
+        "he was sent to fetch a ball that is coming to him"
+    );
+    let ctx = StateProcessingContext {
+        in_state_time: 3,
+        player,
+        context: &context,
+        tick_context: &tick_context,
+    };
+    assert_eq!(
+        MidfielderTakeBallState::default()
+            .process(&ctx)
+            .and_then(|result| result.state),
+        Some(PlayerState::Midfielder(MidfielderState::Running)),
+        "TakeBall kept him chasing a ball his touch is bringing in"
+    );
+
+    // The same ball rolling the other way is not coming to him.
+    field.ball.velocity = Vector3::new(-1.2, 0.3, 0.0);
+    let tick_context = GameTickContext::new(&field, &context.players);
+    let player = field
+        .players
+        .iter()
+        .find(|p| p.id == man)
+        .expect("the man is on the field");
+    assert!(
+        PlayerFieldPositionGroup::should_force_takeball(
+            player.tactical_position.current_position.position_group(),
+            player,
+            &context,
+            &tick_context,
+        ),
+        "a ball rolling away from him is his to go and get"
+    );
+}

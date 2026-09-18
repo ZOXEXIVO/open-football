@@ -230,6 +230,40 @@ impl MarketSwitches {
         *OFF.get_or_init(|| Self::read("OF_GEOGRAPHY_OFF"))
     }
 
+    /// The corridor FLOOR: a pair a card names never reads below what the
+    /// derived prior would have said for it.
+    ///
+    /// Disarmed, a card weight replaces the prior outright, and because every
+    /// weight is normalised by its own list's maximum that inverts the model
+    /// on two thirds of the pairs any card names — England's card mentions
+    /// Estonia at 1 against Brazil's 30, so an Estonian reads 0.023 where
+    /// saying nothing would have said 0.320, and `MARKET_REACH_FLOOR` (0.05)
+    /// then closes a move that the silence would have allowed.
+    ///
+    /// The A/B arm for the corridor-floor campaign. It moves the PERMANENT
+    /// market, the free-agent visibility layer and the scouting prefilter as
+    /// well as the loan route, because all four read
+    /// [`crate::transfers::MarketAffinity`]'s one corridor blend.
+    pub fn corridor_floor_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_CORRIDOR_FLOOR_OFF"))
+    }
+
+    /// The ROUTE half of a loan's geography — the corridor between the
+    /// lending league and the borrowing one, as distinct from the player's
+    /// own. Disarmed, [`crate::transfers::MarketAffinity::loan_affinity`]
+    /// answers exactly as `affinity` does and a loan is priced on the
+    /// passport alone, which is what let a J-League club borrow a Brazilian
+    /// from Russia as readily as from Brazil.
+    ///
+    /// The A/B arm for the loan-geography campaign: the gate AND the
+    /// borrower's draw weight read the same number, so one switch moves both
+    /// sides of it.
+    pub fn loan_route_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_ROUTE_OFF"))
+    }
+
     /// The loan asset guard and every gate it re-shapes: the
     /// destination pricing ([`crate::transfers::loan::guard::LoanAssetGuard`]), the
     /// readiness-continuous destination floors, the overqualified-minutes
@@ -245,5 +279,14 @@ impl MarketSwitches {
     pub fn loan_guard_off() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_LOAN_GUARD_OFF"))
+    }
+
+    /// The loan AGREEMENT arm: disarmed, the four continuous terms are
+    /// bypassed and the destination funnel is the conjunctive gate stack
+    /// it replaced, so a census can price one model against the other in
+    /// the same tree.
+    pub fn loan_agreement_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_AGREEMENT_OFF"))
     }
 }

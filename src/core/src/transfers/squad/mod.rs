@@ -21,6 +21,7 @@ use crate::transfers::squad::loans::LoanOutScan;
 
 use review::{SquadReview, SquadReviewOpening};
 
+pub use bands::LevelBand;
 pub use ledger::*;
 pub use needs::*;
 pub use plan::*;
@@ -1112,6 +1113,7 @@ impl SquadReviewPass {
                     // pricing him as though he could would have the club
                     // marketing an empty shirt.
                     unsellable: info.is_injured && info.recovery_days > 60,
+                    stage: player.pathway_stage(),
                 })
             })
             .collect();
@@ -1740,9 +1742,10 @@ mod stalled_prospect_tests {
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
-        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
-        PlayerPosition, PlayerPositions, PlayerSkills, PlayerStatistics,
-        PlayerStatisticsHistoryItem, TeamCollection,
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PathwayStage, PersonAttributes,
+        PlayerAttributes, PlayerClubContract, PlayerPlan, PlayerPlanRole, PlayerPosition,
+        PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistoryItem,
+        TeamCollection,
     };
     use std::collections::HashMap;
 
@@ -1821,6 +1824,12 @@ mod stalled_prospect_tests {
                 })
                 .player_attributes(attrs)
                 .statistics(stats)
+                // A man with no deal cannot be lent to anybody, so a
+                // loan-out fixture has to carry one.
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    Self::date(2031, 6, 30),
+                )))
                 .build()
                 .unwrap()
         }
@@ -2433,6 +2442,51 @@ mod stalled_prospect_tests {
             0.5,
         );
         loan_outs
+    }
+
+    /// The three judgements that used to be hard bars in `blocked` — over
+    /// thirty, fifteen appearances, two previous spells — are prices in
+    /// [`ParentWillingness`] now. Each one still makes a loan LESS likely;
+    /// none of them makes it impossible, which is what kept the ordinary
+    /// squad-player loan of world football out of the game.
+    #[test]
+    fn a_thirty_one_year_old_surplus_forward_is_still_a_loan_candidate() {
+        let date = Fx::date(2026, 9, 5);
+        let mut players = vec![Fx::player(1, PlayerPositionType::Striker, 100, 31, 5)];
+        let mut squad = vec![Fx::info(&players[0], date, 100, 0.3, 5)];
+        for i in 0..4u32 {
+            let p = Fx::player(100 + i, PlayerPositionType::Striker, 120, 27, 10);
+            squad.push(Fx::info(&p, date, 120, 0.3, 10));
+            players.push(p);
+        }
+        assert!(
+            run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "a thirty-one-year-old squad player going out for a season is ordinary football"
+        );
+    }
+
+    /// …and a man who has already been out twice. The third spell is
+    /// dampened, not barred.
+    #[test]
+    fn a_third_spell_is_still_possible() {
+        let date = Fx::date(2026, 9, 5);
+        let (mut players, squad) = surplus_forward_scenario(date);
+        players[0].plan = Some(PlayerPlan::from_existing(
+            PlayerPlanRole::Development,
+            PathwayStage::Prospect,
+            date,
+        ));
+        if let Some(plan) = players[0].plan.as_mut() {
+            plan.loans_used = 2;
+        }
+        assert!(
+            run_loan_outs(&squad, &players, date)
+                .iter()
+                .any(|c| c.player_id == 1),
+            "two spells behind him is a reason to be less keen, not a rule against it"
+        );
     }
 
     #[test]

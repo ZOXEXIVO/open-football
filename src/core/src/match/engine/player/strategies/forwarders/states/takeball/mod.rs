@@ -15,7 +15,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // to Running so the "has ball" paths can pick Shooting / Passing /
         // Dribbling. His but beyond his feet is still a chase: nothing
         // draws it to him (`Ball::move_to`), he has to get there.
-        if ctx.ball().at_my_feet() {
+        if ctx.ball().mine_to_play() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
         // Somebody else has it. Running handles that — for teammates:

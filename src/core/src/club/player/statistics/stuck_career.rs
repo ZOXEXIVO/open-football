@@ -212,6 +212,23 @@ impl StuckCareerScan {
     /// renewal that re-stamps the deal cannot shorten a long one either.
     /// `None` means no anchor at all — a homegrown player who has never
     /// moved, and who is settled by definition.
+    /// Days at one club before a stuck story exists at all.
+    ///
+    /// One number, read through [`Self::club_tenure_days`], because
+    /// "how long before this is a grievance rather than a settling-in
+    /// period" was answered four different ways — 300 in the parked-
+    /// prime pass, 365 for a settled foreigner, 540 in the backup
+    /// anxiety audit and again in the transfer-desire ask — and the same
+    /// man was therefore stuck at one pass and settling at another on
+    /// the same morning. A season: long enough that a bad autumn is not
+    /// a career, short enough that a wasted year is.
+    ///
+    /// Distinct from [`MindSituation::SETTLING_DAYS`], which is the much
+    /// shorter window before he has a VIEW of the place at all.
+    ///
+    /// [`MindSituation::SETTLING_DAYS`]: crate::club::player::mind::MindSituation::SETTLING_DAYS
+    pub const TENURE_FOR_A_STUCK_STORY: i64 = 365;
+
     pub fn club_tenure_days(player: &Player, today: NaiveDate) -> Option<i64> {
         let since_move = player.days_since_transfer(today)?;
         let since_contract = player

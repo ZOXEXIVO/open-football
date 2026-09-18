@@ -29,6 +29,7 @@ use super::{
     TransferPlausibilityEvaluator, TransferPlausibilityInputs, TransferPlausibilityVerdict,
 };
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::mind::MindClock;
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::market::route::TransferRoutePolicy;
 use crate::transfers::pipeline::PlayerSummary;
@@ -213,6 +214,7 @@ impl TransferPlausibilityBuilder {
             seller_in_debt: seller.in_debt,
             release_clause_triggered: false,
             listing_resignation: seller.market_resignation,
+            player_plan: target.career_plan,
             same_country,
             same_league_or_division,
             country_pair_blocked,
@@ -428,6 +430,7 @@ impl TransferPlausibilityBuilder {
             seller_in_debt: selling_club.finance.balance.balance < 0,
             release_clause_triggered,
             listing_resignation: player.market_resignation(date),
+            player_plan: player.mind.career.plan_view(MindClock::day(date)),
             same_country,
             same_league_or_division,
             country_pair_blocked,
@@ -597,7 +600,11 @@ impl PlayerManagerAffinity {
     /// −1..=1, and exactly zero for the overwhelming majority of moves,
     /// where the two of them have never met.
     pub(in crate::transfers) fn of(player: &Player, buying_club: &Club, date: NaiveDate) -> f32 {
-        let Some(coach) = buying_club.teams.main().map(|team| team.staffs.head_coach()) else {
+        let Some(coach) = buying_club
+            .teams
+            .main()
+            .map(|team| team.staffs.head_coach())
+        else {
             return 0.0;
         };
         if coach.id == 0 {

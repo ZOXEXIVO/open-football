@@ -21,6 +21,7 @@ use chrono::{Duration, NaiveDate};
 use log::debug;
 
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::mind::{CareerPlanView, MindClock};
 use crate::club::player::transfer::MarketResignation;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
@@ -74,9 +75,6 @@ struct Broadcastable {
     parent_best_in_group: u8,
     group: PlayerFieldPositionGroup,
     ability: u8,
-    /// Carried so the borrower-appetite gate can hold a pushed
-    /// candidate to the age band of the request it is answering.
-    age: u8,
     is_development: bool,
     asking: f64,
     /// Where the parent decided he would rather go, and enough of
@@ -89,6 +87,13 @@ struct Broadcastable {
     return_home_desire: f32,
     /// The asset's own price on this move — see [`LoanAssetGuard`].
     guard: Option<LoanAssetGuard>,
+    /// How willing the parent is to send him anywhere at all, 0..1, the
+    /// arc he is living out, and what the parent will keep paying of
+    /// his wage. Read once per broadcast rather than per candidate
+    /// destination — all three are properties of the man and his club.
+    willingness: f32,
+    plan: CareerPlanView,
+    parent_subsidy: f32,
 }
 
 /// A player whose transfer listing has gone stale.
@@ -282,7 +287,6 @@ impl ListingBroadcast {
                 parent_best_in_group,
                 group,
                 ability: player.player_attributes.current_ability,
-                age: player.age(date),
                 is_development,
                 asking: listing.asking_price.amount,
                 preference: parent_club
@@ -296,6 +300,12 @@ impl ListingBroadcast {
                 nationality_region: player.home_region(),
                 return_home_desire: player.home_pull.desire,
                 guard,
+                willingness: LoanAssetGuard::willingness_for(parent_club, player, date),
+                plan: player.mind.career.plan_view(MindClock::day(date)),
+                parent_subsidy: LoanMoney::parent_desire(
+                    player.pathway_stage(),
+                    player.plan.as_ref().and_then(|p| p.loan_purpose),
+                ),
             });
         }
 
@@ -568,25 +578,6 @@ impl ListingBroadcast {
                 .unwrap_or(0);
             let borrower_profile = LoanBorrowerProfile::of(club, date, borrower_league_rep)
                 .map(|p| p.with_best_in_group(borrower_best_here));
-            let upgrade_welcome = borrower_profile
-                .as_ref()
-                .zip(b.guard.as_ref())
-                .map(|(profile, guard)| {
-                    let verdict = guard.assess(profile);
-                    verdict.allows() && verdict.carry <= LoanAssetGuard::CARRY_MAX
-                })
-                .unwrap_or(false)
-                && !MarketSwitches::loan_guard_off();
-            if !LoanBorrowerAppetite::assess(club, team, is_january).accepts_push(
-                club,
-                b.group,
-                b.ability,
-                b.age,
-                borrower_best_here,
-                upgrade_welcome,
-            ) {
-                continue;
-            }
             if country
                 .transfer_market
                 .has_active_negotiation_for(b.player_id, club.id)
@@ -620,50 +611,80 @@ impl ListingBroadcast {
                 borrower_league_rep,
                 is_development: b.is_development,
             };
-            if !depth.has_room_for(b.group, b.ability, b.is_development)
-                || !depth.would_get_loan_minutes(
-                    b.group,
-                    b.ability,
-                    b.is_development,
-                    b.parent_best_in_group,
-                )
-                || !level.is_plausible()
-            {
+            // What the three sides would agree on, as a factor on how
+            // attractive this destination is — the parent's own
+            // willingness is already banked in the broadcast entry, so
+            // what this prices is the borrower, the player and the
+            // money.
+            let verdict = b
+                .guard
+                .as_ref()
+                .zip(borrower_profile.as_ref())
+                .map(|(g, p)| g.assess(p));
+            let Some(agreement) = LoanAgreement::price(&AgreementInputs {
+                willingness: b.willingness,
+                parent_rep: b.parent_rep,
+                parent_league_rep: b.parent_league_rep,
+                parent_best_in_group: b.parent_best_in_group,
+                parent_subsidy: b.parent_subsidy,
+                borrower_tier: TierBands::rep_level_value(&team.reputation.level()),
+                borrower_rep,
+                borrower_league_rep,
+                group: b.group,
+                count: depth.headcount(b.group),
+                best_here: borrower_best_here,
+                clearly_better_ahead: depth.clearly_better_ahead(b.group, b.ability),
+                need: if LoanBorrowerAppetite::assess(team).critical_shortage {
+                    0.6
+                } else {
+                    0.35
+                },
+                is_january,
+                candidate: b.ability,
+                is_development: b.is_development,
+                plan: b.plan,
+                renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
+                renown_band: b.guard.as_ref().map(|g| g.renown_band()).unwrap_or(0.0),
+                resignation: b
+                    .guard
+                    .as_ref()
+                    .map(|g| g.listing_resignation())
+                    .unwrap_or(0.0),
+                going_home: false,
+                weight: verdict.map(|v| v.weight).unwrap_or(0.0),
+                carry: verdict.map(|v| v.carry).unwrap_or(0.0),
+                asking: 0.0,
+                max_loan_fee: f64::MAX,
+            }) else {
                 continue;
-            }
-            if !LoanPipeline::loan_guard_allows(
-                b.guard.as_ref(),
-                borrower_profile.as_ref(),
-                b.player_id,
-            ) {
-                continue;
-            }
+            };
             destinations.push((
                 club.id,
-                DestinationAppeal {
-                    borrower_rep,
-                    borrower_league_rep: level.borrower_league_rep,
-                    parent_league_rep: b.parent_league_rep,
-                    minutes_headroom: depth.minutes_headroom(b.group, b.ability),
-                    training_rating: club.facilities.training.to_rating(),
-                    existing_placements: LoanApproachMemory::crowding_at(
-                        parent_placements,
-                        club.id,
-                        date,
-                    ),
-                    is_development: b.is_development,
-                    // Same term the borrower-side scan and the
-                    // appraisal read, so all three agree about an
-                    // Argentine loaned within Brazil (C4).
-                    home_pull: HomeLoanPull::factor(
-                        b.nationality_country_id,
-                        b.nationality_region,
-                        country.id,
-                        domestic_region,
-                        b.return_home_desire,
-                    ),
-                }
-                .score(),
+                agreement
+                    * DestinationAppeal {
+                        borrower_rep,
+                        borrower_league_rep: level.borrower_league_rep,
+                        parent_league_rep: b.parent_league_rep,
+                        minutes_headroom: depth.minutes_headroom(b.group, b.ability),
+                        training_rating: club.facilities.training.to_rating(),
+                        existing_placements: LoanApproachMemory::crowding_at(
+                            parent_placements,
+                            club.id,
+                            date,
+                        ),
+                        is_development: b.is_development,
+                        // Same term the borrower-side scan and the
+                        // appraisal read, so all three agree about an
+                        // Argentine loaned within Brazil (C4).
+                        home_pull: HomeLoanPull::factor(
+                            b.nationality_country_id,
+                            b.nationality_region,
+                            country.id,
+                            domestic_region,
+                            b.return_home_desire,
+                        ),
+                    }
+                    .score(),
             ));
         }
 

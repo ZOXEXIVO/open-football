@@ -168,6 +168,7 @@ pub use player::{
     PlayerMailboxResult,
     PlayerMessage,
     PlayerMessageType,
+    PathwayStage,
     PlayerPlan,
     PlayerPlanRole,
     PlayerPosition,

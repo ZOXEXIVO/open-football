@@ -239,15 +239,16 @@ impl<'b> BallOperationsImpl<'b> {
         self.ctx.tick_context.ball.rebounded_off == Some(self.ctx.player.id)
     }
 
-    /// His AND at his feet. An owned ball beyond [`Ball::AT_FEET`] is one
-    /// he still has to go and collect.
+    /// His, and playable from where he stands: at his feet, or coming to
+    /// him inside his reach so that his first touch will bring it in. An
+    /// owned ball that is neither is one he has to go and collect.
     #[inline]
-    pub fn at_my_feet(&self) -> bool {
+    pub fn mine_to_play(&self) -> bool {
+        let ball = &self.ctx.tick_context.positions.ball;
+        let me = self.ctx.player.position;
         self.owner_id() == Some(self.ctx.player.id)
-            && Ball::at_feet(
-                self.ctx.tick_context.positions.ball.position,
-                self.ctx.player.position,
-            )
+            && (Ball::at_feet(ball.position, me)
+                || Ball::within_first_touch(ball.position, ball.velocity, me))
     }
 
     /// Check if the current player has had stable possession long enough to make controlled actions

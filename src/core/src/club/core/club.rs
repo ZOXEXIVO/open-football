@@ -10,7 +10,7 @@ use crate::transfers::pipeline::ClubTransferPlan;
 use crate::{ReputationLevel, TeamCollection};
 use chrono::NaiveDate;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClubPhilosophy {
     /// Develop youth and sell for profit (Ajax, Benfica, Dortmund)
     DevelopAndSell,

@@ -10,7 +10,9 @@
 use chrono::NaiveDate;
 
 use crate::club::staff::perception::AbilityEstimator;
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::pipeline::LoanOutReason;
 use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
 
 use super::decision::SquadDecision;
@@ -63,7 +65,8 @@ impl LoanSweep {
                         // depth (he is on this roster today); he is simply
                         // never the body that leaves.
                         p.is_force_match_selection
-                            || LoanAssetGuard::parent_holds_for(club, p, date),
+                            || LoanAssetGuard::willingness_for(club, p, date)
+                                < ParentWillingness::ENTERTAINS,
                     )
                 })
                 .collect();
@@ -76,10 +79,11 @@ impl LoanSweep {
                 // A keeper the goalkeeping department is building around
                 // is not surplus, however many keepers sit on this roster.
                 if !pinned && !keepers.protects(player_id) {
-                    out.push(SquadDecision::new(
+                    out.push(SquadDecision::loan(
                         team_idx,
                         player_id,
                         SquadDecision::YOUNG_DEVELOP,
+                        LoanOutReason::BlockedByDepth,
                     ));
                 }
             }
@@ -116,10 +120,11 @@ impl LoanSweep {
             {
                 continue;
             }
-            out.push(SquadDecision::new(
+            out.push(SquadDecision::loan(
                 team_idx,
                 player.id,
                 SquadDecision::YOUNG_DEVELOP,
+                LoanOutReason::NeedsFirstTeamMinutes,
             ));
         }
     }
@@ -175,7 +180,8 @@ impl LoanSweep {
                         // the first team is a promotion, not a development
                         // loan. He still counts toward the youth side's
                         // fielding minimum — he is on this roster today.
-                        LoanAssetGuard::parent_holds_for(club, p, date),
+                        LoanAssetGuard::willingness_for(club, p, date)
+                            < ParentWillingness::ENTERTAINS,
                     )
                 })
                 .collect();
@@ -203,10 +209,11 @@ impl LoanSweep {
                 if remaining <= min_field {
                     break;
                 }
-                out.push(SquadDecision::new(
+                out.push(SquadDecision::loan(
                     team_idx,
                     player_id,
                     SquadDecision::YOUNG_DEVELOP,
+                    LoanOutReason::NeedsGameTime,
                 ));
                 remaining -= 1;
             }

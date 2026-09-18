@@ -419,12 +419,18 @@ impl PlayerFieldPositionGroup {
         }
 
         // An owned ball is loose to nobody — except its owner, whose ball
-        // beyond his feet is his to go and collect: `Ball::move_to` no
-        // longer draws it to him. One in his gloves is already on him.
+        // is his to go and collect when nothing else will bring it: not at
+        // his feet, not in his gloves, and not coming to him inside his
+        // reach (that one his first touch takes, and he keeps the state he
+        // was deciding in — a receiver who was sent to fetch every arriving
+        // pass lost the first-time shot and the one-touch lay-off, and
+        // shots fell 13.5 to 11.7 a match for it).
         if tick_context.ball.is_owned {
+            let ball = &tick_context.positions.ball;
             return tick_context.ball.current_owner == Some(player.id)
                 && !tick_context.ball.held_in_hands
-                && !Ball::at_feet(tick_context.positions.ball.position, player.position);
+                && !Ball::at_feet(ball.position, player.position)
+                && !Ball::within_first_touch(ball.position, ball.velocity, player.position);
         }
 
         // A ball OUT OF PLAY is loose in the sense this test means and in

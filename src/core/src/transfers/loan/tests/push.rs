@@ -182,120 +182,40 @@ fn a_thin_attack_still_admits_a_development_loan() {
     );
 }
 
-/// The push used to ask the borrower nothing at all. A Continental club
-/// that shops the loan market only in January, and only while in the red,
-/// was handed teenagers in August because it happened to be the biggest
-/// name that would play them.
+/// The push used to ask the borrower nothing at all, and the borrower's
+/// own scan asked "does this club shop at all" and walked away from a
+/// no. Both are prices now, so what is left to assert is that the price
+/// moves in the right direction.
+///
+/// A club that shops rarely is still a destination — it wants a loanee
+/// less than a small club does, which is a smaller number rather than a
+/// closed door, and the refusal was exactly what walked a giant's
+/// near-ready youngster down two divisions a fortnight at a time.
 #[test]
-fn a_club_that_does_not_shop_is_not_a_destination() {
+fn a_club_that_shops_rarely_is_still_a_destination() {
+    let elite = BorrowerAppetite::base_for_tier(5);
+    let regional = BorrowerAppetite::base_for_tier(2);
+    assert!(elite > 0.0, "fewer loans is a smaller number, not a no");
+    assert!(regional > elite);
+}
+
+/// A club that genuinely cannot field a balanced side is short, and the
+/// emergency reading has to keep working — it is the one thing left in
+/// the appetite model that is a fact rather than a policy.
+#[test]
+fn a_club_in_crisis_reads_as_short() {
     let club = PushFx::giant_with_hidden_attack();
-    let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
     assert!(
-        !appetite.scans,
-        "precondition: this club runs no loan scans"
-    );
-    assert!(
-        !appetite.critical_shortage,
+        !LoanBorrowerAppetite::assess(PushFx::main_team(&club)).critical_shortage,
         "precondition: no group is below a fieldable minimum"
     );
 
-    assert!(
-        !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false),
-        "reputation makes a club attractive; it is not consent"
-    );
-}
-
-/// An open request opens the door — but only to the player it was asking
-/// for. A side shopping for a centre-forward who can lead its line has not
-/// agreed to take any centre-forward alive.
-#[test]
-fn an_open_request_admits_only_the_player_it_asked_for() {
-    let mut club = PushFx::giant_with_hidden_attack();
-    club.transfer_plan
-        .transfer_requests
-        .push(PushFx::striker_request(129));
-    let team_rep_snapshot = PushFx::main_team(&club).reputation.world;
-    assert_eq!(team_rep_snapshot, 7600);
-
-    let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
-    assert!(
-        !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false),
-        "a 92-rated seventeen-year-old is not what a 129-minimum brief asked for"
-    );
-    assert!(
-        appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 132, 24, 0, false),
-        "…and the centre-forward it did ask for is welcome"
-    );
-    assert!(
-        !appetite.accepts_push(&club, PlayerFieldPositionGroup::Defender, 132, 24, 0, false),
-        "the request was for a forward, not a defender"
-    );
-}
-
-/// A club that genuinely cannot field a balanced side takes what it is
-/// offered — the emergency arm has to keep working.
-#[test]
-fn a_club_in_crisis_still_takes_what_it_is_offered() {
-    let club = PushFx::giant_with_hidden_attack();
     let mut team = PushFx::main_team(&club).clone();
     team.players
         .players
         .retain(|p| p.position().position_group() != PlayerFieldPositionGroup::Forward);
-
-    let appetite = LoanBorrowerAppetite::assess(&club, &team, false);
     assert!(
-        appetite.critical_shortage,
+        LoanBorrowerAppetite::assess(&team).critical_shortage,
         "a side with no forwards at all is short"
-    );
-    assert!(appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false));
-}
-
-/// WI-7: the upgrade acceptance. A club that "only loans in January,
-/// and only while in the red" does not turn down a genuine first-team
-/// upgrade in August — and its refusal was exactly what walked a
-/// giant's near-ready youngster down to the tier below, a fortnight at
-/// a time.
-#[test]
-fn a_clear_upgrade_is_welcome_in_any_month() {
-    let club = PushFx::giant_with_hidden_attack();
-    let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
-    assert!(
-        !appetite.scans,
-        "precondition: this club runs no loan scans"
-    );
-
-    let best_here = 130u8;
-    assert!(
-        appetite.accepts_push(
-            &club,
-            PlayerFieldPositionGroup::Forward,
-            best_here + LoanBorrowerAppetite::UPGRADE_MARGIN,
-            21,
-            best_here,
-            true,
-        ),
-        "a loanee clearly better than anything here, whose wage it can carry"
-    );
-    assert!(
-        !appetite.accepts_push(
-            &club,
-            PlayerFieldPositionGroup::Forward,
-            best_here + LoanBorrowerAppetite::UPGRADE_MARGIN,
-            21,
-            best_here,
-            false,
-        ),
-        "…but only inside the guard's reach: an unaffordable upgrade is not one"
-    );
-    assert!(
-        !appetite.accepts_push(
-            &club,
-            PlayerFieldPositionGroup::Forward,
-            best_here,
-            21,
-            best_here,
-            true,
-        ),
-        "a comparable body is not an upgrade, guard or no guard"
     );
 }

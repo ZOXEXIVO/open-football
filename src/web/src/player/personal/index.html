@@ -198,7 +198,24 @@
                 {% endif %}
             </div>
             <div class="fm-mh-cell">
-                <h4 class="fm-section-subtitle">{{ i18n.t("mind_what_he_wants") }}</h4>
+                {% if let Some(plan) = career_plan %}
+                <h4 class="fm-section-subtitle">{{ i18n.t("career_plan_title") }}</h4>
+                <div class="fm-mh-plan{% if plan.unspoken %} is-unspoken{% endif %}">
+                    <div class="fm-mh-plan-head">
+                        <span class="fm-mh-plan-arc">{{ plan.arc }}</span>
+                        <span class="fm-mh-plan-stage">{{ plan.stage }}</span>
+                    </div>
+                    <div class="fm-mh-plan-note">{{ plan.band_floor }}</div>
+                    {% if let Some(deadline) = plan.deadline %}
+                    <div class="fm-mh-plan-note">{{ deadline }}</div>
+                    {% endif %}
+                    {% if let Some(verdict) = plan.last_verdict %}
+                    <div class="fm-mh-plan-note">{{ i18n.t("career_plan_last_spell") }} {{ verdict }}</div>
+                    {% endif %}
+                    <div class="fm-mh-plan-note is-club">{{ i18n.t("career_plan_club_view") }} {{ plan.pathway }}</div>
+                </div>
+                {% endif %}
+                <h4 class="fm-section-subtitle{% if career_plan.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("mind_what_he_wants") }}</h4>
                 {% if wants.is_empty() %}
                 <p class="fm-mh-empty">{{ i18n.t("mind_no_wants") }}</p>
                 {% else %}

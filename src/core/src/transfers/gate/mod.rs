@@ -53,8 +53,10 @@ pub mod stance;
 pub use appraisal::*;
 pub use stance::*;
 
-use crate::club::staff::DossierTuning;
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::mind::CareerPlanView;
+use crate::club::staff::DossierTuning;
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus, TeamType};
 
@@ -403,10 +405,16 @@ pub struct TransferPlausibilityInputs {
 
     /// Continuous 0..1 market resignation of a listed / transfer-requested
     /// player — [`crate::club::player::transfer::MarketResignation`]. 0 for
-    /// a fresh listing or a player not on the permanent market. Widens the
+    /// a fresh listing of a man who has been playing; one listed after
+    /// seasons on the bench arrives already resigned. Widens the
     /// level band he will accept, erodes his market-read importance, and
     /// lifts his personal-terms willingness as the unsold weeks accumulate.
     pub listing_resignation: f32,
+    /// The arc he is living out — what HE has decided, as opposed to
+    /// what months on the market have done to him. A man whose plan is
+    /// a level drop has already made his peace with what that says
+    /// about his name, and with being lent out at all.
+    pub player_plan: CareerPlanView,
 
     pub same_country: bool,
     pub same_league_or_division: bool,
@@ -718,6 +726,12 @@ pub(crate) mod thresholds {
     /// must stay able to open a corridor that has never existed.
     pub const MARKET_REACH_FLOOR: f32 = 0.05;
     pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
+    /// Most a player can be read as mattering to his club once the club
+    /// has decided to lend him out. Below
+    /// [`Self::LOAN_IMPORTANCE_BLOCK`] by construction: the decision is
+    /// taken, so the gate that asks "would the parent risk him" has
+    /// been answered.
+    pub const LOAN_STAGED_IMPORTANCE_CAP: f32 = 0.4;
     pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
     /// Reputation gap at which a loan stops being a step down and becomes a
     /// different level of football altogether. A listing says the parent is
@@ -1243,10 +1257,7 @@ impl TransferMovePlausibility {
     ///
     /// `rep_drop` is positive when the player is stepping *down*, so a step
     /// up is a negative of matching size.
-    fn ambition_outweighs_the_grudge(
-        inputs: &TransferPlausibilityInputs,
-        rep_drop: i32,
-    ) -> bool {
+    fn ambition_outweighs_the_grudge(inputs: &TransferPlausibilityInputs, rep_drop: i32) -> bool {
         rep_drop <= -Self::GRUDGE_BOUGHT_OFF_REP
             && !matches!(inputs.availability_strength(), AvailabilityStrength::Forced)
     }
@@ -1534,6 +1545,17 @@ impl TransferMovePlausibility {
         let loan_rep_gap = inputs.seller_rep - inputs.buyer_rep;
         let loan_gap_beyond_consent = loan_rep_gap > thresholds::LOAN_HUGE_REP_GAP_BLOCK
             && !matches!(strength, AvailabilityStrength::Forced);
+        // …and what the man himself is to his club is capped by what
+        // his club has decided to do with him. A player it has staged
+        // for a loan is not a key contributor it would be risking; the
+        // decision is already taken, and reading him as one turned away
+        // every club that asked about exactly the players the pathway
+        // was built to move.
+        let importance = if inputs.player_plan.loan_push() >= ParentWillingness::PLAN_OPENS_AT {
+            importance.min(thresholds::LOAN_STAGED_IMPORTANCE_CAP)
+        } else {
+            importance
+        };
         if inputs.is_loan
             && (!hard_gate_open || loan_gap_beyond_consent)
             && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
@@ -1569,8 +1591,11 @@ impl TransferMovePlausibility {
         // what "his renown counts for less" means. The band is now
         // continuous in age: wide for a boy, ordinary at the development
         // age, and never absent.
-        let renown_gap_tolerated =
-            LoanAssetGuard::renown_gap_tolerated(inputs.player_age, resignation);
+        let renown_gap_tolerated = LoanAssetGuard::renown_gap_tolerated_with(
+            inputs.player_age,
+            resignation,
+            inputs.player_plan.loan_push(),
+        );
         if inputs.is_loan
             && !inputs.is_transfer_requested
             && !matches!(strength, AvailabilityStrength::Forced)
@@ -1708,6 +1733,7 @@ mod tests {
             seller_in_debt: false,
             release_clause_triggered: false,
             listing_resignation: 0.0,
+            player_plan: CareerPlanView::none(),
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 10_000_000.0,
@@ -1762,6 +1788,7 @@ mod tests {
             seller_in_debt: false,
             release_clause_triggered: false,
             listing_resignation: 0.0,
+            player_plan: CareerPlanView::none(),
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 15_000_000.0,
@@ -2958,6 +2985,7 @@ mod tests {
             seller_in_debt: false,
             release_clause_triggered: false,
             listing_resignation: 0.0,
+            player_plan: CareerPlanView::none(),
             same_country: false,
             same_league_or_division: false,
             buyer_transfer_budget: 2_000_000.0,
@@ -3255,6 +3283,7 @@ mod agent_channel_tests {
                 seller_in_debt: false,
                 release_clause_triggered: false,
                 listing_resignation: 0.0,
+                player_plan: CareerPlanView::none(),
                 same_country: false,
                 same_league_or_division: false,
                 country_pair_blocked: false,

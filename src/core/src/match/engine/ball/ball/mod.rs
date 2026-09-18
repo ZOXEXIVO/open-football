@@ -821,6 +821,25 @@ impl Ball {
         dx * dx + dy * dy <= Self::AT_FEET * Self::AT_FEET
     }
 
+    /// Is a ball at `ball` moving at `velocity` coming to a man standing at
+    /// `man` inside his reach — so that his first touch
+    /// (`first_touch_toward`) will bring it onto his feet? On the deck,
+    /// rolling, inside [`CONTROL_DISTANCE`] and closing on him. A ball
+    /// that is not is his to go and get.
+    pub fn within_first_touch(
+        ball: Vector3<f32>,
+        velocity: Vector3<f32>,
+        man: Vector3<f32>,
+    ) -> bool {
+        let dx = man.x - ball.x;
+        let dy = man.y - ball.y;
+        ball.z <= Self::DECK
+            && dx * dx + dy * dy <= CONTROL_DISTANCE * CONTROL_DISTANCE
+            && velocity.x * velocity.x + velocity.y * velocity.y
+                > BallRoll::STOPPED * BallRoll::STOPPED
+            && velocity.x * dx + velocity.y * dy > 0.0
+    }
+
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
         let x = field_width / 2.0;
         let y = field_height / 2.0;

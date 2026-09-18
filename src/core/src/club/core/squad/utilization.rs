@@ -10,7 +10,9 @@
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::pipeline::LoanOutReason;
 use crate::{
     Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
 };
@@ -285,11 +287,14 @@ impl Club {
                         // label a teenager gets on his birth year, so it
                         // reads a nineteen-year-old starter as a loan
                         // asset; standing does not.
-                        if !LoanAssetGuard::parent_holds_for(self, player, date) {
-                            loan_players.push(SquadDecision::new(
+                        if LoanAssetGuard::willingness_for(self, player, date)
+                            >= ParentWillingness::ENTERTAINS
+                        {
+                            loan_players.push(SquadDecision::loan(
                                 ti,
                                 player.id,
                                 SquadDecision::YOUNG_DEVELOP,
+                                LoanOutReason::BlockedByDepth,
                             ));
                         }
                         continue;
@@ -299,10 +304,11 @@ impl Club {
 
                 // Decision: choose Lst vs Loa based on player profile and club context
                 if age <= 23 && pa > level.saturating_add(5) {
-                    loan_players.push(SquadDecision::new(
+                    loan_players.push(SquadDecision::loan(
                         ti,
                         player.id,
                         SquadDecision::YOUNG_DEVELOP,
+                        LoanOutReason::NeedsGameTime,
                     ));
                 } else if level < 60 && pa < 70 {
                     transfer_players.push(SquadDecision::new(
@@ -321,13 +327,18 @@ impl Club {
                     ReputationLevel::Elite | ReputationLevel::Continental
                 ) && age <= 29
                 {
-                    loan_players.push(SquadDecision::new(
+                    loan_players.push(SquadDecision::loan(
                         ti,
                         player.id,
                         if dead_wage {
                             SquadDecision::DEAD_WAGE
                         } else {
                             SquadDecision::UNDERUTILIZED_TOP_CLUB
+                        },
+                        if dead_wage {
+                            LoanOutReason::FinancialRelief
+                        } else {
+                            LoanOutReason::LackOfPlayingTime
                         },
                     ));
                 } else {
@@ -379,6 +390,9 @@ impl Club {
                     // `Lst` matters as much as the contract flag here: this
                     // very pass lists via the status only, so without it the
                     // same player was re-picked and re-listed every month.
+                    // A man the club signed this window is not the excess
+                    // either: the ceiling was already over him when the
+                    // board approved the signing.
                     if already.contains(&player.id)
                         || player.is_on_loan()
                         || player.is_force_match_selection
@@ -388,6 +402,11 @@ impl Club {
                             .as_ref()
                             .map(|c| c.is_transfer_listed)
                             .unwrap_or(true)
+                        || player
+                            .days_since_transfer(date)
+                            .map(|d| d < RECENT_TRANSFER_GRACE_DAYS)
+                            .unwrap_or(false)
+                        || player.signing_protection_active(date)
                     {
                         continue;
                     }
@@ -550,6 +569,7 @@ mod tests {
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::plan::PlayerPlan;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -558,7 +578,7 @@ mod tests {
         PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffCollection, Team, TeamBuilder,
         TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
-    use chrono::{NaiveDate, NaiveTime};
+    use chrono::{Duration, NaiveDate, NaiveTime};
 
     /// Fixtures for the underutilization audit: a CA-130 first team plus a
     /// reserve squad. The reserve always carries one "busy" regular so the
@@ -855,6 +875,41 @@ mod tests {
             .filter(|d| d.movement == "dec_board_transfer_listed")
             .count();
         assert_eq!(rows, 1, "an already-listed player is never re-listed");
+    }
+
+    /// The size trim is a squad-size rule, not a verdict on the man the
+    /// club signed three weeks ago.
+    #[test]
+    fn size_trim_leaves_a_fresh_signing_alone() {
+        let over_the_ceiling = || SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        };
+        let signed_on = Fx::date() - Duration::days(19);
+
+        // The same man, read as just another body: trimmed.
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(over_the_ceiling());
+        club.audit_squad_utilization(Fx::date());
+        assert!(Fx::has(&club, 300, PlayerStatusType::Lst));
+
+        // The same man, signed three weeks ago: left alone.
+        let mut signing = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        signing.last_transfer_date = Some(signed_on);
+        signing.plan = Some(PlayerPlan::from_signing(34, 0.0, signed_on));
+        let mut club = Fx::club(vec![signing]);
+        club.board.season_targets = Some(over_the_ceiling());
+        club.audit_squad_utilization(Fx::date());
+        assert!(
+            !Fx::listed(&club, 301),
+            "a signing still inside its plan is never the excess"
+        );
     }
 
     /// The badge is the visible half of a board listing; the contract flag

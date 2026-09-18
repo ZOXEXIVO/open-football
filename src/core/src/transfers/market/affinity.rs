@@ -19,6 +19,7 @@
 
 use crate::club::board::ownership::ClubBenefactor;
 use crate::transfers::market::map::{AFFINITY_FLOOR, CorridorReading, MarketMap};
+use crate::transfers::pipeline::trace::MarketSwitches;
 
 /// What kind of move is being priced. A wage-led landing answers to the
 /// destination's capacity to buy names rather than to any corridor: the Gulf,
@@ -85,6 +86,26 @@ impl MarketAffinity {
     /// A corridor only one of the two cards names is real but thinner
     /// evidence than one both name.
     const MISSING_SIDE_DISCOUNT: f32 = 0.7;
+    /// How much of the derived prior a named pair may not read below. See
+    /// [`Self::blend_corridor`] for why a floor exists at all.
+    ///
+    /// The knee of a 0 / ¼ / ½ / ¾ / 1 sweep, two full seasons each against
+    /// the unfloored baseline (`OF_CORRIDOR_FLOOR_OFF`).
+    ///
+    /// What the floor costs is measurable and small: `corridor_overlap`
+    /// against the top-8 export list falls monotonically, 0.500 at zero to
+    /// 0.465 at the whole prior. Every other census number — foreign share
+    /// against the card, the free-agent and permanent overlaps, the loan
+    /// route bands — sits inside run-to-run noise at n=2.
+    ///
+    /// What it BUYS cannot be seen in any of them, because a move
+    /// `thresholds::MARKET_REACH_FLOOR` closes never becomes a row anywhere.
+    /// Counted directly off the cards, for a buyer with no particular
+    /// knowledge of the market, that floor shuts 2353 of the 4556 ordered
+    /// pairs between countries running a league. A half share reopens 300 of
+    /// them for 0.020 of overlap; a quarter reopens 36 for the same 0.020;
+    /// the whole prior reopens 478 for 0.035. Half is where the curve turns.
+    const CORRIDOR_PRIOR_FLOOR_SHARE: f32 = 0.5;
 
     /// How plausible this destination is for this player, 0.02..1.
     ///
@@ -146,6 +167,60 @@ impl MarketAffinity {
         geo.clamp(AFFINITY_FLOOR, 1.0)
     }
 
+    /// How plausible this destination is for a LOAN of this player, 0.02..1.
+    ///
+    /// A permanent signing is an acquisition, and [`Self::affinity`] prices
+    /// it correctly: the buyer answers to the player's own corridor, and the
+    /// league he happens to sit in is a shop window on top of it. A loan is
+    /// an agreement between two CLUBS that outlives the signature — one hands
+    /// over an asset, plays it for a season and gives it back — so the route
+    /// between the two leagues is not a bonus on the passport, it is half the
+    /// question. Japan signs Brazilians and does not borrow from Russia, and
+    /// a passport-only read cannot tell those two apart: it scores a
+    /// Brazilian at Zenit exactly as it scores the same man at Flamengo.
+    ///
+    /// The geometric mean, for the reason [`Self::blend_corridor`] uses one:
+    /// a loan needs both sides to be real, and either alone is a claim.
+    pub fn loan_affinity(map: &MarketMap, inputs: MarketAffinityInputs) -> f32 {
+        let player = Self::affinity(map, inputs);
+        if MarketSwitches::loan_route_off() {
+            return player;
+        }
+        // No second league in the deal, so there is no route to price. He is
+        // going home (his own federation is a route of its own — that is what
+        // keeps the loan-home pathway untouched), he already plays here, his
+        // club's country IS his passport's so the route and the corridor are
+        // one corridor read twice, or nobody knows where he plays.
+        if inputs.nationality_country_id == inputs.buyer_country_id
+            || inputs.current_country_id == 0
+            || inputs.current_country_id == inputs.buyer_country_id
+            || inputs.current_country_id == inputs.nationality_country_id
+        {
+            return player;
+        }
+        // The model's own read, so the corridor-floor arm moves this term
+        // with every other one. `corridor_strength` is the census ruler and
+        // deliberately ignores that arm.
+        let route =
+            Self::blend_corridor(&map.corridor(inputs.current_country_id, inputs.buyer_country_id));
+        (player * route).sqrt().clamp(AFFINITY_FLOOR, 1.0)
+    }
+
+    /// What two markets are worth to each other, 0..1, with no player in the
+    /// middle — the one number a census can read to say whether two leagues
+    /// do business at all.
+    ///
+    /// Always floored at the derived prior, whatever
+    /// [`MarketSwitches::corridor_floor_off`] says, because this is a RULER
+    /// and the arm is a model. A census that read the arm would move its own
+    /// measurement with the thing it is measuring, and the route bands would
+    /// improve by definition rather than by behaviour.
+    pub fn corridor_strength(map: &MarketMap, from_country: u32, to_country: u32) -> f32 {
+        let reading = map.corridor(from_country, to_country);
+        let prior = (reading.derived.import * reading.derived.export).sqrt();
+        Self::blend_corridor(&reading).max(prior)
+    }
+
     /// The player's OWN map of a destination — what he knows of the place,
     /// as distinct from what the buyer's market knows of him. Used by the
     /// personal-terms appraisal, where the question is whether HE would go.
@@ -181,19 +256,44 @@ impl MarketAffinity {
 
     /// Geometric mean of the two sides when both cards name the corridor;
     /// the named side discounted when only one does; the derived pair when
-    /// neither does.
+    /// neither does — and never less than that derived pair.
     ///
     /// The geometric mean is what makes a corridor need agreement: a
     /// destination that says it buys Brazilians and a Brazil card that says
     /// its nationals go there is a corridor, and either one alone is a
     /// claim.
+    ///
+    /// The floor is there because a card weight and a corridor are not the
+    /// same quantity. A weight is a VOLUME SHARE, normalised by its own
+    /// list's maximum; a corridor is a PLAUSIBILITY. Portugal importing
+    /// fifteen Brazilians for every Italian is the card being right, and it
+    /// does not make an Italian at a Portuguese club implausible — but the
+    /// tail of every card normalises to 0.03, the geometric mean squares that
+    /// to 0.023, and `thresholds::MARKET_REACH_FLOOR` is 0.05. Measured
+    /// across the shipped cards, 1501 of the 2264 ordered pairs some card
+    /// names read BELOW their own derived prior, England's 25-country import
+    /// list undercutting it 69 times: naming a pair was making it less of a
+    /// corridor than never mentioning it. Data raises a prior; it does not
+    /// lower one.
+    ///
+    /// A SHARE of the prior rather than all of it, because the two readings
+    /// disagree for a reason. A pair the cards name faintly is a pair the
+    /// world has looked at and found little traffic on, and that is worth
+    /// something against the prior's structural guess — the floor is there to
+    /// stop the card reading as a denial, not to make it say nothing at all.
+    /// See [`Self::CORRIDOR_PRIOR_FLOOR_SHARE`].
     fn blend_corridor(reading: &CorridorReading) -> f32 {
-        match (reading.data_import, reading.data_export) {
+        let prior = (reading.derived.import * reading.derived.export).sqrt();
+        let data = match (reading.data_import, reading.data_export) {
             (Some(import), Some(export)) => (import * export).sqrt(),
             (Some(import), None) => import * Self::MISSING_SIDE_DISCOUNT,
             (None, Some(export)) => export * Self::MISSING_SIDE_DISCOUNT,
-            (None, None) => (reading.derived.import * reading.derived.export).sqrt(),
+            (None, None) => return prior,
+        };
+        if MarketSwitches::corridor_floor_off() {
+            return data;
         }
+        data.max(prior * Self::CORRIDOR_PRIOR_FLOOR_SHARE)
     }
 }
 
@@ -215,6 +315,7 @@ mod tests {
     const SA: u32 = 6;
     const ES: u32 = 7;
     const DE: u32 = 8;
+    const JP: u32 = 9;
 
     fn facts(
         id: u32,
@@ -263,6 +364,7 @@ mod tests {
             facts(SA, "sa", 4, 6000, 6200, 4_000_000),
             facts(ES, "es", 1, 9200, 9200, 2_500_000),
             facts(DE, "de", 1, 9300, 9300, 2_600_000),
+            facts(JP, "jp", 4, 6500, 6200, 1_500_000),
         ] {
             facts_map.insert(f.id, f);
         }
@@ -292,7 +394,12 @@ mod tests {
             BR,
             CountryTransferProfile {
                 import: vec![],
-                export: vec![weight(PT, 1.0), weight(TR, 0.27), money(SA, 0.27)],
+                export: vec![
+                    weight(PT, 1.0),
+                    weight(JP, 0.33),
+                    weight(TR, 0.27),
+                    money(SA, 0.27),
+                ],
                 diaspora: vec![],
                 foreign_share: 0.07,
                 authored: true,
@@ -338,6 +445,16 @@ mod tests {
                     share: 0.09,
                 }],
                 foreign_share: 0.56,
+                authored: true,
+            },
+        );
+        profiles.insert(
+            JP,
+            CountryTransferProfile {
+                import: vec![weight(BR, 1.0)],
+                export: vec![weight(DE, 1.0)],
+                diaspora: vec![],
+                foreign_share: 0.15,
                 authored: true,
             },
         );
@@ -393,6 +510,142 @@ mod tests {
             at_porto > at_home,
             "Porto shop window {at_porto} must beat the Brasileirão {at_home}"
         );
+    }
+
+    fn loan(map: &MarketMap, nationality: u32, current: u32, buyer: u32) -> f32 {
+        MarketAffinity::loan_affinity(
+            map,
+            MarketAffinityInputs {
+                buyer_country_id: buyer,
+                nationality_country_id: nationality,
+                current_country_id: current,
+                kind: MoveKind::Talent,
+                benefactor: 0.0,
+            },
+        )
+    }
+
+    #[test]
+    fn a_loan_is_priced_on_the_route_between_the_two_clubs() {
+        let map = world();
+        // Japan imports Brazilians heavily and does no business at all with
+        // Russia. Read on the passport alone the two are the same player, so
+        // a J-League club borrowed a Brazilian from Zenit as readily as from
+        // Flamengo — which is the move this exists to stop.
+        let from_home = loan(&map, BR, BR, JP);
+        let from_russia = loan(&map, BR, RU, JP);
+        assert!(
+            from_home > 2.0 * from_russia,
+            "Flamengo {from_home} must dwarf Zenit {from_russia}"
+        );
+        // …and the permanent read, which answers a different question, still
+        // cannot tell them apart. That difference is the whole point.
+        let permanent = affinity(&map, BR, RU, JP);
+        assert!(permanent > 2.0 * from_russia, "was {permanent}");
+    }
+
+    #[test]
+    fn a_loan_along_a_worked_route_is_untouched() {
+        let map = world();
+        // Russia's card exports to Turkey at the top of its list, so a
+        // Brazilian at a Russian club is a Turkish club's ordinary loan-in
+        // and must not pay for the border twice.
+        let brazilian_to_turkey = loan(&map, BR, RU, TR);
+        assert!(brazilian_to_turkey > 0.4, "was {brazilian_to_turkey}");
+    }
+
+    #[test]
+    fn a_faint_card_entry_never_reads_below_knowing_nothing() {
+        let map = world();
+        // Turkey's card imports Russians at 0.17 — a real but minor market,
+        // and the two are neighbours on the reputation ladder, so the derived
+        // prior speaks louder than the share does. The card must raise that
+        // prior or stay out of its way; measured on the shipped data it did
+        // neither, and Italy → Portugal read 0.047 against a 0.31 prior.
+        let named = MarketAffinity::corridor_strength(&map, RU, TR);
+        let silent = MarketAffinity::corridor_strength(&map, ES, PT);
+        let prior = {
+            let reading = map.corridor(RU, TR);
+            (reading.derived.import * reading.derived.export).sqrt()
+        };
+        assert!(
+            named >= prior,
+            "card {named} must not undercut prior {prior}"
+        );
+        assert!(silent > 0.2, "two Western European neighbours: {silent}");
+    }
+
+    #[test]
+    fn the_model_floors_a_named_pair_at_its_share_of_the_prior() {
+        let map = world();
+        // The MODEL path, as distinct from the ruler above it: a named pair
+        // may sit below the prior — the cards finding little traffic is
+        // evidence — but not arbitrarily far below it.
+        for from in [BR, RU, TR, PT, CM, SA, ES, DE, JP] {
+            for to in [BR, RU, TR, PT, CM, SA, ES, DE, JP] {
+                let reading = map.corridor(from, to);
+                let prior = (reading.derived.import * reading.derived.export).sqrt();
+                let blended = MarketAffinity::blend_corridor(&reading);
+                let bar = prior * MarketAffinity::CORRIDOR_PRIOR_FLOOR_SHARE;
+                assert!(blended >= bar - 1e-6, "{from} → {to}: {blended} < {bar}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_corridor_floor_only_ever_raises_a_pair() {
+        let map = world();
+        // Every pair, both directions: the floor is a MAX, so nothing the
+        // cards say can come out lower than it went in. The arm that disarms
+        // it is the A/B baseline, not a second model.
+        for from in [BR, RU, TR, PT, CM, SA, ES, DE, JP] {
+            for to in [BR, RU, TR, PT, CM, SA, ES, DE, JP] {
+                let reading = map.corridor(from, to);
+                let prior = (reading.derived.import * reading.derived.export).sqrt();
+                let blended = MarketAffinity::corridor_strength(&map, from, to);
+                assert!(
+                    blended >= prior - 1e-6,
+                    "{from} → {to}: {blended} < {prior}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_route_never_touches_a_loan_home() {
+        let map = world();
+        // The loan-home pathway is the one cross-border route that answers to
+        // the player rather than to the two leagues: Russia and Brazil do no
+        // business, and a Brazilian at a Russian club still goes home.
+        assert_eq!(loan(&map, BR, RU, BR), 1.0);
+        assert_eq!(loan(&map, CM, ES, CM), 1.0);
+    }
+
+    #[test]
+    fn a_man_at_home_reads_one_corridor_not_two() {
+        let map = world();
+        // His club's country IS his passport's, so the route and the
+        // nationality corridor are the same corridor. Squaring it would make
+        // every loan out of a player's own country implausible.
+        for buyer in [TR, PT, ES, JP, SA] {
+            assert_eq!(loan(&map, BR, BR, buyer), affinity(&map, BR, BR, buyer));
+        }
+    }
+
+    #[test]
+    fn loan_affinity_never_leaves_the_band() {
+        let map = world();
+        for nationality in [BR, RU, TR, PT, CM, SA, ES, DE, JP, 999] {
+            for current in [BR, RU, CM, ES, JP, 0] {
+                for buyer in [BR, RU, TR, PT, CM, SA, ES, DE, JP, 999] {
+                    let value = loan(&map, nationality, current, buyer);
+                    assert!(
+                        (AFFINITY_FLOOR..=1.0).contains(&value),
+                        "{nationality} @ {current} → {buyer} produced {value}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

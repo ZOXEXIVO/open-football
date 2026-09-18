@@ -672,21 +672,16 @@ impl Ball {
     /// than through his feet rolled past: 140 balls a match ran clear of
     /// their owner at a stride, 79 at a stride and a half.
     fn first_touch_toward(&mut self, owner: Vector3<f32>, gap_sq: f32) {
-        const REACH: f32 = crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
         /// The pace a controlled ball leaves the boot at, in u/tick: about
         /// 6 m/s, a firm touch and no more.
         const TOUCH_PACE: f32 = 0.5;
 
-        if gap_sq > REACH * REACH || self.position.z > Self::DECK {
+        if !Self::within_first_touch(self.position, self.velocity, owner) {
             return;
         }
         let dx = owner.x - self.position.x;
         let dy = owner.y - self.position.y;
         let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
-        let approaching = self.velocity.x * dx + self.velocity.y * dy > 0.0;
-        if speed <= BallRoll::STOPPED || !approaching {
-            return;
-        }
         let gap = gap_sq.sqrt().max(f32::EPSILON);
         let pace = speed.min(TOUCH_PACE);
         self.velocity.x = dx / gap * pace;

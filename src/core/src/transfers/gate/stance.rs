@@ -19,7 +19,7 @@ use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::happiness::processing::PlayingTimeFrustrationConfig;
 use crate::club::player::language::Language;
-use crate::club::player::mind::MindSituation;
+use crate::club::player::mind::{MindClock, MindSituation};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::PromisedSquadStatus;
@@ -219,7 +219,11 @@ impl PlayerStanceBuilder {
 
         stance
             .with_situation(&situation)
-            .with_mind(&player.mind, Self::home_mood_desire(player, &situation))
+            .with_mind(
+                &player.mind,
+                Self::home_mood_desire(player, &situation),
+                MindClock::day(date),
+            )
             .with_agent(&PlayerAgent::for_player(player), inputs.rep_diff)
             // `club_tenure_days` is the honest anchor for a stay — a loan
             // return re-stamps `last_transfer_date`, which would otherwise
@@ -293,6 +297,8 @@ impl PlayerStanceBuilder {
             adaptability_drive: (summary.adaptability as f32 / 20.0).clamp(0.0, 1.0),
             big_stage_inclination: summary.seller_ctx.big_stage_inclination,
             importance,
+            own_level: summary.skill_ability,
+            position_group: summary.position_group,
             starter_ratio: summary.starter_share,
             // Against what his ROLE implies, the way the live builder's
             // `MindSituation::playing_time_gap` does — not against a flat
@@ -322,6 +328,10 @@ impl PlayerStanceBuilder {
                 .max(if summary.home_return_wanted { 0.6 } else { 0.0 })
                 .clamp(0.0, 1.0),
             stay_pressure: summary.stay_pressure.clamp(0.0, 1.0),
+            // The arc he is living out, staged on the summary — a
+            // borrowing country cannot reach his mind any more than it
+            // can reach his club's depth chart.
+            plan: summary.career_plan,
             language_profile: summary.language_profile,
             buyer_is_favourite: false,
             buyer_sentiment: 0.0,
@@ -385,6 +395,10 @@ impl OfferViewBuilder {
         offered_wage: f64,
         promised_status: Option<PromisedSquadStatus>,
         sporting_drop: f32,
+        // The buying club's reputation `overall_score`, 0..1 — the one
+        // thing the offer needs about the buyer that its country cannot
+        // supply, and what places the player in ITS bands.
+        buyer_reputation: f32,
         market_map: &MarketMap,
     ) -> OfferView {
         let buyer_region =
@@ -423,6 +437,7 @@ impl OfferViewBuilder {
             deadline_urgency: 0.0,
             release_clause_triggered: false,
             returning_to_seller: 0.0,
+            band_offered: stance.band_at(buyer_reputation),
         }
     }
 }
@@ -432,6 +447,7 @@ mod tests {
     use super::*;
     use crate::club::player::ability::position::PositionCoverage;
     use crate::club::player::language::LanguageProfile;
+    use crate::club::player::mind::CareerPlanView;
     use crate::transfers::gate::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
@@ -460,6 +476,9 @@ mod tests {
             adaptability: 6,
             leave_pressure: 0.55,
             stay_pressure: 0.1,
+            loan_willingness: 1.0,
+            career_plan: CareerPlanView::none(),
+            parent_subsidy: 0.0,
             player_name: "Test".to_string(),
             club_name: "Test Club".to_string(),
             position: PlayerPositionType::Striker,

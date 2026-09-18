@@ -5,6 +5,7 @@
 //! a player's own country, and [`interest`] is what a borrower actually
 //! wants.
 
+pub mod agreement;
 mod broadcast;
 mod foreign;
 pub mod guard;
@@ -14,6 +15,7 @@ mod scan;
 #[cfg(test)]
 mod tests;
 
+pub use agreement::*;
 pub use guard::*;
 pub use home::*;
 
@@ -33,12 +35,12 @@ use crate::transfers::gate::{EffectivePlayerReputation, TransferPlausibilityEval
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
-use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutStatus};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    Club, ClubPhilosophy, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType,
-    ReputationLevel, RoleFamiliarity, Team,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, RoleFamiliarity,
+    Team,
 };
 use std::collections::HashMap;
 
@@ -51,10 +53,17 @@ use crate::transfers::market::TransferListingOrigin;
 // than this are signed cheap permanent (or as free agents) rather than
 // loaned, so loan targeting above it is noise regardless of whether the
 // move is request-driven or opportunistic.
-/// Corridor affinity a foreign loan target must clear for a club to even
-/// consider him. Low, and deliberately below the permanent-move floor: a
-/// loan is a cheaper, more speculative piece of business than a purchase,
-/// and clubs take flyers on loanees from markets they would not buy in.
+/// [`crate::transfers::MarketAffinity::loan_affinity`] a foreign loan target
+/// must clear for a club to even consider him. Low, and deliberately below
+/// the permanent-move floor: a loan is a cheaper, more speculative piece of
+/// business than a purchase, and clubs take flyers on loanees from markets
+/// they would not buy in.
+///
+/// It stays a FLOOR rather than a bar the implausible routes fall under,
+/// because there is no bar that separates them: Italy → Romania, the weakest
+/// route real loans use, derives below Russia → Japan. What separates those
+/// two is the draw, which weights every surviving candidate by this same
+/// number — so a thin route is rare rather than forbidden.
 const FOREIGN_LOAN_VISIBILITY_FLOOR: f32 = 0.04;
 
 const MAX_LOAN_TARGET_AGE: u8 = 34;
@@ -171,8 +180,17 @@ impl LoanPipeline {
     // ============================================================
 
     /// Days a broadcast sits at one reputation tier before, unanswered, it
-    /// widens to the next tier down.
-    const BROADCAST_RESPONSE_DAYS: i64 = 14;
+    /// widens to the next tier down. A week: the cascade is how a
+    /// parent finds a taker, and a fortnight per rung spent most of a
+    /// window walking down the tiers.
+    const BROADCAST_RESPONSE_DAYS: i64 = 7;
+
+    /// The days a parent's staff actually work the phones. Twice a week
+    /// rather than once — a placement that takes four rungs to find its
+    /// club had a month of window to do it in.
+    fn is_market_day(date: NaiveDate) -> bool {
+        matches!(date.weekday(), Weekday::Mon | Weekday::Thu)
+    }
 
     /// Days a posted `HomeCountry` candidate is held off the domestic push
     /// so his own league's clubs get first refusal. A fortnight — the same
@@ -199,7 +217,7 @@ impl LoanPipeline {
     /// reputation-drop floor — so a push never lands a player on a bench or
     /// somewhere that makes no sporting sense.
     pub fn broadcast_listed_loans(country: &mut Country, date: NaiveDate) {
-        if date.weekday() != Weekday::Mon {
+        if !Self::is_market_day(date) {
             return;
         }
         ListingBroadcast::loans(country, date);
@@ -388,25 +406,23 @@ impl LoanPipeline {
     /// option pricing.
     const LOAN_OPTION_VALUE_FRACTION: f64 = 0.7;
     /// Age above which a loan is squad-clearing rather than an investment,
-    /// so no option is written. Nobody buys a 31-year-old at the end of a
-    /// cover loan.
-    const LOAN_OPTION_MAX_AGE: u8 = 30;
+    /// so no option is written. A club will still buy a thirty-two-year-old
+    /// it has had for a season; it will not buy one it has not.
+    const LOAN_OPTION_MAX_AGE: u8 = 32;
 
     /// Strike price for an option to buy on this loan, or `None` when the
     /// deal isn't one an option belongs on.
     ///
-    /// Cold, unsolicited approaches are excluded: the parent never
-    /// advertised the player, and a club that hasn't decided to sell him
-    /// doesn't hand over a purchase right as part of a loan it was talked
-    /// into. Everything else — a player his club put on the loan list — is
-    /// exactly the deal that carries one in reality.
+    /// Cold, unsolicited approaches carry one only when the parent has
+    /// already decided to move him on. It never advertised him, so it is
+    /// not handing a purchase right to a club it was talked into dealing
+    /// with — unless its own pathway says he is a fee, in which case an
+    /// option is exactly what it wants written in. Everything the parent
+    /// did advertise carries one as a matter of course.
     fn loan_option_fee<A>(country: &Country, action: &A, date: NaiveDate) -> Option<f64>
     where
         A: LoanOptionContext,
     {
-        if action.is_unsolicited() {
-            return None;
-        }
         let selling_club = country
             .clubs
             .iter()
@@ -417,6 +433,9 @@ impl LoanPipeline {
                 .iter()
                 .find(|p| p.id == action.player_id())
         })?;
+        if action.is_unsolicited() && !player.pathway_stage().is_terminal() {
+            return None;
+        }
         if player.age(date) > Self::LOAN_OPTION_MAX_AGE {
             return None;
         }
@@ -564,20 +583,6 @@ impl LoanPipeline {
             );
         }
         verdict.allows()
-    }
-
-    /// The guard's verdict alone, for the paths that need the reach rather
-    /// than the yes/no — the broadcast cascade's floor tier and the
-    /// Continental cold approach, which is peer-level business only.
-    fn loan_guard_reach(
-        guard: Option<&LoanAssetGuard>,
-        borrower: Option<&LoanBorrowerProfile>,
-    ) -> Option<LoanReach> {
-        if MarketSwitches::loan_guard_off() {
-            return None;
-        }
-        let (guard, borrower) = (guard?, borrower?);
-        Some(guard.assess(borrower).reach)
     }
 
     /// League reputation of a club's main competition, or 0 when the club
@@ -977,28 +982,6 @@ impl UnsolicitedLoanTarget {
             SquadAssetClass::TrueSurplus => Some(age <= Self::DEVELOPMENT_AGE),
         }
     }
-
-    /// Does the target clear the "right level for this borrower" gate?
-    ///
-    /// For a development loan the realism check is "will he actually play
-    /// here", which the caller enforces with the position-aware minutes /
-    /// room gates (and, for keepers, the strict plausible-#1 rule). When
-    /// that holds, the squad-average floor is actively harmful — it blocks
-    /// the signature development move: a big-club youngster dropping to a
-    /// smaller club to START. Young keepers are the sharpest case — they
-    /// develop late, so a teenage keeper's CA sits far below an outfield-heavy
-    /// squad average, which is exactly why none ever moved. So a development
-    /// loan skips the squad-average floor. The destination-level floors are
-    /// NOT skipped wholesale: [`LoanDestinationLevel`] is itself keyed to
-    /// readiness, so a genuinely raw youngster still drops to a club where he
-    /// STARTS, but a near-ready player (a displaced first-choice) is held to a
-    /// peer-level club in a peer-level division rather than tumbling several
-    /// tiers. Cover (non-development) loans keep every floor.
-    fn clears_level_gate(borrower_avg_ability: u8, level: &LoanDestinationLevel) -> bool {
-        let avg_ok =
-            level.is_development || level.ability >= borrower_avg_ability.saturating_sub(5);
-        avg_ok && level.is_plausible()
-    }
 }
 
 /// The two seller-side numbers a cross-border loan has to carry with it.
@@ -1080,127 +1063,42 @@ impl ForeignUnsolicitedLoanTarget {
     }
 }
 
-/// Whether a club is in the market for a loan at all, and on what terms.
+/// Whether a club's squad is genuinely short of bodies.
 ///
-/// The borrower-side scan and the seller-side broadcast have to agree about
-/// this. They used not to: the scan asked reputation, philosophy, window and
-/// squad shortage before it would even look, while the push asked the
-/// borrower nothing — the comment there called accepting a pushed loan "a
-/// passive response, not a planning action" and skipped every appetite gate.
-/// So a Continental club that shops the loan market only in January, and only
-/// while in the red, was handed teenagers in August by parents who had simply
-/// picked the highest-reputation name that would play them.
+/// This used to be the whole appetite model, and it was a gate: a
+/// Continental club "only loans in January, and only while in the red",
+/// an Elite club never, and the seller-side push asked the borrower
+/// nothing at all. Between them, the two sides of the same market
+/// disagreed about who was in it, and the tiers that take the most loans
+/// in real football took none here.
+///
+/// What is left is the one reading that is a FACT rather than a policy:
+/// a squad below the bodies it needs to field a balanced matchday side.
+/// How much a club of a given standing wants a loanee is priced by
+/// [`BorrowerAppetite::base_for_tier`] instead.
 struct LoanBorrowerAppetite {
-    /// The club runs its own loan scans right now.
-    scans: bool,
-    /// Some position group is below the level at which the club can field a
-    /// balanced matchday squad.
+    /// Some position group is below the level at which the club can
+    /// field a balanced matchday squad.
     critical_shortage: bool,
 }
 
 impl LoanBorrowerAppetite {
-    /// Age slack a pushed candidate gets against a request's band — the same
-    /// relaxation [`LoanPipeline::scan_loan_market`] applies when it
-    /// matches its own requests against the listed market.
-    const REQUEST_AGE_SLACK: u8 = 3;
-    /// Ability slack, likewise mirrored from the scan's `relaxed_min`.
-    const REQUEST_ABILITY_SLACK: u8 = 5;
-    /// CA over the borrower's own best in the group at which a pushed
-    /// loanee stops being "somebody else's player" and becomes an
-    /// upgrade any club takes, in any month.
-    const UPGRADE_MARGIN: u8 = 5;
+    /// Below these counts a side genuinely cannot put out a balanced
+    /// eleven: < 2 keepers, < 4 defenders, < 4 midfielders, < 2
+    /// forwards.
+    const MINIMUM: [usize; PlayerFieldPositionGroup::COUNT] = [2, 4, 4, 2];
 
-    fn assess(club: &Club, team: &Team, is_january: bool) -> Self {
-        // Critical-need override: a club whose squad is genuinely short at
-        // any position MUST scan the loan market, even outside its usual
-        // scanning window. Without this, a National-rep club that loses both
-        // senior GKs in October would otherwise wait until January to cover —
-        // leaving them fielding youth keepers for two months.
-        //
-        // Threshold: < 2 at GK, < 4 at DEF/MID, < 2 at FWD. Below these and
-        // the team genuinely cannot field a balanced matchday squad.
-        let critical_shortage = {
-            let mut counts = [0usize; PlayerFieldPositionGroup::COUNT];
-            for p in team.players.iter() {
-                counts[p.position().position_group().index()] += 1;
-            }
-            counts[0] < 2 || counts[1] < 4 || counts[2] < 4 || counts[3] < 2
-        };
-
-        // Philosophy overrides reputation defaults. LoanFocused clubs always
-        // scan; SignToCompete clubs almost never loan.
-        let scans = critical_shortage
-            || match &club.philosophy {
-                ClubPhilosophy::LoanFocused => true,
-                ClubPhilosophy::SignToCompete => {
-                    // Only loan as emergency cover in January
-                    is_january && club.finance.balance.balance < 0
-                }
-                _ => match team.reputation.level() {
-                    ReputationLevel::Regional
-                    | ReputationLevel::Local
-                    | ReputationLevel::Amateur => true,
-                    ReputationLevel::National => is_january || club.finance.balance.balance < 0,
-                    ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
-                    ReputationLevel::Elite => false,
-                },
-            };
-
+    fn assess(team: &Team) -> Self {
+        let mut counts = [0usize; PlayerFieldPositionGroup::COUNT];
+        for p in team.players.iter() {
+            counts[p.position().position_group().index()] += 1;
+        }
         LoanBorrowerAppetite {
-            scans,
-            critical_shortage,
+            critical_shortage: counts
+                .iter()
+                .zip(Self::MINIMUM)
+                .any(|(have, need)| *have < need),
         }
-    }
-
-    /// Will this club entertain a loan somebody else brings to it?
-    ///
-    /// Answering a knock at the door is more permissive than going out
-    /// looking, so an open request at the position counts even for a club
-    /// that runs no scans of its own. What it is not is unconditional: the
-    /// candidate still has to be someone that request was asking for. A side
-    /// shopping for a centre-forward who can lead its line has not thereby
-    /// agreed to take any centre-forward alive, and a club with no request at
-    /// the position has not asked for anybody at all.
-    ///
-    /// The one unconditional yes is an UPGRADE: a loanee clearly better
-    /// than anything the club has in that group, whose wage it can carry
-    /// and who is inside the guard's reach. A Continental club that
-    /// "only loans in January, and only in the red" turning that down in
-    /// August is not caution — it is the refusal that handed the boy to
-    /// the tier below, every time.
-    #[allow(clippy::too_many_arguments)]
-    fn accepts_push(
-        &self,
-        club: &Club,
-        group: PlayerFieldPositionGroup,
-        candidate_ability: u8,
-        candidate_age: u8,
-        borrower_best_in_group: u8,
-        guard_clears: bool,
-    ) -> bool {
-        if self.scans || self.critical_shortage {
-            return true;
-        }
-        if guard_clears
-            && borrower_best_in_group > 0
-            && candidate_ability >= borrower_best_in_group.saturating_add(Self::UPGRADE_MARGIN)
-        {
-            return true;
-        }
-        club.transfer_plan
-            .transfer_requests
-            .iter()
-            .filter(|r| {
-                r.status != TransferRequestStatus::Fulfilled
-                    && r.status != TransferRequestStatus::Abandoned
-                    && !r.is_emergency_free_agent_depth()
-                    && r.position.position_group() == group
-            })
-            .any(|r| {
-                candidate_ability >= r.min_ability.saturating_sub(Self::REQUEST_ABILITY_SLACK)
-                    && candidate_age >= r.preferred_age_min
-                    && candidate_age <= r.preferred_age_max.saturating_add(Self::REQUEST_AGE_SLACK)
-            })
     }
 }
 
@@ -1456,6 +1354,26 @@ impl BorrowerPositionDepth {
     /// Best ability the borrower can already field in this group — the
     /// competition view, so a wide forward filed as a midfielder counts
     /// where he actually plays.
+    /// Men in this group clearly better than the candidate — the same
+    /// competition view the minutes gate reads, as a count rather than
+    /// a verdict.
+    fn clearly_better_ahead(
+        &self,
+        group: PlayerFieldPositionGroup,
+        candidate_ability: u8,
+    ) -> usize {
+        self.role_row(group)
+            .map(|(_, abilities)| {
+                abilities
+                    .iter()
+                    .filter(|&&a| {
+                        a >= candidate_ability.saturating_add(BorrowerAppetite::CLEARLY_BETTER)
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     fn best_in_group(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.role_row(group)
             .and_then(|(_, abilities)| abilities.iter().copied().max())

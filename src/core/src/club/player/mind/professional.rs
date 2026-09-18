@@ -301,8 +301,14 @@ impl SubMind for ProfessionalMind {
                 today,
             );
         } else if self.feels_rated() > 0.3 {
-            // He is trusted. Whatever he wanted there is answered.
-            organs.goals.advance(GoalKind::WinTheManagersTrust, 0.2);
+            // He is trusted — and the team sheet has to say so too.
+            // Warm words answer nothing on their own: a man told every
+            // week how well he is doing and never picked has won
+            // nothing, and used to be handed the want as achieved on
+            // the strength of the conversations alone.
+            organs
+                .goals
+                .advance(GoalKind::WinTheManagersTrust, 0.2 * s.starter_ratio);
         }
 
         // Not knowing what he is being asked to do is its own grievance,
@@ -586,6 +592,54 @@ mod tests {
                 .unwrap()
                 .progress()
                 > 0.0
+        );
+    }
+
+    /// The reported case: spoken to warmly week after week and never
+    /// picked. The want used to march to Satisfied on the
+    /// conversations alone, and his diary told him he had won the
+    /// manager's trust without having played a minute.
+    #[test]
+    fn a_man_who_is_never_picked_never_wins_the_trust() {
+        let mut organs = MindOrgans::new();
+        let mut mind = ProfessionalMind::default();
+        mind.manager = ActorRef::staff(COACH);
+        organs.goals.pursue(
+            GoalKind::WinTheManagersTrust,
+            GoalOrigin::SelfDrive,
+            GoalEvidence::EMPTY,
+            0.6,
+            100,
+        );
+
+        // Nothing is expected of him and nothing is given: the silence
+        // clock never starts, so this is the branch that reads him as
+        // trusted.
+        let unpicked = MindSituation {
+            starter_ratio: 0.0,
+            expected_start_share: 0.0,
+            ..under(COACH)
+        };
+        for _ in 0..4 {
+            mind.observe(
+                &episode(EpisodeKind::ManagerPrivateBacking, ActorRef::staff(COACH)),
+                &mut organs,
+            );
+        }
+        assert!(
+            mind.feels_rated() > 0.3,
+            "he believes the manager rates him"
+        );
+
+        for _ in 0..20 {
+            reflect(&mut mind, &unpicked, &mut organs);
+        }
+        assert_eq!(
+            organs
+                .goals
+                .get(GoalKind::WinTheManagersTrust)
+                .map(|g| g.progress()),
+            Some(0.0),
         );
     }
 

@@ -2361,6 +2361,28 @@ a:active {
     width: 32px;
 }
 
+/* What the CLUB means to do with him, beside what he is. The dot marks
+   a row carrying more than the stage — a loan's purpose, or the verdict
+   on the last one — which the title attribute holds. */
+.fm-squad .sq-pathway {
+    color: #7a868e;
+    font-size: 11px;
+    white-space: nowrap;
+    width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fm-squad .sq-pathway-note {
+    display: inline-block;
+    width: 3px;
+    height: 3px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: #4a7c9e;
+    vertical-align: 2px;
+}
+
 .fm-squad .sq-ability {
     width: 3.5em;
 }
@@ -3597,6 +3619,57 @@ a:active {
     font-size: 11px;
     color: #6d8290;
     text-align: right;
+}
+
+/* The arc he is living out, above the wants it orders. Deliberately a
+   block rather than a row: it is one held decision, and the wants below
+   are what it produces this month. The club's own view of him is the
+   last line, so the two sides of the same conversation sit together. */
+.fm-mh-plan {
+    padding: 8px 10px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.025);
+    border-left: 2px solid #4a7c9e;
+}
+
+.fm-mh-plan.is-unspoken {
+    border-left-color: #47586a;
+}
+
+.fm-mh-plan-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.fm-mh-plan-arc {
+    font-size: 13px;
+    font-weight: 600;
+    color: #c8d4de;
+}
+
+.fm-mh-plan.is-unspoken .fm-mh-plan-arc {
+    font-style: italic;
+    font-weight: 500;
+    color: #8fa2b0;
+}
+
+.fm-mh-plan-stage {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #6d8290;
+    text-align: right;
+}
+
+.fm-mh-plan-note {
+    margin-top: 2px;
+    font-size: 11px;
+    color: #6d8290;
+}
+
+.fm-mh-plan-note.is-club {
+    color: #5c6f7c;
 }
 
 /* Where he stands with this club: the manager, then what he

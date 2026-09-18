@@ -19,6 +19,8 @@
 //! knew nothing about.
 
 use super::organs::memory::ActorRef;
+use crate::PlayerFieldPositionGroup;
+use crate::transfers::squad::LevelBand;
 
 /// How close a player is to his country's side.
 ///
@@ -158,6 +160,14 @@ pub struct MindSituation {
     /// His regressed season rating, 0..10. 0 when he has not played
     /// enough for it to mean anything.
     pub recent_rating: f32,
+    /// The shirt he is judged in. Only ever read alongside
+    /// [`Self::own_level`], which is 0 until anybody has looked at him,
+    /// so the default never speaks on its own.
+    pub position_group: PlayerFieldPositionGroup,
+    /// How long his own football has been dry, 0..1 — the seasons
+    /// without a first-team shirt the stuck-career machinery already
+    /// reads. 0 is a man who is playing.
+    pub football_drought: f32,
 
     // ── His country ─────────────────────────────────────────────
     /// Months until his nation's next major tournament. `u8::MAX` when
@@ -209,6 +219,8 @@ impl MindSituation {
             own_level: 0,
             training_performance: 10.0,
             recent_rating: 0.0,
+            position_group: PlayerFieldPositionGroup::Midfielder,
+            football_drought: 0.0,
             months_to_tournament: u8::MAX,
             national_standing: NationalStanding::Unknown,
         }
@@ -408,6 +420,19 @@ impl MindSituation {
     #[inline]
     pub fn training_signal(&self) -> f32 {
         ((self.training_performance - 10.0) / 6.0).clamp(-1.0, 1.0)
+    }
+
+    /// What he is at the club he is at, as a [`LevelBand`] — 1.0 a
+    /// starter here, 0.0 rotation depth, above 1 too good for the place.
+    /// `None` until somebody has taken a reading of him.
+    ///
+    /// The one vocabulary the player's plan and the club's pathway
+    /// share, so "drop a level" means the same thing on both sides of
+    /// the desk.
+    pub fn band_here(&self) -> Option<f32> {
+        (self.own_level > 0).then(|| {
+            LevelBand::at_reputation(self.own_level, self.position_group, self.club_reputation)
+        })
     }
 
     /// How far his own level sits above what a club of this standing

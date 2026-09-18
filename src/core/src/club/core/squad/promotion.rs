@@ -6,7 +6,9 @@ use log::debug;
 
 use crate::club::ClubPhilosophy;
 use crate::club::staff::perception::{CoachProfile, DevelopmentFormEvidence};
-use crate::{Club, ContractType, Person, Player, PlayerClubContract, PlayerStatusType, TeamType};
+use crate::{
+    Club, ContractType, Person, Player, PlayerClubContract, PlayerPlan, PlayerStatusType, TeamType,
+};
 
 use super::super::academy::GraduationTerms;
 
@@ -32,6 +34,7 @@ impl Club {
             None => return,
         };
         let club_rep = self.teams.teams[main_idx].reputation.world;
+        let club_id = self.id;
 
         // Collect first, mutate second: the scan borrows the team
         // collection immutably, so we can't upgrade in the same loop.
@@ -54,6 +57,9 @@ impl Club {
                 // First pro deal — a genuine career milestone for the
                 // player, distinct from the senior-debut breakthrough.
                 player.on_professional_contract_awarded();
+                // A senior contract is the club saying he has a future
+                // here, so it writes the pathway that says what kind.
+                player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
                 debug!(
                     "youth → pro contract on merit: {} (CA={}, age={}) at {}",
                     player.full_name,

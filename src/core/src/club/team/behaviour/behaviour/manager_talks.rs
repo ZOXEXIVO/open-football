@@ -12,36 +12,28 @@ use crate::club::player::calculators::{
 };
 use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
-use crate::club::player::mind::GoalKind;
+use crate::club::player::mind::{CareerArc, MindClock};
 use crate::club::staff::CoachPlayerBond;
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
-    ContractTermination, ManagerTalkResult, ManagerTalkType, TeamBehaviourResult,
+    ContractTermination, ManagerTalkResult, ManagerTalkType, PraiseGrounds, TeamBehaviourResult,
 };
 use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
-use crate::transfers::loan::home::{HomeLoanGates, HomePull, UnsettledAbroadScan};
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup,
-    PlayerSquadStatus, PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
+    PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
 };
 use chrono::{Duration, NaiveDate};
 use log::debug;
 use std::collections::{HashMap, HashSet};
 
 impl TeamBehaviour {
-    /// How long a "no more loans" declaration keeps steering the
-    /// stuck-career escalation after the player has come home. Matches
-    /// the window the returnee audit reads it over, so the two halves of
-    /// the same arc agree about when the sentence stops counting.
-    const DONE_WITH_LOANS_WINDOW_DAYS: u16 = 180;
-
-    /// How formed a `GoOutOnLoan` want has to be before he takes it to the
-    /// coach. Below `HomeLoanGates::WANTS_HOME_BAR` on purpose: wanting
-    /// minutes is a lower bar than wanting to go home, and the same want
-    /// carries a man who is not homesick at all.
-    const LOAN_WANT_BAR: f32 = 0.3;
+    /// How close a man has to be to the deadline he gave his own plan
+    /// before he takes it to the manager. Half of it: he asks while
+    /// there is still time for an answer, not once it has run out.
+    const PLAN_TALK_PRESSURE: f32 = 0.5;
 
     /// Date-aware. The interaction-log cooldown gate needs the
     /// simulation date so re-asking the same player about the same topic
@@ -128,30 +120,36 @@ impl TeamBehaviour {
                 talk_candidates.push((player.id, ManagerTalkType::Motivational, 70));
             }
 
-            // Lower priority: praise good performers
-            if player.behaviour.is_good() && player.happiness.morale < 80.0 {
-                talk_candidates.push((player.id, ManagerTalkType::Praise, 30));
-            }
-
             // Discipline for poor behaviour + high ability
             if player.behaviour.is_poor() && player.player_attributes.current_ability > 100 {
                 talk_candidates.push((player.id, ManagerTalkType::Discipline, 60));
             }
 
-            // Form-driven automatic talks — gate on the manager's personality.
-            // A strong motivator spots hot streaks; a strong disciplinarian
-            // spots slumps. Managers weak in both skip form-based talks.
-            // Read the regressed form so a single barnstormer or stinker
-            // doesn't summon a praise/discipline meeting after three games.
             let mgr_motivating = manager.staff_attributes.mental.motivating;
             let mgr_discipline = manager.staff_attributes.mental.discipline;
+
+            // A word for the man who has earned one. What the manager can
+            // point to decides whether the conversation happens at all and
+            // what it is about — a run of form, or the way he has been
+            // training. Nothing to point to, no praise.
+            if let Some(grounds) = PraiseGrounds::read(player) {
+                if player.happiness.morale < grounds.morale_ceiling() {
+                    talk_candidates.push((
+                        player.id,
+                        ManagerTalkType::Praise,
+                        grounds.talk_priority(mgr_motivating),
+                    ));
+                }
+            }
+
+            // Form-driven discipline — gate on the manager's personality.
+            // A strong disciplinarian spots slumps. Read the regressed
+            // form so a single stinker doesn't summon a meeting after
+            // three games.
             let pos = player.position().position_group();
             let form = player.statistics.average_rating_realistic(pos);
             let apps = player.statistics.played + player.statistics.played_subs;
             if apps >= 3 {
-                if mgr_motivating >= 14 && form >= 7.5 && player.happiness.morale < 85.0 {
-                    talk_candidates.push((player.id, ManagerTalkType::Praise, 55));
-                }
                 if mgr_discipline >= 14
                     && form > 0.0
                     && form < 5.5
@@ -405,17 +403,6 @@ impl TeamBehaviour {
 
         let current_date = ctx.simulation.date.date();
 
-        // Squad-tier context — the stuck-career escalation runs for
-        // senior reserve squads (B / Reserve / Second, where the
-        // grievance is the level) and for the main squad itself (the
-        // perennial backup / serial loanee the monthly audit set
-        // dreaming).
-        let team_type = ctx.team.as_ref().and_then(|t| t.team_type);
-        let reserve_team = team_type.map(|t| t.is_senior_reserve()).unwrap_or(false);
-        let main_team = team_type
-            .map(|t| matches!(t, TeamType::Main))
-            .unwrap_or(false);
-
         // Collect complaint candidates with priority score for sorting
         let mut candidates: Vec<(u32, ManagerTalkType, u32)> = Vec::new();
 
@@ -454,8 +441,6 @@ impl TeamBehaviour {
             }
 
             let ability = player.player_attributes.current_ability;
-            let ambition = player.attributes.ambition;
-            let determination = player.skills.mental.determination;
 
             // A player the club is moving on — not needed, or already put
             // up for sale — does not lobby the manager for minutes or a
@@ -479,173 +464,51 @@ impl TeamBehaviour {
                 .and_then(|c| c.loan_min_appearances);
             let gate = opp.can_judge(squad_status, &cfg, loan_min);
 
-            // ── Check 0: Senior stuck outside first-team football ──
-            // Two cases the minutes model below cannot see: a reserve-
-            // squad senior starting every reserve fixture (the grievance
-            // is the level, not the minutes), and a main-squad perennial
-            // backup whose weekly bench spot banks enough involvement
-            // credit to never cross the complaint threshold. Once the
-            // monthly ambition audits have him dreaming of first-team
-            // football, ambition / age pressure decides when he takes it
-            // to the coach: younger players push for a development loan,
-            // older ones ask for the move itself (a failed talk becomes
-            // a transfer request). The interaction-log cooldown keeps a
-            // successful "be patient" chat from being re-litigated
-            // weekly. Main-squad dreamers are 24+ by construction — the
-            // perennial-backup audit does not emit below that age.
+            // ── Check 1: what his own plan says ──
             //
-            // The third case is the returnee who spent his loan saying
-            // he had been lent out enough. Two things follow from that
-            // sentence and both are handled here: another loan is the
-            // one answer he has already refused, so he never asks for
-            // one whatever his age; and the year-long settling window
-            // belongs to a player who has just walked in, not to one
-            // who has been on the club's books for seasons and merely
-            // came back from somewhere. What he gets instead is a
-            // quarter of a season at home to be proved right or wrong.
-            let done_with_loans = player.happiness.has_recent_event(
-                &HappinessEventType::WantsToProveHimselfAtParent,
-                Self::DONE_WITH_LOANS_WINDOW_DAYS,
-            );
-
-            // ── Check 0a: the man who wants a season somewhere he plays ──
+            // One channel, and it is his. Three ad-hoc formulas used to
+            // sit here — a senior-stuck ladder keyed on age bands, a
+            // homesick-loan branch keyed on a mood, and a prospect
+            // branch with its own ambition × determination × age-urgency
+            // desire — and they disagreed about the same man: a
+            // twenty-three-year-old non-starter fell through all three
+            // while the mind was carrying `GoOutOnLoan` the whole time.
             //
-            // Ahead of every band below, because it answers a question
-            // none of them asks. Check 0 needs `age >= 24` for a main-team
-            // player and only yields a LOAN request under 23; Check 1
-            // needs a prospect squad status; Check 2 needs `age < 23`. So
-            // a homesick 23-to-25-year-old non-starter — the exact
-            // archetype of the loan home — fell through every one of them
-            // and got no channel at all, while the mind was carrying
-            // `GoHome` and `GoOutOnLoan` the whole time. Nothing in the
-            // file read either goal.
-            //
-            // Over 25 he is not sent somewhere to settle; he asks to
-            // leave, and Check 0 / Check 2 already do that.
-            let wants_a_season_away = player.home_pull.desire >= HomeLoanGates::WANTS_HOME_BAR
-                || player.mind.pressure_of(GoalKind::GoOutOnLoan) >= Self::LOAN_WANT_BAR;
-            if age <= UnsettledAbroadScan::MAX_AGE
-                && !done_with_loans
-                && wants_a_season_away
-                && player.happiness.starter_ratio < HomePull::SETTLED_STARTER_SHARE
-                && !player
-                    .interactions
-                    .topic_on_cooldown(topic_for_talk(ManagerTalkType::LoanRequest), current_date)
-            {
-                // He is asking for the move his own wants describe, so
-                // the push is those wants rather than a personality roll.
-                let priority = ((player
-                    .home_pull
-                    .desire
-                    .max(player.mind.pressure_of(GoalKind::GoOutOnLoan))
-                    * 100.0) as u32)
-                    + age as u32 * 10;
-                candidates.push((player.id, ManagerTalkType::LoanRequest, priority));
-                continue;
-            }
-
-            if (reserve_team && age >= 20)
-                || (main_team && age >= 24)
-                || (done_with_loans && age >= 21)
-            {
-                let settled = opp.days_since_join >= if done_with_loans { 90 } else { 365 };
-                let dreaming = player
-                    .happiness
-                    .has_recent_event(&HappinessEventType::WantsFirstTeamFootball, 90);
-                let already_listed = player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.is_transfer_listed)
-                    .unwrap_or(false);
-                if settled && dreaming && !already_listed {
-                    let talk_type = if age < 23 && !done_with_loans {
-                        ManagerTalkType::LoanRequest
-                    } else {
-                        ManagerTalkType::PlayingTimeRequest
-                    };
-                    let topic = topic_for_talk(talk_type.clone());
-                    let on_cooldown = player.interactions.topic_on_cooldown(topic, current_date);
-
-                    // How hard he pushes: ambition leads, determination
-                    // backs it, age pressure builds through the mid-20s
-                    // (the breakthrough window closing), loyalty holds
-                    // him back. A modest 21-year-old waits; an ambitious
-                    // one asks for a loan; almost every non-loyal
-                    // mid-20s player eventually asks for the move.
-                    let ambition_factor = ambition / 20.0;
-                    let determination_factor = determination / 20.0;
-                    let age_pressure = ((age as f32 - 20.0) / 6.0).clamp(0.0, 1.0);
-                    let loyalty_brake = player.attributes.loyalty / 20.0 * 0.15;
-                    let desire =
-                        ambition_factor * 0.45 + determination_factor * 0.20 + age_pressure * 0.35
-                            - loyalty_brake;
-
-                    if !on_cooldown && desire > 0.50 {
-                        let priority = (desire * 100.0) as u32 + age as u32 * 10;
-                        candidates.push((player.id, talk_type, priority));
+            // The arc he is living out already knows what he wants and
+            // how loudly (its rung IS the goal's rung), so the talk is
+            // simply the moment he takes it to the manager.
+            let plan = player.mind.career.plan_view(MindClock::day(current_date));
+            if let (Some(arc), Some(stage)) = (plan.arc, plan.stage) {
+                let talk = match arc {
+                    CareerArc::ProveOnLoan if stage.is_asking() => {
+                        Some(ManagerTalkType::LoanRequest)
+                    }
+                    CareerArc::StepUp if stage.is_asking() => {
+                        Some(ManagerTalkType::PlayingTimeRequest)
+                    }
+                    // He came home with a record and the club has not
+                    // acted on it. He does not ask for another loan —
+                    // that is the one answer he has already given.
+                    CareerArc::ClaimMyPlace | CareerArc::BreakThroughHere
+                        if plan.deadline_pressure >= Self::PLAN_TALK_PRESSURE =>
+                    {
+                        Some(ManagerTalkType::PlayingTimeRequest)
+                    }
+                    CareerArc::StepDownToPlay if stage.is_asking() => {
+                        Some(ManagerTalkType::PlayingTimeRequest)
+                    }
+                    _ => None,
+                };
+                if let Some(talk) = talk {
+                    let topic = topic_for_talk(talk.clone());
+                    if !player.interactions.topic_on_cooldown(topic, current_date) {
+                        // He pushes with what he holds it at, and the
+                        // deadline he gave himself sharpens it.
+                        let push = plan.strength.max(plan.deadline_pressure);
+                        let priority = (push * 100.0) as u32 + age as u32 * 10;
+                        candidates.push((player.id, talk, priority));
                         continue;
                     }
-                }
-            }
-
-            // ── Check 1: Youth prospect wants real football (loan request) ──
-            // Young players with prospect status who aren't getting meaningful
-            // first-team football should request loans for development.
-            // The label is the club's word for a boy not yet in the side;
-            // an age-group squad is the same fact without the word. A
-            // youth label expires at twenty, so a twenty-two-year-old
-            // parked in the under-23s would otherwise have no channel.
-            let is_prospect = matches!(
-                squad_status,
-                Some(PlayerSquadStatus::HotProspectForTheFuture)
-                    | Some(PlayerSquadStatus::DecentYoungster)
-            ) || (!main_team && !reserve_team);
-
-            if is_prospect && age >= 19 && age <= 23 {
-                // Priority increases with age — a 22yo prospect is more urgent than a 19yo
-                let age_urgency = (age as f32 - 18.0) / 5.0; // 0.2 at 19, 0.8 at 22
-                let ambition_factor = ambition / 20.0; // 0-1
-                let determination_factor = determination / 20.0;
-
-                // Ambitious, determined prospects request loans sooner
-                let desire =
-                    age_urgency * 0.4 + ambition_factor * 0.35 + determination_factor * 0.25;
-
-                // At age 21+ with decent ambition (>10), almost always request
-                // At age 19-20, need high ambition (>14) or long wait
-                let threshold = if age >= 21 {
-                    0.35 // Lower bar — most 21+ prospects want real football
-                } else {
-                    0.55 // Higher bar — 19-20 year olds need more drive
-                };
-
-                // A prospect only pushes for a loan once he has had real
-                // first-team match opportunities at the parent club — or
-                // has sat through a long idle stretch (60+ days) while the
-                // season is clearly under way. Calendar days alone, with
-                // the club having played nothing, never trigger it.
-                let had_opportunity = opp.eligible_official_matches_since_join > 0;
-                let season_active = ctx
-                    .club
-                    .as_ref()
-                    .map(|c| c.league_matches_played > 0)
-                    .unwrap_or(false);
-                // The idle branch is the one that must NOT read
-                // `had_opportunity`: a player registered below the first
-                // team is never eligible for its official fixtures, and a
-                // youth side's own games are friendly-classified, so his
-                // opportunity count stays zero for as long as he is
-                // parked. Anding it in here made the fallback written for
-                // the man who never plays require that he had played.
-                let long_idle = opp.days_since_join >= 60 && season_active;
-
-                if (desire > threshold && had_opportunity)
-                    || (age >= 21 && had_opportunity && gate.is_some())
-                    || long_idle
-                {
-                    let priority = (desire * 100.0) as u32 + age as u32 * 10;
-                    candidates.push((player.id, ManagerTalkType::LoanRequest, priority));
-                    continue;
                 }
             }
 
@@ -1544,6 +1407,7 @@ mod coach_termination_tests {
     //! cheap, clearly-below-level surplus — and is otherwise left for the
     //! sale / loan / listing systems instead of being walked for free.
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
@@ -1916,16 +1780,18 @@ mod coach_termination_tests {
 }
 
 #[cfg(test)]
-mod reserve_escalation_tests {
-    //! The stuck-career escalation (Check 0 of
-    //! `process_playing_time_complaints`): a settled senior in a
-    //! B / Reserve / Second squad — or a main-squad perennial backup the
-    //! monthly audit set dreaming — takes it to the coach: a development
-    //! loan when young, the move itself (a failed talk → transfer
-    //! request) when older.
+mod plan_escalation_tests {
+    //! A player takes his own plan to the manager. Three ad-hoc ladders
+    //! used to decide this — an age-banded stuck-career escalation, a
+    //! homesick-loan branch keyed on a mood, and a prospect branch with
+    //! its own desire formula — and they disagreed about the same man.
+    //! One channel now: the arc he is living out, at the rung he has
+    //! said it out loud.
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerPlan, GoalOrigin, PlanStage};
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::context::{GlobalContext, SimulationContext};
     use crate::shared::fullname::FullName;
@@ -1959,14 +1825,12 @@ mod reserve_escalation_tests {
             StaffCollection::new(vec![staff])
         }
 
-        /// A settled, homegrown (never transferred) reserve-squad
-        /// senior with the personality to push: decent ambition and
-        /// determination, ordinary loyalty. `dreaming` seeds the mood
-        /// the monthly reserve-ambition audit would have emitted.
-        fn reserve_player(age: u8, ambition: f32, dreaming: bool) -> Player {
+        /// A settled squad player with the personality to push. `plan`
+        /// is the arc he is living out and the rung it has reached.
+        fn player(age: u8, plan: Option<(CareerArc, PlanStage, f32)>) -> Player {
             let birth_year = Self::date().year() - age as i32;
             let mut attrs = PersonAttributes::default();
-            attrs.ambition = ambition;
+            attrs.ambition = 14.0;
             attrs.loyalty = 10.0;
             let mut skills = PlayerSkills::default();
             skills.mental.determination = 12.0;
@@ -1992,10 +1856,15 @@ mod reserve_escalation_tests {
                 .contract(Some(contract))
                 .build()
                 .unwrap();
-            if dreaming {
-                player
-                    .happiness
-                    .add_event(HappinessEventType::WantsFirstTeamFootball, -3.0);
+            if let Some((arc, stage, deadline_pressure)) = plan {
+                let today = MindClock::day(Self::date());
+                // A deadline this close is what `deadline_pressure`
+                // resolves to; the plan holds the date, not the number.
+                let left = ((1.0 - deadline_pressure) * CareerPlan::DEADLINE_HORIZON) as u16;
+                let mut career_plan =
+                    CareerPlan::new(arc, GoalOrigin::Survival, 0.7, today, left, 0.6, true);
+                career_plan.escalate(stage);
+                player.mind.career.plan = Some(career_plan);
             }
             player
         }
@@ -2014,43 +1883,47 @@ mod reserve_escalation_tests {
     }
 
     #[test]
-    fn stuck_dreaming_reserve_senior_raises_the_move() {
-        // 25-year-old — past the loan window, asks for the move itself.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, true)]);
+    fn a_man_who_wants_a_season_away_asks_for_the_loan() {
+        let players = PlayerCollection::new(vec![Fx::player(
+            21,
+            Some((CareerArc::ProveOnLoan, PlanStage::Asking, 0.0)),
+        )]);
         let result = Fx::run(&players, TeamType::Second);
-        assert_eq!(
-            result.manager_talks.len(),
-            1,
-            "the stuck senior must raise it"
-        );
+        assert_eq!(result.manager_talks.len(), 1);
         assert_eq!(result.manager_talks[0].player_id, 7);
         assert_eq!(
             result.manager_talks[0].talk_type,
-            ManagerTalkType::PlayingTimeRequest,
-            "a mid-20s stuck reserve asks for the move, not a loan"
+            ManagerTalkType::LoanRequest
         );
     }
 
-    /// The end of the carousel arc. A 22-year-old back from a loan he
-    /// spent telling anyone who would listen that he had been lent out
-    /// enough is not on the prospect pathway any more, and the one
-    /// answer he has already refused is another loan.
     #[test]
-    fn a_returnee_done_with_loans_asks_for_the_move_not_another_one() {
-        // 22, ambitious — the profile the carousel audit emits on in the
-        // first place.
-        let mut player = Fx::reserve_player(22, 18.0, true);
-        player
-            .happiness
-            .add_event(HappinessEventType::WantsToProveHimselfAtParent, -2.5);
-        let players = PlayerCollection::new(vec![player]);
-        let result = Fx::run(&players, TeamType::Main);
-
+    fn a_man_who_has_outgrown_the_place_asks_for_the_move() {
+        let players = PlayerCollection::new(vec![Fx::player(
+            25,
+            Some((CareerArc::StepUp, PlanStage::Asking, 0.0)),
+        )]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert_eq!(result.manager_talks.len(), 1);
         assert_eq!(
-            result.manager_talks.len(),
-            1,
-            "a returnee who said it out loud on loan must be heard at home"
+            result.manager_talks[0].talk_type,
+            ManagerTalkType::PlayingTimeRequest,
+            "a man who has outgrown the club asks for the move, not a loan"
         );
+    }
+
+    /// The end of the carousel arc. A returnee with a record gave the
+    /// club a deadline; when it runs down he asks for the look he came
+    /// home for — never another loan, which is the one answer he has
+    /// already given.
+    #[test]
+    fn a_returnee_whose_deadline_is_running_out_asks_for_a_look() {
+        let players = PlayerCollection::new(vec![Fx::player(
+            22,
+            Some((CareerArc::ClaimMyPlace, PlanStage::Committed, 0.8)),
+        )]);
+        let result = Fx::run(&players, TeamType::Main);
+        assert_eq!(result.manager_talks.len(), 1);
         assert_eq!(
             result.manager_talks[0].talk_type,
             ManagerTalkType::PlayingTimeRequest,
@@ -2059,69 +1932,38 @@ mod reserve_escalation_tests {
     }
 
     #[test]
-    fn stuck_dreaming_young_reserve_asks_for_a_loan() {
-        // 21-year-old with big ambition — pushes for a development loan.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(21, 18.0, true)]);
-        let result = Fx::run(&players, TeamType::Second);
-        assert_eq!(result.manager_talks.len(), 1);
-        assert_eq!(
-            result.manager_talks[0].talk_type,
-            ManagerTalkType::LoanRequest,
-            "a young stuck reserve pushes for a development loan"
-        );
-    }
-
-    #[test]
-    fn no_dream_means_no_escalation() {
-        // Same senior, but the reserve-ambition mood never fired — the
-        // escalation must wait for the dream, not invent one.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(25, 14.0, false)]);
+    fn no_plan_means_no_escalation() {
+        let players = PlayerCollection::new(vec![Fx::player(25, None)]);
         let result = Fx::run(&players, TeamType::Second);
         assert!(
             result.manager_talks.is_empty(),
-            "no first-team dream on record → no escalation"
+            "a man who has decided nothing has nothing to raise"
         );
     }
 
     #[test]
-    fn main_squad_dreaming_backup_asks_for_the_move() {
-        // 28-year-old main-squad backup the perennial-backup audit set
-        // dreaming — he asks for the move itself, never a loan.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(28, 14.0, true)]);
-        let result = Fx::run(&players, TeamType::Main);
-        assert_eq!(
-            result.manager_talks.len(),
-            1,
-            "a dreaming main-squad perennial backup must raise the move"
-        );
-        assert_eq!(
-            result.manager_talks[0].talk_type,
-            ManagerTalkType::PlayingTimeRequest,
-            "a main-squad backup asks for the move, not a loan"
+    fn a_plan_he_has_not_said_out_loud_stays_private() {
+        let players = PlayerCollection::new(vec![Fx::player(
+            21,
+            Some((CareerArc::ProveOnLoan, PlanStage::Forming, 0.0)),
+        )]);
+        let result = Fx::run(&players, TeamType::Second);
+        assert!(
+            result.manager_talks.is_empty(),
+            "the rung IS the escalation — an unspoken arc reaches nobody"
         );
     }
 
     #[test]
-    fn young_main_squad_dreamer_stays_on_the_prospect_pathway() {
-        // Under 24 in the main squad the development-loan machinery owns
-        // the story — Check 0 must not escalate.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(22, 14.0, true)]);
+    fn a_returnee_with_time_left_on_his_deadline_waits() {
+        let players = PlayerCollection::new(vec![Fx::player(
+            22,
+            Some((CareerArc::ClaimMyPlace, PlanStage::Committed, 0.0)),
+        )]);
         let result = Fx::run(&players, TeamType::Main);
         assert!(
             result.manager_talks.is_empty(),
-            "main-squad escalation starts at 24 — younger players go the loan pathway"
-        );
-    }
-
-    #[test]
-    fn modest_young_reserve_stays_patient() {
-        // 21-year-old with ordinary ambition — desire stays below the
-        // push threshold, so he keeps working and waits.
-        let players = PlayerCollection::new(vec![Fx::reserve_player(21, 10.0, true)]);
-        let result = Fx::run(&players, TeamType::Second);
-        assert!(
-            result.manager_talks.is_empty(),
-            "a modest 21-year-old doesn't force the issue yet"
+            "he gave the club a deadline and he means to honour it"
         );
     }
 }
@@ -2133,6 +1975,7 @@ mod player_forced_termination_tests {
     //! up so he can leave on a free — the door the surplus-only coach path
     //! keeps shut for a protected or valuable player.
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -2245,6 +2088,7 @@ mod moving_on_talk_tests {
     //! the weekly talk queue, and his knock on the door is answered with
     //! the truth rather than a promise the manager cannot keep.
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};

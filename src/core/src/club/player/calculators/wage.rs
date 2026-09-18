@@ -106,6 +106,12 @@ impl WageCalculator {
     /// per-start match fee — paying the borrower to actually play its prospect,
     /// which is what makes a development loan attractive to take on.
     /// `borrower_score` and `parent_desire_to_develop` are 0..1.
+    /// Least of a parent wage a borrower ever picks up …
+    pub const LOAN_SHARE_FLOOR: f64 = 0.30;
+    /// … and how far a parent that wants him developed will carry it
+    /// down from there.
+    pub const LOAN_SHARE_SUBSIDY: f64 = 0.20;
+
     pub fn loan_wage_split_v2(
         parent_annual_wage: u32,
         borrower_score: f32,
@@ -114,9 +120,14 @@ impl WageCalculator {
         let parent = parent_annual_wage.max(1_000) as f64;
         // Borrower share scales 35-80% of parent wage.
         let share = 0.35 + (borrower_score.clamp(0.0, 1.0) as f64) * 0.45;
-        // Development-focused parents accept absorbing more wage.
-        let share =
-            (share - (parent_desire_to_develop.clamp(0.0, 1.0) as f64) * 0.10).clamp(0.30, 0.85);
+        // Development-focused parents accept absorbing more wage — and
+        // the floor moves with them. A flat 0.30 floor meant a parent
+        // that wanted its prospect developed could still not put him
+        // anywhere that could not find a third of a big-club wage,
+        // which is most of the clubs with minutes for him.
+        let desire = parent_desire_to_develop.clamp(0.0, 1.0) as f64;
+        let floor = Self::LOAN_SHARE_FLOOR - desire * Self::LOAN_SHARE_SUBSIDY;
+        let share = (share - desire * 0.10).clamp(floor, 0.85);
         let borrower = (parent * share).max(2_400.0) as u32;
         // Match fee climbs with borrower size AND with how badly the parent
         // wants the player developed: a club loaning out a prized prospect pays

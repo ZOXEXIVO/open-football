@@ -1,13 +1,13 @@
-use crate::club::SquadDepartures;
-use crate::club::staff::SpellCloser;
-use crate::club::staff::SeparationCause;
 use super::CountryResult;
 use super::transfers::settlement::TransferClauseSettler;
 use crate::ContractBonusType;
 use crate::PlayerContractProposal;
+use crate::club::SquadDepartures;
 use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
+use crate::club::staff::SeparationCause;
+use crate::club::staff::SpellCloser;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
@@ -98,12 +98,6 @@ impl WarehousedLoans {
 }
 
 impl CountryResult {
-    /// How recently a loanee must have said he wants his chance at the
-    /// parent club for the claim to survive the return. A season's worth
-    /// of window: he said it during the spell that has just ended, not
-    /// during some earlier one he has long since stopped thinking about.
-    const DECLARED_INTENT_CARRY_DAYS: u16 = 240;
-
     pub(crate) fn process_end_of_period(
         country: &mut Country,
         date: NaiveDate,
@@ -1427,16 +1421,6 @@ impl CountryResult {
             spell
         };
 
-        // What he said while he was away, read before the slate is
-        // wiped. A player who spent the spell asking for a chance at his
-        // own club did not stop wanting it on the drive home, and the
-        // monthly returnee audit reads the carried mood as notice the
-        // club has already had.
-        let declared_intent = player.happiness.has_recent_event(
-            &HappinessEventType::WantsToProveHimselfAtParent,
-            Self::DECLARED_INTENT_CARRY_DAYS,
-        );
-
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
         player.happiness = PlayerHappiness::new();
@@ -1461,11 +1445,6 @@ impl CountryResult {
             })
             .unwrap_or(false);
         let age = DateUtils::age(player.birth_date, date);
-        let written_off = player
-            .contract
-            .as_ref()
-            .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
-            .unwrap_or(false);
         if fringe_at_parent && age >= 21 && loan_starts >= 12 && loan_rating >= 6.6 {
             let magnitude = HappinessConfig::default()
                 .catalog
@@ -1503,24 +1482,6 @@ impl CountryResult {
             player
                 .happiness
                 .add_event(HappinessEventType::ReturnedFromLoanDeflated, magnitude);
-        } else if declared_intent && !written_off {
-            // He spent the spell saying he wanted this chance, and here
-            // he is. The claim outlives the loan it was made on — it is
-            // the first thing he says in the building, and the returnee
-            // audit treats it as notice the club has already had.
-            //
-            // Last of the branches on purpose. A returnee shoved
-            // straight to the fringe is already carrying the deeper
-            // version of this grievance, one who owned his loan gets the
-            // confidence beat he earned, and one whose spell collapsed
-            // has a different problem — the carried claim is for
-            // everyone else who said it out loud and came home anyway.
-            let magnitude = HappinessConfig::default()
-                .catalog
-                .wants_to_prove_himself_at_parent;
-            player
-                .happiness
-                .add_event(HappinessEventType::WantsToProveHimselfAtParent, magnitude);
         }
 
         // The loan report. Every return files one, including the ones
@@ -1529,6 +1490,12 @@ impl CountryResult {
         // back is how the parent club decides what he is now. Carries
         // the whole record, so the feed can say "34 games, 9 goals,
         // 7.12" instead of "returned from loan".
+        let spell_verdict = spell.verdict;
+        // The spell is over and he has read it too. What a man does next
+        // after a season away is his own decision, held on his plan —
+        // this replaces the mood that used to be carried across the
+        // return by hand so a later audit could notice it.
+        player.on_loan_spell_reviewed(spell_verdict, data.continents[pci].countries[pcoi].id, date);
         let review = LoanEventContext::new(LoanEventKind::LoanSpellReviewed)
             .with_parent_club(event.parent_club_id)
             .with_loan_club(event.borrowing_club_id)
@@ -1573,6 +1540,16 @@ impl CountryResult {
         data.continents[pci].countries[pcoi].clubs[pcli].teams.teams[pti]
             .players
             .add(player);
+
+        // The parent reads the spell and says what he is now — promotion
+        // with a promise, another season away with a purpose, or the
+        // market. The club owns the decision; this pass only states that
+        // he is home.
+        data.continents[pci].countries[pcoi].clubs[pcli].on_loanee_returned(
+            event.player_id,
+            spell_verdict,
+            date,
+        );
 
         // And his own manager picks the relationship back up. The spell was
         // suspended rather than closed when he went out, so nothing has to

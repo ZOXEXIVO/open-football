@@ -1,13 +1,13 @@
-use crate::club::SquadDepartures;
-use crate::club::staff::SeparationCause;
 use super::types::DeferredTransfer;
 use crate::club::Person;
+use crate::club::SquadDepartures;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::core::player::SellOnObligation;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
+use crate::club::staff::SeparationCause;
 use crate::club::staff::mind::StaffSubMind;
 use crate::transfers::MarketLedgerUpdate;
 use crate::transfers::TransferRoutePolicy;
@@ -15,11 +15,10 @@ use crate::transfers::TransferWindowManager;
 use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::loan::LoanPipeline;
+use crate::transfers::loan::agreement::LoanMoney;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
+use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
-use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-};
 use crate::transfers::squad::bands::TierBands;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::world::MarketWorld;
@@ -896,6 +895,12 @@ impl TransferExecutor {
             } else {
                 let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
                 selling_club.finance.add_transfer_income_at(fee, share);
+                // The shirt is free. Whoever the club has been bringing
+                // through behind him moves up a rung — the succession
+                // half of selling at peak, and the club's own decision
+                // rather than a consequence the rebalance stumbles on
+                // three weeks later.
+                selling_club.on_asset_sold(player_id, today);
             }
         }
 
@@ -1509,19 +1514,16 @@ impl TransferExecutor {
             .and_then(|c| c.teams.main())
             .map(|t| t.reputation.world as f32 / 10_000.0)
             .unwrap_or(0.4);
-        // Same observable rule as the within-country path: plan role and
-        // age, never hidden PA.
-        let parent_desire = if player.age(date) <= 22
-            || player
-                .plan
-                .as_ref()
-                .map(|p| p.role == PlayerPlanRole::Development)
-                .unwrap_or(false)
-        {
-            0.7
-        } else {
-            0.3
-        };
+        // What the parent actually decided this loan was FOR. A club
+        // that staged him to be developed keeps paying most of the
+        // wage; one shedding a surplus body pays a token; one that did
+        // not arrange the move at all pays nothing. The purpose is
+        // carried on his pathway, so nothing downstream has to
+        // re-derive it from a birth year.
+        let parent_desire = LoanMoney::parent_desire(
+            player.pathway_stage(),
+            player.plan.as_ref().and_then(|p| p.loan_purpose),
+        );
         let loan_contract = ExecutionLookup::loan_contract(
             loan_fee,
             loan_end,
@@ -2180,15 +2182,7 @@ impl DevelopmentLoanPathway {
                     "Development pathway: club {} stages player {} ({:?}) for a development loan",
                     buying_club_id, player_id, group
                 );
-                club.transfer_plan
-                    .loan_out_candidates
-                    .push(LoanOutCandidate {
-                        player_id,
-                        reason: LoanOutReason::DevelopmentPathway,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
+                club.on_pathway_loan_staged(player_id, LoanOutReason::DevelopmentPathway, date);
                 for team in &mut club.teams.teams {
                     if let Some(player) =
                         team.players.players.iter_mut().find(|p| p.id == player_id)
@@ -2579,6 +2573,7 @@ mod development_pathway_tests {
     use crate::transfers::deal::negotiation::NegotiationStatus;
     use crate::transfers::market::{TransferListingStatus, TransferListingType};
     use crate::transfers::pipeline::LoanOutReason as PipelineLoanOutReason;
+    use crate::transfers::pipeline::LoanOutStatus;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes,
         PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,

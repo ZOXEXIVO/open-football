@@ -199,9 +199,6 @@ impl Club {
             // this week's rather than last week's.
             self.run_manager_mind(date, table);
 
-            // Weekly: move loan returnees from main to reserve
-            self.move_loan_returns_to_reserve(date);
-
             // Weekly: rebalance players across all teams
             self.rebalance_squads(date);
 
@@ -259,6 +256,14 @@ impl Club {
             // and the club's current standing. Must run after the finance
             // pass so it sees this month's distress and debt classification.
             self.recompute_budgets();
+
+            // Monthly: re-read what the club is FOR from the brief its
+            // board actually wrote, then look at every contracted
+            // player's pathway. Before the utilization audit, so the
+            // sweeps act on this month's stages rather than last
+            // month's.
+            self.review_philosophy();
+            self.review_pathways(date);
 
             // Monthly: audit squad utilization and list underused players
             self.audit_squad_utilization(date);

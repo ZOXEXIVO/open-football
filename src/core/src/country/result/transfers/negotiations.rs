@@ -9,6 +9,7 @@ use crate::club::board::ownership::ClubBenefactor;
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::transfers::Appraisal;
 use crate::transfers::MarketMap;
@@ -34,7 +35,7 @@ use crate::transfers::gate::{
     TransferPlausibilityEvaluator, TransferPlausibilityInputs, TransferPlausibilityVerdict,
 };
 use crate::transfers::loan::LoanPipeline;
-use crate::transfers::loan::guard::{LoanBorrowerProfile, LoanGuardVerdict};
+use crate::transfers::loan::guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGuardVerdict};
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -669,12 +670,45 @@ impl NegotiationPass {
         else {
             return false;
         };
-        selling_club
+        // A name it could buy with the fee …
+        if selling_club
             .transfer_plan
             .watchlist
             .iter()
             .any(|e| e.position_group == group && e.estimated_value <= neg_data.offer_amount)
+        {
+            return true;
+        }
+        // … or one it already has. A club that has been bringing a
+        // successor through does not price the hole he is about to fill,
+        // and the watchlist is blind to him because it only holds men
+        // the club does not own. This is the succession half of a
+        // trading club's model: sell at peak, promote the heir.
+        let level = selling_club
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .find(|p| p.id == neg_data.player_id)
+            .map(AbilityEstimator::observable_level)
+            .unwrap_or(0);
+        selling_club
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .filter(|p| {
+                p.id != neg_data.player_id
+                    && p.contract.is_some()
+                    && !p.is_on_loan()
+                    && p.position().position_group() == group
+                    && p.pathway_stage().is_first_team()
+            })
+            .any(|p| AbilityEstimator::observable_level(p) + Self::SUCCESSOR_GAP >= level)
     }
+
+    /// Observable points a man already in the building may sit behind
+    /// the one being sold and still count as his successor. Roughly one
+    /// season of a prospect's development.
+    const SUCCESSOR_GAP: u8 = 12;
 
     /// Live rival bids on one player, and the highest of them.
     ///
@@ -711,6 +745,36 @@ impl NegotiationPass {
     /// `None` for permanent moves and whenever either side cannot be read
     /// in this country's borrow — a cross-border seller, above all — which
     /// leaves the acceptance roll exactly as it was.
+    /// Seller engagement for a man his club has advertised and a
+    /// destination inside the verdict's reach. Raised with the
+    /// agreement model: the refusal deltas below price the destination
+    /// continuously now, so the base no longer has to leave room for a
+    /// gate that has already spoken.
+    const ENGAGED_BASE: f32 = 90.0;
+    /// How much a parent that actively wants him out adds on top.
+    const ENGAGED_WILLINGNESS: f32 = 15.0;
+
+    /// The parent's own position on lending him out, 0..1. Zero when
+    /// the pair cannot be read from this country — a cross-border loan
+    /// resolves in the borrower's borrow, where the parent's squad is
+    /// out of scope.
+    fn loan_willingness(country: &Country, neg_data: &NegotiationData, date: NaiveDate) -> f32 {
+        if neg_data.selling_country_id.is_some() {
+            return 0.0;
+        }
+        let Some(selling_club) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        else {
+            return 0.0;
+        };
+        let Some(player) = CountryRoster::find(country, neg_data.player_id) else {
+            return 0.0;
+        };
+        LoanAssetGuard::willingness_for(selling_club, player, date)
+    }
+
     fn loan_guard_verdict(
         country: &Country,
         neg_data: &NegotiationData,
@@ -783,7 +847,7 @@ impl NegotiationPass {
         let loan_verdict = Self::loan_guard_verdict(country, neg_data, date);
         let within_reach = loan_verdict.map(|v| v.within_reach).unwrap_or(true);
         let mut chance: f32 = if neg_data.player_is_available && within_reach {
-            80.0
+            Self::ENGAGED_BASE
         } else if neg_data.is_unsolicited {
             35.0
         } else {
@@ -791,6 +855,14 @@ impl NegotiationPass {
         };
         if let Some(verdict) = loan_verdict.as_ref() {
             chance += verdict.refusal_delta;
+        }
+        // …and the parent's own position on lending him out at all. A
+        // club that WANTS him out rarely refuses the conversation,
+        // whatever the destination costs it — the refusal deltas above
+        // price the destination, and this prices the club.
+        if neg_data.is_loan {
+            chance += Self::ENGAGED_WILLINGNESS
+                * Self::loan_willingness(country, neg_data, date).clamp(0.0, 1.0);
         }
 
         // Reservation-price guardrails: randomness adds texture, but it
@@ -1295,6 +1367,7 @@ impl NegotiationPass {
                 .as_ref()
                 .and_then(|t| t.squad_status_promise),
             sporting_drop,
+            neg_data.buying_rep,
             market_map,
         );
 

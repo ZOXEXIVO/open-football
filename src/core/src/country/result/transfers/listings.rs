@@ -7,6 +7,7 @@ use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
@@ -828,10 +829,12 @@ impl ListingPass {
             return decision;
         }
 
-        // Would the club entertain a loan of this man at all? Read once —
-        // every loan arm below consults it, and a sale never does: a club
-        // may decide to SELL its starter, it does not lend him out.
-        let parent_holds = LoanAssetGuard::parent_holds_for(club, player, date);
+        // Would the club entertain a loan of this man at all? Read once
+        // — every loan arm below consults it, and a sale never does: a
+        // club may decide to SELL its starter, and lending him out is a
+        // different question with its own price.
+        let parent_holds =
+            LoanAssetGuard::willingness_for(club, player, date) < ParentWillingness::ENTERTAINS;
 
         let reading = ListingReading {
             age,
@@ -1927,7 +1930,9 @@ impl ListingPass {
                 // whatever his birth year says, and unhappiness is not the
                 // club's cue to lend him away.
                 SquadAssetClass::ProspectDevelopment => {
-                    if LoanAssetGuard::parent_holds_for(club, player, date) {
+                    if LoanAssetGuard::willingness_for(club, player, date)
+                        < ParentWillingness::ENTERTAINS
+                    {
                         ListingDecision::Keep
                     } else {
                         ListingDecision::Loan {
