@@ -3,12 +3,11 @@
 
 use chrono::NaiveDate;
 
-use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::TransferTrace;
 use crate::transfers::pipeline::{LoanOutReason, LoanOutStatus};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
-use crate::{Club, Person, PlayerStatusType, ReputationLevel, TransferItem};
+use crate::{Club, Person, PlayerStatusType, ReputationLevel};
 use log::debug;
 
 /// One squad decision the club has reached this tick: put this player on the
@@ -155,14 +154,6 @@ impl Club {
             let (team_idx, player_id) = (decision.team_idx, decision.player_id);
             let team_name = self.teams.teams[team_idx].name.clone();
 
-            let asking_price = {
-                let player = match self.teams.teams[team_idx].players.find(player_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                player.value(date, seller_league_rep, seller_club_rep) * 0.5
-            };
-
             let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
                 Some(p) => p,
                 None => continue,
@@ -177,20 +168,12 @@ impl Club {
             TransferTrace::list(player, date, "board_utilization", decision.reason);
 
             debug!(
-                "Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",
+                "Board transfer-listed: {} (age {}, CA={}) from {}",
                 player.full_name,
                 player.age(date),
                 player.player_attributes.current_ability,
-                team_name,
-                asking_price
+                team_name
             );
-
-            self.teams.teams[main_idx]
-                .transfer_list
-                .add(TransferItem::new(
-                    player_id,
-                    CurrencyValue::new(asking_price, Currency::Usd),
-                ));
         }
     }
 }

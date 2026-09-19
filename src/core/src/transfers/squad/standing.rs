@@ -189,7 +189,7 @@ struct SeasonTally {
     /// ledger. Zero for a season imported from the database.
     rating_sum: f32,
     rating_matches: u16,
-    /// Σ(season average × appearances) from the legacy scalar. This is the
+    /// Σ(season average × appearances) from the imported scalar. This is the
     /// ONLY rating a database-imported season carries: the importer writes
     /// a season average and leaves both per-match ledgers empty
     /// (`database/generators/player.rs`, "accessors fall back to
@@ -197,7 +197,7 @@ struct SeasonTally {
     /// world starts with no rating record at all, and the standing signal
     /// runs a term short until he has played a full simulated season —
     /// which is exactly the population the signal exists to find.
-    legacy_rating_sum: f32,
+    imported_rating_sum: f32,
     /// True once any row for this year is a League row. Cup rows are folded
     /// into the season they belong to but never define one.
     has_league_row: bool,
@@ -210,7 +210,7 @@ impl SeasonTally {
             apps: 0,
             rating_sum: 0.0,
             rating_matches: 0,
-            legacy_rating_sum: 0.0,
+            imported_rating_sum: 0.0,
             has_league_row: false,
         }
     }
@@ -222,7 +222,7 @@ impl SeasonTally {
         self.rating_matches = self
             .rating_matches
             .saturating_add(entry.statistics.rating_matches);
-        self.legacy_rating_sum += entry.statistics.average_rating * games as f32;
+        self.imported_rating_sum += entry.statistics.average_rating * games as f32;
         self.has_league_row |= entry.competition_kind == PlayerStatCompetitionKind::League;
     }
 
@@ -236,8 +236,8 @@ impl SeasonTally {
                 self.rating_matches,
             ));
         }
-        if self.apps > 0 && self.legacy_rating_sum > 0.0 {
-            return Some((self.legacy_rating_sum / self.apps as f32, self.apps));
+        if self.apps > 0 && self.imported_rating_sum > 0.0 {
+            return Some((self.imported_rating_sum / self.apps as f32, self.apps));
         }
         None
     }

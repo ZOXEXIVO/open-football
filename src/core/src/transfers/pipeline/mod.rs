@@ -39,10 +39,12 @@ use chrono::Duration;
 use std::cmp::Ordering;
 
 pub(in crate::transfers) mod processor {
+    use crate::PathwayStage;
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::CareerPlanView;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
+    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{
         PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
@@ -274,12 +276,26 @@ pub(in crate::transfers) mod processor {
         /// once when the pool is built.
         pub leave_pressure: f32,
         pub stay_pressure: f32,
-        /// How willing his club is to lend him out at all, 0..1, the arc
-        /// he is living out, and what his club would keep paying of his
-        /// wage. Staged here because a borrowing country cannot reach
-        /// into his club's squad to read any of the three — the same
-        /// reason `leave_pressure` travels.
-        pub loan_willingness: f32,
+        /// What his club makes of lending him out at all, the arc he is
+        /// living out, and what it would keep paying of his wage. Staged
+        /// here because a borrowing country cannot reach into his club's
+        /// squad to read any of the three — the same reason
+        /// `leave_pressure` travels.
+        pub loan_willingness: ParentWillingness,
+        /// What he looks like from outside, 1..200 — the one scale a
+        /// [`LevelBand`](crate::transfers::squad::LevelBand), a readiness
+        /// and a clearly-better count are all measured on. `skill_ability`
+        /// is a positional skill total and is not comparable with it.
+        pub observable_level: u8,
+        /// Where his club's own pathway has him, and whether a loan of
+        /// him would be a DEVELOPMENT one — below his club's own level,
+        /// not merely young. Both travel because a borrowing country
+        /// cannot reach into his club to read either, and because the
+        /// three sweeps used to answer the second question three
+        /// different ways: by age abroad, by level at home, by birth
+        /// year in the guard.
+        pub pathway_stage: PathwayStage,
+        pub is_development: bool,
         pub career_plan: CareerPlanView,
         pub parent_subsidy: f32,
         /// His parent has posted him to the world as a man who would go
@@ -1214,6 +1230,16 @@ pub struct LoanOutCandidate {
     /// parent decided to lend him. A ranking term on the broadcast, never
     /// a gate — see [`LoanDestinationPreference`].
     pub preferred_destination: LoanDestinationPreference,
+    /// The club's own pathway staged him, so the row and the stage are
+    /// the same decision. A window reset that dropped one and kept the
+    /// other left the man carrying `LoanOut` for ever with nobody
+    /// advertising him.
+    pub from_pathway: bool,
+    /// The band the club means this spell to put him at, when it has a
+    /// view. Read by the agreement for a man with no plan of his own, so
+    /// a second loan after a steady spell is aimed at the same level and
+    /// one after a peripheral spell a rung lower.
+    pub band_target: Option<f32>,
 }
 
 /// Per-player state for a staged availability broadcast (the seller-side
@@ -1807,11 +1833,11 @@ impl ClubTransferPlan {
     /// Fold every search that has died since the last meeting into the club's
     /// memory, counting each exactly once. Returns how many were counted.
     ///
-    /// An `Abandoned` request is a position the club identified, shopped for
-    /// and failed to fill. Nothing used to read that: the row sat here while
-    /// the dedupe filter — which ignores Abandoned — cheerfully raised an
-    /// identical request next time, on the same brief, at the same priority,
-    /// and sent it after the same handful of names it had already lost. The
+    /// An `Abandoned` request is a position the club identified, shopped
+    /// for and failed to fill, and somebody has to read it: the dedupe
+    /// filter ignores Abandoned, so an unharvested row means an identical
+    /// request next time, on the same brief, at the same priority, sent
+    /// after the same handful of names the club has already lost. The
     /// rows are marked rather than removed, so the recruitment page keeps
     /// showing what the club tried.
     pub fn harvest_failed_searches(&mut self, date: NaiveDate) -> usize {
@@ -1845,7 +1871,9 @@ impl ClubTransferPlan {
         self.scouting_assignments.clear();
         self.scouting_reports.clear();
         self.shortlists.clear();
-        self.loan_out_candidates.clear();
+        // A pathway-staged loan is the club's held intention, not this
+        // window's shopping list; it lapses on [`Club::on_window_closed`].
+        self.loan_out_candidates.retain(|c| c.from_pathway);
         self.prospect_buys_this_window = 0;
         self.compatriot_sweeps_this_window = 0;
         self.prospect_pursuits_active = 0;

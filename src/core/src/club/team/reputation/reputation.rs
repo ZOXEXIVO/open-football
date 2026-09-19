@@ -623,19 +623,6 @@ impl ReputationLevel {
         }
         tier
     }
-
-    /// True when a club of this tier runs the seller-side loan broadcast:
-    /// resource-rich clubs (National and above) actively place their listed
-    /// loanees instead of waiting to be scanned. Shared by the broadcast's
-    /// eligibility gate and the borrower scan — which defers to the broadcast
-    /// for such a club's development loanees rather than letting a lower club
-    /// snatch the prospect before the parent picks the best home for him.
-    pub fn runs_loan_broadcast(self) -> bool {
-        matches!(
-            self,
-            ReputationLevel::National | ReputationLevel::Continental | ReputationLevel::Elite
-        )
-    }
 }
 
 /// Reputation trend

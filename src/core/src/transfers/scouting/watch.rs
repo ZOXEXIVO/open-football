@@ -1037,6 +1037,7 @@ impl FormWatch {
 #[cfg(test)]
 mod breakout_watch_tests {
     use super::*;
+    use crate::PathwayStage;
     use crate::club::academy::ClubAcademy;
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
@@ -1044,6 +1045,7 @@ mod breakout_watch_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::pipeline::{
         SellerPlausibilityContext, TransferNeedReason, TransferRequestStatus,
     };
@@ -1207,7 +1209,7 @@ mod breakout_watch_tests {
                 adaptability: 12,
                 leave_pressure: 0.0,
                 stay_pressure: 0.0,
-                loan_willingness: 1.0,
+                loan_willingness: ParentWillingness::open(),
                 career_plan: CareerPlanView::none(),
                 parent_subsidy: 0.0,
                 player_name: "Foreign Star".into(),
@@ -1220,6 +1222,9 @@ mod breakout_watch_tests {
                 is_listed: false,
                 is_loan_listed: false,
                 skill_ability: ability,
+                observable_level: ability,
+                pathway_stage: PathwayStage::Rotation,
+                is_development: false,
                 average_rating: 8.4,
                 goals: 23,
                 assists: 3,

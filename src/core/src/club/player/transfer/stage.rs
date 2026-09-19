@@ -36,6 +36,7 @@
 
 use crate::TeamType;
 use crate::club::player::player::Player;
+use crate::club::player::statistics::StuckCareerScan;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
@@ -115,7 +116,8 @@ pub struct BigStagePullConfig {
     /// Loyalty at/above which a player at a boyhood club stays regardless.
     pub loyalty_stay_floor: f32,
     /// Days at the club before the pull engages — a new signing gets a
-    /// season to find out what he has joined.
+    /// season to find out what he has joined. The same season every
+    /// other "is he stuck here" reading uses.
     pub settle_days: i64,
 }
 
@@ -139,7 +141,7 @@ impl Default for BigStagePullConfig {
             mood_bar: 0.40,
             request_bar: 0.68,
             loyalty_stay_floor: 17.0,
-            settle_days: 365,
+            settle_days: StuckCareerScan::TENURE_FOR_A_STUCK_STORY,
         }
     }
 }

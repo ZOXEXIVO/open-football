@@ -12,8 +12,8 @@ use crate::club::player::core::player::{
     ManagerPromise, ManagerPromiseKind, TransferRequestReason,
 };
 use crate::club::player::mind::{
-    ActorRef, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind, GoalOrigin,
-    GoalStatus, MindClock, MindSituation, RecallCue,
+    ActorRef, CareerArc, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind,
+    GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue,
 };
 use crate::shared::fullname::FullName;
 use crate::{
@@ -1596,5 +1596,68 @@ fn the_club_where_he_made_his_name_argues_for_itself_a_decade_later() {
     assert!(
         !home.is_empty(),
         "and the reason is printable rather than a number"
+    );
+}
+
+/// A boy the club produced has no transfer to date his stay from, and
+/// five of the eight arcs are gated on how long he has been somewhere.
+/// Reading "no anchor" as "arrived this morning" left every homegrown
+/// player in the world with one arc he could form and four he could not.
+#[test]
+fn a_homegrown_boy_with_no_transfer_on_record_can_still_decide_something() {
+    let today = Fixture::date(2030, 6, 1);
+    let mut p = Fixture::player();
+    p.birth_date = Fixture::date(2010, 1, 1);
+    // Fourth choice, never picked, and a season of evidence for it.
+    p.happiness.starter_ratio = 0.05;
+    p.happiness.appearances_tracked = 8;
+    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+        pecking_rank: 4,
+        rivals_at_position: 5,
+        top_rival_age: 26,
+        observable_level: 95,
+        ..Default::default()
+    });
+
+    let situation = p.mind_situation(today, 1, "");
+    assert!(
+        situation.is_settled(),
+        "a club's own boy has been here all along"
+    );
+
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.tick_with(&ctx, &situation);
+
+    assert_eq!(
+        p.mind.career.plan.map(|plan| plan.arc),
+        Some(CareerArc::ProveOnLoan),
+        "he is going nowhere here and there is a season elsewhere in him"
+    );
+}
+
+/// The other end of the same anchor: long service is what makes a man
+/// the furniture, and a one-club man has the longest of all.
+#[test]
+fn a_one_club_man_at_his_own_level_means_to_stay_and_lead() {
+    let today = Fixture::date(2030, 6, 1);
+    let mut p = Fixture::player();
+    p.birth_date = Fixture::date(2000, 1, 1);
+    p.attributes.loyalty = 18.0;
+    p.happiness.starter_ratio = 0.8;
+    p.happiness.appearances_tracked = 30;
+    p.squad_standing_view = Some(crate::club::player::core::player::SquadStandingView {
+        pecking_rank: 1,
+        rivals_at_position: 2,
+        observable_level: 125,
+        ..Default::default()
+    });
+
+    let situation = p.mind_situation(today, 1, "");
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.tick_with(&ctx, &situation);
+
+    assert_eq!(
+        p.mind.career.plan.map(|plan| plan.arc),
+        Some(CareerArc::StayAndLead)
     );
 }

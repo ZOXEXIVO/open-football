@@ -857,11 +857,13 @@ impl ScoutingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PathwayStage;
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerSquadStatus;
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::CareerPlanView;
     use crate::transfers::ScoutingRegion;
+    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{PlayerPositionType, PositionCoverage};
@@ -926,7 +928,7 @@ mod tests {
                 adaptability: 12,
                 leave_pressure: 0.0,
                 stay_pressure: 0.0,
-                loan_willingness: 1.0,
+                loan_willingness: ParentWillingness::open(),
                 career_plan: CareerPlanView::none(),
                 parent_subsidy: 0.0,
                 player_name: "Test".to_string(),
@@ -939,6 +941,9 @@ mod tests {
                 is_listed: self.is_listed,
                 is_loan_listed: self.is_loan_listed,
                 skill_ability: 150,
+                observable_level: 150,
+                pathway_stage: PathwayStage::Rotation,
+                is_development: false,
                 average_rating: 7.0,
                 goals: 0,
                 assists: 0,

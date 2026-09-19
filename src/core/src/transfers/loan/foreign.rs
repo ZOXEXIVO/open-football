@@ -28,10 +28,9 @@ use crate::transfers::loan::interest::{
     BorrowerTaste, GroupPressure, InterestDraw, LoanCandidateProfile,
 };
 use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
-use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::MarketSwitches;
-use crate::transfers::squad::bands::TierBands;
+use crate::transfers::pipeline::{TransferRequest, TransferRequestStatus};
 use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::{MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind};
 use crate::utils::FormattingUtils;
@@ -43,6 +42,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::transfers::pipeline::ClubTransferPlan;
 
 use super::*;
+use crate::transfers::loan::legacy::{LegacyForeignGate, LegacyLoanGuard};
 
 /// Everyone outside this country who could plausibly be borrowed, plus the
 /// geography that decides who can even be seen from here.
@@ -50,7 +50,7 @@ struct ForeignLoanBoard<'a> {
     loans: Vec<&'a PlayerSummary>,
     compatriots: Vec<&'a PlayerSummary>,
     by_group: [Vec<&'a PlayerSummary>; PlayerFieldPositionGroup::COUNT],
-    is_january: bool,
+    mid_season_window: bool,
     /// Loan corridor per `(passport, league he plays in)`, memoised while the
     /// board was filtered. The same number gates and weights: a route this
     /// country barely works is not a candidate it takes as readily as one it
@@ -88,7 +88,9 @@ struct ForeignBorrower<'a> {
     foreign_borrower_profile: Option<LoanBorrowerProfile>,
     buyer_loan_ctx: BuyerPlausibilityContext,
     taste: BorrowerTaste,
-    open_request_groups: Vec<PlayerFieldPositionGroup>,
+    /// What the club has actually asked for — the band, not just the
+    /// shirt.
+    open_requests: Vec<TransferRequest>,
 }
 
 impl ForeignBorrower<'_> {
@@ -100,9 +102,20 @@ impl ForeignBorrower<'_> {
     /// and the wage his club would keep paying all travel on the
     /// summary: this country cannot reach into his club's squad to read
     /// any of them, which is the same reason `leave_pressure` travels.
-    fn agreement_for(&self, p: &PlayerSummary, is_january: bool) -> Option<f32> {
+    fn agreement_for(&self, p: &PlayerSummary, mid_season_window: bool) -> Option<f32> {
         if LoanAgreement::disarmed() {
-            return self.legacy_foreign_gates(p).then_some(1.0);
+            return LegacyLoanGuard::foreign_allows(&LegacyForeignGate {
+                summary: p,
+                borrower_rep: self.team_rep,
+                borrower_league_rep: self.borrower_league_rep,
+                depth: &self.borrower_position_depth,
+                borrower: self.foreign_borrower_profile.clone().map(|profile| {
+                    profile.with_best_in_group(
+                        self.borrower_position_depth.best_in_group(p.position_group),
+                    )
+                }),
+            })
+            .then_some(1.0);
         }
         let group = p.position_group;
         let borrower = self.foreign_borrower_profile.map(|profile| {
@@ -126,14 +139,16 @@ impl ForeignBorrower<'_> {
             ),
         )
         .with_plan(p.career_plan);
-        let verdict = borrower.as_ref().map(|b| guard.assess(b));
+        let verdict = borrower
+            .as_ref()
+            .map(|b| guard.assess(b, p.loan_willingness.score, p.parent_subsidy));
         LoanAgreement::price(&AgreementInputs {
-            willingness: p.loan_willingness,
+            parent: p.loan_willingness,
             parent_rep: p.club_world_reputation.max(0) as u16,
             parent_league_rep: p.seller_ctx.league_reputation,
             parent_best_in_group: p.club_best_in_group,
             parent_subsidy: p.parent_subsidy,
-            borrower_tier: TierBands::rep_level_value(&self.team.reputation.level()),
+            borrower_tier: self.team.reputation.level(),
             borrower_rep: self.team_rep,
             borrower_league_rep: self.borrower_league_rep,
             group,
@@ -142,14 +157,14 @@ impl ForeignBorrower<'_> {
             clearly_better_ahead: self
                 .borrower_position_depth
                 .clearly_better_ahead(group, p.skill_ability),
-            need: if self.open_request_groups.contains(&group) {
-                1.0
-            } else {
-                0.35
-            },
-            is_january,
-            candidate: p.skill_ability,
-            is_development: ForeignUnsolicitedLoanTarget::is_development(p.age),
+            need: self.need_for(p).score(),
+            mid_season_window,
+            candidate: p.observable_level,
+            is_development: p.is_development,
+            stage: p.pathway_stage,
+            // A summary carries no loan-out row: the club's own band is
+            // one of the things a borrowing country cannot see.
+            club_band_target: None,
             plan: p.career_plan,
             renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
             renown_band: guard.renown_band(),
@@ -166,36 +181,26 @@ impl ForeignBorrower<'_> {
         })
     }
 
-    /// The conjunctive gate stack the agreement replaced, kept for the
-    /// `OF_LOAN_AGREEMENT_OFF` arm.
-    fn legacy_foreign_gates(&self, p: &PlayerSummary) -> bool {
-        let development = ForeignUnsolicitedLoanTarget::is_development(p.age);
-        let borrower = self.foreign_borrower_profile.map(|profile| {
-            profile.with_best_in_group(self.borrower_position_depth.best_in_group(p.position_group))
-        });
-        p.home_reputation <= (self.team_rep as f32 * 2.0) as i16
-            && self.team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
-            && self.borrower_position_depth.has_room_for(
-                p.position_group,
-                p.skill_ability,
-                development,
-            )
-            && self.borrower_position_depth.would_get_loan_minutes(
-                p.position_group,
-                p.skill_ability,
-                development,
-                p.club_best_in_group,
-            )
-            && LoanPipeline::loan_level_ok(
-                self.team_rep,
-                p.club_world_reputation.max(0) as u16,
-                p.skill_ability,
-                p.club_best_in_group,
-                development,
-                p.seller_ctx.league_reputation,
-                self.borrower_league_rep,
-            )
-            && LoanPipeline::foreign_loan_guard_allows(p, borrower.as_ref())
+    /// How badly this club wants a body in that shirt — the same
+    /// reading the domestic scan and the seller broadcast take.
+    fn need_for(&self, p: &PlayerSummary) -> BorrowerNeed {
+        let group = p.position_group;
+        let request = self
+            .open_requests
+            .iter()
+            .find(|r| r.position.position_group() == group);
+        let ideal = group.ideal_squad_depth();
+        let held = self.borrower_position_depth.headcount(group);
+        BorrowerNeed {
+            requested: request.is_some(),
+            level_shortfall: request
+                .map(|r| r.min_ability as i16 - p.observable_level as i16)
+                .unwrap_or(0),
+            age_excess: request
+                .map(|r| p.age as i16 - r.preferred_age_max as i16)
+                .unwrap_or(0),
+            vacancy: ((ideal as f32 - held as f32) / ideal.max(1) as f32).clamp(0.0, 1.0),
+        }
     }
 }
 
@@ -299,10 +304,11 @@ impl ForeignLoanScan {
         date: NaiveDate,
         market_map: &MarketMap,
     ) -> Option<ForeignLoanBoard<'a>> {
-        let is_january = MarketCadence::is_mid_season_window_for(&country.code, date);
+        let mid_season_window = MarketCadence::is_mid_season_window_for(&country.code, date);
 
-        // The scanning country's own region — used to block loans from
-        // clearly more prestigious regions (Paraguay can't loan from England).
+        // The scanning country's own region, which blocks loans from
+        // clearly more prestigious ones (Paraguay can't loan from
+        // England).
         let country_id = country.id;
         let club_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let club_region_prestige = club_region.league_prestige();
@@ -432,14 +438,14 @@ impl ForeignLoanScan {
             .filter(|p| p.home_return_wanted && p.nationality_country_id == country_id)
             .collect();
 
-        // Position-group partition for the request loop below — each
-        // request used to walk the whole filtered pool to reject the
+        // Position-group partition for the request loop below, so a
+        // request does not walk the whole filtered pool rejecting the
         // other three groups candidate by candidate. The proactive
         // development pickup after the request loop crosses groups and
         // keeps using the flat `foreign_loans`. Selection is a weighted
         // draw over the whole qualified slate either way, so the
-        // partition is a cost saving and nothing more — it no longer
-        // has to preserve an ordering for a tie-break to land on.
+        // partition is a cost saving and nothing more — it preserves no
+        // ordering a tie-break could land on.
         let mut foreign_loans_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
         for p in &foreign_loans {
@@ -450,7 +456,7 @@ impl ForeignLoanScan {
             loans: foreign_loans,
             compatriots,
             by_group: foreign_loans_by_group,
-            is_january,
+            mid_season_window,
             visibility: visibility_cache,
         })
     }
@@ -463,7 +469,7 @@ impl ForeignLoanScan {
         date: NaiveDate,
         load: &MarketLoad,
     ) -> Option<ForeignBorrower<'a>> {
-        let is_january = board.is_january;
+        let mid_season_window = board.mid_season_window;
         let compatriots = &board.compatriots;
         let pending_loans = &load.pending_loans;
         let active_counts = &load.active_counts;
@@ -487,7 +493,7 @@ impl ForeignLoanScan {
         // plus the proactive pickup, over the whole foreign pool.
         let ordinary_foreign_scan = match rep_level {
             ReputationLevel::Elite => false,
-            ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
+            ReputationLevel::Continental => mid_season_window && club.finance.balance.balance < 0,
             ReputationLevel::National | ReputationLevel::Regional => true,
             _ => false, // Local/Amateur
         };
@@ -501,12 +507,11 @@ impl ForeignLoanScan {
         // branch alone, over the posted-compatriot slice alone, once
         // per club per window.
         //
-        // It used to be a country-wide `any()` that simply flipped
-        // `should_scan_foreign`, after which both branches iterated
-        // the FULL foreign pool with no compatriot restriction: one
-        // posted English 21-year-old at Ajax had every Elite English
-        // club running the ordinary foreign scan every pass for as
-        // long as he stayed posted.
+        // Narrow on purpose. Flip `should_scan_foreign` country-wide
+        // instead and both branches walk the FULL foreign pool with no
+        // compatriot restriction — one posted English 21-year-old at
+        // Ajax has every Elite English club running the ordinary foreign
+        // scan every pass for as long as he stays posted.
         let compatriot_sweep = !ordinary_foreign_scan
             && !MarketSwitches::compatriot_sweep_off()
             && matches!(
@@ -604,14 +609,14 @@ impl ForeignLoanScan {
             avg_ability,
             max_loan_fee,
         );
-        let open_request_groups: Vec<PlayerFieldPositionGroup> = plan
+        let open_requests: Vec<TransferRequest> = plan
             .transfer_requests
             .iter()
             .filter(|r| {
                 r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
             })
-            .map(|r| r.position.position_group())
+            .cloned()
             .collect();
         // Cultural proximity stays a preference, as it was — but as a
 
@@ -636,7 +641,7 @@ impl ForeignLoanScan {
             foreign_borrower_profile,
             buyer_loan_ctx,
             taste,
-            open_request_groups,
+            open_requests,
         })
     }
 
@@ -651,7 +656,7 @@ impl ForeignLoanScan {
         let country_id = borrower.country_id;
         let club_region = borrower.club_region;
         let borrower_position_depth = &borrower.borrower_position_depth;
-        let open_request_groups = &borrower.open_request_groups;
+        let open_requests = &borrower.open_requests;
         taste
             .interest_in(&LoanCandidateProfile {
                 player_id: p.player_id,
@@ -663,7 +668,9 @@ impl ForeignLoanScan {
                     borrower_position_depth.headcount(p.position_group),
                     p.position_group,
                 ),
-                answers_open_request: open_request_groups.contains(&p.position_group),
+                answers_open_request: open_requests
+                    .iter()
+                    .any(|r| r.position.position_group() == p.position_group),
             })
             .map(|score| {
                 // Local supply is real: a club looks in its own
@@ -672,11 +679,10 @@ impl ForeignLoanScan {
                 // replacing it, and the census decides.
                 let local = if p.region == club_region { 1.45 } else { 1.0 };
                 // …and a man's own country pulls him back, in
-                // proportion to how much he wants it. Note this
-                // reads his NATIONALITY region against the
-                // borrower's, where `local` above reads his
-                // CLUB's — the two used to be the same field, and
-                // the same-region term therefore worked AGAINST a
+                // proportion to how much he wants it. Note this reads
+                // his NATIONALITY region against the borrower's, where
+                // `local` above reads his CLUB's: collapse the two into
+                // one field and the same-region term works AGAINST a
                 // return home.
                 // …and the geography the board already scored. The floor only
                 // removes what no club would look at; between the candidates
@@ -719,16 +725,16 @@ impl ForeignLoanScan {
         let max_scans = borrower.max_scans;
         let buyer_loan_ctx = &borrower.buyer_loan_ctx;
         let _taste = &borrower.taste;
-        let _open_request_groups = &borrower.open_request_groups;
         let club_region = borrower.club_region;
         let country_id = borrower.country_id;
-        let _is_january = board.is_january;
+        let _mid_season_window = board.mid_season_window;
         let _compatriots = &board.compatriots;
         let foreign_interest = |p: &PlayerSummary, fee: f64| -> Option<f32> {
             Self::foreign_interest(borrower, board, p, fee)
         };
-        let agreement =
-            |p: &PlayerSummary| -> Option<f32> { borrower.agreement_for(p, board.is_january) };
+        let agreement = |p: &PlayerSummary| -> Option<f32> {
+            borrower.agreement_for(p, board.mid_season_window)
+        };
         let scans = &mut state.scans;
         let scanned_position_groups = &mut state.scanned_position_groups;
         let foreign_loans_by_group = &board.by_group;
@@ -859,16 +865,16 @@ impl ForeignLoanScan {
         let max_scans = borrower.max_scans;
         let buyer_loan_ctx = &borrower.buyer_loan_ctx;
         let _taste = &borrower.taste;
-        let _open_request_groups = &borrower.open_request_groups;
         let club_region = borrower.club_region;
         let country_id = borrower.country_id;
-        let _is_january = board.is_january;
+        let _mid_season_window = board.mid_season_window;
         let _compatriots = &board.compatriots;
         let foreign_interest = |p: &PlayerSummary, fee: f64| -> Option<f32> {
             Self::foreign_interest(borrower, board, p, fee)
         };
-        let agreement =
-            |p: &PlayerSummary| -> Option<f32> { borrower.agreement_for(p, board.is_january) };
+        let agreement = |p: &PlayerSummary| -> Option<f32> {
+            borrower.agreement_for(p, board.mid_season_window)
+        };
         let scans = &mut state.scans;
         let scanned_position_groups = &mut state.scanned_position_groups;
         let foreign_loans = &board.loans;
@@ -1112,13 +1118,7 @@ impl ForeignLoanScan {
                     negotiation.open_salary_at(action.player.salary);
                 }
 
-                // Same standoff the domestic scan stamps — a club that has
-                // moved for a foreign target doesn't reopen the file the
-                // following tick.
                 if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                    buyer
-                        .transfer_plan
-                        .record_loan_approach(action.player.player_id, date);
                     if action.from_compatriot_sweep {
                         // One homecoming per window. The sweep is a door
                         // for the boy a league produced, not a licence to

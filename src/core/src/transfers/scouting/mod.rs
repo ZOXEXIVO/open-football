@@ -20,6 +20,7 @@ pub use desk::*;
 pub use recruitment::*;
 pub use watchlist::MarketKnowledge;
 
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::scouting::assignment::ClubScan;
 use crate::transfers::scouting::judgement::ScoutJudgement;
@@ -1905,6 +1906,9 @@ impl ScoutingPass {
             skill_ability: player
                 .skills
                 .calculate_ability_for_position(player.position()),
+            observable_level: AbilityEstimator::observable_level(player),
+            pathway_stage: player.pathway_stage(),
+            is_development: LoanAssetGuard::development_loan(player, club, date),
             // Transfer-market candidate listing: regressed
             // value so the candidate sorter / recommendation
             // engine isn't fooled by a small-sample season.

@@ -17,22 +17,18 @@
 
 use chrono::NaiveDate;
 
-use crate::club::academy::AcademyDevelopmentIdentity;
-use crate::club::board::vision::VisionYouthFocus;
-use crate::club::player::statistics::StuckCareerScan;
+use crate::club::CareerRunway;
+use crate::club::player::mind::{MindClock, MindSituation};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
-use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::offer::PromisedSquadStatus;
+use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
 };
 use crate::transfers::squad::LevelBand;
-use crate::transfers::value::PlayerValuationCalculator;
-use crate::utils::FormattingUtils;
 use crate::{
-    Club, ClubLevelAnchor, ClubPhilosophy, LoanSpellVerdict, PathwayStage, Person, Player,
-    PlayerFieldPositionGroup, PlayerPlan, PlayerPlanRole, ReputationLevel, Team, TeamType,
-    TransferItem,
+    Club, ClubLevelAnchor, ClubPhilosophy, LoanSpellRecord, LoanSpellVerdict, PathwayStage, Person,
+    Player, PlayerFieldPositionGroup, PlayerPlan, PlayerPlanRole, Team, TeamType,
 };
 
 use super::depth::PromotionBar;
@@ -49,11 +45,46 @@ pub(in crate::club::core) struct PathwaySignals {
     pub upside_gap: i16,
     pub runway: f32,
     pub starter_share: f32,
+    /// Competitive matches behind that share. Below
+    /// [`MindSituation::TRACKED_APPS`] it is a placeholder, and a club
+    /// that read it as "he is not playing" would stage a loan for a boy
+    /// who has not been named in a squad yet.
+    pub appearances_tracked: u8,
     pub contract_days: i64,
     /// His observable level clears the first team's promotion floor.
     pub clears_promotion_bar: bool,
     pub rank_in_group: u8,
     pub gap_to_best: i16,
+    /// The band the spell he has just finished actually put him at.
+    /// `None` outside a return.
+    pub spell_band: f32,
+}
+
+impl PathwaySignals {
+    /// Has he played enough for the start share to mean anything?
+    fn has_playing_view(&self) -> bool {
+        self.appearances_tracked >= MindSituation::TRACKED_APPS
+    }
+
+    /// He is in the side.
+    fn in_the_side(&self) -> bool {
+        self.has_playing_view() && self.starter_share >= PathwayReview::PLAYING_SHARE
+    }
+
+    /// He is not in the side — a different claim from "nobody has seen
+    /// him play", and the one a loan is staged on.
+    fn out_of_the_side_below(&self, share: f32) -> bool {
+        self.has_playing_view() && self.starter_share < share
+    }
+
+    /// Read him on the season he actually played rather than on the live
+    /// share the drive home has just reset.
+    fn on_the_spell(mut self, spell: &LoanSpellRecord, spell_band: f32) -> Self {
+        self.starter_share = spell.start_share();
+        self.appearances_tracked = spell.matches_available();
+        self.spell_band = spell_band;
+        self
+    }
 }
 
 /// The monthly pathway pass, and the verdict tables the two event-driven
@@ -70,8 +101,10 @@ impl PathwayReview {
     /// quality for this club at all.
     const ROTATION_BAND: f32 = 0.35;
     /// Share of starts at which the club reads him as actually in the
-    /// side, rather than merely good enough to be.
+    /// side, rather than merely good enough to be …
     const PLAYING_SHARE: f32 = 0.45;
+    /// … and the lower one it settles for when the boy has asked to go.
+    const ASKED_PLAYING_SHARE: f32 = 0.35;
     /// Observable points of believed growth that make a below-band player
     /// a prospect rather than surplus.
     const PROSPECT_UPSIDE: i16 = 8;
@@ -91,6 +124,14 @@ impl PathwayReview {
     const BLOCKED_GAP: i16 = 8;
     /// Loans a club will arrange before a player's answer is the market.
     const MAX_LOANS: u8 = 2;
+    /// What a club finished with a man would take for him, as a multiple
+    /// of his value. The same number the exhausted-pathway return
+    /// verdict names.
+    const MOVE_ON_MULTIPLE: f32 = 0.7;
+    /// Days a returnee the club was pleased with holds the squad place
+    /// it promised him. Shorter than a standout's: it is a look, not a
+    /// shirt.
+    const SUCCESSFUL_PROMISE_DAYS: i64 = 120;
 
     /// Read a player as the club sees him.
     pub(in crate::club::core) fn signals(
@@ -108,8 +149,9 @@ impl PathwayReview {
         PathwaySignals {
             band: LevelBand::of(level, group, anchor),
             upside_gap: ceiling as i16 - level as i16,
-            runway: ((34.0 - age as f32) / 12.0).clamp(0.0, 1.0),
+            runway: CareerRunway::at(age),
             starter_share: player.happiness.starter_ratio,
+            appearances_tracked: player.happiness.appearances_tracked,
             contract_days: player
                 .contract
                 .as_ref()
@@ -118,6 +160,7 @@ impl PathwayReview {
             clears_promotion_bar: level >= bar.floor(group),
             rank_in_group,
             gap_to_best: best_in_group as i16 - level as i16,
+            spell_band: LevelBand::MIN,
         }
     }
 
@@ -137,7 +180,7 @@ impl PathwayReview {
     /// Where a player's own level and minutes put him, with nothing else
     /// in the picture. The spine of every table below.
     fn standing_stage(signals: &PathwaySignals) -> PathwayStage {
-        if signals.band >= Self::CORE_BAND && signals.starter_share >= Self::PLAYING_SHARE {
+        if signals.band >= Self::CORE_BAND && signals.in_the_side() {
             PathwayStage::Core
         } else if signals.band >= Self::STARTER_BAND {
             PathwayStage::Starter
@@ -162,15 +205,32 @@ impl PathwayReview {
         signals: &PathwaySignals,
         plan: &PlayerPlan,
         philosophy: &ClubPhilosophy,
+        is_youth_squad: bool,
+        plan_push: f32,
     ) -> PathwayStage {
         // A staged loan is a decision the club has already taken and has
-        // not yet been able to act on. It resolves when the spell ends or
-        // the purpose is cleared, not on a calendar month.
+        // not yet been able to act on. It resolves when the spell ends,
+        // or when the window it was staged in closes with no taker
+        // ([`Club::on_window_closed`]) — never on a calendar month.
         if current == PathwayStage::LoanOut {
             return PathwayStage::LoanOut;
         }
 
         let standing = Self::standing_stage(signals);
+
+        // A boy in an age-group side has three rungs, and none of them is
+        // the market: `Academy` until he clears the first team's bar,
+        // `Prospect` once he does, and a spell away. The senior tables
+        // below read a short deal and a modest ceiling as a club out of
+        // patience, which is not a thing a club is with a seventeen-year
+        // -old on a youth contract.
+        if is_youth_squad {
+            return if signals.clears_promotion_bar {
+                PathwayStage::Prospect
+            } else {
+                PathwayStage::Academy
+            };
+        }
 
         // Out of contract runway with nothing settled: the club is past
         // being patient, whatever it once meant him to become.
@@ -185,9 +245,17 @@ impl PathwayReview {
         // elsewhere to be a career step and with loans left in him, goes
         // out rather than sitting. This is the club's half of the same
         // sentence the player's `ProveOnLoan` arc says.
+        // A club that knows the boy wants a loan grants it on less
+        // evidence than one talking him into it: he has asked, so the
+        // share it waits to see before acting is lower.
+        let share_bar = if plan_push >= ParentWillingness::PLAN_OPENS_AT {
+            Self::ASKED_PLAYING_SHARE
+        } else {
+            Self::PLAYING_SHARE
+        };
         if matches!(standing, PathwayStage::Prospect)
             && plan.loans_used < Self::MAX_LOANS
-            && signals.starter_share < Self::PLAYING_SHARE
+            && signals.out_of_the_side_below(share_bar)
         {
             return PathwayStage::LoanOut;
         }
@@ -237,12 +305,15 @@ impl PathwayReview {
             }
             LoanSpellVerdict::Successful => LoanReturnVerdict::promote(
                 PathwayStage::Rotation,
-                PromisedSquadStatus::HotProspectForTheFuture,
-                120,
+                PromisedSquadStatus::MainBackupPlayer,
+                Self::SUCCESSFUL_PROMISE_DAYS,
             ),
             LoanSpellVerdict::Steady => {
                 if signals.runway >= 0.6 {
-                    LoanReturnVerdict::loan_again(LoanOutReason::NeedsFirstTeamMinutes)
+                    LoanReturnVerdict::loan_again(
+                        LoanOutReason::NeedsFirstTeamMinutes,
+                        signals.spell_band,
+                    )
                 } else {
                     LoanReturnVerdict::sell(PathwayStage::MoveOn, 0.9)
                 }
@@ -252,7 +323,10 @@ impl PathwayReview {
                     && plan.loans_used < Self::MAX_LOANS
                     && signals.upside_gap >= Self::BLOCKED_GAP
                 {
-                    LoanReturnVerdict::loan_again(LoanOutReason::BlockedByDepth)
+                    LoanReturnVerdict::loan_again(
+                        LoanOutReason::BlockedByDepth,
+                        signals.spell_band - LevelBand::ONE_LEVEL,
+                    )
                 } else {
                     LoanReturnVerdict::sell(PathwayStage::MoveOn, 0.7)
                 }
@@ -274,6 +348,10 @@ pub(in crate::club::core) struct LoanReturnVerdict {
     pub stage: Option<PathwayStage>,
     pub promise: Option<PromisedSquadStatus>,
     pub loan_purpose: Option<LoanOutReason>,
+    /// The band that second spell is meant to put him at. A steady spell
+    /// earns the same level again; a peripheral one a rung lower, which
+    /// is the whole difference between the two verdicts.
+    pub loan_band_target: Option<f32>,
     /// Multiple of his value the club would take for him, when the
     /// decision is a sale.
     pub asking_multiple: Option<f32>,
@@ -288,14 +366,16 @@ impl LoanReturnVerdict {
             loan_purpose: None,
             asking_multiple: None,
             review_in_days,
+            loan_band_target: None,
         }
     }
 
-    fn loan_again(purpose: LoanOutReason) -> Self {
+    fn loan_again(purpose: LoanOutReason, band_target: f32) -> Self {
         LoanReturnVerdict {
             stage: Some(PathwayStage::Reassess),
             promise: None,
             loan_purpose: Some(purpose),
+            loan_band_target: Some(band_target),
             asking_multiple: None,
             review_in_days: PlayerPlan::SHORT_REVIEW_DAYS,
         }
@@ -308,6 +388,7 @@ impl LoanReturnVerdict {
             loan_purpose: None,
             asking_multiple: Some(asking_multiple),
             review_in_days: PlayerPlan::SHORT_REVIEW_DAYS,
+            loan_band_target: None,
         }
     }
 
@@ -318,47 +399,7 @@ impl LoanReturnVerdict {
             loan_purpose: None,
             asking_multiple: None,
             review_in_days: PlayerPlan::SHORT_REVIEW_DAYS,
-        }
-    }
-}
-
-impl ClubPhilosophy {
-    /// What the club is FOR, derived from the brief its board actually
-    /// wrote and the academy it actually runs.
-    ///
-    /// Reputation alone mapped three of the four onto a ladder and never
-    /// produced the fourth at all, so no club in the world traded players
-    /// as a policy. Youth focus, academy standard and the academy's own
-    /// identity are the signals that separate a Benfica from a Chelsea at
-    /// the same reputation.
-    pub fn derive(
-        youth_focus: VisionYouthFocus,
-        academy_tier: u8,
-        identity: AcademyDevelopmentIdentity,
-        rep_level: ReputationLevel,
-    ) -> Self {
-        /// Academy standard at which a club can actually supply its own
-        /// first team, and therefore has something to sell.
-        const TRADING_ACADEMY_TIER: u8 = 6;
-
-        let trades = matches!(identity, AcademyDevelopmentIdentity::PlayerTrading)
-            || (matches!(youth_focus, VisionYouthFocus::DevelopYouth)
-                && academy_tier >= TRADING_ACADEMY_TIER
-                && matches!(
-                    rep_level,
-                    ReputationLevel::National | ReputationLevel::Continental
-                ));
-        if trades {
-            return ClubPhilosophy::DevelopAndSell;
-        }
-        match rep_level {
-            ReputationLevel::Elite if matches!(youth_focus, VisionYouthFocus::SignExperienced) => {
-                ClubPhilosophy::SignToCompete
-            }
-            ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National => {
-                ClubPhilosophy::Balanced
-            }
-            _ => ClubPhilosophy::LoanFocused,
+            loan_band_target: None,
         }
     }
 }
@@ -367,18 +408,26 @@ impl Club {
     /// Re-derive what the club is for. The board writes its brief on the
     /// first tick and rewrites it at every takeover, so the philosophy is
     /// read from it rather than frozen at world load.
+    ///
+    /// A club whose academy hovers on the trading line would otherwise
+    /// flip every month, so leaving a trading identity takes two reviews
+    /// that both say so.
     pub(in crate::club::core) fn review_philosophy(&mut self) {
-        let rep_level = self
-            .teams
-            .main()
-            .map(|t| t.reputation.level())
-            .unwrap_or(ReputationLevel::Amateur);
-        self.philosophy = ClubPhilosophy::derive(
+        let next = ClubPhilosophy::derive(
             self.board.vision.youth_focus,
             self.academy.tier().value(),
             self.academy.development_identity,
-            rep_level,
         );
+        if self.philosophy == ClubPhilosophy::DevelopAndSell
+            && next != ClubPhilosophy::DevelopAndSell
+        {
+            if !self.philosophy_under_review {
+                self.philosophy_under_review = true;
+                return;
+            }
+        }
+        self.philosophy_under_review = false;
+        self.philosophy = next;
     }
 
     /// The monthly look at every contracted player: is he still on the
@@ -415,16 +464,29 @@ impl Club {
                     let role = Self::role_for_existing(&signals);
                     let stage = PathwayReview::opening_stage(&signals, is_youth_squad);
                     let mut fresh = PlayerPlan::from_existing(role, stage, date);
-                    fresh.loans_used = StuckCareerScan::of(player, date)
-                        .map(|scan| if scan.serial_loanee { 2 } else { 0 })
-                        .unwrap_or(0);
+                    // How many spells this club has actually sent him on,
+                    // off the ledger. The serial-loanee flag is a boolean
+                    // about a career and was standing in for a count, so
+                    // every backfilled player read as nought or two.
+                    fresh.loans_used = player.statistics_history.loan_spells_at_current_club();
                     player.assign_pathway(club_id, fresh, date);
                     continue;
                 };
                 if !plan.review_due(date) {
                     continue;
                 }
-                let next = PathwayReview::next_stage(plan.stage, &signals, plan, &philosophy);
+                let next = PathwayReview::next_stage(
+                    plan.stage,
+                    &signals,
+                    plan,
+                    &philosophy,
+                    is_youth_squad,
+                    player
+                        .mind
+                        .career
+                        .plan_view(MindClock::day(date))
+                        .loan_push(),
+                );
                 let from = plan.stage;
                 let review_days = if next == from {
                     PlayerPlan::REVIEW_DAYS
@@ -436,20 +498,32 @@ impl Club {
                 }
                 if next != from {
                     player.on_pathway_stage_changed(club_id, Some(from), next, date);
+                    // …and `MoveOn` is a decision with a market
+                    // consequence, exactly as it is on the return path.
+                    // Without this the monthly pass produced a stage that
+                    // nothing downstream acted on.
+                    if next == PathwayStage::MoveOn {
+                        player.on_listed_by_club("dec_reason_pathway_exhausted", date);
+                        if let Some(plan) = player.plan.as_mut() {
+                            plan.asking_multiple = Some(PathwayReview::MOVE_ON_MULTIPLE);
+                        }
+                    }
                 }
             }
         }
     }
 
     /// A loan has ended and the player is back. The parent reads the
-    /// spell and says what he is now — which is the decision the blanket
-    /// move to the reserves used to make for it.
+    /// spell and says what he is now, rather than letting a blanket move
+    /// to the reserves make that decision for it.
     pub fn on_loanee_returned(
         &mut self,
         player_id: u32,
-        verdict: LoanSpellVerdict,
+        spell: &LoanSpellRecord,
+        spell_band: f32,
         date: NaiveDate,
     ) {
+        let verdict = spell.verdict;
         let Some(main_idx) = self.teams.main_index() else {
             return;
         };
@@ -458,11 +532,6 @@ impl Club {
         let bar = PromotionBar::snapshot(&self.teams.teams[main_idx]);
         let philosophy = self.philosophy;
         let club_id = self.id;
-        // The same seller context the valuation and every other sell-side
-        // reading resolve, so a pathway listing quotes the market's own
-        // number rather than a second one.
-        let (seller_league_rep, seller_club_rep) =
-            PlayerValuationCalculator::seller_context_from_club(self);
 
         let Some(team_idx) = self
             .teams
@@ -472,8 +541,12 @@ impl Club {
         else {
             return;
         };
-        let ranks = Self::group_standing(&self.teams.teams[team_idx]);
-        let decision = {
+        // Against the MAIN squad, whatever roster the return happened to
+        // put him on. Ranking a returnee among the reserves he was parked
+        // with is a queue he is not in, and it is the queue the verdict
+        // reads to decide whether anybody is in his way.
+        let ranks = Self::group_standing(&self.teams.teams[main_idx]);
+        let (decision, keep_on_main) = {
             let Some(player) = self.teams.teams[team_idx].players.find(player_id) else {
                 return;
             };
@@ -485,7 +558,8 @@ impl Club {
                     (levels.iter().filter(|&&l| l > level).count() as u8, *best)
                 })
                 .unwrap_or((0, 0));
-            let signals = PathwayReview::signals(player, date, &anchor, &bar, rank, best);
+            let signals = PathwayReview::signals(player, date, &anchor, &bar, rank, best)
+                .on_the_spell(spell, spell_band);
             let owned;
             let plan = match player.plan.as_ref() {
                 Some(plan) => plan,
@@ -498,13 +572,23 @@ impl Club {
                     &owned
                 }
             };
-            PathwayReview::after_loan(verdict, &signals, plan, &philosophy)
+            let decision = PathwayReview::after_loan(verdict, &signals, plan, &philosophy);
+            // A man the club means to cash in stays where his own band
+            // puts him: he is worth a premium because he is a first-team
+            // player, and a reserve is not.
+            let keep_on_main = match decision.stage {
+                Some(PathwayStage::SellAtPeak) => {
+                    PathwayReview::standing_stage(&signals).is_first_team()
+                }
+                Some(stage) => stage.is_first_team(),
+                None => false,
+            };
+            (decision, keep_on_main)
         };
 
         let Some(player) = self.teams.teams[team_idx].players.find_mut(player_id) else {
             return;
         };
-        let from = player.plan.as_ref().map(|p| p.stage);
         if player.plan.is_none() {
             player.plan = Some(PlayerPlan::from_existing(
                 PlayerPlanRole::Development,
@@ -515,44 +599,44 @@ impl Club {
         if let Some(plan) = player.plan.as_mut() {
             plan.last_verdict = Some(verdict);
             plan.loans_used = plan.loans_used.saturating_add(1);
-            match decision.stage {
-                Some(stage) => {
-                    plan.move_to(stage, date, decision.review_in_days);
-                    plan.loan_purpose = decision.loan_purpose;
-                }
-                None => plan.defer_review(date, decision.review_in_days),
-            }
         }
-        if let (Some(stage), true) = (decision.stage, decision.stage != from) {
-            player.on_pathway_stage_changed(club_id, from, stage, date);
+        match decision.stage {
+            // A second loan is the club's own decision, so the one
+            // club-side producer states it — stage, purpose, row and the
+            // player's reaction, once.
+            Some(PathwayStage::Reassess) if decision.loan_purpose.is_some() => {}
+            Some(stage) => {
+                player.on_pathway_advanced(club_id, stage, decision.review_in_days, date);
+            }
+            None => {
+                if let Some(plan) = player.plan.as_mut() {
+                    plan.defer_review(date, decision.review_in_days);
+                }
+            }
         }
         if let Some(promise) = decision.promise {
             player.on_squad_role_promised(promise, date, decision.review_in_days);
         }
-        let asking = decision.asking_multiple.map(|multiple| {
+        // The price the verdict named, on the one row a seller's ask is
+        // ever built from. Writing it to the team's own list instead put
+        // a number where no market code reads one.
+        if let Some(multiple) = decision.asking_multiple {
             player.on_listed_by_club("dec_reason_pathway_exhausted", date);
-            player.value(date, seller_league_rep, seller_club_rep) * multiple as f64
-        });
-
-        // The price the verdict named. A listing with no number on it
-        // is a badge, and the market reads rows.
-        if let Some(asking) = asking {
-            self.teams.teams[main_idx]
-                .transfer_list
-                .add(TransferItem::new(
-                    player_id,
-                    CurrencyValue::new(FormattingUtils::round_fee(asking), Currency::Usd),
-                ));
+            if let Some(plan) = player.plan.as_mut() {
+                plan.asking_multiple = Some(multiple);
+            }
         }
 
-        // A second loan is the club's own decision, so it is staged as one
-        // rather than waiting for a sweep to rediscover him.
         if let Some(purpose) = decision.loan_purpose {
-            self.on_pathway_loan_staged(player_id, purpose, date);
+            match decision.loan_band_target {
+                Some(band) => self.on_pathway_loan_staged_at(player_id, purpose, band, date),
+                None => self.on_pathway_loan_staged(player_id, purpose, date),
+            }
         }
         // Whether he stays on the first-team roster is the consequence of
-        // the verdict, not of the calendar.
-        let keep_on_main = decision.stage.map(|s| s.is_first_team()).unwrap_or(false);
+        // the verdict, not of the calendar. A man the club means to cash
+        // in stays where his own band puts him: he is worth 1.4× because
+        // he is a first-team player, and a reserve is not.
         if !keep_on_main && team_idx == main_idx {
             self.demote_to_reserve(player_id, date);
         }
@@ -566,6 +650,28 @@ impl Club {
         &mut self,
         player_id: u32,
         purpose: LoanOutReason,
+        date: NaiveDate,
+    ) {
+        self.stage_loan(player_id, purpose, None, date);
+    }
+
+    /// The same, with the band the club means the spell to put him at —
+    /// what a second loan after a read spell is FOR.
+    pub fn on_pathway_loan_staged_at(
+        &mut self,
+        player_id: u32,
+        purpose: LoanOutReason,
+        band_target: f32,
+        date: NaiveDate,
+    ) {
+        self.stage_loan(player_id, purpose, Some(band_target), date);
+    }
+
+    fn stage_loan(
+        &mut self,
+        player_id: u32,
+        purpose: LoanOutReason,
+        band_target: Option<f32>,
         date: NaiveDate,
     ) {
         let club_id = self.id;
@@ -606,6 +712,7 @@ impl Club {
             .find(|c| c.player_id == player_id)
         {
             existing.reason = purpose;
+            existing.band_target = band_target;
             return;
         }
         let preference = self.teams.teams[team_idx]
@@ -621,16 +728,39 @@ impl Club {
                 status: LoanOutStatus::Identified,
                 loan_fee: 0.0,
                 preferred_destination: preference,
+                from_pathway: true,
+                band_target,
             });
+    }
+
+    /// The window has shut. A man the club staged for a loan that never
+    /// happened is not still on his way out: the intent lapses, the badge
+    /// comes off, the row goes, and the club looks at him again shortly.
+    ///
+    /// This is the window on [`PathwayStage::LoanOut`]. Without it the
+    /// stage was the one rung nothing moved a player off, so he carried
+    /// `loan_push` 1.0 and a full parent subsidy for ever.
+    pub fn on_window_closed(&mut self, date: NaiveDate) {
+        let club_id = self.id;
+        let mut lapsed: Vec<u32> = Vec::new();
+        for team in self.teams.teams.iter_mut() {
+            for player in team.players.players.iter_mut() {
+                if player.is_on_loan() || player.pathway_stage() != PathwayStage::LoanOut {
+                    continue;
+                }
+                player.on_pathway_loan_lapsed(club_id, date);
+                lapsed.push(player.id);
+            }
+        }
+        self.transfer_plan
+            .loan_out_candidates
+            .retain(|c| !lapsed.contains(&c.player_id));
     }
 
     /// A player has been sold. The man behind him moves up a rung — the
     /// succession the club was holding him for.
     pub fn on_asset_sold(&mut self, player_id: u32, date: NaiveDate) {
         let club_id = self.id;
-        let Some(main_idx) = self.teams.main_index() else {
-            return;
-        };
         let Some(group) = self
             .teams
             .iter()
@@ -641,11 +771,18 @@ impl Club {
             return;
         };
         // The best man at the position the club already reads as a
-        // successor — a rung below the first team, not another starter.
+        // successor — a rung below the first team, not another starter. A
+        // staged loan is a decision in flight, so a sale elsewhere does
+        // not quietly un-stage him.
         let heir = self
             .teams
             .teams
             .iter()
+            // Senior sides only: the shirt that just came free is a
+            // senior one, and the man who inherits it is the one already
+            // in the building's senior queue, not a boy in an age-group
+            // side who has never been near it.
+            .filter(|t| t.team_type.is_own_team())
             .flat_map(|t| t.players.iter())
             .filter(|p| {
                 p.id != player_id
@@ -655,7 +792,7 @@ impl Club {
                     && !p.pathway_stage().is_terminal()
                     && !matches!(
                         p.pathway_stage(),
-                        PathwayStage::Starter | PathwayStage::Core
+                        PathwayStage::Starter | PathwayStage::Core | PathwayStage::LoanOut
                     )
             })
             .max_by_key(|p| AbilityEstimator::observable_level(p))
@@ -663,7 +800,6 @@ impl Club {
         let Some(heir) = heir else {
             return;
         };
-        let _ = main_idx;
         for team in self.teams.teams.iter_mut() {
             if let Some(player) = team.players.find_mut(heir) {
                 let from = player.plan.as_ref().map(|p| p.stage);
@@ -757,11 +893,12 @@ mod tests {
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::loan::agreement::LoanMoney;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, PlayerSquadStatus, StaffCollection, TeamBuilder, TeamCollection,
-        TeamReputation, TrainingSchedule,
+        PlayerSkills, PlayerSquadStatus, PlayerStatusType, StaffCollection, TeamBuilder,
+        TeamCollection, TeamReputation, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -778,10 +915,12 @@ mod tests {
                 upside_gap: 12,
                 runway,
                 starter_share: 0.2,
+                appearances_tracked: 20,
                 contract_days: 900,
                 clears_promotion_bar: band >= 0.85,
                 rank_in_group: 1,
                 gap_to_best: 4,
+                spell_band: band,
             }
         }
 
@@ -851,6 +990,26 @@ mod tests {
                 ClubFacilities::default(),
             )
         }
+    }
+
+    /// The monthly pass, end to end, at a club that trades: a good
+    /// first-teamer with his best years behind the horizon is staged for
+    /// sale. A census that never prints this row means the pass is not
+    /// reaching him, not that no such player exists.
+    #[test]
+    fn the_monthly_pass_stages_a_trading_clubs_peak_first_teamer() {
+        let mut club = Fx::club(vec![Fx::player(1, 130, 30)]);
+        club.philosophy = ClubPhilosophy::DevelopAndSell;
+        club.review_pathways(Fx::date());
+        club.review_pathways(Fx::date() + chrono::Duration::days(PlayerPlan::REVIEW_DAYS as i64));
+
+        let player = club.teams.teams[0].players.find(1).unwrap();
+        assert_eq!(
+            player.pathway_stage(),
+            PathwayStage::SellAtPeak,
+            "the club sells him at his peak; his stage is {:?}",
+            player.pathway_stage()
+        );
     }
 
     #[test]
@@ -934,53 +1093,105 @@ mod tests {
         assert_eq!(verdict.stage, None);
     }
 
+    /// A boy in an age-group side has three rungs, and none of them is
+    /// the market. The senior tables read a short youth deal and a modest
+    /// ceiling as a club out of patience, which is not a thing a club is
+    /// with a seventeen-year-old.
     #[test]
-    fn every_philosophy_is_reachable_from_a_real_brief() {
+    fn a_youth_squad_player_never_reaches_the_market_from_the_monthly_pass() {
+        let mut modest = Fx::signals(0.1, 0.9);
+        modest.contract_days = 200;
+        modest.upside_gap = 1;
+        modest.clears_promotion_bar = false;
         assert_eq!(
-            ClubPhilosophy::derive(
-                VisionYouthFocus::DevelopYouth,
-                8,
-                AcademyDevelopmentIdentity::Balanced,
-                ReputationLevel::National,
+            PathwayReview::next_stage(
+                PathwayStage::Academy,
+                &modest,
+                &Fx::plan(0),
+                &ClubPhilosophy::Balanced,
+                true,
+                0.0,
             ),
-            ClubPhilosophy::DevelopAndSell
+            PathwayStage::Academy
         );
         assert_eq!(
-            ClubPhilosophy::derive(
-                VisionYouthFocus::Balanced,
-                3,
-                AcademyDevelopmentIdentity::PlayerTrading,
-                ReputationLevel::Regional,
+            PathwayReview::next_stage(
+                PathwayStage::Academy,
+                &modest,
+                &Fx::plan(0),
+                &ClubPhilosophy::Balanced,
+                false,
+                0.0,
             ),
-            ClubPhilosophy::DevelopAndSell,
-            "a trading academy is a trading club at any standing"
+            PathwayStage::MoveOn,
+            "the same reading of a senior contract IS a club out of patience"
+        );
+    }
+
+    /// A trading club with a first-team man whose best years are behind
+    /// the horizon it trades against. Every other club holds him.
+    #[test]
+    fn a_trading_club_stages_its_peak_first_teamer_for_sale() {
+        let mut peaked = Fx::signals(0.9, 0.4);
+        peaked.starter_share = 0.8;
+        assert_eq!(
+            PathwayReview::next_stage(
+                PathwayStage::Starter,
+                &peaked,
+                &Fx::plan(0),
+                &ClubPhilosophy::DevelopAndSell,
+                false,
+                0.0,
+            ),
+            PathwayStage::SellAtPeak
         );
         assert_eq!(
-            ClubPhilosophy::derive(
-                VisionYouthFocus::SignExperienced,
-                4,
-                AcademyDevelopmentIdentity::Balanced,
-                ReputationLevel::Elite,
+            PathwayReview::next_stage(
+                PathwayStage::Starter,
+                &peaked,
+                &Fx::plan(0),
+                &ClubPhilosophy::Balanced,
+                false,
+                0.0,
             ),
-            ClubPhilosophy::SignToCompete
+            PathwayStage::Starter,
+            "a club that does not trade keeps its starter"
         );
+    }
+
+    /// He clears the first team's own bar, so the club stops calling him
+    /// an academy boy.
+    #[test]
+    fn a_youth_player_who_clears_the_bar_becomes_a_prospect() {
+        let mut ready = Fx::signals(0.5, 0.9);
+        ready.clears_promotion_bar = true;
         assert_eq!(
-            ClubPhilosophy::derive(
-                VisionYouthFocus::Balanced,
-                4,
-                AcademyDevelopmentIdentity::Balanced,
-                ReputationLevel::Continental,
+            PathwayReview::next_stage(
+                PathwayStage::Academy,
+                &ready,
+                &Fx::plan(0),
+                &ClubPhilosophy::Balanced,
+                true,
+                0.0,
             ),
-            ClubPhilosophy::Balanced
+            PathwayStage::Prospect
         );
+    }
+
+    /// The price the verdict named has to reach the one place a seller's
+    /// ask is built, or the market quotes a different number.
+    #[test]
+    fn the_verdict_multiple_is_what_the_ledger_asks() {
+        let mut club = Fx::club(vec![Fx::player(1, 40, 30)]);
+        club.review_pathways(Fx::date());
+        let spell = LoanSpellRecord::new(2, 4, 0, 0, 5.9, 300);
+        club.on_loanee_returned(1, &spell, 0.5, Fx::date());
+
+        let player = club.teams.teams[0].players.find(1).unwrap();
         assert_eq!(
-            ClubPhilosophy::derive(
-                VisionYouthFocus::Balanced,
-                2,
-                AcademyDevelopmentIdentity::Balanced,
-                ReputationLevel::Local,
-            ),
-            ClubPhilosophy::LoanFocused
+            player.plan.as_ref().and_then(|p| p.asking_multiple),
+            Some(0.7),
+            "a failed spell prices him at what the club would take"
         );
     }
 
@@ -999,7 +1210,7 @@ mod tests {
         let player = club.teams.teams[0].players.find(1).unwrap();
         assert_eq!(player.pathway_stage(), PathwayStage::LoanOut);
         assert_eq!(
-            player.plan.as_ref().unwrap().loan_purpose,
+            player.loan_purpose(),
             Some(LoanOutReason::UnsettledAbroad),
             "the purpose is held on the pathway, not re-derived downstream"
         );
@@ -1038,6 +1249,77 @@ mod tests {
             "the man behind him moves up when the shirt comes free"
         );
         assert_eq!(heir_after, heir_before.promoted());
+    }
+
+    /// A staged loan is a decision with a window on it. Before the
+    /// window closed it, `LoanOut` was the one stage nothing moved a
+    /// player off — so a boy nobody took carried `loan_push` 1.0 and a
+    /// full parent subsidy for the rest of his career.
+    #[test]
+    fn a_staged_loan_nobody_took_lapses_when_the_window_shuts() {
+        let mut club = Fx::club(vec![Fx::player(1, 110, 20)]);
+        club.on_pathway_loan_staged(1, LoanOutReason::NeedsGameTime, Fx::date());
+        club.teams.teams[0]
+            .players
+            .find_mut(1)
+            .unwrap()
+            .statuses
+            .add(Fx::date(), PlayerStatusType::Loa);
+        assert_eq!(
+            {
+                let staged = club.teams.teams[0].players.find(1).unwrap();
+                LoanMoney::parent_desire(staged.pathway_stage(), staged.loan_purpose())
+            },
+            1.0,
+            "precondition: the parent is funding the spell it arranged"
+        );
+
+        club.on_window_closed(Fx::date() + chrono::Duration::days(30));
+
+        let player = club.teams.teams[0].players.find(1).unwrap();
+        assert_eq!(player.pathway_stage(), PathwayStage::Reassess);
+        assert_eq!(
+            LoanMoney::parent_desire(player.pathway_stage(), player.loan_purpose()),
+            0.0,
+            "a loan that never happened is not one the parent is paying for"
+        );
+        assert!(
+            !player.statuses.has(PlayerStatusType::Loa),
+            "the badge said he was on his way out"
+        );
+        assert!(
+            club.transfer_plan.loan_out_candidates.is_empty(),
+            "and so did the row"
+        );
+    }
+
+    /// The pathway-staged row is the club's held intention, so a window
+    /// reset must not drop it while the stage survives.
+    #[test]
+    fn a_window_reset_keeps_the_rows_the_pathway_staged() {
+        let mut club = Fx::club(vec![Fx::player(1, 110, 20)]);
+        club.on_pathway_loan_staged(1, LoanOutReason::NeedsGameTime, Fx::date());
+        club.transfer_plan
+            .loan_out_candidates
+            .push(LoanOutCandidate {
+                player_id: 2,
+                reason: LoanOutReason::Surplus,
+                status: LoanOutStatus::Identified,
+                loan_fee: 0.0,
+                preferred_destination: LoanDestinationPreference::Any,
+                from_pathway: false,
+                band_target: None,
+            });
+
+        club.transfer_plan.reset_for_window();
+
+        let ids: Vec<u32> = club
+            .transfer_plan
+            .loan_out_candidates
+            .iter()
+            .map(|c| c.player_id)
+            .collect();
+        assert_eq!(ids, vec![1]);
     }
 
     #[test]

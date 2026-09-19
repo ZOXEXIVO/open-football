@@ -4,6 +4,7 @@ use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::OdbPlayer;
 use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
+use core::club::board::vision::VisionYouthFocus;
 use core::context::NaiveTime;
 use core::shared::Location;
 use core::transfers::market::knowledge::ClubMarketLedger;
@@ -84,29 +85,6 @@ impl DatabaseGenerator {
                         )
                     });
 
-                // Determine philosophy from main team reputation
-                let philosophy = if let Some(ref p) = club.philosophy {
-                    match p.as_str() {
-                        "SignToCompete" => ClubPhilosophy::SignToCompete,
-                        "DevelopAndSell" => ClubPhilosophy::DevelopAndSell,
-                        "LoanFocused" => ClubPhilosophy::LoanFocused,
-                        _ => ClubPhilosophy::Balanced,
-                    }
-                } else {
-                    let main_rep = club
-                        .teams
-                        .iter()
-                        .find(|t| t.team_type.eq_ignore_ascii_case("main"))
-                        .map(|t| t.reputation.world)
-                        .unwrap_or(0);
-                    match TeamReputation::new(0, 0, main_rep).level() {
-                        ReputationLevel::Elite => ClubPhilosophy::SignToCompete,
-                        ReputationLevel::Continental => ClubPhilosophy::Balanced,
-                        ReputationLevel::National => ClubPhilosophy::Balanced,
-                        _ => ClubPhilosophy::LoanFocused,
-                    }
-                };
-
                 // Ground capacity: the data carries a typical gate, not a
                 // capacity, so gross it up. Falls back to a reputation
                 // estimate for clubs with no attendance record — never zero,
@@ -139,6 +117,29 @@ impl DatabaseGenerator {
 
                 // Extract facility values for youth generation before facilities is moved
                 let academy_rating = facilities.academy.to_rating();
+
+                // What the club is FOR. The data says so when it says so;
+                // otherwise it is derived from the academy the club
+                // actually runs, exactly as `Club::new` and the monthly
+                // review derive it — a ladder of its own here and no
+                // loaded world has a club that trades players as a
+                // policy.
+                let philosophy = if let Some(ref p) = club.philosophy {
+                    match p.as_str() {
+                        "SignToCompete" => ClubPhilosophy::SignToCompete,
+                        "DevelopAndSell" => ClubPhilosophy::DevelopAndSell,
+                        "LoanFocused" => ClubPhilosophy::LoanFocused,
+                        _ => ClubPhilosophy::Balanced,
+                    }
+                } else {
+                    let academy = ClubAcademy::new(academy_rating);
+                    ClubPhilosophy::derive(
+                        VisionYouthFocus::Balanced,
+                        academy.tier().value(),
+                        academy.development_identity,
+                    )
+                };
+
                 let youth_quality = facilities.youth.multiplier();
                 let academy_quality = facilities.academy.multiplier();
                 let recruitment_quality = facilities.recruitment.multiplier();
@@ -258,6 +259,7 @@ impl DatabaseGenerator {
                     },
                     transfer_plan: ClubTransferPlan::new(),
                     philosophy,
+                    philosophy_under_review: false,
                     facilities,
                     rivals: club.rivals.clone(),
                     teams,

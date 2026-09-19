@@ -15,6 +15,7 @@
 //! `foreign_seller_importance` and `foreign_seller_finances` already do.
 //! One builder, two call sites, no second model.
 
+use crate::club::CareerRunway;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::happiness::processing::PlayingTimeFrustrationConfig;
@@ -267,7 +268,7 @@ impl PlayerStanceBuilder {
         importance: f32,
         seller_region: ScoutingRegion,
     ) -> PlayerStance {
-        let runway = ((34.0 - summary.age as f32) / 12.0).clamp(0.0, 1.0);
+        let runway = CareerRunway::at(summary.age);
         let wage = (summary.salary as f64).max(1.0);
         PlayerStance {
             current_wage: wage,
@@ -297,7 +298,7 @@ impl PlayerStanceBuilder {
             adaptability_drive: (summary.adaptability as f32 / 20.0).clamp(0.0, 1.0),
             big_stage_inclination: summary.seller_ctx.big_stage_inclination,
             importance,
-            own_level: summary.skill_ability,
+            own_level: summary.observable_level,
             position_group: summary.position_group,
             starter_ratio: summary.starter_share,
             // Against what his ROLE implies, the way the live builder's
@@ -445,10 +446,12 @@ impl OfferViewBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PathwayStage;
     use crate::club::player::ability::position::PositionCoverage;
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::CareerPlanView;
     use crate::transfers::gate::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
+    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -476,7 +479,7 @@ mod tests {
             adaptability: 6,
             leave_pressure: 0.55,
             stay_pressure: 0.1,
-            loan_willingness: 1.0,
+            loan_willingness: ParentWillingness::open(),
             career_plan: CareerPlanView::none(),
             parent_subsidy: 0.0,
             player_name: "Test".to_string(),
@@ -489,6 +492,9 @@ mod tests {
             is_listed: false,
             is_loan_listed: true,
             skill_ability: 120,
+            observable_level: 120,
+            pathway_stage: PathwayStage::Rotation,
+            is_development: false,
             average_rating: 6.6,
             goals: 1,
             assists: 0,

@@ -7,6 +7,7 @@
 //! [`SquadDecision`]; [`Club::process_underutilized_players`] is the single
 //! place those become statuses, listings and loan candidates.
 
+use crate::club::CareerRunway;
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
@@ -25,6 +26,15 @@ use super::depth::{KeeperLoanView, PromotionBar};
 use super::loans::LoanSweep;
 
 impl Club {
+    /// Prime left at or above which a season elsewhere can still be
+    /// collected on …
+    const SPELL_IS_WORTH_IT: f32 = 0.5;
+    /// … and the gap between what the staff think he could be and what
+    /// they see, that makes it worth arranging.
+    const GROWTH_WORTH_A_SPELL: i16 = 5;
+    /// Prime left at or below which the club has seen the whole of him.
+    const CAREER_IS_SPENT: f32 = 0.1;
+
     /// Monthly audit: identify underutilized players in non-main teams and
     /// list them for loan/transfer.
     pub(in crate::club::core) fn audit_squad_utilization(&mut self, date: NaiveDate) {
@@ -257,11 +267,11 @@ impl Club {
                     continue;
                 }
 
-                // Protect quality players who are competitive with the main
-                // team, regardless of age — don't list a first-team-level
-                // player just because they're 31. Seasons of not being
-                // picked are the coach's verdict on that level already.
-                if level >= main_avg_level.saturating_sub(10) && age < 35 && !dead_wage {
+                // Still competitive with the first team, and the wage is
+                // not dead. Seasons of not being picked are the coach's
+                // verdict on that level already.
+                let runway = CareerRunway::at(age);
+                if level >= main_avg_level.saturating_sub(10) && runway > 0.0 && !dead_wage {
                     continue;
                 }
 
@@ -287,7 +297,7 @@ impl Club {
                         // label a teenager gets on his birth year, so it
                         // reads a nineteen-year-old starter as a loan
                         // asset; standing does not.
-                        if LoanAssetGuard::willingness_for(self, player, date)
+                        if LoanAssetGuard::willingness_for(self, player, date).score
                             >= ParentWillingness::ENTERTAINS
                         {
                             loan_players.push(SquadDecision::loan(
@@ -302,8 +312,14 @@ impl Club {
                     SquadAssetClass::TrueSurplus => {}
                 }
 
-                // Decision: choose Lst vs Loa based on player profile and club context
-                if age <= 23 && pa > level.saturating_add(5) {
+                // Sell or send out? One reading, not a set of birthdays:
+                // how much of him is left that a season elsewhere could
+                // still be worth. A staff that sees more in him and a
+                // career with time to collect it means a spell; a career
+                // the club has seen the whole of means the list.
+                let believed_growth = pa as i16 - level as i16;
+                if runway >= Self::SPELL_IS_WORTH_IT && believed_growth > Self::GROWTH_WORTH_A_SPELL
+                {
                     loan_players.push(SquadDecision::loan(
                         ti,
                         player.id,
@@ -316,16 +332,16 @@ impl Club {
                         player.id,
                         SquadDecision::LOW_ABILITY_SURPLUS,
                     ));
-                } else if age >= 34 && level < main_avg_level.saturating_sub(20) {
+                } else if runway <= Self::CAREER_IS_SPENT
+                    && level < main_avg_level.saturating_sub(20)
+                {
                     transfer_players.push(SquadDecision::new(
                         ti,
                         player.id,
                         SquadDecision::AGING_SURPLUS,
                     ));
-                } else if matches!(
-                    rep_level,
-                    ReputationLevel::Elite | ReputationLevel::Continental
-                ) && age <= 29
+                } else if LoanAssetGuard::willingness_for(self, player, date).score
+                    >= ParentWillingness::ENTERTAINS
                 {
                     loan_players.push(SquadDecision::loan(
                         ti,
@@ -690,8 +706,8 @@ mod tests {
                 .unwrap()
         }
 
-        /// Like [`Self::team`] but with NO league — a friendly-only squad,
-        /// the case the early-season idle gate used to skip forever.
+        /// Like [`Self::team`] but with NO league — a friendly-only
+        /// squad, which an official-appearance idle gate skips forever.
         fn team_no_league(id: u32, tt: TeamType, players: Vec<Player>) -> Team {
             TeamBuilder::new()
                 .id(id)
@@ -1060,9 +1076,9 @@ mod tests {
         );
     }
 
-    /// B: a non-main team WITHOUT a league plays only friendlies, so the
-    /// official-appearance idle gate used to skip it forever. It is now
-    /// assessed on positional surplus like a youth side, so depth beyond the
+    /// B: a non-main team WITHOUT a league plays only friendlies, which
+    /// an official-appearance idle gate skips forever. It is assessed on
+    /// positional surplus like a youth side instead, so depth beyond the
     /// rotation need is loan-listed.
     #[test]
     fn league_less_reserve_surplus_is_loan_listed() {

@@ -53,10 +53,11 @@ pub mod stance;
 pub use appraisal::*;
 pub use stance::*;
 
+use crate::PathwayStage;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::mind::CareerPlanView;
 use crate::club::staff::DossierTuning;
-use crate::transfers::loan::agreement::ParentWillingness;
+use crate::transfers::loan::agreement::LoanMoney;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus, TeamType};
 
@@ -481,6 +482,16 @@ pub struct TransferPlausibilityInputs {
     /// stands both loan money gates down rather than guessing.
     pub buyer_annual_income: i64,
     pub buyer_top_earner: u32,
+    /// Share of his wage the PARENT means to keep paying on a loan it
+    /// arranged, 0..1 — [`LoanMoney::parent_desire`]. It changes both
+    /// money gates below: a subsidised wage is a smaller carry, and a
+    /// subsidised loan is a different asset to take custody of.
+    pub parent_subsidy: f32,
+    /// Where the selling club's own pathway has him. A man it has staged
+    /// for a loan is not a key contributor it would be risking — the
+    /// decision is already taken — and reading his own mood instead
+    /// capped the wrong men.
+    pub pathway_stage: PathwayStage,
 }
 
 impl TransferPlausibilityInputs {
@@ -516,12 +527,26 @@ impl TransferPlausibilityInputs {
             return 0.0;
         }
         let borrower_score = (self.buyer_world_rep.max(0) as f32 / 10_000.0).clamp(0.0, 1.0);
-        let (borrower_wage, _) =
-            WageCalculator::loan_wage_split_v2(self.current_salary, borrower_score, 0.0);
+        let (borrower_wage, _) = WageCalculator::loan_wage_split_v2(
+            self.current_salary,
+            borrower_score,
+            self.parent_subsidy,
+        );
         let ceiling = (wage_headroom.max(0) as f64 * 1.30)
             .max(self.buyer_top_earner as f64 * 1.50)
             .max(1.0);
         borrower_wage as f64 / ceiling
+    }
+
+    /// The most of its own year a borrower will take custody of. A loan
+    /// the parent is paying for is a different thing to carry, so the
+    /// ceiling moves with the subsidy rather than with a birth year.
+    pub fn loan_weight_ceiling(&self) -> f64 {
+        if self.parent_subsidy > 0.0 {
+            LoanMoney::W_MAX_DEVELOPMENT
+        } else {
+            LoanMoney::W_MAX
+        }
     }
 
     /// The buyer's reputation reach on the 0..10000 scale — its world
@@ -769,7 +794,7 @@ pub(crate) mod thresholds {
     pub const REP_IMPORTANCE_MAX_FLOOR: f32 = 0.80;
     /// Effective player reputation this far above the buyer's reach reads
     /// as a reputation step-down the player resists in his own market.
-    pub const REP_STEP_DOWN_GAP: i16 = 1500;
+    pub const REP_STEP_DOWN_GAP: i16 = 2000;
     /// Extra effective-reputation gap a loan destination may sit below a
     /// recognised (post-development-age) player's standing at FULL market
     /// resignation, on top of [`Self::REP_STEP_DOWN_GAP`]. Fresh on the
@@ -1551,7 +1576,7 @@ impl TransferMovePlausibility {
         // decision is already taken, and reading him as one turned away
         // every club that asked about exactly the players the pathway
         // was built to move.
-        let importance = if inputs.player_plan.loan_push() >= ParentWillingness::PLAN_OPENS_AT {
+        let importance = if inputs.pathway_stage == PathwayStage::LoanOut {
             importance.min(thresholds::LOAN_STAGED_IMPORTANCE_CAP)
         } else {
             importance
@@ -1594,7 +1619,7 @@ impl TransferMovePlausibility {
         let renown_gap_tolerated = LoanAssetGuard::renown_gap_tolerated_with(
             inputs.player_age,
             resignation,
-            inputs.player_plan.loan_push(),
+            inputs.player_plan.renown_widening(),
         );
         if inputs.is_loan
             && !inputs.is_transfer_requested
@@ -1639,7 +1664,7 @@ impl TransferMovePlausibility {
                 // own salary, which is precisely the number that makes it
                 // unaffordable. Price the share against what this club can
                 // actually pay instead.
-                if inputs.loan_wage_carry(wage_headroom) > LoanAssetGuard::CARRY_MAX {
+                if inputs.loan_wage_carry(wage_headroom) > LoanMoney::CARRY_MAX {
                     return Some(make(
                         TransferMoveStage::CanShortlistInternally,
                         Some(TransferPlausibilityReason::UnaffordableWages),
@@ -1681,7 +1706,7 @@ impl TransferMovePlausibility {
         // more than everything it earns in a year, however free the loan
         // is, because it cannot insure him, cannot pay him and cannot
         // replace him if it breaks him.
-        if inputs.is_loan && inputs.loan_asset_weight() > LoanAssetGuard::W_MAX {
+        if inputs.is_loan && inputs.loan_asset_weight() > inputs.loan_weight_ceiling() {
             return Some(make(
                 TransferMoveStage::CanShowPublicInterest,
                 Some(TransferPlausibilityReason::LoanBeyondBorrowerMeans),
@@ -1744,6 +1769,8 @@ mod tests {
             seller_marketed: false,
             buyer_annual_income: 0,
             buyer_top_earner: 0,
+            parent_subsidy: 0.0,
+            pathway_stage: PathwayStage::Rotation,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -1799,6 +1826,8 @@ mod tests {
             seller_marketed: false,
             buyer_annual_income: 0,
             buyer_top_earner: 0,
+            parent_subsidy: 0.0,
+            pathway_stage: PathwayStage::Rotation,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -2257,6 +2286,21 @@ mod tests {
     /// which is exactly why the player-side renown floor has to exist:
     /// without it every loan gate waves him through to a third-division
     /// club abroad.
+    /// Fixtures that place a destination relative to the band the man
+    /// himself tolerates, so the band can be calibrated without
+    /// rewriting every case that reads it.
+    struct Fx;
+
+    impl Fx {
+        /// A buyer whose reputation reach sits `bands` of the band a
+        /// player of `age` tolerates below the player's own effective
+        /// standing.
+        fn reach_below(inputs: &TransferPlausibilityInputs, age: u8, bands: f32) -> i16 {
+            let band = LoanAssetGuard::renown_gap_tolerated(age, 0.0);
+            (inputs.effective_player_reputation() as f32 - bands * band).max(100.0) as i16
+        }
+    }
+
     fn declined_veteran_foreign_loan_inputs() -> TransferPlausibilityInputs {
         let mut inputs = base_inputs();
         inputs.is_loan = true;
@@ -2279,10 +2323,14 @@ mod tests {
         inputs.seller_rep = 0.75;
         inputs.seller_world_rep = 6800;
         inputs.seller_league_rep = 6800;
-        // A third-division club abroad.
+        // A club abroad whose reach sits a clear band and a half below
+        // his own standing — written against the band rather than as a
+        // pair of reputations, so calibrating the band does not silently
+        // move what this test is about.
         inputs.buyer_rep = 0.30;
-        inputs.buyer_world_rep = 900;
-        inputs.buyer_league_rep = 2500;
+        let far_below = Fx::reach_below(&inputs, inputs.player_age, 1.5);
+        inputs.buyer_world_rep = far_below;
+        inputs.buyer_league_rep = far_below.max(0) as u16;
         inputs
     }
 
@@ -2317,8 +2365,9 @@ mod tests {
         // but not another sport.
         let mut inputs = declined_veteran_foreign_loan_inputs();
         inputs.buyer_rep = 0.42;
-        inputs.buyer_world_rep = 2000;
-        inputs.buyer_league_rep = 3400;
+        let just_outside = Fx::reach_below(&inputs, inputs.player_age, 1.15);
+        inputs.buyer_world_rep = just_outside;
+        inputs.buyer_league_rep = just_outside.max(0) as u16;
 
         // Fresh on the list he still says no…
         let fresh = TransferPlausibilityEvaluator::evaluate(&inputs);
@@ -2342,6 +2391,10 @@ mod tests {
             resigned
         );
     }
+
+    /// The age at which the renown band is the ordinary step-down band,
+    /// with nothing added for youth.
+    const ADULT_AGE: u8 = 33;
 
     /// The renown band widens with youth; it does not vanish.
     ///
@@ -2376,8 +2429,10 @@ mod tests {
         // A destination inside the widened band IS open to him — and only
         // to him: the same club is beyond the veteran's narrower one.
         let mut reachable = inputs.clone();
-        reachable.buyer_world_rep = 2800;
-        reachable.buyer_league_rep = 2200;
+        // Inside the band youth widens, outside the one it does not.
+        let between = Fx::reach_below(&reachable, ADULT_AGE, 1.1);
+        reachable.buyer_world_rep = between;
+        reachable.buyer_league_rep = between.max(0) as u16;
         reachable.buyer_rep = 0.42;
         assert!(
             matches!(
@@ -2996,6 +3051,8 @@ mod tests {
             seller_marketed: false,
             buyer_annual_income: 0,
             buyer_top_earner: 0,
+            parent_subsidy: 0.0,
+            pathway_stage: PathwayStage::Rotation,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -3295,6 +3352,8 @@ mod agent_channel_tests {
                 seller_marketed: false,
                 buyer_annual_income: 0,
                 buyer_top_earner: 0,
+                parent_subsidy: 0.0,
+                pathway_stage: PathwayStage::Rotation,
                 market_affinity: 1.0,
                 buyer_market_knowledge: 1.0,
             }
@@ -3345,6 +3404,8 @@ mod agent_channel_tests {
             seller_marketed: false,
             buyer_annual_income: 0,
             buyer_top_earner: 0,
+            parent_subsidy: 0.0,
+            pathway_stage: PathwayStage::Rotation,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
             ..AgentFixtures::contented_standout()

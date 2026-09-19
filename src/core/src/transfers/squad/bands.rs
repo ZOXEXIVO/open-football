@@ -27,6 +27,12 @@ impl LevelBand {
     pub const ONE_LEVEL: f32 = 0.6;
 
     /// The band `level` occupies at a club with this anchor.
+    ///
+    /// `level` is always an observable reading —
+    /// [`AbilityEstimator::observable_level`](crate::club::staff::perception::AbilityEstimator::observable_level).
+    /// A band is a statement about the player football can see, and the
+    /// plan's own floor and target are built on that scale; feeding it
+    /// hidden ability compares two different numbers.
     pub fn of(level: u8, group: PlayerFieldPositionGroup, anchor: &ClubLevelAnchor) -> f32 {
         let key = anchor.key_floor(group) as f32;
         let rotation = anchor.rotation_floor(group) as f32;
@@ -51,13 +57,13 @@ impl LevelBand {
     /// which is the standard he is actually judged by there. An unknown
     /// parent standard reads as fully raw, which is what stands the
     /// destination floors down.
-    pub fn readiness_of(ability: u8, parent_best_in_group: u8) -> f32 {
+    pub fn readiness_of(level: u8, parent_best_in_group: u8) -> f32 {
         if parent_best_in_group == 0 {
             return 0.0;
         }
         const RAW_RATIO: f32 = 0.60;
         const READY_RATIO: f32 = 0.90;
-        let ratio = ability as f32 / parent_best_in_group as f32;
+        let ratio = level as f32 / parent_best_in_group as f32;
         ((ratio - RAW_RATIO) / (READY_RATIO - RAW_RATIO)).clamp(0.0, 1.0)
     }
 }
@@ -181,5 +187,57 @@ impl TierBands {
         let s = score.clamp(0.0, 1.0);
         let raw = 4.0 + (1.0 - s) * 11.0; // 4 at top, 15 at the bottom
         raw.round() as i16
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::staff::perception::AbilityEstimator;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+    use chrono::NaiveDate;
+
+    /// A band is a statement about the player football can see. Every
+    /// producer of one has to hand it the same reading, or the plan's
+    /// floor and the agreement's fit are measuring two different men.
+    #[test]
+    fn the_band_and_the_hidden_ability_are_not_the_same_number() {
+        let mut attrs = PlayerAttributes::default();
+        // A well-regarded academy boy: a real hidden ability, and skills
+        // nobody watching would read that high.
+        attrs.current_ability = 160;
+        let player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("B".into(), "Band".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2006, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::flat_for_ability(90))
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+
+        let observable = AbilityEstimator::observable_level(&player);
+        let group = PlayerFieldPositionGroup::Forward;
+        assert_ne!(
+            observable, player.player_attributes.current_ability,
+            "the fixture only means anything while the two readings differ"
+        );
+        assert_ne!(
+            LevelBand::at_reputation(observable, group, 0.7),
+            LevelBand::at_reputation(player.player_attributes.current_ability, group, 0.7),
+            "so a band built on the wrong one places him at the wrong club"
+        );
     }
 }

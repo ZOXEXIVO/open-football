@@ -476,10 +476,10 @@ impl SuccessionAudit {
     /// the club should be doing about it. `None` means he is nowhere near
     /// the end and there is nothing to plan for yet.
     ///
-    /// This replaces a bare "is he past a trigger age" test. The trigger
-    /// age alone never explained what to do about a player who sailed
-    /// past it and kept playing: a keeper still starting every week at 40
-    /// read exactly like one who had just turned 33.
+    /// Not a bare "is he past a trigger age" test, which never explains
+    /// what to do about a player who sails past it and keeps playing: a
+    /// keeper still starting every week at 40 would read exactly like one
+    /// who had just turned 33.
     pub(in crate::transfers) fn urgency(incumbent: &SquadPlayerInfo) -> Option<SuccessionUrgency> {
         let group = incumbent.primary_position.position_group();
         let remaining = Self::career_end_age(group).saturating_sub(incumbent.age);
@@ -863,6 +863,7 @@ impl SquadReviewPass {
             }
 
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == eval.club_id) {
+                let loan_outs = eval.loan_outs;
                 let plan = &mut club.transfer_plan;
 
                 // Only fully reset plans at window start or first initialization
@@ -944,18 +945,16 @@ impl SquadReviewPass {
                     })
                     .collect();
                 plan.transfer_requests.extend(new_requests);
-                // Deduplicate loan-out candidates — don't re-add players already in the list
-                for candidate in eval.loan_outs {
-                    if !plan
-                        .loan_out_candidates
-                        .iter()
-                        .any(|existing| existing.player_id == candidate.player_id)
-                    {
-                        plan.loan_out_candidates.push(candidate);
-                    }
-                }
                 plan.last_evaluation_date = Some(date);
                 plan.initialized = true;
+
+                // The loan-out scan's candidates are a club decision, so
+                // they are staged as one: the purpose reaches the borrower
+                // and the pathway says he is on his way out, instead of
+                // both being re-derived downstream.
+                for candidate in loan_outs {
+                    club.on_pathway_loan_staged(candidate.player_id, candidate.reason, date);
+                }
 
                 // Apply position-glut transfer-list decisions. These
                 // write Lst directly. Cheap — usually empty; non-empty
@@ -1114,6 +1113,7 @@ impl SquadReviewPass {
                     // marketing an empty shirt.
                     unsellable: info.is_injured && info.recovery_days > 60,
                     stage: player.pathway_stage(),
+                    verdict_multiple: player.plan.as_ref().and_then(|p| p.asking_multiple),
                 })
             })
             .collect();
@@ -1125,10 +1125,9 @@ impl SquadReviewPass {
     /// philosophy: triggers purely on having too many at one position.
     ///
     /// Per group, picks the bottom `count - keep_threshold` players
-    /// (worst CA first, oldest tiebreak). Routes them by age:
-    ///   * age >= 30 → **transfer-list** (returned for pass-2 apply,
-    ///     since the loan path won't take them).
-    ///   * age <  30 → **loan-out candidate** with `Surplus` reason.
+    /// (worst CA first, oldest tiebreak) and stages each as a `Surplus`
+    /// loan-out candidate. The listing pass decides whether the market
+    /// answer is a loan or a sale.
     ///
     /// Catches the Gzira pattern: 10 GKs sitting on the main roster
     /// because the loan-out branches can't see them (deficit_vs_group
@@ -1137,10 +1136,9 @@ impl SquadReviewPass {
     /// the worst 4-5 GKs are tagged for departure within one tick.
     fn identify_position_glut(
         squad: &[SquadPlayerInfo],
-        date: NaiveDate,
         players: &[Player],
         loan_outs: &mut Vec<LoanOutCandidate>,
-    ) -> Vec<u32> {
+    ) {
         // Per-position keep ceiling. Anything beyond this is glut.
         // Conservative — leaves headroom for tactical depth (e.g. 5
         // CBs is fine for a back-3 club; 6 starts to be silly).
@@ -1158,7 +1156,6 @@ impl SquadReviewPass {
             }
         };
 
-        let mut force_list: Vec<u32> = Vec::new();
         let groups = [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
@@ -1214,44 +1211,30 @@ impl SquadReviewPass {
                 if surplus.asset_class.is_first_team_protected() {
                     continue;
                 }
-                let already_listed = player.statuses.has(PlayerStatusType::Lst);
-
-                if surplus.age >= 30 {
-                    // Older surplus → transfer-list path (loan path
-                    // explicitly excludes >= 30). Skip if already on
-                    // the list to avoid stutter.
-                    if !already_listed {
-                        debug!(
-                            "Position glut: forcing Lst on player {} (age {}, CA {}, group {:?})",
-                            surplus.player_id, surplus.age, surplus.current_ability, group
-                        );
-                        force_list.push(surplus.player_id);
-                    }
-                } else {
-                    // Younger surplus → loan-out path. Use the
-                    // standard `Surplus` reason so the existing
-                    // listing pipeline picks it up.
-                    let already_listed_for_loan =
-                        loan_outs.iter().any(|c| c.player_id == surplus.player_id);
-                    if !already_listed_for_loan {
-                        debug!(
-                            "Position glut: adding loan-out candidate {} (age {}, CA {}, group {:?})",
-                            surplus.player_id, surplus.age, surplus.current_ability, group
-                        );
-                        loan_outs.push(LoanOutCandidate {
-                            player_id: surplus.player_id,
-                            reason: LoanOutReason::Surplus,
-                            status: LoanOutStatus::Identified,
-                            loan_fee: 0.0,
-                            preferred_destination: LoanDestinationPreference::Any,
-                        });
-                    }
+                // Surplus is surplus at any age. Routing the over-30s to
+                // the sale list and everybody else to the loan list was
+                // the same birth-year branch the loan path itself carried,
+                // and between them a veteran his club was perfectly
+                // willing to lend could not be lent anywhere. The listing
+                // pass decides sale or loan from his own reading.
+                let already_staged = loan_outs.iter().any(|c| c.player_id == surplus.player_id);
+                if !already_staged {
+                    debug!(
+                        "Position glut: adding loan-out candidate {} (age {}, CA {}, group {:?})",
+                        surplus.player_id, surplus.age, surplus.current_ability, group
+                    );
+                    loan_outs.push(LoanOutCandidate {
+                        from_pathway: false,
+                        player_id: surplus.player_id,
+                        reason: LoanOutReason::Surplus,
+                        status: LoanOutStatus::Identified,
+                        loan_fee: 0.0,
+                        preferred_destination: LoanDestinationPreference::Any,
+                        band_target: None,
+                    });
                 }
             }
         }
-
-        let _ = date; // reserved for future age-window tweaks
-        force_list
     }
 
     /// Loan-return re-evaluation, sell branch: players with two loan
@@ -1476,6 +1459,8 @@ impl SquadReviewPass {
                         status: LoanOutStatus::Identified,
                         loan_fee: 0.0,
                         preferred_destination: LoanDestinationPreference::Any,
+                        from_pathway: false,
+                        band_target: None,
                     });
                 }
                 PathwayAction::Sell => {
@@ -1654,15 +1639,14 @@ impl SquadReviewPass {
     /// rotation cushion. Shared by every loan-out path so they agree on
     /// "too thin to let anyone leave".
     ///
-    /// Forward used to be the one group with no cushion, on the reasoning
-    /// that "lone-striker shapes already carry the wide forwards counted
-    /// here". They do not: AML / AMR group under `Midfielder`, so that
-    /// carve-out was counting cover the group never had. In a 4-2-3-1 it put
-    /// the floor at one, and a club with four centre-forwards could ship
-    /// three of them out and go into a season with a single striker and no
-    /// deputy. The cushion is now uniform, and matches
-    /// [`GroupNeedScan::depth_requirement`], which had always used `+1` here — the
-    /// two had quietly disagreed about the same squad.
+    /// Uniform across the groups, including Forward. Exempting it on the
+    /// reasoning that lone-striker shapes already carry the wide forwards
+    /// counts cover the group never had — AML / AMR group under
+    /// `Midfielder` — so in a 4-2-3-1 the floor lands at one and a club
+    /// with four centre-forwards can ship three out and start a season
+    /// with a single striker and no deputy. It matches
+    /// [`GroupNeedScan::depth_requirement`], so the two cannot disagree
+    /// about the same squad.
     pub(in crate::transfers) fn group_min_needed(
         group: PlayerFieldPositionGroup,
         formation_positions: &[PlayerPositionType; 11],
@@ -1707,7 +1691,6 @@ impl SquadReviewPass {
         formation_positions: &[PlayerPositionType; 11],
         current_window: Option<(NaiveDate, NaiveDate)>,
         early_season: bool,
-        is_january: bool,
         home: &SquadHomeContext<'_>,
         club_reputation_score: f32,
     ) {
@@ -1723,7 +1706,6 @@ impl SquadReviewPass {
             formation_positions,
             current_window,
             early_season,
-            is_january,
             home,
             club_reputation_score,
         );
@@ -2230,6 +2212,8 @@ mod stalled_prospect_tests {
             status: LoanOutStatus::Identified,
             loan_fee: 0.0,
             preferred_destination: LoanDestinationPreference::Any,
+            from_pathway: false,
+            band_target: None,
         }];
         let mut force_list = Vec::new();
         SquadReviewPass::identify_stalled_prospects(
@@ -2432,7 +2416,6 @@ mod stalled_prospect_tests {
             Fx::formation(),
             None,
             false,
-            false,
             &SquadHomeContext {
                 country_id: 1,
                 country_code: "en",
@@ -2444,11 +2427,11 @@ mod stalled_prospect_tests {
         loan_outs
     }
 
-    /// The three judgements that used to be hard bars in `blocked` — over
-    /// thirty, fifteen appearances, two previous spells — are prices in
-    /// [`ParentWillingness`] now. Each one still makes a loan LESS likely;
-    /// none of them makes it impossible, which is what kept the ordinary
-    /// squad-player loan of world football out of the game.
+    /// Over thirty, fifteen appearances, two previous spells: prices in
+    /// [`ParentWillingness`], not bars in `blocked`. Each makes a loan
+    /// LESS likely and none makes it impossible — as hard bars they keep
+    /// the ordinary squad-player loan of world football out of the
+    /// game.
     #[test]
     fn a_thirty_one_year_old_surplus_forward_is_still_a_loan_candidate() {
         let date = Fx::date(2026, 9, 5);
@@ -2545,12 +2528,12 @@ mod stalled_prospect_tests {
 
 #[cfg(test)]
 mod goalkeeper_prospect_tests {
-    //! The keeper half of the youth prospect pipeline. `DevelopmentSigning`
-    //! requests used to be emitted for Defender/Midfielder/Forward only, so a
-    //! big club never scouted a young goalkeeper. These tests pin the new
-    //! dedicated GK-prospect block: a youth-minded club with no young keeper
-    //! on its first team grooms one, and a club that already has a young
-    //! keeper does not double up.
+    //! The keeper half of the youth prospect pipeline. Emit
+    //! `DevelopmentSigning` for Defender/Midfielder/Forward only and a big
+    //! club never scouts a young goalkeeper, so the GK-prospect block has
+    //! its own: a youth-minded club with no young keeper on its first team
+    //! grooms one, and a club that already has a young keeper does not
+    //! double up.
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;

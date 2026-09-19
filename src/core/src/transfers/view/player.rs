@@ -10,6 +10,7 @@
 //! question asked many times with an index in front of it.
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::{TransferInterestSource, TransferInterestStage};
 use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
@@ -258,6 +259,9 @@ impl PlayerView {
             is_listed: player.statuses.has(PlayerStatusType::Lst),
             is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
             skill_ability,
+            observable_level: AbilityEstimator::observable_level(player),
+            pathway_stage: player.pathway_stage(),
+            is_development: LoanAssetGuard::development_loan(player, club, date),
             // Sample-size-regressed: this candidate row
             // feeds the same scouting recommendation tier
             // logic as the scouting pipeline above.
@@ -282,7 +286,7 @@ impl PlayerView {
             club_best_in_group: ranks
                 .map(|r| r.best(player.position().position_group()))
                 .unwrap_or_else(|| {
-                    PlayerView::best_ca_in_group(club, player.position().position_group())
+                    PlayerView::best_observable_in_group(club, player.position().position_group())
                 }),
             is_injured: player.player_attributes.is_injured,
             contract_months_remaining,
@@ -370,6 +374,20 @@ impl PlayerView {
             .flat_map(|t| t.players.players.iter())
             .filter(|p| p.position().position_group() == group)
             .map(|p| p.player_attributes.current_ability)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// The same, on the scale a loan is actually priced on. Hidden
+    /// ability decides development; what a club compares a loanee
+    /// against is the player it can see.
+    pub(crate) fn best_observable_in_group(club: &Club, group: PlayerFieldPositionGroup) -> u8 {
+        club.teams
+            .iter()
+            .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| p.position().position_group() == group)
+            .map(AbilityEstimator::observable_level)
             .max()
             .unwrap_or(0)
     }
@@ -569,7 +587,7 @@ impl ClubGroupRanks {
                 Default::default();
             for p in squads.iter().flat_map(|t| t.players.players.iter()) {
                 let group = p.position().position_group();
-                peers_by_group[group.index()].push((p.id, p.player_attributes.current_ability));
+                peers_by_group[group.index()].push((p.id, AbilityEstimator::observable_level(p)));
             }
             for (group_idx, peers) in peers_by_group.iter_mut().enumerate() {
                 peers.sort_by(|a, b| b.1.cmp(&a.1));

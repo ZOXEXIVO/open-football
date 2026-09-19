@@ -14,7 +14,6 @@
 use super::*;
 use crate::club::player::mind::MindClock;
 use crate::transfers::loan::agreement::ParentWillingness;
-use crate::transfers::squad::SquadReviewPass;
 
 /// The loan-out scan.
 pub(in crate::transfers::squad) struct LoanOutScan;
@@ -22,8 +21,10 @@ pub(in crate::transfers::squad) struct LoanOutScan;
 /// How aggressively the club's philosophy sends people out on loan.
 #[derive(Clone, Copy)]
 struct LoanOutBands {
-    age_threshold: u8,
-    ability_gap: i16,
+    /// Observable points of believed upside the club wants to see before
+    /// a spell away is about development rather than depth.
+    believed_growth: i16,
+    /// Appearances below which it reads him as not being picked.
     min_appearances_pct: u16,
 }
 
@@ -54,32 +55,30 @@ impl LoanOutScan {
         formation_positions: &[PlayerPositionType; 11],
         current_window: Option<(NaiveDate, NaiveDate)>,
         early_season: bool,
-        is_january: bool,
         home: &SquadHomeContext<'_>,
         club_reputation_score: f32,
     ) {
         // Philosophy-based loan-out aggressiveness
         let bands = match philosophy {
+            // A club that trades acts on the faintest upside; one that
+            // buys its way out of every hole wants to be sure before it
+            // gives a shirt away.
             ClubPhilosophy::DevelopAndSell => LoanOutBands {
-                age_threshold: 21,
-                ability_gap: 5,
+                believed_growth: 5,
                 min_appearances_pct: 30,
-            }, // Aggressively loan young players
+            },
             ClubPhilosophy::SignToCompete => LoanOutBands {
-                age_threshold: 19,
-                ability_gap: 10,
+                believed_growth: 10,
                 min_appearances_pct: 20,
-            }, // Only loan clearly surplus
+            },
             ClubPhilosophy::LoanFocused => LoanOutBands {
-                age_threshold: 23,
-                ability_gap: 3,
+                believed_growth: 3,
                 min_appearances_pct: 40,
-            }, // Loan to reduce wages
+            },
             ClubPhilosophy::Balanced => LoanOutBands {
-                age_threshold: 21,
-                ability_gap: 8,
+                believed_growth: 8,
                 min_appearances_pct: 25,
-            }, // Standard
+            },
         };
 
         for player_info in squad {
@@ -92,9 +91,7 @@ impl LoanOutScan {
                 continue;
             }
 
-            let Some(depth) =
-                Self::group_depth(squad, player_info, formation_positions, avg_ability)
-            else {
+            let Some(depth) = Self::group_depth(squad, player_info, avg_ability) else {
                 continue;
             };
 
@@ -111,35 +108,36 @@ impl LoanOutScan {
                 continue;
             }
 
-            if Self::tier_verdict(
+            if let Some(reason) = Self::purpose(
                 player_info,
-                squad,
                 rep_level,
-                avg_ability,
-                early_season,
-                is_january,
+                philosophy,
                 bands,
+                early_season,
                 depth,
-                loan_outs,
             ) {
-                continue;
+                loan_outs.push(LoanOutCandidate {
+                    player_id: player_info.player_id,
+                    reason,
+                    status: LoanOutStatus::Identified,
+                    loan_fee: 0.0,
+                    preferred_destination: LoanDestinationPreference::Any,
+                    from_pathway: false,
+                    band_target: None,
+                });
             }
-
-            Self::surplus(player_info, philosophy, is_january, depth, loan_outs);
         }
     }
 
     /// The reasons a man cannot be loaned out at all.
     ///
-    /// Physical only, now: he is already away, he has no contract to
-    /// lend, he is with his country, his manager has pinned him, or the
-    /// club committed to him this window. Everything that used to sit
-    /// here and was a JUDGEMENT rather than a fact — thirty and over,
+    /// Physical only: he is already away, he has no contract to lend, he
+    /// is with his country, his manager has pinned him, or the club
+    /// committed to him this window. A JUDGEMENT — thirty and over,
     /// fifteen appearances, two previous spells, a first-team label, the
-    /// club's own first choice — is priced in
-    /// [`ParentWillingness`] instead, because each of them is a reason a
-    /// club is less likely to lend somebody rather than a reason it
-    /// cannot.
+    /// club's own first choice — belongs in [`ParentWillingness`], since
+    /// each is a reason a club is less likely to lend somebody rather
+    /// than a reason it cannot.
     fn blocked(
         player: &Player,
         player_info: &SquadPlayerInfo,
@@ -207,20 +205,24 @@ impl LoanOutScan {
                 .loan_push()
                 >= ParentWillingness::PLAN_OPENS_AT;
         let willingness = ParentWillingness::held_as_first_team(
-            LoanAssetGuard::willingness_for(club, player, date),
+            LoanAssetGuard::willingness_for(club, player, date).score,
             player_info.asset_class.is_first_team_protected(),
             opened,
         );
         willingness < ParentWillingness::ENTERTAINS
     }
 
-    /// His place in the pecking order, and the cushion it buys him. `None`
-    /// means the group is already at the formation's floor, so nobody in it
-    /// can leave whatever else is true of him.
+    /// His place in the pecking order, and the cushion it buys him.
+    /// `None` only when his own group cannot be read.
+    ///
+    /// The fielding floor that used to short-circuit here is gone: it
+    /// said a club at its formation's minimum lends nobody, which is the
+    /// parent's own position and is priced as `depth_room` in
+    /// [`ParentWillingness`]. Two readings of one fact, one of them a
+    /// veto.
     fn group_depth(
         squad: &[SquadPlayerInfo],
         player_info: &SquadPlayerInfo,
-        formation_positions: &[PlayerPositionType; 11],
         avg_ability: u8,
     ) -> Option<GroupDepth> {
         let group = player_info.primary_position.position_group();
@@ -230,14 +232,6 @@ impl LoanOutScan {
             .iter()
             .filter(|p| p.primary_position.position_group() == group)
             .count();
-
-        // Minimum players needed per group from formation
-        let min_needed = SquadReviewPass::group_min_needed(group, formation_positions);
-
-        // Don't loan out if we'd drop below minimum
-        if group_count <= min_needed {
-            return None;
-        }
 
         // Depth-chart position in the player's group. Used later as
         // a graduated resistance — the higher up the pecking order
@@ -368,6 +362,8 @@ impl LoanOutScan {
                         status: LoanOutStatus::Identified,
                         loan_fee: 0.0,
                         preferred_destination: scan.preference,
+                        from_pathway: false,
+                        band_target: None,
                     });
                     return true;
                 }
@@ -377,234 +373,106 @@ impl LoanOutScan {
         false
     }
 
-    /// What the club's own tier considers a reason to lend somebody out. A
-    /// giant farms out prospects and the blocked; a national-tier club needs a
-    /// wider believed gap because its staff read potential less well; below
-    /// that, only the very young go at all.
-    #[allow(clippy::too_many_arguments)]
-    fn tier_verdict(
+    /// Why the club would send this man out, when it would send him out
+    /// at all.
+    ///
+    /// Never WHETHER: [`Self::blocked`] has already asked the parent
+    /// what it makes of lending him, and the agreement prices the
+    /// destination. Each tier used to own a different ladder of its own —
+    /// a giant farmed out prospects, a national club needed a wider
+    /// believed gap, everybody below that lent only teenagers — so a
+    /// thirty-one-year-old squad player his club was perfectly willing
+    /// to lend could not be a loan candidate at any club in the world.
+    ///
+    /// The tier survives as the one thing it genuinely says: how clearly
+    /// a staff of that standard has to SEE an upside before the club
+    /// acts on it.
+    fn purpose(
         player_info: &SquadPlayerInfo,
-        squad: &[SquadPlayerInfo],
         rep_level: &ReputationLevel,
-        avg_ability: u8,
-        early_season: bool,
-        is_january: bool,
+        philosophy: &ClubPhilosophy,
         bands: LoanOutBands,
+        early_season: bool,
         depth: GroupDepth,
-        loan_outs: &mut Vec<LoanOutCandidate>,
-    ) -> bool {
-        let age_threshold = bands.age_threshold;
-        let ability_gap = bands.ability_gap;
-        let min_appearances_pct = bands.min_appearances_pct;
-        let group = depth.group;
-        let group_avg = depth.group_avg;
-        let depth_cushion = depth.depth_cushion;
+    ) -> Option<LoanOutReason> {
+        // Behind the men in front of him, with the cushion his own place
+        // in the queue buys him.
+        let behind =
+            depth.group_avg as i16 - player_info.current_ability as i16 - depth.depth_cushion;
 
-        match rep_level {
-            ReputationLevel::Elite | ReputationLevel::Continental => {
-                // Young players who need game time. Compare to the
-                // position-group average + depth cushion so the main
-                // at any position isn't routed to "dev minutes".
-                // Confidence gate: only act on a clear coach
-                // opinion (≥ 0.4). Borderline reads stay neutral —
-                // a low-judging coach shouldn't ship kids out on a
-                // hunch.
-                if player_info.age <= age_threshold
-                    && player_info.estimated_potential > player_info.current_ability + 5
-                    && player_info.potential_confidence >= 0.40
-                    && (player_info.current_ability as i16)
-                        < group_avg as i16 - ability_gap - depth_cushion
-                {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::NeedsGameTime,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-
-                // Players blocked by better players. Suppressed in the
-                // early-season low-evidence window: a handful of games
-                // into the season, low appearances are sample noise, not
-                // proof a player is blocked and needs to leave.
-                if !early_season
-                    && player_info.age <= 25
-                    && player_info.current_ability >= avg_ability.saturating_sub(10)
-                    && player_info.appearances < min_appearances_pct
-                {
-                    // Check if there's a clearly better player in same position
-                    let better_exists = squad.iter().any(|other| {
-                        other.player_id != player_info.player_id
-                            && other.primary_position.position_group() == group
-                            && other.current_ability > player_info.current_ability + 10
-                    });
-
-                    if better_exists {
-                        loan_outs.push(LoanOutCandidate {
-                            player_id: player_info.player_id,
-                            reason: LoanOutReason::BlockedByBetterPlayer,
-                            status: LoanOutStatus::Identified,
-                            loan_fee: 0.0,
-                            preferred_destination: LoanDestinationPreference::Any,
-                        });
-                        return true;
-                    }
-                }
-
-                // Post-injury fitness
-                if player_info.age <= 25
-                    && player_info.is_injured
-                    && player_info.recovery_days <= 14
-                    && player_info.injury_days > 60
-                {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::PostInjuryFitness,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-
-                // Lack of playing time (January window)
-                if is_january
-                    && player_info.age <= 26
-                    && player_info.appearances < 5
-                    && player_info.current_ability >= avg_ability.saturating_sub(15)
-                {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::LackOfPlayingTime,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-            }
-            ReputationLevel::National => {
-                // Young players with high potential gap — group-relative
-                // deficit + depth cushion keeps the starter unscathed.
-                // National-tier staff have weaker judging eyes, so
-                // demand a wider believed gap (10) and reasonable
-                // confidence (≥ 0.35).
-                if player_info.age <= 22
-                    && player_info.estimated_potential > player_info.current_ability + 10
-                    && player_info.potential_confidence >= 0.35
-                    && (player_info.current_ability as i16) < group_avg as i16 - 5 - depth_cushion
-                {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::NeedsGameTime,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-
-                // Lack of playing time (January)
-                if is_january && player_info.age <= 24 && player_info.appearances < 3 {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::LackOfPlayingTime,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-            }
-            _ => {
-                // Regional/Local/Amateur: only loan very young players.
-                // Group-relative + depth cushion, same logic as above.
-                // Smaller-club staff are the weakest judges of
-                // potential — require the widest believed gap (15)
-                // and at least baseline confidence (≥ 0.30) before
-                // acting.
-                if player_info.age <= 21
-                    && player_info.estimated_potential > player_info.current_ability + 15
-                    && player_info.potential_confidence >= 0.30
-                    && (player_info.current_ability as i16) < group_avg as i16 - 10 - depth_cushion
-                {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::NeedsGameTime,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: LoanDestinationPreference::Any,
-                    });
-                    return true;
-                }
-            }
+        // Nearly fit after a long lay-off: a spell somewhere is match
+        // practice, whatever else is true of him.
+        if player_info.is_injured
+            && player_info.recovery_days <= Self::NEARLY_FIT_DAYS
+            && player_info.injury_days > Self::LONG_LAY_OFF_DAYS
+        {
+            return Some(LoanOutReason::PostInjuryFitness);
         }
 
-        false
+        // A staff that can see a lot left in him, and a man not playing
+        // for it here.
+        let believed_growth =
+            player_info.estimated_potential as i16 - player_info.current_ability as i16;
+        if believed_growth >= bands.believed_growth
+            && player_info.potential_confidence >= Self::confidence_bar(rep_level)
+            && behind >= Self::BEHIND_THE_GROUP
+        {
+            return Some(LoanOutReason::NeedsGameTime);
+        }
+
+        // Somebody clearly better in his shirt. Suppressed in the
+        // early-season low-evidence window: a handful of games in, low
+        // appearances are sample noise rather than proof.
+        let not_picked = !early_season && player_info.appearances < bands.min_appearances_pct;
+        if not_picked
+            && behind >= 0
+            && depth.group_best as i16 > player_info.current_ability as i16 + Self::CLEARLY_BETTER
+        {
+            return Some(LoanOutReason::BlockedByBetterPlayer);
+        }
+
+        // Simply not being picked.
+        if not_picked && behind >= 0 {
+            return Some(LoanOutReason::LackOfPlayingTime);
+        }
+
+        // Too many bodies in the shirt.
+        if depth.group_count >= depth.group.ideal_squad_depth() && behind >= 0 {
+            return Some(LoanOutReason::Surplus);
+        }
+
+        // A wage the club would rather somebody else paid.
+        if *philosophy == ClubPhilosophy::LoanFocused
+            && behind >= 0
+            && player_info.appearances < Self::QUIET_SEASON_APPS
+        {
+            return Some(LoanOutReason::FinancialRelief);
+        }
+
+        None
     }
 
-    /// Nothing about him in particular, then — just too many bodies in his
-    /// shirt, or a wage the club would rather someone else paid.
-    fn surplus(
-        player_info: &SquadPlayerInfo,
-        philosophy: &ClubPhilosophy,
-        is_january: bool,
-        depth: GroupDepth,
-        loan_outs: &mut Vec<LoanOutCandidate>,
-    ) {
-        let group = depth.group;
-        let group_count = depth.group_count;
-        let group_avg = depth.group_avg;
-        let depth_cushion = depth.depth_cushion;
+    /// Observable points below his own position group at which the club
+    /// reads him as behind the men in front.
+    const BEHIND_THE_GROUP: i16 = 5;
+    /// … and at which the man ahead of him is plainly a better player.
+    const CLEARLY_BETTER: i16 = 10;
+    /// Appearances that make a season a quiet one whatever the reason.
+    const QUIET_SEASON_APPS: u16 = 10;
+    /// Days from full fitness at which a spell elsewhere is match
+    /// practice, and the lay-off that makes him need it.
+    const NEARLY_FIT_DAYS: u16 = 14;
+    const LONG_LAY_OFF_DAYS: u16 = 60;
 
-        // Surplus detection (all tiers)
-        let surplus_threshold = if is_january {
-            match group {
-                PlayerFieldPositionGroup::Goalkeeper => 3,
-                PlayerFieldPositionGroup::Defender => 5,
-                PlayerFieldPositionGroup::Midfielder => 5,
-                PlayerFieldPositionGroup::Forward => 3,
-            }
-        } else {
-            match group {
-                PlayerFieldPositionGroup::Goalkeeper => 3,
-                PlayerFieldPositionGroup::Defender => 6,
-                PlayerFieldPositionGroup::Midfielder => 6,
-                PlayerFieldPositionGroup::Forward => 4,
-            }
-        };
-
-        // Surplus fires on a position-group-relative deficit — a GK
-        // sitting below the outfield-dominated squad mean is normal.
-        // Depth cushion makes the first-choice extremely hard to flag.
-        let deficit_vs_group = group_avg as i16 - player_info.current_ability as i16;
-        if group_count >= surplus_threshold && deficit_vs_group >= 5 + depth_cushion {
-            loan_outs.push(LoanOutCandidate {
-                player_id: player_info.player_id,
-                reason: LoanOutReason::Surplus,
-                status: LoanOutStatus::Identified,
-                loan_fee: 0.0,
-                preferred_destination: LoanDestinationPreference::Any,
-            });
-            return;
-        }
-
-        // Financial relief (LoanFocused philosophy). The depth cushion
-        // protects starters here too — you don't dump your first-choice
-        // for wage relief.
-        if *philosophy == ClubPhilosophy::LoanFocused
-            && deficit_vs_group >= depth_cushion
-            && player_info.appearances < 10
-        {
-            loan_outs.push(LoanOutCandidate {
-                player_id: player_info.player_id,
-                reason: LoanOutReason::FinancialRelief,
-                status: LoanOutStatus::Identified,
-                loan_fee: 0.0,
-                preferred_destination: LoanDestinationPreference::Any,
-            });
+    /// How clearly a staff of this standard has to see an upside before
+    /// the club acts on it. The one thing a tier genuinely says about a
+    /// loan: a smaller club's judges are weaker, so it needs more of a
+    /// reading — not a younger player.
+    fn confidence_bar(rep_level: &ReputationLevel) -> f32 {
+        match rep_level {
+            ReputationLevel::Elite | ReputationLevel::Continental => 0.40,
+            ReputationLevel::National => 0.35,
+            _ => 0.30,
         }
     }
 }

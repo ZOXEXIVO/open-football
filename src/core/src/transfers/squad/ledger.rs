@@ -85,8 +85,11 @@ pub struct AssetRow {
     pub renewal_blocked: bool,
     /// True while a recent signing is still protected from resale.
     pub signing_protected: bool,
-    /// Where the club's own pathway has him.
+    /// Where the club's own pathway has him, and the multiple of his
+    /// value a return verdict put on him. `None` for everybody the
+    /// pathway has not priced.
     pub stage: PathwayStage,
+    pub verdict_multiple: Option<f32>,
     /// True while the player is unavailable for reasons that make a sale
     /// impossible right now (long-term injury).
     pub unsellable: bool,
@@ -268,7 +271,7 @@ impl AssetLedger {
     pub fn asking_for(row: &AssetRow) -> f64 {
         row.estimated_value.max(0.0)
             * Self::role_premium(row)
-            * Self::pathway_premium(row.stage)
+            * Self::pathway_premium(row)
             * Self::runway_curve(row.contract_months_remaining)
             * Self::age_trajectory(row.age, row.group)
     }
@@ -279,8 +282,14 @@ impl AssetLedger {
     /// it has a successor, it is in no hurry, and it prices him
     /// accordingly. One it has finished with is one every buyer knows it
     /// has finished with.
-    fn pathway_premium(stage: PathwayStage) -> f64 {
-        match stage {
+    fn pathway_premium(row: &AssetRow) -> f64 {
+        // A number the club actually named — the verdict on a finished
+        // spell — outranks the stage's own default, because it was
+        // decided about this man rather than about his rung.
+        if let Some(multiple) = row.verdict_multiple {
+            return multiple.max(0.0) as f64;
+        }
+        match row.stage {
             PathwayStage::SellAtPeak => Self::SELL_AT_PEAK_PREMIUM,
             PathwayStage::MoveOn => Self::MOVE_ON_DISCOUNT,
             _ => 1.0,
@@ -550,6 +559,7 @@ mod asking_price_tests {
                 signing_protected: false,
                 unsellable: false,
                 stage: PathwayStage::Starter,
+                verdict_multiple: None,
             }
         }
     }
@@ -651,6 +661,7 @@ mod sell_list_tests {
                 signing_protected: false,
                 unsellable: false,
                 stage: PathwayStage::Starter,
+                verdict_multiple: None,
             }
         }
     }
@@ -791,6 +802,7 @@ mod sell_at_peak_tests {
                 signing_protected: false,
                 unsellable: false,
                 stage,
+                verdict_multiple: None,
             }
         }
 

@@ -116,6 +116,10 @@ impl LoanSpellVerdict {
     /// starts most weeks, and under 1.0 is a player who does not get in.
     const REGULAR_STARTS_PER_MONTH: f32 = 2.6;
     const FRINGE_STARTS_PER_MONTH: f32 = 1.0;
+    /// Matches a side plays in a month — 38 league games over ten
+    /// months, plus cups. Turns a spell into the same start share the
+    /// live rolling one is on.
+    pub const MATCHES_PER_MONTH: f32 = 3.8;
 
     /// Read a finished spell.
     ///
@@ -322,6 +326,25 @@ impl LoanSpellRecord {
         self.clean_sheets = clean_sheets;
         self.conceded = conceded;
         self
+    }
+
+    /// Share of the borrower's matches he started over the spell, 0..1 —
+    /// on the same scale as the live rolling share, which the return
+    /// itself resets.
+    pub fn start_share(&self) -> f32 {
+        let months = self.days as f32 / 30.4;
+        if months <= 0.0 {
+            return 0.0;
+        }
+        (self.starts as f32 / months / LoanSpellVerdict::MATCHES_PER_MONTH).clamp(0.0, 1.0)
+    }
+
+    /// Matches of that season he was there for — the sample behind
+    /// [`Self::start_share`]. A fortnight's cover says nothing; a
+    /// half-season of not being picked says a great deal.
+    pub fn matches_available(&self) -> u8 {
+        let months = self.days as f32 / 30.4;
+        (months * LoanSpellVerdict::MATCHES_PER_MONTH).clamp(0.0, u8::MAX as f32) as u8
     }
 }
 

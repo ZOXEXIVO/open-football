@@ -31,6 +31,11 @@ pub struct CountryContext {
     /// football that dates a player's *club* situation from outside the
     /// club.
     pub months_to_tournament: u8,
+    /// Days until the next registration window opens here — 0 while one
+    /// is open. `u16::MAX` when no calendar resolves, which reads as "no
+    /// window in view" rather than "one opens today". The deadline a man
+    /// who means to go somewhere actually lives against.
+    pub days_to_next_window: u16,
 }
 
 impl CountryContext {
@@ -46,6 +51,7 @@ impl CountryContext {
             price_level: 1.0,
             reputation: 0,
             months_to_tournament: u8::MAX,
+            days_to_next_window: u16::MAX,
         }
     }
 
@@ -61,7 +67,15 @@ impl CountryContext {
             price_level: 1.0,
             reputation: 0,
             months_to_tournament: u8::MAX,
+            days_to_next_window: u16::MAX,
         }
+    }
+
+    /// Stamp the days to the next registration window, worked out from
+    /// the country's own calendar.
+    pub fn with_window_clock(mut self, days: u16) -> Self {
+        self.days_to_next_window = days;
+        self
     }
 
     /// Stamp the tournament clock the continent worked out this tick.

@@ -19,27 +19,6 @@ impl Fx {
         NaiveDate::from_ymd_opt(2026, 7, 6).unwrap()
     }
 
-    /// Destination level with no league context on either side, so the
-    /// division gate stands down and the club-standing floor is what the
-    /// assertion is measuring.
-    fn level(
-        ability: u8,
-        parent_best_in_group: u8,
-        parent_rep: u16,
-        borrower_rep: u16,
-        is_development: bool,
-    ) -> LoanDestinationLevel {
-        LoanDestinationLevel {
-            ability,
-            parent_best_in_group,
-            parent_rep,
-            borrower_rep,
-            parent_league_rep: 0,
-            borrower_league_rep: 0,
-            is_development,
-        }
-    }
-
     /// A contracted central midfielder. `with_contract = false` leaves
     /// him contract-less (a returning loanee / free agent on the books).
     fn player(with_contract: bool) -> Player {

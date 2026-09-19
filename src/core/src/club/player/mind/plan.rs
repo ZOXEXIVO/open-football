@@ -82,35 +82,29 @@ impl CareerArc {
         )
     }
 
-    /// The lowest band he will accept for the next move, and the band he
-    /// means to be playing at when the arc resolves.
+    /// The lowest band he will accept for the next move — anywhere, and
+    /// then toward his own country — and the band he means to be playing
+    /// at when the arc resolves.
     ///
     /// `runway` is the only input beyond the arc itself, because how far
-    /// a man will drop to play is how much career he has left to spend
-    /// on getting back up; `at_home` because a move home is measured on a
-    /// different scale from a move anywhere else.
-    pub fn bands(self, runway: f32, at_home: bool) -> (f32, f32) {
+    /// a man will drop to play is how much career he has left to spend on
+    /// getting back up. Home is a property of the DESTINATION, so both
+    /// floors travel and the side that knows where he is going picks:
+    /// reading it off where he is standing when the arc formed made the
+    /// home row unreachable for the one arc that is about going home.
+    pub fn bands(self, runway: f32) -> (f32, f32, f32) {
         match self {
-            CareerArc::BreakThroughHere => (0.6, 1.0),
+            CareerArc::BreakThroughHere => (0.6, 0.6, 1.0),
             CareerArc::ProveOnLoan => {
-                if runway >= 0.7 {
-                    (-0.2, 0.9)
-                } else {
-                    (0.2, 0.9)
-                }
+                let floor = if runway >= 0.7 { -0.2 } else { 0.2 };
+                (floor, floor, 0.9)
             }
-            CareerArc::ClaimMyPlace => (0.6, 1.0),
-            CareerArc::StepUp => (0.9, 0.8),
-            CareerArc::StepDownToPlay => (0.1, 0.9),
-            CareerArc::SettleAtMyLevel => (0.5, 0.9),
-            CareerArc::FinishAtHome => {
-                if at_home {
-                    (-0.3, 0.7)
-                } else {
-                    (0.3, 0.7)
-                }
-            }
-            CareerArc::StayAndLead => (0.8, 1.0),
+            CareerArc::ClaimMyPlace => (0.6, 0.6, 1.0),
+            CareerArc::StepUp => (0.9, 0.9, 0.8),
+            CareerArc::StepDownToPlay => (0.1, 0.1, 0.9),
+            CareerArc::SettleAtMyLevel => (0.5, 0.5, 0.9),
+            CareerArc::FinishAtHome => (0.3, -0.3, 0.7),
+            CareerArc::StayAndLead => (0.8, 0.8, 1.0),
         }
     }
 }
@@ -126,8 +120,6 @@ pub enum PlanStage {
     Asking,
     /// It is happening: the loan is agreed, the move is in motion.
     Acting,
-    /// It has run, and he is reading what it was worth.
-    Reviewing,
 }
 
 impl PlanStage {
@@ -137,7 +129,6 @@ impl PlanStage {
             PlanStage::Committed => "plan_stage_committed",
             PlanStage::Asking => "plan_stage_asking",
             PlanStage::Acting => "plan_stage_acting",
-            PlanStage::Reviewing => "plan_stage_reviewing",
         }
     }
 
@@ -159,10 +150,17 @@ pub struct CareerPlan {
     pub review_on: EpochDay,
     /// Arcs re-entered — a second loan, a second ask.
     pub attempts: u8,
-    /// The lowest [`LevelBand`] he will accept for the next move.
+    /// The lowest [`LevelBand`] he will accept for the next move, and
+    /// the lower one a move toward his own country is measured against.
     pub band_floor: f32,
+    pub band_floor_home: f32,
     /// The band he means to be playing at when the arc resolves.
     pub band_target: f32,
+    /// The band the last spell actually put him at. A man who has played
+    /// a season at a level has proved he belongs there, and it is the
+    /// floor he will not go below afterwards — which the arc's own table
+    /// cannot know.
+    pub loan_band: f32,
     pub origin: GoalOrigin,
     /// How firmly he holds it. A rival arc has to beat this by
     /// [`CareerPlan::SWITCH_MARGIN`] to displace it.
@@ -196,9 +194,8 @@ impl CareerPlan {
         today: EpochDay,
         review_in_days: u16,
         runway: f32,
-        at_home: bool,
     ) -> Self {
-        let (band_floor, band_target) = arc.bands(runway, at_home);
+        let (band_floor, band_floor_home, band_target) = arc.bands(runway);
         CareerPlan {
             arc,
             stage: PlanStage::Forming,
@@ -206,7 +203,9 @@ impl CareerPlan {
             review_on: today.saturating_add(review_in_days),
             attempts: 0,
             band_floor,
+            band_floor_home,
             band_target,
+            loan_band: LevelBand::MIN,
             origin,
             strength: strength.clamp(0.0, 1.0),
         }
@@ -223,6 +222,15 @@ impl CareerPlan {
         }
     }
 
+    /// Push the deadline out, changing nothing else. A man who has had
+    /// no football to be judged on has not failed at anything yet.
+    pub fn defer(&self, today: EpochDay, review_in_days: u16) -> Self {
+        CareerPlan {
+            review_on: today.saturating_add(review_in_days),
+            ..*self
+        }
+    }
+
     /// Move on to a different arc, keeping the count of what he has
     /// already tried — a man on his third plan is not starting fresh.
     pub fn succeed_with(
@@ -231,9 +239,8 @@ impl CareerPlan {
         today: EpochDay,
         review_in_days: u16,
         runway: f32,
-        at_home: bool,
     ) -> Self {
-        let (band_floor, band_target) = arc.bands(runway, at_home);
+        let (band_floor, band_floor_home, band_target) = arc.bands(runway);
         CareerPlan {
             arc,
             stage: PlanStage::Forming,
@@ -241,7 +248,9 @@ impl CareerPlan {
             review_on: today.saturating_add(review_in_days),
             attempts: self.attempts,
             band_floor,
+            band_floor_home,
             band_target,
+            loan_band: self.loan_band,
             origin: self.origin,
             strength: self.strength,
         }
@@ -260,9 +269,14 @@ impl CareerPlan {
 
     /// How well a destination at `band` matches what the plan is for,
     /// −1..1. Positive is a fit; negative is below the floor he set.
-    pub fn fit_for(&self, band: f32) -> f32 {
+    pub fn fit_for(&self, band: f32, going_home: bool) -> f32 {
+        let floor = if going_home {
+            self.band_floor_home
+        } else {
+            self.band_floor
+        };
         LevelBand::fit(band, self.band_target)
-            - Self::FLOOR_PENALTY_SCALE * ((self.band_floor - band) / 0.4).clamp(0.0, 1.0)
+            - Self::FLOOR_PENALTY_SCALE * ((floor - band) / 0.4).clamp(0.0, 1.0)
     }
 
     /// How steeply falling below his own floor is punished, relative to
@@ -276,6 +290,31 @@ impl CareerPlan {
             self.stage = to;
         }
     }
+
+    /// The successor of a deadline that has passed. A man whose claim
+    /// went unanswered for a season has already said what he thinks, so
+    /// the arc it turns into does not start again at `Forming` — which
+    /// is what made the ask unreachable whenever his review day fell on
+    /// the same weekly tick that read it.
+    pub fn already_asked(mut self) -> Self {
+        self.stage = PlanStage::Asking;
+        self
+    }
+
+    /// A milestone may lower him. A spell nobody could read is not a man
+    /// on his way out of the door this week.
+    pub fn stepped_back_to(mut self, stage: PlanStage) -> Self {
+        self.stage = self.stage.min(stage);
+        self
+    }
+
+    /// Shed what a week of the forming rule no longer holding costs it.
+    /// Without this a plan formed at 0.81 could never be displaced,
+    /// because `strength` only ever rose.
+    pub fn fade(&mut self, per_month: f32) {
+        const WEEKS_PER_MONTH: f32 = 52.0 / 12.0;
+        self.strength = (self.strength * (1.0 - per_month / WEEKS_PER_MONTH)).clamp(0.0, 1.0);
+    }
 }
 
 /// The plan as everything outside the mind reads it — a flat, `Copy`
@@ -285,6 +324,7 @@ pub struct CareerPlanView {
     pub arc: Option<CareerArc>,
     pub stage: Option<PlanStage>,
     pub band_floor: f32,
+    pub band_floor_home: f32,
     pub band_target: f32,
     /// 0..1 — how close the deadline he gave it is.
     pub deadline_pressure: f32,
@@ -300,6 +340,7 @@ impl CareerPlanView {
             arc: None,
             stage: None,
             band_floor: LevelBand::MIN,
+            band_floor_home: LevelBand::MIN,
             band_target: 0.0,
             deadline_pressure: 0.0,
             attempts: 0,
@@ -312,6 +353,7 @@ impl CareerPlanView {
             arc: Some(plan.arc),
             stage: Some(plan.stage),
             band_floor: plan.band_floor,
+            band_floor_home: plan.band_floor_home,
             band_target: plan.band_target,
             deadline_pressure: plan.deadline_pressure(today),
             attempts: plan.attempts,
@@ -350,14 +392,34 @@ impl CareerPlanView {
         }
     }
 
+    /// How far his own decision to drop a level widens the reputation
+    /// gap he will listen to, 0..1.
+    ///
+    /// The gap a renown band measures is a statement about his NAME, and
+    /// a man who has decided he is going down to play has already made
+    /// his peace with what that says about him. One reading, so the
+    /// guard and the plausibility gate cannot take two different ones of
+    /// the same fact.
+    pub fn renown_widening(&self) -> f32 {
+        match self.arc {
+            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => self.strength,
+            _ => 0.0,
+        }
+    }
+
     /// How well a destination at `band` serves the plan, −1..1. Zero
     /// with no plan — the appraisal's other axes own the decision then.
-    pub fn fit_for(&self, band: f32) -> f32 {
+    pub fn fit_for(&self, band: f32, going_home: bool) -> f32 {
         if self.arc.is_none() {
             return 0.0;
         }
+        let floor = if going_home {
+            self.band_floor_home
+        } else {
+            self.band_floor
+        };
         LevelBand::fit(band, self.band_target)
-            - CareerPlan::FLOOR_PENALTY_SCALE * ((self.band_floor - band) / 0.4).clamp(0.0, 1.0)
+            - CareerPlan::FLOOR_PENALTY_SCALE * ((floor - band) / 0.4).clamp(0.0, 1.0)
     }
 }
 
@@ -378,8 +440,6 @@ impl CareerPlanner {
     /// Start share below which he is not in the side, whatever the club
     /// calls him.
     const NOT_PLAYING_SHARE: f32 = 0.25;
-    /// Pecking-order rank at which the shirt is not coming to him.
-    const BLOCKED_RANK: u8 = 3;
     /// Runway at or above which going out to play is a career step
     /// rather than a demotion.
     const LOAN_RUNWAY: f32 = 0.45;
@@ -394,12 +454,39 @@ impl CareerPlanner {
     const CLIMBER_AMBITION: f32 = 0.6;
     /// Loyalty at or above which a long server means to stay for good.
     const SERVANT_LOYALTY: f32 = 0.7;
+    /// How much of a climb a stayer's loyalty takes back out of him.
+    const LOYALTY_BRAKE: f32 = 0.6;
     /// Days at one club before "staying" and "moving on" are real
     /// choices rather than a settling-in period. Two seasons.
     const TENURE_FOR_A_CHOICE: u16 = 730;
     /// Career spent at which a man starts thinking about where he
     /// finishes.
     const HOMEWARD_SPENT: f32 = 0.75;
+
+    /// The deadline a man who means to be somewhere else gives it: the
+    /// next registration window, plus the grace he allows for the move
+    /// to happen inside one. A season when no calendar is in view.
+    fn move_deadline(situation: &MindSituation) -> u16 {
+        if situation.days_to_next_window == u16::MAX {
+            return CareerPlan::DEFAULT_REVIEW_DAYS;
+        }
+        situation
+            .days_to_next_window
+            .saturating_add(CareerPlan::WINDOW_REVIEW_DAYS)
+    }
+
+    /// How long an arc runs before he looks at it again. The two that
+    /// are about being somewhere else are measured against the
+    /// registration calendar, because that is when they can happen; the
+    /// returnee's claim against the deadline he gave the club; the rest
+    /// run a season.
+    pub fn review_days_for(arc: CareerArc, situation: &MindSituation) -> u16 {
+        match arc {
+            CareerArc::ProveOnLoan | CareerArc::StepUp => Self::move_deadline(situation),
+            CareerArc::ClaimMyPlace => CareerPlan::CLAIM_REVIEW_DAYS,
+            _ => CareerPlan::DEFAULT_REVIEW_DAYS,
+        }
+    }
 
     /// The arc his situation argues for, with the strength he would hold
     /// it at. `None` when nothing in his circumstances points anywhere —
@@ -437,28 +524,31 @@ impl CareerPlanner {
             ));
         }
 
-        // Not playing, and young enough for a season away to be a step
-        // up rather than down. The boy who can see the shirt coming to
-        // him waits for it instead; failing that wait is what turns him
-        // into the loan.
-        let not_playing = situation.starter_ratio < Self::NOT_PLAYING_SHARE;
-        let blocked = situation.pecking_rank >= Self::BLOCKED_RANK
-            || !situation.has_squad_view()
-            || situation.can_wait_for_the_shirt();
-        if not_playing && blocked && situation.is_settled() && !situation.is_on_loan {
+        // Not playing at a club that has looked at him. A squad nobody
+        // has ranked is not a queue he is at the back of, so no view is
+        // no arc rather than the worst reading of one.
+        let not_playing =
+            situation.has_playing_view() && situation.starter_ratio < Self::NOT_PLAYING_SHARE;
+        if not_playing
+            && situation.has_squad_view()
+            && situation.is_settled()
+            && !situation.is_on_loan
+        {
+            let conviction =
+                0.35 + 0.40 * situation.diligence() + 0.25 * situation.blocked_unfairly();
+            // The boy who can see the shirt coming to him waits for it.
             if situation.can_wait_for_the_shirt() {
                 return Some((
                     CareerArc::BreakThroughHere,
                     GoalOrigin::SelfDrive,
-                    0.35 + 0.40 * situation.diligence() + 0.25 * situation.blocked_unfairly(),
+                    conviction,
                 ));
             }
+            // Everybody else it is not coming to, deep in the queue or
+            // second in it behind a man his own age — which is the
+            // archetypal loan and the one the old reading refused.
             if runway >= Self::LOAN_RUNWAY {
-                return Some((
-                    CareerArc::ProveOnLoan,
-                    GoalOrigin::Survival,
-                    0.35 + 0.40 * situation.diligence() + 0.25 * situation.blocked_unfairly(),
-                ));
+                return Some((CareerArc::ProveOnLoan, GoalOrigin::Survival, conviction));
             }
         }
 
@@ -482,10 +572,15 @@ impl CareerPlanner {
                 && situation.ambition_drive() >= Self::CLIMBER_AMBITION
                 && runway > 0.0
             {
+                let restlessness =
+                    0.3 + 0.4 * situation.ambition_drive() + 0.3 * situation.outgrown_the_club();
                 return Some((
                     CareerArc::StepUp,
                     GoalOrigin::SelfDrive,
-                    0.3 + 0.4 * situation.ambition_drive() + 0.3 * situation.outgrown_the_club(),
+                    // Loyalty is the brake. A man who wants to stay still
+                    // feels the ceiling; he simply feels it less, and it
+                    // takes him longer to act on it.
+                    restlessness * (1.0 - Self::LOYALTY_BRAKE * situation.loyalty_drive()),
                 ));
             }
             if situation.ambition_drive() < Self::CONTENT_AMBITION
@@ -502,6 +597,26 @@ impl CareerPlanner {
         None
     }
 
+    /// Start share at which a returnee's claim on a shirt counts as
+    /// answered, whatever his paperwork calls him.
+    const MIN_CLAIM_SHARE: f32 = 0.35;
+
+    /// Is he playing? `None` until enough competitive football has gone
+    /// past for the share to be a reading rather than a placeholder —
+    /// the trap that wiped every post-return plan on the first Monday.
+    fn playing(situation: &MindSituation) -> Option<bool> {
+        situation.has_playing_view().then(|| {
+            // What the paperwork promised him, what his own record has
+            // taught him to expect, and the floor below which nobody is
+            // playing whatever anybody calls him.
+            let bar = situation
+                .expected_start_share
+                .max(situation.own_expected_start_share)
+                .max(Self::MIN_CLAIM_SHARE);
+            situation.starter_ratio >= bar
+        })
+    }
+
     /// Has the thing the arc was for simply happened?
     ///
     /// A plan is not only answered by its deadline: a boy who wanted a
@@ -509,7 +624,7 @@ impl CareerPlanner {
     /// what he wanted without anybody arranging anything. Resolving it
     /// here is what stops a held intention outliving its own reason.
     pub fn is_answered(plan: &CareerPlan, situation: &MindSituation) -> bool {
-        let playing = situation.starter_ratio >= situation.expected_start_share.max(0.35);
+        let playing = Self::playing(situation) == Some(true);
         match plan.arc {
             // Playing AT HIS OWN CLUB. A man out on loan and playing is
             // the plan working, not the plan finished — the spell's
@@ -536,8 +651,14 @@ impl CareerPlanner {
         today: EpochDay,
     ) -> Option<CareerPlan> {
         let runway = situation.career_runway();
-        let at_home = !situation.is_abroad;
-        let playing = situation.starter_ratio >= situation.expected_start_share.max(0.35);
+        // A deadline arriving on football nobody has watched is not an
+        // answer to anything. The two arcs that resolve on something
+        // other than minutes are read without it.
+        let playing = match Self::playing(situation) {
+            Some(playing) => playing,
+            None if matches!(plan.arc, CareerArc::FinishAtHome | CareerArc::StepUp) => false,
+            None => return Some(plan.defer(today, CareerPlan::WINDOW_REVIEW_DAYS)),
+        };
 
         match plan.arc {
             // He waited for the shirt. Either it came, or the wait is
@@ -546,30 +667,40 @@ impl CareerPlanner {
                 if playing {
                     return None;
                 }
-                Some(plan.succeed_with(
-                    CareerArc::ProveOnLoan,
-                    today,
-                    CareerPlan::WINDOW_REVIEW_DAYS,
-                    runway,
-                    at_home,
-                ))
+                Some(
+                    plan.succeed_with(
+                        CareerArc::ProveOnLoan,
+                        today,
+                        Self::review_days_for(CareerArc::ProveOnLoan, situation),
+                        runway,
+                    )
+                    .already_asked(),
+                )
             }
             // The loan never happened. He asks again while he is young
             // enough, and accepts a permanent drop when he is not.
             CareerArc::ProveOnLoan => {
                 if plan.attempts + 1 >= CareerPlan::MAX_PROVE_ATTEMPTS && !playing {
-                    return Some(plan.succeed_with(
-                        CareerArc::StepDownToPlay,
-                        today,
-                        CareerPlan::DEFAULT_REVIEW_DAYS,
-                        runway,
-                        at_home,
-                    ));
+                    return Some(
+                        plan.succeed_with(
+                            CareerArc::StepDownToPlay,
+                            today,
+                            CareerPlan::DEFAULT_REVIEW_DAYS,
+                            runway,
+                        )
+                        .already_asked(),
+                    );
                 }
                 if playing {
                     return None;
                 }
-                Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
+                Some(
+                    plan.retry(
+                        today,
+                        Self::review_days_for(CareerArc::ProveOnLoan, situation),
+                    )
+                    .already_asked(),
+                )
             }
             // The look he came home for. He got it, or he did not — and
             // which way he goes then is whether he has outgrown the
@@ -583,12 +714,16 @@ impl CareerPlanner {
                 } else {
                     CareerArc::StepDownToPlay
                 };
-                let mut next =
-                    plan.succeed_with(arc, today, CareerPlan::DEFAULT_REVIEW_DAYS, runway, at_home);
-                if arc == CareerArc::StepDownToPlay {
+                let mut next = plan
+                    .succeed_with(arc, today, Self::review_days_for(arc, situation), runway)
+                    .already_asked();
+                if arc == CareerArc::StepDownToPlay && plan.loan_band > LevelBand::MIN {
                     // He will not go below where the loan already put
-                    // him: he has proved he belongs at that level.
-                    next.band_floor = next.band_floor.min(plan.band_floor);
+                    // him: he played a season at that level and has
+                    // proved he belongs at it. The arc's own floor is a
+                    // table; this is his record.
+                    next.band_floor = plan.loan_band;
+                    next.band_floor_home = plan.loan_band;
                 }
                 Some(next)
             }
@@ -599,7 +734,6 @@ impl CareerPlanner {
                 today,
                 CareerPlan::DEFAULT_REVIEW_DAYS,
                 runway,
-                at_home,
             )),
             // These three are their own answer: they resolve when the
             // facts that formed them change, and formation re-runs.
@@ -610,7 +744,7 @@ impl CareerPlanner {
                 Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
             }
             CareerArc::FinishAtHome => {
-                if at_home {
+                if !situation.is_abroad {
                     return None;
                 }
                 Some(plan.retry(today, CareerPlan::DEFAULT_REVIEW_DAYS))
@@ -626,20 +760,24 @@ impl CareerPlanner {
         plan: &CareerPlan,
         verdict: LoanSpellVerdict,
         runway: f32,
-        at_home: bool,
+        loan_band: f32,
         today: EpochDay,
     ) -> CareerPlan {
+        let plan = &CareerPlan { loan_band, ..*plan };
         if verdict.is_positive() {
             return plan.succeed_with(
                 CareerArc::ClaimMyPlace,
                 today,
                 CareerPlan::CLAIM_REVIEW_DAYS,
                 runway,
-                at_home,
             );
         }
         if matches!(verdict, LoanSpellVerdict::Inconclusive) {
-            return *plan;
+            // A spell nobody could read changes nothing about the arc —
+            // but he is home, so he is no longer acting on it, and a
+            // returnee asking for another loan the same week is the one
+            // reading `Acting` could never take back.
+            return plan.stepped_back_to(PlanStage::Committed);
         }
         if plan.attempts + 1 >= CareerPlan::MAX_PROVE_ATTEMPTS || runway < Self::LOAN_RUNWAY {
             return plan.succeed_with(
@@ -647,7 +785,6 @@ impl CareerPlanner {
                 today,
                 CareerPlan::DEFAULT_REVIEW_DAYS,
                 runway,
-                at_home,
             );
         }
         let mut again = plan.succeed_with(
@@ -655,7 +792,6 @@ impl CareerPlanner {
             today,
             CareerPlan::WINDOW_REVIEW_DAYS,
             runway,
-            at_home,
         );
         again.attempts = plan.attempts.saturating_add(1);
         again
@@ -671,6 +807,9 @@ mod tests {
 
     impl Fx {
         const TODAY: EpochDay = 9_000;
+        /// The band the spell in these fixtures actually put him at: a
+        /// starter one level below where he came from.
+        const LOAN_BAND: f32 = 0.6;
 
         /// A man nobody has any reason to think about: mid-twenties,
         /// ordinary in every drive, playing the share his role implies.
@@ -678,6 +817,10 @@ mod tests {
             MindSituation {
                 ambition: 12.0,
                 days_at_club: 800,
+                // A season of football behind him, so the start share is
+                // a reading rather than the placeholder every arc
+                // refuses to act on.
+                appearances_tracked: 30,
                 // A shade above the key-player floor of a club at this
                 // standing: he is at his level, which is what makes the
                 // arcs that read a band read THIS band.
@@ -708,7 +851,6 @@ mod tests {
                 Self::TODAY,
                 CareerPlan::DEFAULT_REVIEW_DAYS,
                 0.7,
-                true,
             );
             plan.attempts = attempts;
             plan
@@ -737,6 +879,93 @@ mod tests {
             CareerArc::BreakThroughHere,
             "the shirt is coming to him; going away is what happens if it does not"
         );
+    }
+
+    /// The archetypal loan, and the one the old reading refused: second
+    /// in the queue behind a man his own age, so the shirt is not coming
+    /// and there is nothing to wait for.
+    #[test]
+    fn a_backup_behind_a_man_his_own_age_goes_out_to_play() {
+        let blocked = MindSituation {
+            age: 21,
+            pecking_rank: 2,
+            rivals_at_position: 2,
+            top_rival_age: 22,
+            rival_gap: 2,
+            starter_ratio: 0.05,
+            ..Fx::settled()
+        };
+        let (arc, _, _) = CareerPlanner::arc_for(&blocked, 0.0)
+            .expect("the shirt is not coming and he is young enough to go and play");
+        assert_eq!(arc, CareerArc::ProveOnLoan);
+    }
+
+    /// A squad nobody has ranked is not a queue he is at the back of.
+    #[test]
+    fn a_squad_nobody_has_ranked_argues_for_nothing() {
+        let unranked = MindSituation {
+            age: 21,
+            pecking_rank: 0,
+            starter_ratio: 0.05,
+            ..Fx::settled()
+        };
+        assert!(CareerPlanner::arc_for(&unranked, 0.0).is_none());
+    }
+
+    /// `at_home` describes the destination, not where he is standing
+    /// when the arc forms — which is why the arc that is ABOUT going
+    /// home could never reach its own home floor.
+    #[test]
+    fn the_home_floor_belongs_to_the_destination() {
+        let plan = Fx::plan(CareerArc::FinishAtHome, 0);
+        let modest = -0.2;
+        assert!(
+            plan.fit_for(modest, true) > plan.fit_for(modest, false),
+            "he will drop further for a club at home than for one anywhere else"
+        );
+        assert!(
+            plan.fit_for(modest, true) >= 0.0,
+            "a modest club at home is not something he argues against"
+        );
+        assert!(
+            plan.fit_for(modest, false) < 0.0,
+            "the same club abroad is below the floor he set"
+        );
+    }
+
+    /// The claim ran out. The successor is something he has already
+    /// said, so it starts at the rung he reached rather than back at
+    /// `Forming` — which is what made the ask unreachable whenever the
+    /// review day fell on the tick that read it.
+    #[test]
+    fn the_successor_of_a_passed_deadline_is_already_asked() {
+        let ignored = MindSituation {
+            starter_ratio: 0.05,
+            own_level: 150,
+            club_reputation: 0.3,
+            ..Fx::settled()
+        };
+        let next = CareerPlanner::review(
+            &Fx::plan(CareerArc::ClaimMyPlace, 0),
+            &ignored,
+            Fx::TODAY + CareerPlan::CLAIM_REVIEW_DAYS,
+        )
+        .expect("an unanswered claim does not simply evaporate");
+        assert_eq!(next.stage, PlanStage::Asking);
+    }
+
+    /// A plan only ever hardened, so one formed at 0.81 could never be
+    /// displaced by anything. The circumstances leaving take it back
+    /// down again.
+    #[test]
+    fn a_plan_the_circumstances_no_longer_argue_for_fades() {
+        let mut plan = Fx::plan(CareerArc::ProveOnLoan, 0);
+        let before = plan.strength;
+        for _ in 0..8 {
+            plan.fade(0.22);
+        }
+        assert!(plan.strength < before * 0.8, "{}", plan.strength);
+        assert!(plan.strength > 0.0, "fading is not forgetting");
     }
 
     #[test]
@@ -836,7 +1065,7 @@ mod tests {
             &Fx::plan(CareerArc::ProveOnLoan, 0),
             LoanSpellVerdict::Standout,
             0.8,
-            true,
+            Fx::LOAN_BAND,
             Fx::TODAY,
         );
         assert_eq!(after.arc, CareerArc::ClaimMyPlace);
@@ -853,7 +1082,7 @@ mod tests {
             &Fx::plan(CareerArc::ProveOnLoan, 0),
             LoanSpellVerdict::Peripheral,
             0.8,
-            true,
+            Fx::LOAN_BAND,
             Fx::TODAY,
         );
         assert_eq!(again.arc, CareerArc::ProveOnLoan);
@@ -863,7 +1092,7 @@ mod tests {
             &Fx::plan(CareerArc::ProveOnLoan, 1),
             LoanSpellVerdict::Peripheral,
             0.8,
-            true,
+            Fx::LOAN_BAND,
             Fx::TODAY,
         );
         assert_eq!(exhausted.arc, CareerArc::StepDownToPlay);
@@ -872,9 +1101,21 @@ mod tests {
     #[test]
     fn a_spell_nobody_can_read_leaves_the_plan_where_it_was() {
         let plan = Fx::plan(CareerArc::ProveOnLoan, 0);
-        let after =
-            CareerPlanner::after_loan(&plan, LoanSpellVerdict::Inconclusive, 0.8, true, Fx::TODAY);
-        assert_eq!(after, plan);
+        let after = CareerPlanner::after_loan(
+            &plan,
+            LoanSpellVerdict::Inconclusive,
+            0.8,
+            Fx::LOAN_BAND,
+            Fx::TODAY,
+        );
+        assert_eq!(after.arc, plan.arc);
+        assert_eq!(after.review_on, plan.review_on);
+        assert_eq!(after.attempts, plan.attempts);
+        assert_eq!(
+            after.loan_band,
+            Fx::LOAN_BAND,
+            "the level he played at is his record whatever anybody made of it"
+        );
     }
 
     #[test]
@@ -928,8 +1169,8 @@ mod tests {
     #[test]
     fn a_destination_at_the_target_band_fits_and_one_below_the_floor_does_not() {
         let plan = Fx::plan(CareerArc::ProveOnLoan, 0);
-        assert!(plan.fit_for(plan.band_target) > 0.9);
-        assert!(plan.fit_for(plan.band_floor - 0.4) < 0.0);
+        assert!(plan.fit_for(plan.band_target, false) > 0.9);
+        assert!(plan.fit_for(plan.band_floor - 0.4, false) < 0.0);
     }
 
     #[test]

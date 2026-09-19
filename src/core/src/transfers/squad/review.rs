@@ -1253,18 +1253,15 @@ impl<'a> SquadReview<'a> {
             formation_positions,
             current_window,
             asset_ctx.is_early_season(),
-            mid_season_window,
             home,
             rep_score,
         );
 
-        // Position-glut sweep: catches surplus the loan-out branches
-        // miss — most importantly the 30+ veterans the loan path
-        // explicitly excludes. A club with 8 GKs needs to *eject* the
-        // worst, not wait for a deficit signal that never fires when
+        // Position-glut sweep: a club with 8 keepers needs to eject the
+        // worst, not wait for a deficit signal that never fires while
         // the surplus itself is dragging the average down.
-        let mut force_transfer_list =
-            SquadReviewPass::identify_position_glut(&squad, date, players, &mut loan_outs);
+        let mut force_transfer_list: Vec<u32> = Vec::new();
+        SquadReviewPass::identify_position_glut(&squad, players, &mut loan_outs);
 
         // Repeated-loan stagnation sweep: a player already farmed out
         // twice (the loan path refuses a third spell) who still sits

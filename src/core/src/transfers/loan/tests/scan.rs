@@ -373,26 +373,22 @@ fn broadcast_cascades_non_development_loan_high_to_low() {
     let mut country = Fx::country(vec![parent, borrower]);
     Fx::loan_list(&mut country, 200, 1, 11);
 
-    // Cycle 1: opens at Elite — no Elite taker exists, nobody responds.
+    // The cascade opens at Elite. The Regional taker is outside it, so
+    // the parent prefers anywhere inside it — but a tier the club has
+    // not reached is a discount now, not a veto: a club one rung outside
+    // it that would actually play him is a better home than one inside
+    // it that would not, and the old filter is what walked a boy down a
+    // division a fortnight at a time with nobody else in the country.
     LoanPipeline::broadcast_listed_loans(&mut country, d0);
-    assert!(
-        !country.transfer_market.has_active_negotiation_for(200, 2),
-        "no Elite club exists to take him on the first broadcast"
-    );
+    let placed_at_once = country.transfer_market.has_active_negotiation_for(200, 2);
 
-    // Widen one tier per 14-day window: Continental, then National.
-    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
-    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(28));
+    // Widening reaches Regional, where the taker actually is.
+    for window in 1..=3 {
+        LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(14 * window));
+    }
     assert!(
-        !country.transfer_market.has_active_negotiation_for(200, 2),
-        "still being offered above the Regional taker's tier"
-    );
-
-    // Fourth window reaches Regional — the club with a vacancy responds.
-    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(42));
-    assert!(
-        country.transfer_market.has_active_negotiation_for(200, 2),
-        "once the net widens to Regional, the club with a vacancy responds"
+        placed_at_once || country.transfer_market.has_active_negotiation_for(200, 2),
+        "the cascade places him at the only club in the country that would play him"
     );
 }
 
@@ -450,11 +446,12 @@ fn broadcast_places_development_loanee_at_best_taker_immediately() {
     );
 }
 
-/// Resource gate: a below-National parent doesn't have the loan-
-/// management reach to run a push, so it never broadcasts — it falls
-/// back to passive listing no matter what takers exist.
+/// Every club that lists a man for loan pushes him. Gate the push on a
+/// resource tier and the half of the market that lends most players out
+/// is left waiting to be scanned — and the borrower-side scan defers to
+/// the broadcast, so nobody moves at all.
 #[test]
-fn broadcast_skipped_for_a_below_national_parent() {
+fn a_small_parent_pushes_its_listed_loanee_too() {
     let date = Fx::monday();
 
     // Regional parent (world 4000) — below the resource threshold.
@@ -492,8 +489,8 @@ fn broadcast_skipped_for_a_below_national_parent() {
     LoanPipeline::broadcast_listed_loans(&mut country, date);
 
     assert!(
-        !country.transfer_market.has_active_negotiation_for(200, 2),
-        "a Regional parent lacks the loan-management resource to run a push"
+        country.transfer_market.has_active_negotiation_for(200, 2),
+        "a Regional parent places its own loanee rather than waiting"
     );
 }
 
@@ -535,6 +532,8 @@ fn a_home_first_hold_releases_although_the_tier_widened_on_the_same_day() {
             status: LoanOutStatus::Identified,
             loan_fee: 0.0,
             preferred_destination: LoanDestinationPreference::HomeCountry,
+            from_pathway: false,
+            band_target: None,
         });
 
     // A domestic club at the same tier with a keeper vacancy — it
@@ -561,8 +560,8 @@ fn a_home_first_hold_releases_although_the_tier_widened_on_the_same_day() {
         "a HomeCountry candidate is not shopped domestically on the day he is posted"
     );
 
-    // Day 14: the tier widens on this very tick — which used to reset
-    // the clock the hold reads, so it could never elapse.
+    // Day 14: the tier widens on this very tick, and that must not reset
+    // the clock the hold reads or it can never elapse.
     LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),

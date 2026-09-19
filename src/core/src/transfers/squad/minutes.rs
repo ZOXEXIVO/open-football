@@ -78,6 +78,7 @@ impl PlayingTimeExpectation {
             Some(PromisedSquadStatus::KeyPlayer) => 0.95,
             Some(PromisedSquadStatus::FirstTeamRegular) => 0.75,
             Some(PromisedSquadStatus::FirstTeamSquadRotation) => 0.45,
+            Some(PromisedSquadStatus::MainBackupPlayer) => 0.35,
             Some(PromisedSquadStatus::HotProspectForTheFuture) => 0.30,
             None => 0.50,
         }

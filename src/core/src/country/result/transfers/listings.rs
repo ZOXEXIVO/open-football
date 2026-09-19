@@ -11,7 +11,7 @@ use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
-use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::value::asking::AskingPrice;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
     TransferListingType, TransferMarket,
@@ -21,6 +21,7 @@ use crate::{
     PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
     ReputationLevel, Team,
 };
+use crate::{PathwayStage, PlayerPlan, TransferItem};
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
 use std::collections::{HashMap, HashSet};
@@ -33,6 +34,10 @@ pub(crate) enum ListingDecision {
     },
     Loan {
         reason: String,
+        /// What the loan is FOR. Carried to the pathway so the purpose
+        /// survives to the borrower rather than collapsing into a
+        /// listing row nobody can read a motive off.
+        purpose: LoanOutReason,
     },
     FreeTransfer,
     /// The player's live loan listing becomes a permanent listing in
@@ -93,6 +98,8 @@ struct PendingListing {
     listing_type: TransferListingType,
     reason: String,
     decided_by: String,
+    /// What a loan listing is FOR. `None` for every other listing type.
+    loan_purpose: Option<LoanOutReason>,
 }
 
 /// What one club's listing pass reads for every player it looks at: the
@@ -102,8 +109,6 @@ struct ClubListingScope<'c> {
     club: &'c Club,
     date: NaiveDate,
     price_level: f32,
-    league_reputation: u16,
-    club_reputation: u16,
     decided_by: String,
 }
 
@@ -154,21 +159,10 @@ impl ListingPass {
             }
 
             let main_team = &club.teams.teams[0];
-            let league_reputation = main_team
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-            // Blend home/national/world rather than reading just `world` —
-            // a club with strong domestic standing but limited continental
-            // exposure should still command a domestic premium.
-            let club_reputation = main_team.reputation.market_value_score();
             let scope = ClubListingScope {
                 club,
                 date,
                 price_level,
-                league_reputation,
-                club_reputation,
                 decided_by: main_team.staffs.head_coach_name(),
             };
 
@@ -833,8 +827,8 @@ impl ListingPass {
         // — every loan arm below consults it, and a sale never does: a
         // club may decide to SELL its starter, and lending him out is a
         // different question with its own price.
-        let parent_holds =
-            LoanAssetGuard::willingness_for(club, player, date) < ParentWillingness::ENTERTAINS;
+        let parent_holds = LoanAssetGuard::willingness_for(club, player, date).score
+            < ParentWillingness::ENTERTAINS;
 
         let reading = ListingReading {
             age,
@@ -915,6 +909,7 @@ impl ListingPass {
         if age <= 23 && pa > ca + 10 && !parent_holds {
             return ListingDecision::Loan {
                 reason: "dec_reason_young_needs_practice".to_string(),
+                purpose: LoanOutReason::NeedsGameTime,
             };
         }
 
@@ -929,6 +924,7 @@ impl ListingPass {
         {
             return ListingDecision::Loan {
                 reason: "dec_reason_blocked_top_club".to_string(),
+                purpose: LoanOutReason::BlockedByDepth,
             };
         }
 
@@ -954,6 +950,7 @@ impl ListingPass {
         {
             return ListingDecision::Loan {
                 reason: "dec_reason_loan_playing_time".to_string(),
+                purpose: LoanOutReason::LackOfPlayingTime,
             };
         }
 
@@ -1281,31 +1278,6 @@ impl ListingPass {
         group_count > min_to_keep
     }
 
-    fn calculate_asking_price(
-        player: &Player,
-        club: &Club,
-        date: NaiveDate,
-        price_level: f32,
-        league_reputation: u16,
-        club_reputation: u16,
-    ) -> CurrencyValue {
-        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(
-            player,
-            date,
-            price_level,
-            league_reputation,
-            club_reputation,
-        );
-
-        let multiplier =
-            PlayerValuationCalculator::seller_distress_multiplier(club.finance.balance.balance);
-
-        CurrencyValue {
-            amount: base_value.amount * multiplier,
-            currency: base_value.currency,
-        }
-    }
-
     /// The main roster's own numeric evaluation — the one pass allowed to
     /// decide, on the club's behalf, that a player it never flagged is for
     /// sale, on loan, or released.
@@ -1321,8 +1293,6 @@ impl ListingPass {
         let club = scope.club;
         let date = scope.date;
         let price_level = scope.price_level;
-        let league_reputation = scope.league_reputation;
-        let club_reputation = scope.club_reputation;
         let decided_by = &scope.decided_by;
 
         for player in &main_team.players.players {
@@ -1337,13 +1307,12 @@ impl ListingPass {
             ) {
                 ListingDecision::Keep => {}
                 ListingDecision::UpgradeLoanToTransfer => {
-                    let asking_price = ListingPass::calculate_asking_price(
+                    let asking_price = AskingPrice::calculate_asking_price(
                         player,
+                        country,
                         club,
                         date,
                         price_level,
-                        league_reputation,
-                        club_reputation,
                     );
                     listings_to_upgrade.push((player.id, asking_price));
                 }
@@ -1360,16 +1329,16 @@ impl ListingPass {
                         listing_type: TransferListingType::EndOfContract,
                         reason: "dec_reason_under16_release".to_string(),
                         decided_by: decided_by.clone(),
+                        loan_purpose: None,
                     });
                 }
                 ListingDecision::Transfer { reason } => {
-                    let asking_price = ListingPass::calculate_asking_price(
+                    let asking_price = AskingPrice::calculate_asking_price(
                         player,
+                        country,
                         club,
                         date,
                         price_level,
-                        league_reputation,
-                        club_reputation,
                     );
                     listings_to_add.push(PendingListing {
                         player_id: player.id,
@@ -1379,9 +1348,10 @@ impl ListingPass {
                         listing_type: TransferListingType::Transfer,
                         reason,
                         decided_by: decided_by.clone(),
+                        loan_purpose: None,
                     });
                 }
-                ListingDecision::Loan { reason } => {
+                ListingDecision::Loan { reason, purpose } => {
                     listings_to_add.push(PendingListing {
                         player_id: player.id,
                         club_id: club.id,
@@ -1393,6 +1363,7 @@ impl ListingPass {
                         listing_type: TransferListingType::Loan,
                         reason,
                         decided_by: decided_by.clone(),
+                        loan_purpose: Some(purpose),
                     });
                 }
             }
@@ -1414,8 +1385,6 @@ impl ListingPass {
         let club = scope.club;
         let date = scope.date;
         let price_level = scope.price_level;
-        let league_reputation = scope.league_reputation;
-        let club_reputation = scope.club_reputation;
         let decided_by = &scope.decided_by;
 
         // Explicit club listings outside the main squad. The evaluation
@@ -1457,6 +1426,7 @@ impl ListingPass {
                                 listing_type: TransferListingType::Loan,
                                 reason: "dec_reason_club_listed".to_string(),
                                 decided_by: decided_by.clone(),
+                                loan_purpose: Some(LoanOutReason::LackOfPlayingTime),
                             });
                         }
                         Some(existing) => {
@@ -1484,13 +1454,12 @@ impl ListingPass {
                                 && (date - existing.listed_date).num_days()
                                     >= LOAN_UNSOLD_UPGRADE_DAYS
                             {
-                                let asking_price = ListingPass::calculate_asking_price(
+                                let asking_price = AskingPrice::calculate_asking_price(
                                     player,
+                                    country,
                                     club,
                                     date,
                                     price_level,
-                                    league_reputation,
-                                    club_reputation,
                                 );
                                 listings_to_upgrade.push((player.id, asking_price));
                             }
@@ -1532,13 +1501,12 @@ impl ListingPass {
                     let already_on_market = player.statuses.has(PlayerStatusType::Lst)
                         || player.statuses.has(PlayerStatusType::Frt);
                     if (requested || long_unhappy) && !already_on_market {
-                        let asking_price = ListingPass::calculate_asking_price(
+                        let asking_price = AskingPrice::calculate_asking_price(
                             player,
+                            country,
                             club,
                             date,
                             price_level,
-                            league_reputation,
-                            club_reputation,
                         );
                         listings_to_add.push(PendingListing {
                             player_id: player.id,
@@ -1552,6 +1520,7 @@ impl ListingPass {
                                 "dec_reason_player_unhappy".to_string()
                             },
                             decided_by: decided_by.clone(),
+                            loan_purpose: None,
                         });
                         continue;
                     }
@@ -1576,14 +1545,8 @@ impl ListingPass {
                 {
                     continue;
                 }
-                let asking_price = ListingPass::calculate_asking_price(
-                    player,
-                    club,
-                    date,
-                    price_level,
-                    league_reputation,
-                    club_reputation,
-                );
+                let asking_price =
+                    AskingPrice::calculate_asking_price(player, country, club, date, price_level);
                 listings_to_add.push(PendingListing {
                     player_id: player.id,
                     club_id: club.id,
@@ -1592,6 +1555,7 @@ impl ListingPass {
                     listing_type: TransferListingType::Transfer,
                     reason: "dec_reason_club_listed".to_string(),
                     decided_by: decided_by.clone(),
+                    loan_purpose: None,
                 });
             }
         }
@@ -1628,6 +1592,12 @@ impl ListingPass {
                 TransferListingType::EndOfContract
             );
 
+            // Mirror it onto the team's own list, which is what the web
+            // team-transfers page reads. One producer writes both, so a
+            // listed player can never show on one surface and not the
+            // other.
+            let mirrored =
+                TransferItem::new(listing_data.player_id, listing_data.asking_price.clone());
             let listing = TransferListing::new(
                 listing_data.player_id,
                 listing_data.club_id,
@@ -1640,8 +1610,24 @@ impl ListingPass {
             country.transfer_market.add_listing(listing);
             summary.total_listings += 1;
 
+            // The loan row and the pathway stage are the same decision,
+            // so the one producer writes both and the purpose survives to
+            // the borrower.
+            if let Some(purpose) = listing_data.loan_purpose {
+                if let Some(club) = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == listing_data.club_id)
+                {
+                    club.on_pathway_loan_staged(listing_data.player_id, purpose, date);
+                }
+            }
+
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
+                    if team.id == listing_data.team_id {
+                        team.transfer_list.add(mirrored.clone());
+                    }
                     if let Some(player) = team
                         .players
                         .players
@@ -1727,6 +1713,8 @@ impl ListingPass {
             listing.original_asking_price = asking_price;
             summary.total_listings += 1;
             for club in &mut country.clubs {
+                let club_id = club.id;
+                let mut converted = false;
                 for team in &mut club.teams.teams {
                     if let Some(player) =
                         team.players.players.iter_mut().find(|p| p.id == player_id)
@@ -1737,7 +1725,23 @@ impl ListingPass {
                         // No decision-history entry: the flag-setter (surplus
                         // trim / salary fallback) already recorded the listing
                         // decision when it stamped `is_transfer_listed`.
+                        //
+                        // The pathway does move: half a year on the loan
+                        // market with no borrower, converted to a sale, is
+                        // the club finished with him.
+                        player.on_pathway_advanced(
+                            club_id,
+                            PathwayStage::MoveOn,
+                            PlayerPlan::SHORT_REVIEW_DAYS,
+                            date,
+                        );
+                        converted = true;
                     }
+                }
+                if converted {
+                    club.transfer_plan
+                        .loan_out_candidates
+                        .retain(|c| c.player_id != player_id);
                 }
             }
         }
@@ -1849,6 +1853,7 @@ impl ListingPass {
             if player.statuses.has(PlayerStatusType::Loa) {
                 return Some(ListingDecision::Loan {
                     reason: "dec_reason_club_listed".to_string(),
+                    purpose: candidate.reason,
                 });
             }
             let reason = match &candidate.reason {
@@ -1869,6 +1874,7 @@ impl ListingPass {
             };
             return Some(ListingDecision::Loan {
                 reason: reason.to_string(),
+                purpose: candidate.reason,
             });
         }
 
@@ -1930,13 +1936,14 @@ impl ListingPass {
                 // whatever his birth year says, and unhappiness is not the
                 // club's cue to lend him away.
                 SquadAssetClass::ProspectDevelopment => {
-                    if LoanAssetGuard::willingness_for(club, player, date)
+                    if LoanAssetGuard::willingness_for(club, player, date).score
                         < ParentWillingness::ENTERTAINS
                     {
                         ListingDecision::Keep
                     } else {
                         ListingDecision::Loan {
                             reason: "dec_reason_young_needs_practice".to_string(),
+                            purpose: LoanOutReason::NeedsGameTime,
                         }
                     }
                 }
@@ -1993,6 +2000,7 @@ impl ListingPass {
         if player.statuses.has(PlayerStatusType::Loa) {
             return Some(ListingDecision::Loan {
                 reason: "dec_reason_club_listed".to_string(),
+                purpose: LoanOutReason::LackOfPlayingTime,
             });
         }
         if labelled_not_needed {
@@ -2412,6 +2420,8 @@ mod tests {
                 status: LoanOutStatus::Listed,
                 loan_fee: 0.0,
                 preferred_destination: LoanDestinationPreference::Any,
+                from_pathway: false,
+                band_target: None,
             });
         let mut country = Fixture::country(club);
         country.transfer_market.add_listing(TransferListing::new(

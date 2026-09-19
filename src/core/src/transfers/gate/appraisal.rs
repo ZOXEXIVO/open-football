@@ -559,7 +559,7 @@ impl Appraisal {
     /// One grepable line for `OF_TRACE_PLAYER`.
     pub fn explain(&self) -> String {
         format!(
-            "U={:+.3} (M{:+.3} S{:+.3} R{:+.3} P{:+.3} H{:+.3} D{:+.3} A{:+.3} F{:+.3}) \
+            "U={:+.3} (M{:+.3} S{:+.3} R{:+.3} P{:+.3} H{:+.3} D{:+.3} A{:+.3} F{:+.3} \
              N{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
             self.utility,
             self.money,
@@ -945,7 +945,7 @@ impl PlayerOfferAppraisal {
         // could not read.
         let plan_fit = offer
             .band_offered
-            .map(|band| cfg.plan_fit * stance.plan.fit_for(band))
+            .map(|band| cfg.plan_fit * stance.plan.fit_for(band, stance.is_home_country(offer)))
             .unwrap_or(0.0);
 
         // ── D · push ────────────────────────────────────────────
@@ -1438,6 +1438,7 @@ mod tests {
             arc: Some(CareerArc::ProveOnLoan),
             stage: Some(PlanStage::Asking),
             band_floor: -0.2,
+            band_floor_home: -0.2,
             band_target: 0.9,
             deadline_pressure: 0.5,
             attempts: 0,
@@ -1466,6 +1467,7 @@ mod tests {
             arc: Some(CareerArc::ClaimMyPlace),
             stage: Some(PlanStage::Committed),
             band_floor: 0.6,
+            band_floor_home: 0.6,
             band_target: 1.0,
             deadline_pressure: 0.0,
             attempts: 0,

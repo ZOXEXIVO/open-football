@@ -12,6 +12,7 @@ use crate::club::player::calculators::{
 use crate::club::player::contract::stalemate::{AffordabilityInput, ContractStalemate};
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::player::lifecycle::CareerStageDetector;
+use crate::club::player::mind::{CareerArc, MindClock, PlanStage};
 use crate::club::player::{RestlessnessInputs, StuckCareerScan};
 use crate::club::staff::perception::AbilityEstimator;
 use crate::context::GlobalContext;
@@ -1431,13 +1432,6 @@ impl TeamBehaviour {
         }
     }
 
-    /// How long a mid-loan "play me or let me go" declaration keeps
-    /// counting as notice already served once the player is home. Long
-    /// enough to cover a summer return plus the opening months of a
-    /// season — the window in which the club could still have acted on
-    /// what he told it.
-    const DECLARED_INTENT_WINDOW_DAYS: u16 = 180;
-
     /// Monthly loan-fatigue audit — the other verdict a loanee can reach
     /// about his own spell, and the one his OWN club hears about.
     ///
@@ -1572,18 +1566,18 @@ impl TeamBehaviour {
             {
                 continue;
             }
-            // He said it while he was still away: the loan-fatigue audit
-            // had him asking for this chance before he came home, and
-            // `execute_loan_return` carried the mood across the return.
-            // A club that was told in advance does not also get the full
-            // grace period, and the record it has to answer is the one
-            // it already heard about — so the fuse is shorter and the
-            // bar is the honest "he played real football" line rather
-            // than a full first-choice season.
-            let declared_away = player.happiness.has_recent_event(
-                &HappinessEventType::WantsToProveHimselfAtParent,
-                Self::DECLARED_INTENT_WINDOW_DAYS,
-            );
+            // He came home holding a claim on the shirt. The club was
+            // told what he wanted before he walked back through the
+            // door, so it does not also get the full grace period, and
+            // the record it has to answer is the one it already heard
+            // about. Read off the arc rather than off a mood: no mood
+            // crosses a return, since happiness is reset on the drive
+            // home.
+            let declared_away = player
+                .mind
+                .career
+                .plan_view(MindClock::day(today))
+                .holds(CareerArc::ClaimMyPlace);
             let (settle_days, min_loan_starts, min_start_share) = if declared_away {
                 (30, 8, 0.30)
             } else {
@@ -2710,9 +2704,6 @@ struct BackupCareerAnxiety {
 }
 
 impl BackupCareerAnxiety {
-    /// A player must clear this desire score before the dream fires.
-    const EMIT_THRESHOLD: f32 = 0.52;
-
     fn evaluate(
         player: &Player,
         today: NaiveDate,
@@ -2834,7 +2825,21 @@ impl BackupCareerAnxiety {
         let wage_comfort =
             ((fair_ratio - 1.0) / 0.5).clamp(0.0, 1.0) * 0.15 * (1.0 - 0.5 * ambition01);
 
-        if restlessness.score - wage_comfort < Self::EMIT_THRESHOLD {
+        // What he has decided about it. A second restlessness curve
+        // beside the plan is two models of one feeling, and they
+        // disagreed about the same man on the same morning — the plan is
+        // formed from these very drives and holds its answer for
+        // seasons, which is what a career story needs.
+        let plan = player.mind.career.plan_view(MindClock::day(today));
+        let decided = plan.is(CareerArc::ProveOnLoan, PlanStage::Committed)
+            || plan.is(CareerArc::StepDownToPlay, PlanStage::Committed);
+        if !decided {
+            return None;
+        }
+        // …and the one comfort the arc does not carry: a wage clearly
+        // above his own fair valuation is exactly why real backups sign
+        // the next extension and stay put.
+        if wage_comfort >= restlessness.score {
             return None;
         }
 
@@ -3297,6 +3302,7 @@ mod tests {
     use super::*;
     use crate::club::context::ClubContext;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerMind, CareerPlan, GoalOrigin};
     use crate::club::player::statistics::CurrentSeasonEntry;
     use crate::context::SimulationContext;
     use crate::shared::fullname::FullName;
@@ -3768,9 +3774,26 @@ mod tests {
         }
     }
 
+    /// A man who has decided he is going somewhere to play. The mood
+    /// reads the arc rather than a restlessness curve of its own, so a
+    /// fixture that wants the mood has to give him the decision.
+    fn decided_to_go(player: &mut Player, arc: CareerArc, today: NaiveDate) {
+        let mut plan = CareerPlan::new(
+            arc,
+            GoalOrigin::Survival,
+            0.7,
+            MindClock::day(today),
+            CareerPlan::DEFAULT_REVIEW_DAYS,
+            0.6,
+        );
+        plan.escalate(PlanStage::Committed);
+        player.mind.career.plan = Some(plan);
+    }
+
     /// A 28-year-old homegrown main-squad backup: seasons of 2-3 league
     /// starts on record, real determination — the career #2.
     fn perennial_backup(ambition: f32) -> Player {
+        let today = first_of_month(2026, 6);
         let mut p = with_contract(
             build_player(
                 1,
@@ -3788,6 +3811,13 @@ mod tests {
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 2, false));
+        // A man with this much ambition and this record has decided he
+        // is going somewhere to play. The mood reads that decision now
+        // rather than running a restlessness curve of its own beside it,
+        // so the fixture states it exactly as the weekly think would.
+        if ambition >= CareerMind::AMBITIOUS {
+            decided_to_go(&mut p, CareerArc::StepDownToPlay, today);
+        }
         p
     }
 
@@ -3869,7 +3899,7 @@ mod tests {
                 HappinessEventType::WantsFirstTeamFootball
             ),
             0,
-            "a well-paid bench at a big club is fine for an average-ambition player"
+            "an average-ambition man on a well-paid bench has decided nothing,              and a mood without a decision behind it is not a career story"
         );
     }
 
@@ -3916,6 +3946,7 @@ mod tests {
                 .season_ledger
                 .push(ledger_row(year, starts, true));
         }
+        decided_to_go(&mut p, CareerArc::ProveOnLoan, today);
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_perennial_backup_audit(
             &mut players,
@@ -4218,10 +4249,11 @@ mod tests {
             "half a season of loan starts, six weeks home: the club still has time"
         );
 
+        // He came home holding a claim on the shirt, which is what the
+        // audit reads: no mood crosses a return, and the one it used to
+        // read was reset with the rest of his happiness on the way home.
         let mut declared = half_season_returnee(today);
-        declared
-            .happiness
-            .add_event_default(HappinessEventType::WantsToProveHimselfAtParent);
+        decided_to_go(&mut declared, CareerArc::ClaimMyPlace, today);
         let mut players = PlayerCollection::new(vec![declared]);
         TeamBehaviour::process_returnee_breakthrough_audit(
             &mut players,
@@ -4536,6 +4568,7 @@ mod tests {
         p.statistics_history
             .season_ledger
             .push(ledger_row(2025, 3, false));
+        decided_to_go(&mut p, CareerArc::StepDownToPlay, today);
         let mut players = PlayerCollection::new(vec![p]);
         TeamBehaviour::process_perennial_backup_audit(
             &mut players,

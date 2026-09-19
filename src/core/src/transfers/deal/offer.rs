@@ -74,6 +74,10 @@ pub enum PromisedSquadStatus {
     KeyPlayer,
     FirstTeamRegular,
     FirstTeamSquadRotation,
+    /// A squad man who will get some of it. The rung between rotation
+    /// and a boy's label — without it a club promoting a twenty-six-year
+    /// -old returnee had to call him a hot prospect.
+    MainBackupPlayer,
     HotProspectForTheFuture,
 }
 
@@ -93,6 +97,7 @@ impl PromisedSquadStatus {
             PromisedSquadStatus::FirstTeamSquadRotation => {
                 PlayerSquadStatus::FirstTeamSquadRotation
             }
+            PromisedSquadStatus::MainBackupPlayer => PlayerSquadStatus::MainBackupPlayer,
             PromisedSquadStatus::HotProspectForTheFuture => {
                 PlayerSquadStatus::HotProspectForTheFuture
             }
@@ -257,10 +262,9 @@ mod tests {
     }
 
     #[test]
-    fn personal_terms_override_legacy_contract_length() {
-        // Setting both: the personal-terms field wins. This matches the
-        // realism rule that the negotiated wage/length package is the
-        // authoritative source, not a fallback default.
+    fn personal_terms_outrank_the_offer_level_contract_length() {
+        // The negotiated wage/length package is what the two sides
+        // actually shook on; the offer-level field is the opening ask.
         let mut terms = PersonalTermsOffer::default();
         terms.contract_years = Some(5);
         terms.annual_wage = Some(120_000);
@@ -273,10 +277,8 @@ mod tests {
 
     #[test]
     fn loan_duration_is_independent_of_permanent_contract_years() {
-        // The legacy bug: `contract_length = Some(1)` meant "1 year"
-        // for permanent deals but was interpreted as "1 month" for
-        // loans. The new split fields make this unambiguous: setting
-        // years to 4 leaves loan duration None.
+        // Two fields, two units: years for the contract, months for the
+        // spell, and neither reads the other.
         let offer = TransferOffer::default()
             .with_contract_length(4)
             .with_loan_duration_months(6);

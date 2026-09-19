@@ -7,7 +7,7 @@ use crate::club::player::mind::{
 };
 use crate::club::player::player::Player;
 use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
-use crate::club::{PlayerMailbox, PlayerResult, PlayerStatusType};
+use crate::club::{Person, PlayerMailbox, PlayerResult, PlayerStatusType};
 use crate::context::GlobalContext;
 use crate::transfers::TransferRoutePolicy;
 use crate::utils::DateUtils;
@@ -281,8 +281,7 @@ impl ContinentalCompetitionTier {
     }
 }
 
-/// Full picture of the current club's access to continental football.
-/// Replaces the position-only signal the desire context used to read —
+/// Full picture of the current club's access to continental football —
 /// see [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
 /// Built once per weekly tick alongside [`TransferDesireContext`].
 ///
@@ -612,19 +611,6 @@ impl Player {
         } else {
             self.first_team_football_ask(now)
         };
-        // A youngster's answer to years without a shirt is a season
-        // somewhere he plays. The want lands in the mind, where the
-        // weekly talk pass reads it and takes it to the coach.
-        if let Some(FirstTeamFootballAsk::Loan(push)) = football_ask {
-            self.mind.organs.goals.pursue(
-                GoalKind::GoOutOnLoan,
-                GoalOrigin::Survival,
-                GoalEvidence::of(&[GoalEvidence::NO_FIRST_TEAM_FOOTBALL]),
-                push,
-                MindClock::day(now),
-            );
-        }
-
         let active_reasons =
             self.active_transfer_reasons(now, ctx, age, recently_transferred, football_ask);
 
@@ -696,13 +682,6 @@ impl Player {
     /// seeded lightly: `return_home_request_pressure` has already found
     /// isolation, tenure and a formed complaint before this runs.
     const HOME_LOAN_SEED_PRESSURE: f32 = 0.45;
-
-    /// Years of prime left, 0..1 — the same curve
-    /// [`crate::club::player::mind::MindSituation::career_runway`] uses,
-    /// read here without building a whole situation.
-    fn home_loan_runway(&self, now: NaiveDate) -> f32 {
-        ((34.0 - DateUtils::age(self.birth_date, now) as f32) / 12.0).clamp(0.0, 1.0)
-    }
 
     /// He wants to go home, and he wants to play — which for a man this
     /// young means one season somewhere he will, not a move.
@@ -1242,13 +1221,10 @@ impl Player {
     /// leave for a club that will pick him.
     ///
     /// One signal, and it is his own: the arc he is living out and how
-    /// far along it he is. Three restlessness bars used to sit on one
-    /// curve here — 0.40 to ask for a loan, 0.52 for the mood, 0.60 to
-    /// ask out — each re-deriving a stuck story from the ledger every
-    /// week. The plan holds it instead, it is formed from the same
-    /// continuous drives, and it climbs its own ladder: the ask happens
-    /// when he has said it out loud, not when a number crosses a line
-    /// somebody chose.
+    /// far along it he is. The plan holds the stuck story rather than
+    /// each caller re-deriving it from the ledger, and it climbs its own
+    /// ladder — so the ask happens when he has said it out loud, not
+    /// when a number crosses a line somebody chose.
     ///
     /// Still structural, and deliberately: a manager-pinned player IS
     /// first-team by definition, and a player the club has already put
@@ -1270,9 +1246,10 @@ impl Player {
             CareerArc::StepDownToPlay if stage.is_asking() => Some(FirstTeamFootballAsk::Transfer),
             // He came home with a record, gave the club a deadline, and
             // it passed.
-            CareerArc::ClaimMyPlace if plan.deadline_pressure >= 1.0 => {
-                Some(FirstTeamFootballAsk::Transfer)
-            }
+            // The claim ran out. The weekly review turns it into the
+            // successor arc, already at `Asking` — so the ask reads that
+            // rather than a deadline the same tick is about to replace.
+            CareerArc::StepUp if stage.is_asking() => Some(FirstTeamFootballAsk::Transfer),
             _ => None,
         }
     }
@@ -1588,7 +1565,7 @@ impl Player {
             //
             // Continuous in runway, so there is no birthday at which the
             // ask changes shape.
-            if self.home_loan_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
+            if self.career_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
                 self.pursue_loan_home(now);
             } else {
                 active_reasons.push(TransferRequestReason::ReturnHome);
@@ -1909,6 +1886,7 @@ mod career_desire_tests {
     use super::*;
     use crate::club::player::adaptation::AdaptationFailureSignals;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::core::player::SquadStandingView;
     use crate::club::player::language::{Language, PlayerLanguage};
     use crate::club::player::mind::{CareerPlan, PlanStage};
     use crate::shared::fullname::FullName;
@@ -2065,10 +2043,42 @@ mod career_desire_tests {
             MindClock::day(today),
             CareerPlan::DEFAULT_REVIEW_DAYS,
             0.5,
-            true,
         );
         plan.escalate(PlanStage::Asking);
         player.mind.career.plan = Some(plan);
+    }
+
+    /// Where the squad pass has him, so the mind reads a real place in
+    /// a real queue rather than the empty default every lone-player test
+    /// otherwise gets.
+    fn standing(player: &mut Player, rank: u8, rivals: u8, rival_age: u8, gap: i8) {
+        player.squad_standing_view = Some(SquadStandingView {
+            head_coach_id: 1,
+            pecking_rank: rank,
+            rivals_at_position: rivals,
+            top_rival_id: 99,
+            top_rival_age: rival_age,
+            rival_gap: gap,
+            observable_level: 125,
+            squad_tier: TeamType::Main,
+            ..Default::default()
+        });
+    }
+
+    /// What the season has actually been: the share of starts he has
+    /// had, over a sample big enough for him to believe it.
+    fn season_so_far(player: &mut Player, starter_ratio: f32) {
+        player.happiness.starter_ratio = starter_ratio;
+        player.happiness.appearances_tracked = 30;
+    }
+
+    /// One week of his own thinking, through the real entry point — no
+    /// plan is staged, so what comes out is what the ledger and the
+    /// queue put there.
+    fn a_week_of_thinking(player: &mut Player, today: NaiveDate) {
+        let situation = player.mind_situation(today, 1, "");
+        let ctx = player.mind_context(today, Some(1));
+        player.mind.tick_with(&ctx, &situation);
     }
 
     /// An elite club: reputation 8000 on the 0..10000 scale.
@@ -2099,9 +2109,9 @@ mod career_desire_tests {
     }
 
     /// The whole point of the reason: it survives the next daily tick.
-    /// A request stamped by a failed manager talk used to be stripped the
-    /// following morning because no reason in the set was about minutes,
-    /// so a benched player could never actually become available.
+    /// Without one in the set that is about minutes, a benched player's
+    /// request is stripped the following morning and he can never
+    /// actually become available.
     #[test]
     fn the_request_survives_the_next_tick() {
         let today = d(2026, 6, 1);
@@ -2149,8 +2159,11 @@ mod career_desire_tests {
             "the answer to a blocked 21-year-old is a development loan, not a transfer request"
         );
         assert!(
-            p.mind.pressure_of(GoalKind::GoOutOnLoan) > 0.0,
-            "and the arc he is living out must leave him wanting that loan"
+            matches!(
+                p.first_team_football_ask(today),
+                Some(FirstTeamFootballAsk::Loan(_))
+            ),
+            "and the arc he is living out asks for the loan instead"
         );
     }
 
@@ -2165,14 +2178,17 @@ mod career_desire_tests {
         asking(&mut p, CareerArc::ProveOnLoan, today);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &elite_ctx());
-        assert!(p.mind.pressure_of(GoalKind::GoOutOnLoan) > 0.0);
+        assert!(matches!(
+            p.first_team_football_ask(today),
+            Some(FirstTeamFootballAsk::Loan(_))
+        ));
         assert!(!p.statuses.has(PlayerStatusType::Req));
     }
 
-    /// The Sokolic case: a keeper the club labelled "not needed" but never
-    /// actually put on the market sat for seasons with no channel of his
-    /// own — the label used to exempt him on the premise that the listing
-    /// system had him, which was false.
+    /// The Sokolic case: a keeper the club labelled "not needed" but
+    /// never actually put on the market. Exempt him on the label, on the
+    /// premise that the listing system has him, and he sits for seasons
+    /// with no channel of his own.
     #[test]
     fn a_written_off_backup_the_club_has_not_listed_asks_out_himself() {
         let today = d(2026, 6, 1);
@@ -2208,6 +2224,112 @@ mod career_desire_tests {
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
             "a live sale intent is the club handling him; the request stays down"
+        );
+    }
+
+    /// The whole chain through the real entry points: a ledger of bench
+    /// seasons, a place in a queue he cannot win, his own weekly think,
+    /// and the ask that follows from it. Nothing is staged — if the mind
+    /// does not form the arc off the ledger, this fails.
+    #[test]
+    fn parked_ambitious_backup_asks_to_leave() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(29, 17.0, 7.0, today);
+        standing(&mut p, 3, 3, 26, -6);
+        season_so_far(&mut p, 0.05);
+
+        a_week_of_thinking(&mut p, today);
+        assert_eq!(
+            p.mind.career.plan.map(|plan| plan.arc),
+            Some(CareerArc::StepDownToPlay),
+            "four seasons on the bench behind a younger man is a decision, not a mood"
+        );
+
+        p.mind
+            .career
+            .plan
+            .as_mut()
+            .unwrap()
+            .escalate(PlanStage::Asking);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            p.statuses.has(PlayerStatusType::Req),
+            "and once he has said it out loud the club hears it"
+        );
+    }
+
+    /// The other end of the same chain. A man in the side has nothing to
+    /// ask for, so no amount of ambition puts the request up.
+    #[test]
+    fn a_first_team_regular_never_raises_it() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 18.0, 6.0, today);
+        p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::KeyPlayer;
+        standing(&mut p, 1, 3, 26, 8);
+        season_so_far(&mut p, 0.85);
+
+        a_week_of_thinking(&mut p, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "he is playing every week — there is nothing here to want"
+        );
+    }
+
+    /// A man who asked because he was not playing, and then started
+    /// playing. The arc is answered by the football itself, so the
+    /// request comes down without anybody withdrawing it.
+    #[test]
+    fn breaking_through_this_season_withdraws_the_request() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        standing(&mut p, 3, 3, 26, -4);
+        season_so_far(&mut p, 0.05);
+        asking(&mut p, CareerArc::StepDownToPlay, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(p.statuses.has(PlayerStatusType::Req), "precondition");
+
+        // He is in the side now, over a sample he believes.
+        let autumn = d(2026, 11, 1);
+        standing(&mut p, 1, 3, 26, 6);
+        season_so_far(&mut p, 0.8);
+        a_week_of_thinking(&mut p, autumn);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, autumn, &elite_ctx());
+
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "the football answered him; nothing had to withdraw the request"
+        );
+    }
+
+    /// A boy behind a veteran is waiting for a date, not being wronged.
+    /// Modest ambition and a shirt that is coming means he stays put and
+    /// asks for nothing at all.
+    #[test]
+    fn modest_young_reserve_stays_patient() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(20, 7.0, 14.0, today);
+        standing(&mut p, 2, 2, 33, -8);
+        season_so_far(&mut p, 0.2);
+
+        let situation = p.mind_situation(today, 1, "");
+        assert!(
+            situation.can_wait_for_the_shirt(),
+            "precondition: the man in front of him is thirty-three"
+        );
+
+        a_week_of_thinking(&mut p, today);
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.statuses.has(PlayerStatusType::Req),
+            "he is waiting his turn, and his turn is actually coming"
         );
     }
 

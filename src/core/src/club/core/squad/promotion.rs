@@ -4,6 +4,7 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+use crate::PathwayStage;
 use crate::club::ClubPhilosophy;
 use crate::club::staff::perception::{CoachProfile, DevelopmentFormEvidence};
 use crate::{
@@ -58,8 +59,15 @@ impl Club {
                 // player, distinct from the senior-debut breakthrough.
                 player.on_professional_contract_awarded();
                 // A senior contract is the club saying he has a future
-                // here, so it writes the pathway that says what kind.
-                player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
+                // here, so it writes the pathway that says what kind —
+                // unless it has already decided one, which the upgrade is
+                // no reason to overwrite.
+                if matches!(
+                    player.plan.as_ref().map(|p| p.stage),
+                    None | Some(PathwayStage::Academy)
+                ) {
+                    player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
+                }
                 debug!(
                     "youth → pro contract on merit: {} (CA={}, age={}) at {}",
                     player.full_name,

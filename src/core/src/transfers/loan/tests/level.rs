@@ -1,6 +1,6 @@
 //! Moved verbatim out of `loan_market.rs` — see that file's `mod loan_destination_level_tests`.
 
-use super::super::*;
+use super::super::legacy::LoanDestinationLevel;
 
 /// A top-flight parent and the divisions below it, on the reputation
 /// scale the compiled database actually uses for Russia: Premier League
@@ -50,7 +50,7 @@ fn near_ready_regular_is_not_loaned_a_division_down() {
 
 /// …but a sideways move to a PEER is fine: same division, comparable
 /// standing. This is the destination the doctrine leaves open for him,
-/// and the one the flat 0.25 standing floor used to share with clubs a
+/// and the one a flat 0.25 standing floor would share with clubs a
 /// quarter of his parent's size.
 #[test]
 fn near_ready_regular_may_loan_to_a_peer_in_his_own_division() {

@@ -1,40 +1,33 @@
 //! A loan is three parties agreeing, not a player passing twelve gates.
 //!
-//! Every loan reading in this subsystem used to be a hard `continue`: the
-//! parent's first choice was vetoed at five call sites, the borrower's
-//! line was full or it was not, the destination cleared a reputation
-//! floor or it did not, the wage fitted under a ceiling or the verdict
-//! was `Untouchable`. A dozen conjunctive cut-offs, each defensible on
-//! its own, and between them the ordinary loan of world football — a
-//! squad player dropping a division for a season to play — could not
-//! happen at all.
-//!
-//! The same readings are here. What changed is that they multiply
-//! instead of short-circuiting:
-//!
 //! ```text
 //! score = willingness × appetite × consent × affordability
 //! ```
 //!
 //! Each term is continuous in 0..1 and each is somebody's actual
 //! position: whether the parent would send him, whether the borrower
-//! wants him, whether he would go, and whether the money works. The
-//! existing [`InterestDraw`] then draws from the candidates weighted by
-//! the product, so a thin agreement is rare rather than forbidden.
+//! wants him, whether he would go, and whether the money works.
+//! [`InterestDraw`] then draws from the candidates weighted by the
+//! product, so a thin agreement is rare rather than forbidden.
 //!
-//! **Only physical constraints stay hard**, and they live at the call
+//! [`InterestDraw`]: super::interest::InterestDraw
+//!
+//! **Only physical constraints are hard**, and they live at the call
 //! sites where they belong: the window is open, he has a contract and is
 //! not already on loan, the clubs are not rivals, the route policy allows
 //! it, he is not away with his country, and no negotiation is live for
 //! the pair.
-//!
-//! [`InterestDraw`]: crate::transfers::loan::interest::InterestDraw
 
-use crate::club::player::mind::CareerPlanView;
+use chrono::NaiveDate;
+
+use crate::club::Club;
+use crate::club::player::mind::{CareerPlanView, MindClock};
+use crate::club::player::player::Player;
+use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::squad::LevelBand;
-use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
+use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup, ReputationLevel};
 
 /// What the parent club can see about lending one of its own out.
 ///
@@ -42,9 +35,9 @@ use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
 /// the world, and nothing here is a verdict.
 #[derive(Debug, Clone, Copy)]
 pub struct ParentReading {
-    /// He is inside the slots that start at his position AND at the
-    /// club's own key-player level — [`super::LoanAssetGuard::first_choice`].
-    /// A reading now, never a veto.
+    /// He is inside the slots the formation starts at his position AND
+    /// at the club's own key-player level —
+    /// [`super::LoanAssetGuard::first_choice`]. A reading, never a veto.
     pub first_choice: bool,
     /// Share of the side's matches he has started, 0..1. The neutral 0.5
     /// stands for "not enough football to say".
@@ -70,13 +63,35 @@ pub struct ParentReading {
     pub advertised: bool,
 }
 
+/// The three readings every loan caller needs about one man at one
+/// moment: what his parent thinks, what he has decided, and how much of
+/// his wage the parent means to keep paying.
+///
+/// Assembled here so that nobody outside his own module reads his plan
+/// to work out the third one.
+#[derive(Debug, Clone, Copy)]
+pub struct LoanTerms {
+    pub willingness: ParentWillingness,
+    pub plan: CareerPlanView,
+    pub parent_subsidy: f32,
+}
+
+impl LoanTerms {
+    pub fn of(parent: &Club, player: &Player, date: NaiveDate) -> Self {
+        LoanTerms {
+            willingness: LoanAssetGuard::willingness_for(parent, player, date),
+            plan: player.mind.career.plan_view(MindClock::day(date)),
+            parent_subsidy: LoanMoney::parent_desire(player.pathway_stage(), player.loan_purpose()),
+        }
+    }
+}
+
 /// How willing the parent is to let him go, 0..1.
 #[derive(Debug, Clone, Copy)]
 pub struct ParentWillingness {
     pub score: f32,
-    /// The first-choice term on its own, for the trace: it is the one
-    /// that used to be a veto and the first thing a surprising score
-    /// needs explaining by.
+    /// The first-choice term on its own, for the trace: the first thing
+    /// a surprising score needs explaining by.
     pub starter_hold: f32,
     pub minutes: f32,
     pub depth_room: f32,
@@ -85,8 +100,7 @@ pub struct ParentWillingness {
 impl ParentWillingness {
     /// How much of a club's willingness survives it being about its own
     /// first choice. Not zero: a first-choice full-back at a giant who
-    /// has asked to go out and play is the commonest loan the old gate
-    /// made impossible.
+    /// has asked to go out and play is an ordinary loan.
     const STARTER_HOLD: f32 = 0.15;
     /// …opened this far by the man's own plan …
     const STARTER_HOLD_WANTED: f32 = 0.6;
@@ -94,21 +108,32 @@ impl ParentWillingness {
     /// rather than the club's.
     const STARTER_HOLD_REQUESTED: f32 = 1.0;
     /// Start share at which a club stops reading him as a man who needs
-    /// football elsewhere. Replaces a flat `appearances >= 15`.
+    /// football elsewhere.
     const MINUTES_SPAN: f32 = 0.45;
     /// Runway at or above which age says nothing …
     const AGE_FIT_RUNWAY: f32 = 0.6;
-    /// … and the willingness left at the very end of a career. Replaces
-    /// a flat `age >= 30` bar: a thirty-one-year-old squad player going
-    /// out for a season is ordinary football.
+    /// … and the willingness left at the very end of a career: a
+    /// thirty-one-year-old squad player going out for a season is
+    /// ordinary football.
     const AGE_FIT_FLOOR: f32 = 0.25;
-    /// Spells already used, as a damper. Replaces a flat `>= 2` block.
+    /// Spells already used, as a damper.
     const LOAN_FATIGUE: [f32; 4] = [1.0, 0.75, 0.45, 0.25];
     /// Bodies over the fielding minimum at which depth stops being a
     /// worry at all.
     const DEPTH_SPAN: f32 = 3.0;
     /// How much the plan has to be pushing before it opens the hold.
     pub const PLAN_OPENS_AT: f32 = 0.5;
+
+    /// No objection at all — what a caller that cannot read the parent
+    /// side gets, and what the `OF_LOAN_GUARD_OFF` arm gets everywhere.
+    pub fn open() -> Self {
+        ParentWillingness {
+            score: 1.0,
+            starter_hold: 1.0,
+            minutes: 1.0,
+            depth_room: 1.0,
+        }
+    }
 
     pub fn of(reading: &ParentReading) -> Self {
         let starter_hold = if !reading.first_choice {
@@ -166,6 +191,20 @@ impl ParentWillingness {
     /// it is refusing the conversation.
     pub const ENTERTAINS: f32 = 0.30;
 
+    /// Willingness at which the whole market below the parent is fair
+    /// game. A listing is consent to a loan, not consent to any
+    /// destination: a club that merely tolerates the idea keeps him near
+    /// its own level, and one that wants him gone opens everything.
+    const CASCADE_OPEN: f32 = 0.6;
+    /// Rungs between the top of the reputation ladder and the bottom.
+    const CASCADE_LADDER: f32 = 5.0;
+
+    /// Lowest tier a seller-side broadcast may walk down to.
+    pub fn cascade_floor(score: f32, parent_tier: ReputationLevel) -> ReputationLevel {
+        let steps = (score.clamp(0.0, 1.0) / Self::CASCADE_OPEN) * Self::CASCADE_LADDER;
+        parent_tier.step_down(steps.round() as u32)
+    }
+
     /// The club's own squad-asset classifier, folded into a willingness
     /// as the same fact [`Self::of`] prices from the other side.
     ///
@@ -184,10 +223,10 @@ impl ParentWillingness {
         }
     }
 
-    /// Extra CA-below-group-average a man needs before a surplus trigger
-    /// fires, by where he sits in the queue. Halved from the old ladder:
-    /// the hold is priced in [`Self::of`] now, so the cushion no longer
-    /// has to do the same job a second time.
+    /// Extra level-below-group-average a man needs before a surplus
+    /// trigger fires, by where he sits in the queue. Modest, because the
+    /// hold itself is priced in [`Self::of`] and the cushion must not do
+    /// the same job a second time.
     pub fn depth_cushion(rank: usize) -> i16 {
         match rank {
             0 => 12,
@@ -225,9 +264,62 @@ pub struct BorrowerReading {
     pub readiness: f32,
     pub standing_ratio: f32,
     pub league_ratio: f32,
-    /// 1.0 when an open request at the group matches him, 0.6 for a
-    /// non-emergency vacancy, 0.35 otherwise.
+    /// How badly this club wants a body in that shirt, 0..1 —
+    /// [`BorrowerNeed`].
     pub need: f32,
+}
+
+/// How badly the borrowing club wants somebody in that shirt, 0..1.
+///
+/// One reading, read by the domestic scan, the seller broadcast and the
+/// cross-border scan alike, so the same borrower cannot want a man
+/// badly, mildly or not at all depending on who asks.
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowerNeed {
+    /// It has an open request at the group.
+    pub requested: bool,
+    /// Observable points the request is short of, and years it is over
+    /// the age it asked for. Both zero for a candidate inside the band.
+    pub level_shortfall: i16,
+    pub age_excess: i16,
+    /// How short the group is of the bodies it likes to carry, 0..1.
+    pub vacancy: f32,
+}
+
+impl BorrowerNeed {
+    /// What a club with no request and a full group still gives a
+    /// candidate. Not zero: somebody is always worth a look.
+    const BASE: f32 = 0.35;
+    /// … and how much a request that matches him adds on top.
+    const REQUEST_SPAN: f32 = 0.65;
+    /// Observable points below the request at which it stops matching
+    /// him at all …
+    const LEVEL_TAPER: f32 = 10.0;
+    /// … and years over the age band it asked for.
+    const AGE_TAPER: f32 = 6.0;
+    /// What an empty shirt adds when nobody asked for one.
+    const VACANCY_LIFT: f32 = 0.25;
+
+    /// No request, no vacancy — what a club that has not said anything
+    /// gives a name it is shown.
+    pub fn none() -> Self {
+        BorrowerNeed {
+            requested: false,
+            level_shortfall: 0,
+            age_excess: 0,
+            vacancy: 0.0,
+        }
+    }
+
+    pub fn score(&self) -> f32 {
+        let level = 1.0 - (self.level_shortfall.max(0) as f32 / Self::LEVEL_TAPER).clamp(0.0, 1.0);
+        let age = 1.0 - (self.age_excess.max(0) as f32 / Self::AGE_TAPER).clamp(0.0, 1.0);
+        let request_match = if self.requested { level * age } else { 0.0 };
+        (Self::BASE
+            + Self::REQUEST_SPAN * request_match
+            + Self::VACANCY_LIFT * self.vacancy.clamp(0.0, 1.0))
+        .clamp(0.0, 1.0)
+    }
 }
 
 /// How badly the borrower wants him, 0..1.
@@ -254,16 +346,15 @@ impl BorrowerAppetite {
     /// Deliberately not all of it. The band is the club's own nominal
     /// standard, and a side can be nominally National with an Amateur
     /// keeper room — a raw boy who walks into THAT team is the
-    /// development loan, and a term that zeroed him would be the
-    /// destination floors back again under another name. What says he
-    /// would play is `minutes_here`, and that one is allowed to kill a
-    /// minutes loan outright.
+    /// development loan. What says he would play is `minutes_here`, and
+    /// that one is allowed to kill a minutes loan outright.
     const FIT_COST: f32 = 0.6;
-    /// A destination below the floor the player's readiness sets is not
-    /// refused, it is discounted …
-    const BELOW_FLOOR: f32 = 0.5;
-    /// … and one less than half of it, discounted hard.
-    const FAR_BELOW_FLOOR: f32 = 0.15;
+    /// How far below the floor a destination has to sit before the term
+    /// is at its worst — half of it …
+    const FLOOR_RAMP: f32 = 0.5;
+    /// … and what that worst case costs. A destination below the floor
+    /// the player's readiness sets is discounted, never refused.
+    const FLOOR_COST: f32 = 0.85;
     /// Club-standing floor a raw loanee is held to, and the extra a
     /// fully first-team-ready one adds. Both are soft now.
     const STANDING_FLOOR_RAW: f32 = 0.12;
@@ -280,8 +371,7 @@ impl BorrowerAppetite {
                     .clamp(0.0, 1.0);
 
         // A full line is not shut; it is open in proportion to how much
-        // of an upgrade he is. The old rule wanted +10 over the best or
-        // nothing at all.
+        // of an upgrade he is.
         let room = if reading.count >= reading.ideal_depth {
             ((reading.candidate as f32 - reading.best_here as f32) / Self::UPGRADE_SPAN)
                 .clamp(0.0, 1.0)
@@ -327,11 +417,11 @@ impl BorrowerAppetite {
     /// take loans — cover, a compatriot, a prospect — they simply take
     /// fewer of them, which is a smaller number rather than a closed
     /// door.
-    pub fn base_for_tier(tier_value: u8) -> f32 {
-        match tier_value {
-            5 => 0.25,
-            4 => 0.50,
-            3 => 0.80,
+    pub fn base_for_tier(tier: ReputationLevel) -> f32 {
+        match tier {
+            ReputationLevel::Elite => 0.25,
+            ReputationLevel::Continental => 0.50,
+            ReputationLevel::National => 0.80,
             _ => 1.0,
         }
     }
@@ -348,22 +438,25 @@ impl BorrowerAppetite {
     }
 
     /// Observable points ahead at which a man counts as clearly better.
+    /// Both sides of the comparison are
+    /// [`AbilityEstimator::observable_level`](crate::club::staff::perception::AbilityEstimator::observable_level):
+    /// a band is a statement about the player football can see.
     pub const CLEARLY_BETTER: u8 = 6;
 
     /// A ratio against a floor, as a factor rather than a verdict. An
     /// unknown ratio (zero on either side) stands the term down, exactly
     /// as the hard gates did.
+    ///
+    /// A ramp rather than three steps: cubed by the draw alongside a
+    /// three-valued `need`, two step functions dominated every continuous
+    /// term in the product and the whole agreement sat within a couple of
+    /// multiples of the floor for an ordinary pair.
     fn floor_term(ratio: f32, floor: f32) -> f32 {
         if ratio <= 0.0 || floor <= 0.0 {
             return 1.0;
         }
-        if ratio >= floor {
-            1.0
-        } else if ratio >= floor * 0.5 {
-            Self::BELOW_FLOOR
-        } else {
-            Self::FAR_BELOW_FLOOR
-        }
+        let below = ((floor - ratio) / (Self::FLOOR_RAMP * floor)).clamp(0.0, 1.0);
+        1.0 - Self::FLOOR_COST * below
     }
 }
 
@@ -408,7 +501,7 @@ impl PlayerConsent {
     const RESIGNATION_RELIEF: f32 = 0.6;
 
     pub fn of(reading: &ConsentReading) -> Self {
-        let plan_fit = reading.plan.fit_for(reading.band_here);
+        let plan_fit = reading.plan.fit_for(reading.band_here, reading.going_home);
         let renown = if reading.renown_band > 0.0 {
             ((reading.renown_gap - reading.renown_band) / reading.renown_band).clamp(0.0, 1.0)
         } else {
@@ -456,6 +549,10 @@ impl LoanMoney {
     /// paying most of the wage has changed what the borrower is
     /// carrying.
     pub const W_MAX_DEVELOPMENT: f64 = 2.5;
+    /// Wage share ÷ what the borrower can pay, above which it is
+    /// borrowing a wage it cannot carry whatever the fee is. The one
+    /// triple, read by the draw and by the negotiation room alike.
+    pub const CARRY_MAX: f64 = 1.0;
     /// How much of the affordability the weight term can take.
     const WEIGHT_PENALTY: f32 = 0.6;
     /// The share of the asking price a borrower typically tables.
@@ -487,9 +584,8 @@ impl LoanMoney {
     }
 
     /// How much of the wage the parent means to keep paying, 0..1 — the
-    /// `parent_desire_to_develop` the wage split has always taken and
-    /// nothing has ever supplied. A loan the parent arranged for its own
-    /// reasons is one it subsidises.
+    /// `parent_desire_to_develop` the wage split takes. A loan the
+    /// parent arranged for its own reasons is one it subsidises.
     pub fn parent_desire(stage: PathwayStage, purpose: Option<LoanOutReason>) -> f32 {
         if stage != PathwayStage::LoanOut {
             return 0.0;
@@ -511,9 +607,9 @@ pub struct LoanAgreement;
 
 impl LoanAgreement {
     /// Below this nobody is agreeing to anything. It exists so a
-    /// candidate list stays finite, not to express a judgement — every
-    /// real refusal is already priced in one of the four terms.
-    pub const FLOOR: f32 = 0.02;
+    /// candidate list stays finite, not to express a judgement: every
+    /// real refusal is priced in one of the four terms.
+    pub const FLOOR: f32 = 0.01;
 
     /// `willingness × appetite × consent × affordability`.
     pub fn score(
@@ -528,8 +624,8 @@ impl LoanAgreement {
         (parent.score * borrower.score * player.score * money.affordability).clamp(0.0, 1.0)
     }
 
-    /// The A/B arm that restores the HEAD gate stack, so a census can
-    /// compare the agreement against the funnel it replaced.
+    /// The A/B arm that runs the conjunctive gate stack instead — see
+    /// [`crate::transfers::loan::legacy`].
     pub fn disarmed() -> bool {
         MarketSwitches::loan_agreement_off()
     }
@@ -569,7 +665,9 @@ impl LoanAgreement {
 #[derive(Debug, Clone, Copy)]
 pub struct AgreementInputs {
     // ── the parent ──────────────────────────────────────────────
-    pub willingness: f32,
+    /// What the parent's own reading of him came to — carried whole so
+    /// the trace describes the deal the score priced.
+    pub parent: ParentWillingness,
     pub parent_rep: u16,
     pub parent_league_rep: u16,
     pub parent_best_in_group: u8,
@@ -577,8 +675,7 @@ pub struct AgreementInputs {
     pub parent_subsidy: f32,
 
     // ── the borrower ────────────────────────────────────────────
-    /// [`crate::ReputationLevel`] as the 0..5 value the bands use.
-    pub borrower_tier: u8,
+    pub borrower_tier: ReputationLevel,
     pub borrower_rep: u16,
     pub borrower_league_rep: u16,
     pub group: PlayerFieldPositionGroup,
@@ -587,11 +684,20 @@ pub struct AgreementInputs {
     pub clearly_better_ahead: usize,
     /// 1.0 an open request at the group, 0.6 a vacancy, 0.35 neither.
     pub need: f32,
-    pub is_january: bool,
+    /// The mid-season window is open where the borrower plays.
+    pub mid_season_window: bool,
 
     // ── the player ──────────────────────────────────────────────
     pub candidate: u8,
     pub is_development: bool,
+    /// Where the parent's pathway has him. Read when he holds no plan of
+    /// his own: the club's rung says what the move is supposed to make
+    /// him just as his arc would.
+    pub stage: PathwayStage,
+    /// The band the parent's own loan-out row names, when it named one.
+    /// Outranks the stage's default: it is a decision about this spell
+    /// rather than about his rung.
+    pub club_band_target: Option<f32>,
     pub plan: CareerPlanView,
     pub renown_gap: f32,
     pub renown_band: f32,
@@ -599,8 +705,10 @@ pub struct AgreementInputs {
     pub going_home: bool,
 
     // ── the money ───────────────────────────────────────────────
-    /// Value ÷ the borrower's year, and the wage share BEFORE the
-    /// subsidy — [`Self`] applies it, so no caller can forget to.
+    /// Value ÷ the borrower's year, and the share of his wage the
+    /// borrower is left carrying once the parent's subsidy is written
+    /// into the split. Both come from [`super::LoanAssetGuard::assess`],
+    /// which prices them once for the pair.
     pub weight: f64,
     pub carry: f64,
     pub asking: f64,
@@ -623,15 +731,14 @@ impl AgreementInputs {
     }
 
     /// What the move is supposed to make him. His own plan states it
-    /// when he has one; failing that the purpose does — a development
-    /// loan is for a shirt, a cover loan for a squad place.
+    /// when he has one; failing that his club's own pathway does, which
+    /// is the same sentence from the other side of the desk.
     pub fn band_target(&self) -> f32 {
         if self.plan.arc.is_some() {
             self.plan.band_target
-        } else if self.is_development {
-            0.8
         } else {
-            0.4
+            self.club_band_target
+                .unwrap_or_else(|| self.stage.band_target())
         }
     }
 }
@@ -658,17 +765,12 @@ impl LoanAgreement {
         PlayerConsent,
         LoanMoney,
     ) {
-        let parent = ParentWillingness {
-            score: inputs.willingness,
-            starter_hold: 1.0,
-            minutes: 1.0,
-            depth_room: 1.0,
-        };
+        let parent = inputs.parent;
         let band_here = inputs.band_here();
         let readiness = LevelBand::readiness_of(inputs.candidate, inputs.parent_best_in_group);
         let appetite = BorrowerAppetite::of(&BorrowerReading {
             base_by_tier: BorrowerAppetite::base_for_tier(inputs.borrower_tier),
-            season_phase: if inputs.is_january {
+            season_phase: if inputs.mid_season_window {
                 AgreementInputs::MID_SEASON_PHASE
             } else {
                 AgreementInputs::SUMMER_PHASE
@@ -697,10 +799,7 @@ impl LoanAgreement {
         });
         let money = LoanMoney::of(&MoneyReading {
             weight: inputs.weight,
-            // After the subsidy, which is the point of it: a parent that
-            // wants him developed is paying most of the wage, so what
-            // prices the deal is the carry the borrower is left with.
-            carry: inputs.carry * (1.0 - inputs.parent_subsidy) as f64,
+            carry: inputs.carry,
             asking: inputs.asking,
             max_loan_fee: inputs.max_loan_fee,
             development: inputs.is_development,
@@ -714,7 +813,7 @@ impl LoanAgreement {
     pub fn explain_inputs(inputs: &AgreementInputs) -> String {
         let (parent, appetite, consent, money) = Self::terms(inputs);
         format!(
-            "{} band={:.2}->{:.2} tier={} subsidy={:.2}",
+            "{} band={:.2}->{:.2} tier={:?} subsidy={:.2}",
             Self::explain(&parent, &appetite, &consent, &money),
             inputs.band_here(),
             inputs.band_target(),
@@ -807,6 +906,7 @@ mod tests {
                 arc: Some(arc),
                 stage: Some(stage),
                 band_floor: -0.2,
+                band_floor_home: -0.2,
                 band_target: 0.9,
                 deadline_pressure: 0.3,
                 attempts: 0,
@@ -879,7 +979,7 @@ mod tests {
     #[test]
     fn an_elite_club_still_takes_a_cover_loan() {
         let elite = BorrowerAppetite::of(&BorrowerReading {
-            base_by_tier: BorrowerAppetite::base_for_tier(5),
+            base_by_tier: BorrowerAppetite::base_for_tier(ReputationLevel::Elite),
             need: 1.0,
             ..Fx::borrower()
         });
@@ -915,7 +1015,7 @@ mod tests {
             readiness: 1.0,
             ..Fx::borrower()
         });
-        assert!(deep.score > 0.0, "the old floors made this exactly zero");
+        assert!(deep.score > 0.0, "a deep drop is a discount, not a veto");
         assert!(deep.score < BorrowerAppetite::of(&Fx::borrower()).score);
     }
 

@@ -37,10 +37,10 @@
 //!                   verdict, the guard's reach and both money terms, the
 //!                   destination-level floors and the minutes read
 //!
-//! `list` and `exit` are the seller-side half the funnel used to have no
-//! record of at all. A move that never happens leaves no evidence; so does a
-//! sale that should never have happened, and the only way to answer "why was
-//! this player listed four months after he was bought?" was to re-derive the
+//! `list` and `exit` are the seller-side half. A move that never happens
+//! leaves no evidence, and neither does a sale that should never have
+//! happened — without these two rows, "why was this player listed four
+//! months after he was bought?" can only be answered by re-deriving the
 //! listing passes by hand.
 //!
 //! Per memory `feedback_keep_match_debug_data`, this is kept after the
@@ -288,5 +288,14 @@ impl MarketSwitches {
     pub fn loan_agreement_off() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_LOAN_AGREEMENT_OFF"))
+    }
+
+    /// The career-ARC arm: disarmed, no player carries a plan, so every
+    /// want is re-derived from ground truth each tick and nothing
+    /// downstream ever sees an arc — the shape of HEAD, where a mood was
+    /// the whole of a career intention.
+    pub fn career_plan_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_CAREER_PLAN_OFF"))
     }
 }

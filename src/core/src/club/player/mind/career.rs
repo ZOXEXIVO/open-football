@@ -11,6 +11,8 @@
 //! `transfer/processing.rs`, `big_stage_pull.rs`, and
 //! `lifecycle.rs::CareerStageDetector`.
 
+use crate::transfers::pipeline::trace::MarketSwitches;
+
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin, GoalStatus};
 use super::organs::memory::{ActorRef, EpisodeKind, EpochDay, FactClaim, MindEpisode};
@@ -85,6 +87,10 @@ pub struct CareerMind {
     /// The arc he is living out, and the deadline he gave it. One at a
     /// time — see [`CareerPlan`].
     pub plan: Option<CareerPlan>,
+    /// Arcs he has already tried, kept across an answered plan. A loan
+    /// he never got is not forgotten because he broke through in the
+    /// meantime, and a man on his third go is not starting fresh.
+    attempts: u8,
 }
 
 impl CareerMind {
@@ -399,12 +405,10 @@ impl CareerMind {
 
     /// Long service, forked by the kind of man he is.
     ///
-    /// The old rule gated the whole branch on ambition ≥ 12 and then
-    /// chose by club size, so a loyal, ambitious club man and a
-    /// rootless one produced identical wants, and everybody below the
-    /// bar produced none at all. Football has at least three answers to
-    /// having been somewhere a long time, and which one a player gives
-    /// is the most legible thing about his character.
+    /// Football has at least three answers to having been somewhere a
+    /// long time, and which one a player gives is the most legible thing
+    /// about his character — so the fork is his loyalty and his ambition
+    /// against each other, not the size of the club.
     fn consider_the_long_stay(&mut self, view: &MindView<'_>, organs: &mut MindOrgans, drive: f32) {
         let s = view.situation;
         let today = view.today();
@@ -471,25 +475,28 @@ impl CareerMind {
 
         // ── The restless man ────────────────────────────────────
         //
-        // A settled man plainly bigger than his club wants a bigger one;
-        // one who is not wants a new test. The same restlessness,
-        // pointed by where he already is — but pointed by what he has
-        // actually become rather than by the club's badge.
-        let goal = if outgrown > 0.2 {
-            GoalKind::StepUpToABiggerClub
-        } else {
-            GoalKind::FindANewChallenge
-        };
-        // Loyalty is the brake. A man who wants to stay still feels the
-        // ceiling; he simply feels it less, and it takes him longer to
-        // act on it.
-        let restlessness = drive * 0.5 * (1.0 - s.loyalty_drive() * 0.6);
-        organs
-            .goals
-            .pursue(goal, GoalOrigin::SelfDrive, evidence, restlessness, today);
-
-        // Time running out sharpens it.
-        organs.goals.set_urgency(goal, s.career_spent());
+        // What he does about the ceiling is the `StepUp` arc's business,
+        // and it pushes `StepUpToABiggerClub` itself from
+        // `consider_his_plan`. Form the same want on a second curve here
+        // and the same man wants a bigger club at two strengths on the
+        // same morning — with the arc, the thing that holds a decision
+        // for seasons, the one that loses.
+        //
+        // What is left here is the want the arc has no rung for: a man
+        // who has NOT outgrown the place and simply wants a new test.
+        if outgrown <= 0.2 {
+            let restlessness = drive * 0.5 * (1.0 - s.loyalty_drive() * 0.6);
+            organs.goals.pursue(
+                GoalKind::FindANewChallenge,
+                GoalOrigin::SelfDrive,
+                evidence,
+                restlessness,
+                today,
+            );
+            organs
+                .goals
+                .set_urgency(GoalKind::FindANewChallenge, s.career_spent());
+        }
     }
 
     /// His country.
@@ -617,10 +624,6 @@ impl CareerMind {
 }
 
 impl CareerMind {
-    /// Days a plan holds before it is reviewed when nothing about it set
-    /// a deadline of its own.
-    const PLAN_REVIEW_DAYS: u16 = CareerPlan::DEFAULT_REVIEW_DAYS;
-
     /// The arc, reviewed and re-formed.
     ///
     /// Three things in order, and the order is the design: a deadline
@@ -630,14 +633,18 @@ impl CareerMind {
     /// because a plan that changes every time a week goes badly is not
     /// a plan.
     fn consider_his_plan(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        if MarketSwitches::career_plan_off() {
+            self.plan = None;
+            return;
+        }
         let s = view.situation;
         let today = view.today();
         let runway = s.career_runway();
-        let at_home = !s.is_abroad;
         let home_desire = organs.goals.pressure_of(GoalKind::GoHome);
 
         if let Some(plan) = self.plan {
             if CareerPlanner::is_answered(&plan, s) {
+                self.remember_attempts(&plan);
                 self.plan = None;
             } else if plan.review_due(today) {
                 self.plan = CareerPlanner::review(&plan, s, today);
@@ -655,26 +662,20 @@ impl CareerMind {
             (Some(current), Some((arc, origin, strength)))
                 if strength > current.strength + CareerPlan::SWITCH_MARGIN =>
             {
-                self.plan = Some(CareerPlan::new(
-                    arc,
-                    origin,
-                    strength,
-                    today,
-                    Self::PLAN_REVIEW_DAYS,
-                    runway,
-                    at_home,
-                ));
+                self.remember_attempts(&current);
+                self.plan = Some(self.fresh_plan(arc, origin, strength, s, today, runway));
             }
             (None, Some((arc, origin, strength))) => {
-                self.plan = Some(CareerPlan::new(
-                    arc,
-                    origin,
-                    strength,
-                    today,
-                    Self::PLAN_REVIEW_DAYS,
-                    runway,
-                    at_home,
-                ));
+                self.plan = Some(self.fresh_plan(arc, origin, strength, s, today, runway));
+            }
+            // The circumstances that formed it are no longer there. A
+            // want nobody feeds fades, and a plan is a want he tells
+            // himself — without this one formed at 0.81 could never be
+            // displaced, because `strength` only ever rose.
+            (Some(current), None) => {
+                if let Some(plan) = self.plan.as_mut() {
+                    plan.fade(Self::goal_for(current.arc).spec().decay_per_month);
+                }
             }
             _ => {}
         }
@@ -710,6 +711,34 @@ impl CareerMind {
         }
     }
 
+    /// A plan formed from scratch, carrying what he has already tried
+    /// and the deadline the arc gives itself.
+    fn fresh_plan(
+        &self,
+        arc: CareerArc,
+        origin: GoalOrigin,
+        strength: f32,
+        situation: &MindSituation,
+        today: EpochDay,
+        runway: f32,
+    ) -> CareerPlan {
+        let mut plan = CareerPlan::new(
+            arc,
+            origin,
+            strength,
+            today,
+            CareerPlanner::review_days_for(arc, situation),
+            runway,
+        );
+        plan.attempts = self.attempts;
+        plan
+    }
+
+    /// Keep the count of what he has tried when a plan ends.
+    fn remember_attempts(&mut self, plan: &CareerPlan) {
+        self.attempts = self.attempts.max(plan.attempts);
+    }
+
     /// The want each arc is lived through. One-to-one, so the arc is
     /// always legible in the goal stack and the escalation ladder the
     /// mind already has is the plan's own.
@@ -733,7 +762,7 @@ impl CareerMind {
         &mut self,
         verdict: LoanSpellVerdict,
         runway: f32,
-        at_home: bool,
+        loan_band: f32,
         today: EpochDay,
     ) {
         let Some(plan) = self.plan else {
@@ -747,13 +776,12 @@ impl CareerMind {
                     today,
                     CareerPlan::CLAIM_REVIEW_DAYS,
                     runway,
-                    at_home,
                 ));
             }
             return;
         };
         self.plan = Some(CareerPlanner::after_loan(
-            &plan, verdict, runway, at_home, today,
+            &plan, verdict, runway, loan_band, today,
         ));
     }
 
@@ -1069,13 +1097,10 @@ mod tests {
             &mut organs,
         );
         assert!(organs.goals.pressure_of(GoalKind::StepUpToABiggerClub) > 0.0);
-        assert!(
-            organs
-                .goals
-                .get(GoalKind::StepUpToABiggerClub)
-                .unwrap()
-                .evidence
-                .contains(GoalEvidence::OUTGROWN_CLUB)
+        assert_eq!(
+            mind.plan.map(|plan| plan.arc),
+            Some(CareerArc::StepUp),
+            "the want is the arc's, and the arc is what holds it for a season"
         );
     }
 
@@ -1242,10 +1267,9 @@ mod tests {
             day,
             CareerPlan::DEFAULT_REVIEW_DAYS,
             0.8,
-            true,
         ));
 
-        mind.on_loan_spell_reviewed(LoanSpellVerdict::Standout, 0.8, true, day + 300);
+        mind.on_loan_spell_reviewed(LoanSpellVerdict::Standout, 0.8, 0.6, day + 300);
 
         let plan = mind
             .plan
@@ -1263,7 +1287,6 @@ mod tests {
             100,
             CareerPlan::CLAIM_REVIEW_DAYS,
             0.8,
-            true,
         ));
         mind.on_club_change();
         assert!(

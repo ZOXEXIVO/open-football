@@ -12,10 +12,32 @@ pub trait Person {
         DateUtils::age(self.birthday(), now)
     }
 
+    /// Years of prime left, 0..1 — [`CareerRunway::at`].
+    fn career_runway(&self, now: NaiveDate) -> f32 {
+        CareerRunway::at(self.age(now))
+    }
+
     fn behaviour(&self) -> &PersonBehaviour;
     fn attributes(&self) -> &PersonAttributes;
 
     fn relations(&self) -> &Relations;
+}
+
+/// How much of a prime a person has left, 0..1. Continuous on purpose:
+/// there is no age at which a career outlook flips, and every copy of
+/// this curve was a place a birthday could quietly become a cliff.
+pub struct CareerRunway;
+
+impl CareerRunway {
+    /// The age at which a prime is spent, and the years it runs over.
+    const PRIME_END: f32 = 34.0;
+    const PRIME_SPAN: f32 = 12.0;
+
+    /// For callers holding an age rather than a person — a market
+    /// summary, a squad row.
+    pub fn at(age: u8) -> f32 {
+        ((Self::PRIME_END - age as f32) / Self::PRIME_SPAN).clamp(0.0, 1.0)
+    }
 }
 
 /// Hidden personality attributes, FM-style, all on a 0.0–20.0 scale.

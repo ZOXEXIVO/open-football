@@ -4,7 +4,7 @@
 //! that pushes the ball back inside the field after it crosses a
 //! touchline.
 
-use crate::r#match::engine::ball::ball::{Ball, BallRoll, GRAVITY_PER_TICK};
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use nalgebra::Vector3;
 

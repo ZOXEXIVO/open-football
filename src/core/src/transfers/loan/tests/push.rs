@@ -1,11 +1,11 @@
 //! Moved verbatim out of `loan_market.rs` — see that file's `mod loan_push_gate_tests`.
 
 use super::super::*;
+use crate::ReputationLevel;
 use crate::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
 use crate::shared::Location;
 use crate::shared::fullname::FullName;
-use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason, TransferRequest};
 use crate::{
     ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
     PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -16,16 +16,18 @@ use chrono::{NaiveDate, NaiveTime};
 struct PushFx;
 
 impl PushFx {
-    fn player(id: u32, roles: &[(PlayerPositionType, u8)], ca: u8) -> Player {
+    fn player(id: u32, roles: &[(PlayerPositionType, u8)], level: u8) -> Player {
         let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
+        attrs.current_ability = level;
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("Loan".to_string(), format!("P{id}")))
             .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
             .country_id(1)
             .attributes(PersonAttributes::default())
-            .skills(PlayerSkills::default())
+            // The depth chart a loan is priced against is the observable
+            // one, so the fixture moves the skills it is read from.
+            .skills(PlayerSkills::flat_for_ability(level))
             .positions(PlayerPositions {
                 positions: roles
                     .iter()
@@ -125,20 +127,6 @@ impl PushFx {
     fn main_team(club: &Club) -> &Team {
         club.teams.main().expect("fixture has a main team")
     }
-
-    /// The club's own shopping list: a centre-forward good enough to lead
-    /// the line, which is what a giant with this attack would ask for.
-    fn striker_request(min_ability: u8) -> TransferRequest {
-        TransferRequest::new(
-            1,
-            PlayerPositionType::Striker,
-            TransferNeedPriority::Important,
-            TransferNeedReason::QualityUpgrade,
-            min_ability,
-            min_ability + 13,
-            35_000_000.0,
-        )
-    }
 }
 
 /// The minutes gate used to count only the men FILED as forwards, so a
@@ -193,29 +181,82 @@ fn a_thin_attack_still_admits_a_development_loan() {
 /// near-ready youngster down two divisions a fortnight at a time.
 #[test]
 fn a_club_that_shops_rarely_is_still_a_destination() {
-    let elite = BorrowerAppetite::base_for_tier(5);
-    let regional = BorrowerAppetite::base_for_tier(2);
+    let elite = BorrowerAppetite::base_for_tier(ReputationLevel::Elite);
+    let regional = BorrowerAppetite::base_for_tier(ReputationLevel::Regional);
     assert!(elite > 0.0, "fewer loans is a smaller number, not a no");
     assert!(regional > elite);
 }
 
-/// A club that genuinely cannot field a balanced side is short, and the
-/// emergency reading has to keep working — it is the one thing left in
-/// the appetite model that is a fact rather than a policy.
+/// A club that genuinely cannot field a balanced side wants a body, and
+/// wants it more than a club whose shirt is already taken. The emergency
+/// is a vacancy now — a term in `BorrowerNeed` — rather than a flag on a
+/// separate appetite model.
 #[test]
-fn a_club_in_crisis_reads_as_short() {
-    let club = PushFx::giant_with_hidden_attack();
+fn a_club_in_crisis_still_takes_what_it_is_offered() {
+    let stocked = BorrowerNeed {
+        requested: false,
+        level_shortfall: 0,
+        age_excess: 0,
+        vacancy: 0.0,
+    };
+    let empty_line = BorrowerNeed {
+        vacancy: 1.0,
+        ..stocked
+    };
+    assert!(empty_line.score() > stocked.score());
     assert!(
-        !LoanBorrowerAppetite::assess(PushFx::main_team(&club)).critical_shortage,
-        "precondition: no group is below a fieldable minimum"
+        stocked.score() > 0.0,
+        "somebody is always worth a look, shortage or not"
     );
+}
 
-    let mut team = PushFx::main_team(&club).clone();
-    team.players
-        .players
-        .retain(|p| p.position().position_group() != PlayerFieldPositionGroup::Forward);
+/// An open request is a band, not a shirt.
+///
+/// The scan used to give a flat 1.0 to any candidate whose position group
+/// matched an open request, so a club shopping for a first-team striker
+/// wanted a raw teenager exactly as badly as the man it had asked for.
+/// `BorrowerNeed` tapers with how far short of the request he falls, and
+/// with how far over the age band he is.
+#[test]
+fn an_open_request_admits_only_the_player_it_asked_for() {
+    let asked_for = BorrowerNeed {
+        requested: true,
+        level_shortfall: 0,
+        age_excess: 0,
+        vacancy: 0.0,
+    };
+    let a_bit_short = BorrowerNeed {
+        level_shortfall: 5,
+        ..asked_for
+    };
+    let nothing_like_it = BorrowerNeed {
+        level_shortfall: 20,
+        ..asked_for
+    };
+    let too_old = BorrowerNeed {
+        age_excess: 8,
+        ..asked_for
+    };
+    let nobody_asked = BorrowerNeed::none();
+
+    assert!(asked_for.score() > a_bit_short.score());
+    assert!(a_bit_short.score() > nothing_like_it.score());
     assert!(
-        LoanBorrowerAppetite::assess(&team).critical_shortage,
-        "a side with no forwards at all is short"
+        (nothing_like_it.score() - nobody_asked.score()).abs() < 1e-6,
+        "a request he answers none of is not a request for him"
     );
+    assert!(too_old.score() < asked_for.score());
+}
+
+/// A club that has asked for a man wants him more than one that has not,
+/// whatever else is true of either.
+#[test]
+fn a_club_that_asked_wants_him_more_than_one_that_did_not() {
+    let asked = BorrowerNeed {
+        requested: true,
+        level_shortfall: 0,
+        age_excess: 0,
+        vacancy: 0.0,
+    };
+    assert!(asked.score() > BorrowerNeed::none().score());
 }

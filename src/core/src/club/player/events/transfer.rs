@@ -540,6 +540,7 @@ impl Player {
                 let promised = match promise {
                     PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
                     PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
+                    PromisedSquadStatus::MainBackupPlayer => PlayerSquadStatus::MainBackupPlayer,
                     PromisedSquadStatus::FirstTeamSquadRotation => {
                         PlayerSquadStatus::FirstTeamSquadRotation
                     }

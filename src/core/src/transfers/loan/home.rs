@@ -83,12 +83,11 @@ impl SquadHomeContext<'_> {
 /// A player's own homesickness, computed once in the weekly tick and read
 /// as two fields everywhere else.
 ///
-/// The pool builder used to build a `MindSituation` and scan
-/// `recent_events` for every player in the world every day, and then build
-/// the situation a SECOND time for anyone posted. Neither is a per-day
-/// quantity: the mind thinks weekly, and `WantsReturnHome` fires on a
-/// 60-day cooldown. So it is read where the mind already builds its
-/// picture, and everything downstream reads a field.
+/// Neither half is a per-day quantity — the mind thinks weekly and
+/// `WantsReturnHome` fires on a 60-day cooldown — so it is read where the
+/// mind already builds its picture rather than by rebuilding a
+/// `MindSituation` and rescanning `recent_events` for every player in the
+/// world every day.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HomePull {
     /// 0..1 — the mind's `GoHome`, a recent `WantsReturnHome` mood, or raw
@@ -102,43 +101,48 @@ pub struct HomePull {
 }
 
 impl HomePull {
-    /// A season in the side, playing this share of the matches, is a man
-    /// who has settled — whatever he was saying when he arrived. The
-    /// same tenure every other "is he stuck here" reading uses.
-    pub const SETTLED_TENURE_DAYS: u16 = StuckCareerScan::TENURE_FOR_A_STUCK_STORY as u16;
     pub const SETTLED_STARTER_SHARE: f32 = 0.4;
+    /// How much of a want to go home a loan arc needs alongside it
+    /// before it sharpens one. Below this he has decided about his
+    /// football, not about his country.
+    const ARC_NEEDS_A_WANT: f32 = 0.3;
 
     /// Read him, at the point the mind has already built its picture.
     ///
     /// Three channels, read as a MAX: the want, the mood, and — since
-    /// the arc exists — the plan. A man living out `FinishAtHome` has
-    /// decided where he means to end up, which is a stronger statement
-    /// than any mood; a man on `ProveOnLoan` who would rather do it
-    /// among his own people is the commonest loan home in the game, and
-    /// the two together are what a parent posts to the world.
+    /// the arc exists — the plan.
+    ///
+    /// Only an arc that is ABOUT home speaks on its own. `FinishAtHome`
+    /// is a decision about where he means to end up, which is a stronger
+    /// statement than any mood. A man on `ProveOnLoan` has decided
+    /// nothing about his passport: reading his conviction as a home
+    /// desire posted every firmly-held foreign prospect in the world as
+    /// wanting to go home. He speaks only alongside a real want to.
     pub fn read(player: &Player, situation: &MindSituation, date: NaiveDate) -> Self {
         let plan = player.mind.career.plan;
+        let home_want = player.mind.pressure_of(GoalKind::GoHome);
         let plan_desire = match plan.map(|p| p.arc) {
             Some(CareerArc::FinishAtHome) => plan.map(|p| p.strength).unwrap_or(0.0),
-            // He is going somewhere to play, and where he plays is a
-            // question his passport has an answer to. Half weight: it is
-            // a preference on a move he wants anyway, not the reason for
-            // it.
-            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => {
+            // A season away he would rather spend among his own people
+            // is the commonest loan home in the game — but the wanting
+            // is the `GoHome` want, and the arc only sharpens it.
+            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay)
+                if home_want >= Self::ARC_NEEDS_A_WANT =>
+            {
                 plan.map(|p| p.strength * 0.5).unwrap_or(0.0)
             }
             _ => 0.0,
         };
-        let desire = player
-            .mind
-            .pressure_of(GoalKind::GoHome)
+        let desire = home_want
             .max(PlayerStanceBuilder::home_mood_desire(player, situation))
             .max(plan_desire)
             .clamp(0.0, 1.0);
         // The want clears itself. A move resets `days_at_club`, and a year
         // of regular football answers the question the posting asked — so
         // nothing has to remember to take the flag down.
-        let settled = situation.days_at_club >= Self::SETTLED_TENURE_DAYS
+        // A season in the side, playing this share of the matches, is a
+        // man who has settled — whatever he was saying when he arrived.
+        let settled = situation.days_at_club as i64 >= StuckCareerScan::TENURE_FOR_A_STUCK_STORY
             && situation.starter_ratio >= Self::SETTLED_STARTER_SHARE;
         HomePull {
             desire,
@@ -278,11 +282,11 @@ impl UnsettledAbroadScan {
 
     /// Where the parent would send him.
     ///
-    /// This used to read the homesickness axis alone, and the scan is a
-    /// MAX of three: a foreign prospect on 10 % of starts IS a candidate,
-    /// but with no mood at all he scored below the 0.25 floor, came out
-    /// `Any`, was never posted, and was loaned "elsewhere". That is the
-    /// 66 % cell the census printed.
+    /// All three axes, not the homesickness one alone, because the scan
+    /// is a MAX of three: a foreign prospect on 10 % of starts IS a
+    /// candidate, and on homesickness alone he scores below the 0.25
+    /// floor, comes out `Any`, is never posted, and is loaned
+    /// "elsewhere".
     ///
     /// Part I.3's second initiator is the PARENT's decision — warehouse
     /// the asset where it will play and be seen — and where it will be
@@ -660,9 +664,9 @@ mod tests {
         );
     }
 
-    /// C5 — ONE posting predicate, and either half is enough. The world
-    /// pool used to require the formed want AND a loan badge while the
-    /// ranked-summary builder hard-coded `false`.
+    /// C5 — ONE posting predicate, and either half is enough: the formed
+    /// want OR a loan badge, never both, and never hard-coded `false` on
+    /// one of the two builders.
     #[test]
     fn a_posting_is_the_want_or_the_clubs_own_decision() {
         // The want has formed: he is posted, badge or no badge.
@@ -681,12 +685,12 @@ mod tests {
     fn a_settled_year_takes_the_posting_down() {
         let mut situation = MindSituation::neutral();
         situation.is_abroad = true;
-        situation.days_at_club = HomePull::SETTLED_TENURE_DAYS;
+        situation.days_at_club = StuckCareerScan::TENURE_FOR_A_STUCK_STORY as u16;
         situation.starter_ratio = HomePull::SETTLED_STARTER_SHARE;
         let settled = HomePull {
             desire: 0.9,
             wanted: situation.is_abroad
-                && !(situation.days_at_club >= HomePull::SETTLED_TENURE_DAYS
+                && !(situation.days_at_club >= StuckCareerScan::TENURE_FOR_A_STUCK_STORY as u16
                     && situation.starter_ratio >= HomePull::SETTLED_STARTER_SHARE)
                 && 0.9 >= HomeLoanGates::WANTS_HOME_BAR,
             computed_on: None,
@@ -780,7 +784,7 @@ mod passport_tests {
         let pull = HomePull {
             desire: 0.6,
             wanted: situation.is_abroad
-                && !(situation.days_at_club >= HomePull::SETTLED_TENURE_DAYS
+                && !(situation.days_at_club >= StuckCareerScan::TENURE_FOR_A_STUCK_STORY as u16
                     && situation.starter_ratio >= HomePull::SETTLED_STARTER_SHARE)
                 && 0.6 >= HomeLoanGates::WANTS_HOME_BAR,
             computed_on: Some(date),

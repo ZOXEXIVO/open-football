@@ -1,5 +1,6 @@
 //! Moved verbatim out of `loan_market.rs` — see that file's `mod borrower_gate_tests`.
 
+use super::super::legacy::LegacyLoanGuard;
 use super::super::*;
 use crate::club::player::builder::PlayerBuilder;
 use crate::shared::fullname::FullName;
@@ -16,16 +17,19 @@ use chrono::{NaiveDate, NaiveTime};
 struct BorrowerFixtures;
 
 impl BorrowerFixtures {
-    fn player(id: u32, position: PlayerPositionType, ca: u8) -> Player {
+    fn player(id: u32, position: PlayerPositionType, level: u8) -> Player {
         let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
+        attrs.current_ability = level;
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("Loan".to_string(), format!("P{id}")))
             .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
             .country_id(1)
             .attributes(PersonAttributes::default())
-            .skills(PlayerSkills::default())
+            // A loan is priced on what a staff can SEE, so the fixture
+            // has to move the skills the observable reading is built
+            // from rather than the hidden ability beside them.
+            .skills(PlayerSkills::flat_for_ability(level))
             .positions(PlayerPositions {
                 positions: vec![PlayerPosition {
                     position,
@@ -285,28 +289,28 @@ fn development_relaxation_does_not_apply_to_outfield() {
 fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
     // Established player (close to the parent's best): a 2000-rep
     // borrower is too far below a 9000-rep parent.
-    assert!(!LoanPipeline::loan_reputation_drop_ok(
+    assert!(!LegacyLoanGuard::loan_reputation_drop_ok(
         2000, 9000, 120, 130, false
     ));
     // Same borrower is fine for a genuinely raw player — any senior
     // football is the point of the loan. The floor tracks readiness
     // continuously now rather than switching on a "very raw" flag, so
     // this is the man who is years off the shirt, not merely below it.
-    assert!(LoanPipeline::loan_reputation_drop_ok(
+    assert!(LegacyLoanGuard::loan_reputation_drop_ok(
         2000, 9000, 80, 130, false
     ));
     // A PEER-level borrower clears the floor for the established
     // player — that is the destination doctrine leaves him.
-    assert!(LoanPipeline::loan_reputation_drop_ok(
+    assert!(LegacyLoanGuard::loan_reputation_drop_ok(
         7000, 9000, 120, 130, false
     ));
     // …and a mid-table one does not: a man at his club's own level
     // goes sideways or stays.
-    assert!(!LoanPipeline::loan_reputation_drop_ok(
+    assert!(!LegacyLoanGuard::loan_reputation_drop_ok(
         3000, 9000, 120, 130, false
     ));
     // Unknown parent reputation never blocks.
-    assert!(LoanPipeline::loan_reputation_drop_ok(
+    assert!(LegacyLoanGuard::loan_reputation_drop_ok(
         2000, 0, 120, 130, false
     ));
     // Readiness, not age, decides the drop. The development flag no longer
@@ -314,13 +318,13 @@ fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
     // choice (close to the parent's best) is held to the same peer-level
     // floor as an established player, so the giant-to-minnow drop is
     // blocked — he moves down a tier or two, not several.
-    assert!(!LoanPipeline::loan_reputation_drop_ok(
+    assert!(!LegacyLoanGuard::loan_reputation_drop_ok(
         2000, 9000, 120, 130, true
     ));
     // A genuinely raw development player still has the floor lifted
     // entirely — any senior football is the point, and the minutes gate is
     // the realism check instead.
-    assert!(LoanPipeline::loan_reputation_drop_ok(
+    assert!(LegacyLoanGuard::loan_reputation_drop_ok(
         400, 9000, 90, 130, true
     ));
 }
@@ -349,9 +353,9 @@ fn foreign_loan_region_gate_lifts_for_development_step_down() {
     // role — the 0.50 gap exceeds the 0.20 cover allowance.
     assert!(!LoanPipeline::foreign_loan_region_ok(1.0, 0.50, false));
     // ...but a development youngster going abroad for senior minutes is
-    // exactly the "go abroad to play" move the region gate used to block —
-    // the wider development allowance clears the gap. The downstream
-    // club-rep band still bounds how far he actually falls.
+    // exactly the "go abroad to play" move, so the wider development
+    // allowance clears the gap. The downstream club-rep band still bounds
+    // how far he actually falls.
     assert!(LoanPipeline::foreign_loan_region_ok(1.0, 0.50, true));
     // The development lift stays bounded: a top-region prospect still can't
     // reach the very bottom regions (e.g. South Asia, 0.10) from 1.0.

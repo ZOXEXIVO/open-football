@@ -201,17 +201,6 @@ impl StuckCareerScan {
         })
     }
 
-    /// How long the player has actually been this club's player.
-    ///
-    /// `days_since_transfer` is stamped by the loan machinery as well as
-    /// by the market, so a player who is lent out and brought home reads
-    /// as a brand-new signing twice a year — and a serial loanee, the
-    /// exact career this scan exists to see, would never clear a settling
-    /// window at all. The permanent contract's own start date is the
-    /// honest anchor for a stay; the later of the two is taken so a
-    /// renewal that re-stamps the deal cannot shorten a long one either.
-    /// `None` means no anchor at all — a homegrown player who has never
-    /// moved, and who is settled by definition.
     /// Days at one club before a stuck story exists at all.
     ///
     /// One number, read through [`Self::club_tenure_days`], because
@@ -229,15 +218,32 @@ impl StuckCareerScan {
     /// [`MindSituation::SETTLING_DAYS`]: crate::club::player::mind::MindSituation::SETTLING_DAYS
     pub const TENURE_FOR_A_STUCK_STORY: i64 = 365;
 
+    /// How long the player has actually been this club's player — the one
+    /// tenure anchor, read by everything from the parked-prime pass to
+    /// the mind's own picture of where he is.
+    ///
+    /// `days_since_transfer` is stamped by the loan machinery as well as
+    /// by the market, so a player who is lent out and brought home reads
+    /// as a brand-new signing twice a year — and a serial loanee, the
+    /// exact career this scan exists to see, would never clear a settling
+    /// window at all. The permanent contract's own start date is the
+    /// honest anchor for a stay; the later of the two is taken so a
+    /// renewal that re-stamps the deal cannot shorten a long one either,
+    /// and either speaks alone when the other is missing. `None` means no
+    /// anchor of any kind — a homegrown player who has never moved, and
+    /// who is settled by definition.
     pub fn club_tenure_days(player: &Player, today: NaiveDate) -> Option<i64> {
-        let since_move = player.days_since_transfer(today)?;
+        let since_move = player.days_since_transfer(today);
         let since_contract = player
             .contract
             .as_ref()
             .and_then(|c| c.started)
-            .map(|start| (today - start).num_days())
-            .unwrap_or(0);
-        Some(since_move.max(since_contract))
+            .map(|start| (today - start).num_days());
+        match (since_move, since_contract) {
+            (Some(moved), Some(signed)) => Some(moved.max(signed)),
+            (Some(days), None) | (None, Some(days)) => Some(days),
+            (None, None) => None,
+        }
     }
 
     /// 0..1 stuck pressure, saturating at four seasons — the shared ramp

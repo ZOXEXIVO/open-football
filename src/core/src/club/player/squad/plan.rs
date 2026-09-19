@@ -151,6 +151,10 @@ pub struct PlayerPlan {
     pub loan_purpose: Option<LoanOutReason>,
     pub loans_used: u8,
     pub last_verdict: Option<LoanSpellVerdict>,
+    /// What the club would take for him, as a multiple of his value —
+    /// the number a return verdict named. Read by the asset ledger,
+    /// which is the one place a seller's ask is built.
+    pub asking_multiple: Option<f32>,
     /// The band the club means him to reach HERE.
     pub band_target: f32,
 }
@@ -248,6 +252,7 @@ impl PlayerPlan {
             loan_purpose: None,
             loans_used: 0,
             last_verdict: None,
+            asking_multiple: None,
             band_target: stage.band_target(),
         }
     }
@@ -270,6 +275,7 @@ impl PlayerPlan {
             loan_purpose: None,
             loans_used: 0,
             last_verdict: None,
+            asking_multiple: None,
             band_target: stage.band_target(),
         }
     }
@@ -363,6 +369,13 @@ impl Player {
             .unwrap_or(PathwayStage::Prospect)
     }
 
+    /// Why the club would send him out, when it has decided. Nobody
+    /// outside reads his plan for it.
+    #[inline]
+    pub fn loan_purpose(&self) -> Option<LoanOutReason> {
+        self.plan.as_ref().and_then(|p| p.loan_purpose)
+    }
+
     /// The club states the pathway; the player is told.
     pub fn assign_pathway(&mut self, club_id: u32, plan: PlayerPlan, date: NaiveDate) {
         let from = self.plan.as_ref().map(|p| p.stage);
@@ -414,6 +427,51 @@ impl Player {
         );
     }
 
+    /// The club has moved him a rung along its pathway, and says which.
+    /// The caller states the fact; what it means to him is his own
+    /// business.
+    pub fn on_pathway_advanced(
+        &mut self,
+        club_id: u32,
+        stage: PathwayStage,
+        review_in_days: i64,
+        date: NaiveDate,
+    ) {
+        let from = self.plan.as_ref().map(|p| p.stage);
+        match self.plan.as_mut() {
+            Some(plan) => {
+                plan.move_to(stage, date, review_in_days);
+            }
+            None => {
+                self.plan = Some(PlayerPlan::from_existing(
+                    PlayerPlanRole::CompeteForStarting,
+                    stage,
+                    date,
+                ));
+            }
+        }
+        self.on_pathway_stage_changed(club_id, from, stage, date);
+    }
+
+    /// The window shut and nobody took him. The intention lapses with it
+    /// — the badge that said he was on his way out comes off, and the
+    /// club owes him another look.
+    pub fn on_pathway_loan_lapsed(&mut self, club_id: u32, date: NaiveDate) {
+        self.statuses.remove(PlayerStatusType::Loa);
+        self.decision_history.add(
+            date,
+            "dec_loan_withdrawn".to_string(),
+            "dec_reason_no_borrower".to_string(),
+            "dec_decided_board".to_string(),
+        );
+        self.on_pathway_advanced(
+            club_id,
+            PathwayStage::Reassess,
+            PlayerPlan::SHORT_REVIEW_DAYS,
+            date,
+        );
+    }
+
     /// The club has told him what he is for the next stretch. Written onto
     /// the contract as a bound promise, exactly as a signing promise is,
     /// so breaking it surfaces as playing-time unhappiness rather than
@@ -443,14 +501,13 @@ impl Player {
     pub fn on_loan_spell_reviewed(
         &mut self,
         verdict: LoanSpellVerdict,
-        parent_country_id: u32,
+        loan_band: f32,
         date: NaiveDate,
     ) {
-        let runway = ((34.0_f32 - self.age(date) as f32) / 12.0).clamp(0.0, 1.0);
-        let at_home = parent_country_id == 0 || parent_country_id == self.country_id;
+        let runway = self.career_runway(date);
         self.mind
             .career
-            .on_loan_spell_reviewed(verdict, runway, at_home, MindClock::day(date));
+            .on_loan_spell_reviewed(verdict, runway, loan_band, MindClock::day(date));
     }
 
     /// The club has put him on the market, and why.

@@ -20,6 +20,7 @@
 
 use super::organs::memory::ActorRef;
 use crate::PlayerFieldPositionGroup;
+use crate::club::CareerRunway;
 use crate::transfers::squad::LevelBand;
 
 /// How close a player is to his country's side.
@@ -83,6 +84,10 @@ pub struct MindSituation {
     /// Rolling share of recent competitive matches started, 0..1.
     /// Neutral 0.5 before he has played enough for it to mean anything.
     pub starter_ratio: f32,
+    /// Competitive matches behind that share. Below
+    /// [`Self::TRACKED_APPS`] the 0.5 is a placeholder and not a
+    /// reading, so nothing may form or resolve on it.
+    pub appearances_tracked: u8,
     /// Competitive appearances since his last goal. Saturates.
     pub apps_since_goal: u8,
     /// Days left on his deal. 0 when he has none.
@@ -101,6 +106,14 @@ pub struct MindSituation {
     ///
     /// [`PlayingTimeFrustrationConfig::expected_start_share`]: crate::club::player::happiness::PlayingTimeFrustrationConfig::expected_start_share
     pub expected_start_share: f32,
+    /// What HE expects, which a season of real football raises above
+    /// what his paperwork says —
+    /// [`MatchExperienceBackground::expected_start_share_floor`]. A
+    /// returnee who started thirty games does not come home content with
+    /// a rotation player's share of them.
+    ///
+    /// [`MatchExperienceBackground::expected_start_share_floor`]: crate::club::player::statistics::MatchExperienceBackground::expected_start_share_floor
+    pub own_expected_start_share: f32,
     /// Who the manager is, so the professional mind can hold a read of a
     /// specific person rather than of "the manager" in the abstract —
     /// and notice when it becomes somebody else.
@@ -110,13 +123,12 @@ pub struct MindSituation {
     /// Is he playing outside his own country?
     ///
     /// A PASSPORT test — `player.country_id != club country id` — and
-    /// never a language one. It used to read "does not speak the local
-    /// language", so a Brazilian at Benfica, an Argentine at Sevilla, a
-    /// Colombian in Mexico and a Uruguayan in Argentina were all "at
+    /// never a language one. Read it as "does not speak the local
+    /// language" and a Brazilian at Benfica, an Argentine at Sevilla, a
+    /// Colombian in Mexico and a Uruguayan in Argentina are all "at
     /// home": never homesick, never posted, never seen by a club in the
     /// league they came through. Those are the largest home-loan
-    /// populations in world football, and the census read 1 % home-country
-    /// loans because of this one line.
+    /// populations in world football.
     /// [`Self::speaks_local_language`] is the separate boolean it always
     /// was, and the two together are what cultural isolation means.
     pub is_abroad: bool,
@@ -125,6 +137,11 @@ pub struct MindSituation {
     /// Compatriots and shared-language teammates in the squad.
     pub familiar_teammates: u8,
     pub is_on_loan: bool,
+    /// Registered with the first team. Below it the rolling start share
+    /// is a B side's football and says nothing about being picked — the
+    /// same distinction [`FootballDrought`](crate::club::player::transfer::availability::FootballDrought)
+    /// draws.
+    pub in_first_team: bool,
 
     // ── Where he stands in this dressing room ───────────────────
     //
@@ -175,6 +192,10 @@ pub struct MindSituation {
     /// any real one rather than imminent.
     pub months_to_tournament: u8,
     pub national_standing: NationalStanding,
+    /// Days until the next registration window opens where he plays.
+    /// 0 while one is open, `u16::MAX` when none is in view — the
+    /// deadline a man who means to be somewhere else lives against.
+    pub days_to_next_window: u16,
 }
 
 impl Default for MindSituation {
@@ -197,16 +218,19 @@ impl MindSituation {
             professionalism: 10.0,
             temperament: 10.0,
             starter_ratio: 0.5,
+            appearances_tracked: 0,
             apps_since_goal: 0,
             contract_days_left: 0,
             days_at_club: 0,
             expected_start_share: 0.50,
+            own_expected_start_share: 0.0,
             manager: ActorRef::NONE,
             club_reputation: 0.5,
             is_abroad: false,
             speaks_local_language: true,
             familiar_teammates: 0,
             is_on_loan: false,
+            in_first_team: true,
             pecking_rank: 0,
             rivals_at_position: 0,
             top_rival: ActorRef::NONE,
@@ -223,6 +247,7 @@ impl MindSituation {
             football_drought: 0.0,
             months_to_tournament: u8::MAX,
             national_standing: NationalStanding::Unknown,
+            days_to_next_window: u16::MAX,
         }
     }
 
@@ -231,21 +256,45 @@ impl MindSituation {
     /// than reading a settling-in period as a problem — the same
     /// honeymoon the happiness path already respects.
     pub const SETTLING_DAYS: u16 = 90;
+    /// Age gap at which waiting is half worth it, and the years either
+    /// side of it that carry the reading from certain to hopeless.
+    const WAIT_GAP_CENTRE: f32 = 12.0;
+    const WAIT_GAP_SPAN: f32 = 15.0;
+    /// A rival nobody can name is not a shirt he is waiting for.
+    const UNKNOWN_RIVAL_IS_POINTLESS: f32 = 0.8;
+    /// At or below this, the shirt is coming and he holds on for it.
+    const WORTH_WAITING_FOR: f32 = 0.35;
 
     /// Years of service at which a man stops being a signing and starts
     /// being part of the furniture. Five seasons.
     pub const CLUB_SERVANT_DAYS: u16 = 1825;
+
+    /// Competitive matches the rolling start share needs before anybody
+    /// reads it. The same bar the drought scan and the loan guard hold
+    /// their own copies of.
+    pub const TRACKED_APPS: u8 = 6;
+
+    /// Has he played enough for [`Self::starter_ratio`] to mean
+    /// anything? Until he has, the share is a placeholder and reading it
+    /// as bad news is how a returnee loses his arc on the first Monday.
+    ///
+    /// A B-side regular has a view of his own football and none at all
+    /// of the first team's, so his share says nothing about being
+    /// picked — and a man with `pecking_rank` 1 in a reserve side read
+    /// as a first-choice starter.
+    #[inline]
+    pub fn has_playing_view(&self) -> bool {
+        self.in_first_team && self.appearances_tracked >= Self::TRACKED_APPS
+    }
 
     #[inline]
     pub fn is_settled(&self) -> bool {
         self.days_at_club >= Self::SETTLING_DAYS
     }
 
-    /// Years of prime left, 0..1. Nothing at the very end of a career,
-    /// full through the mid twenties. Continuous, so there is no
-    /// birthday at which a player's outlook flips.
+    /// Years of prime left, 0..1 — [`CareerRunway::at`].
     pub fn career_runway(&self) -> f32 {
-        ((34.0 - self.age as f32) / 12.0).clamp(0.0, 1.0)
+        CareerRunway::at(self.age)
     }
 
     /// How far into his career he is, 0..1 — the inverse read, for the
@@ -379,21 +428,33 @@ impl MindSituation {
         // younger player is waiting for it to get worse. Centred so the
         // ordinary case — a peer — is most of a grievance rather than
         // half of one.
-        let waiting_is_pointless = if self.top_rival_age == 0 {
-            0.8
-        } else {
-            ((self.age as f32 - self.top_rival_age as f32 + 12.0) / 15.0).clamp(0.0, 1.0)
-        };
-        (merit * 0.65 + self.career_spent() * 0.35) * waiting_is_pointless
+        (merit * 0.65 + self.career_spent() * 0.35) * self.waiting_is_pointless()
+    }
+
+    /// How little the shirt in front of him is worth waiting for, 0..1.
+    ///
+    /// The age gap and nothing else: a man behind someone his own age is
+    /// waiting for nothing, one behind a younger player is waiting for
+    /// it to get worse, and one behind a veteran is waiting for a date.
+    /// Centred so the ordinary case — a peer — is most of a grievance
+    /// rather than half of one. An unknown rival is read as pointless,
+    /// because a shirt nobody can name is not a plan.
+    pub fn waiting_is_pointless(&self) -> f32 {
+        if self.top_rival_age == 0 {
+            return Self::UNKNOWN_RIVAL_IS_POINTLESS;
+        }
+        ((self.age as f32 - self.top_rival_age as f32 + Self::WAIT_GAP_CENTRE)
+            / Self::WAIT_GAP_SPAN)
+            .clamp(0.0, 1.0)
     }
 
     /// Is the man in front of him old enough that the shirt is coming
-    /// anyway? The reason a good young player stays put.
+    /// anyway? The reason a good player stays put — at any age, because
+    /// what decides it is the gap and not the birthday.
     pub fn can_wait_for_the_shirt(&self) -> bool {
         self.has_squad_view()
             && !self.is_first_choice()
-            && self.top_rival_age >= 31
-            && self.age <= 24
+            && self.waiting_is_pointless() <= Self::WORTH_WAITING_FOR
     }
 
     // ── Development ─────────────────────────────────────────────

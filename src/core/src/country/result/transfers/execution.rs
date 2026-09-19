@@ -573,8 +573,8 @@ impl SquadReactionPass {
 /// each generic over
 /// [`MarketWorld`](crate::transfers::view::world::MarketWorld), so the
 /// same code runs whether the caller holds one country (Phase A) or the
-/// whole world (Phase C). There used to be two of each, one per scope,
-/// and they drifted.
+/// whole world (Phase C) — one executor per product, so the two reaches
+/// cannot drift.
 pub(crate) struct TransferExecutor;
 
 impl TransferExecutor {
@@ -681,19 +681,15 @@ impl TransferExecutor {
                 return (false, false);
             }
         }
-        // One executor per product, whatever the reach.
+        // One executor per product, whatever the reach: this function
+        // holds `&mut SimulatorData` on both branches, so a domestic
+        // fork would buy nothing but drift.
         //
-        // There used to be two of each — a `_within_country` pair taking `&mut
-        // Country` and an `_across_countries` pair taking `&mut SimulatorData`
-        // — and the fork was never load-bearing: this function already holds
-        // `&mut SimulatorData` on both branches and merely narrowed it for the
-        // domestic case. What the fork did buy was drift. The domestic pair
-        // removed the player, credited the seller and fired the leaving
-        // squad's reactions BEFORE testing whether the buyer could actually
-        // take him, then rolled the roster and the cash back when it could
-        // not — leaving the dressing room having grieved a departure that
-        // never happened. The surviving executors test first and touch
-        // nothing until the answer is yes.
+        // Both executors test first and touch nothing until the answer
+        // is yes — remove the player, credit the seller and fire the
+        // leaving squad's reactions before knowing the buyer can take
+        // him, and a rollback leaves the dressing room having grieved a
+        // departure that never happened.
         let success = if is_loan {
             Self::loan(data, transfer, date)
         } else {
@@ -1376,9 +1372,9 @@ impl TransferExecutor {
             );
 
             // Compatriot integration, direct-competition threats and the
-            // squad-investment signal — one pass, the same one the domestic
-            // path runs. It used to be inlined here verbatim; two copies of a
-            // fifty-line reception is how the two reaches drift.
+            // squad-investment signal — one pass, the same one the
+            // domestic path runs. Two copies of a fifty-line reception is
+            // how the two reaches drift.
             SquadReactionPass::arrival_reception(
                 buying_club,
                 player_id,
@@ -1520,10 +1516,7 @@ impl TransferExecutor {
         // not arrange the move at all pays nothing. The purpose is
         // carried on his pathway, so nothing downstream has to
         // re-derive it from a birth year.
-        let parent_desire = LoanMoney::parent_desire(
-            player.pathway_stage(),
-            player.plan.as_ref().and_then(|p| p.loan_purpose),
-        );
+        let parent_desire = LoanMoney::parent_desire(player.pathway_stage(), player.loan_purpose());
         let loan_contract = ExecutionLookup::loan_contract(
             loan_fee,
             loan_end,
@@ -2599,16 +2592,18 @@ mod development_pathway_tests {
             Self::d(2026, 7, 5)
         }
 
-        fn player(id: u32, birth_year: i32, ca: u8) -> Player {
+        fn player(id: u32, birth_year: i32, level: u8) -> Player {
             let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
+            attrs.current_ability = level;
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Dev".to_string(), format!("P{id}")))
                 .birth_date(Self::d(birth_year, 1, 1))
                 .country_id(1)
                 .attributes(PersonAttributes::default())
-                .skills(PlayerSkills::default())
+                // The depth charts a loan is priced against are observable,
+                // so the fixture moves the skills they are read from.
+                .skills(PlayerSkills::flat_for_ability(level))
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position: PlayerPositionType::Striker,
@@ -3046,11 +3041,12 @@ mod development_pathway_tests {
         );
     }
 
-    /// The keeper half of the pathway: an Elite club buys a teenage GOALKEEPER
-    /// and, with two senior keepers ahead of him, the development pathway
-    /// farms him out on loan. This is the move the prospect-signing fix
-    /// enables — keepers used to be omitted from the prospect pipeline, so a
-    /// big club never signed (and therefore never farmed out) a young keeper.
+    /// The keeper half of the pathway: an Elite club buys a teenage
+    /// GOALKEEPER and, with two senior keepers ahead of him, the
+    /// development pathway farms him out on loan. Keepers are in the
+    /// prospect pipeline on the same terms as everybody else — omit them
+    /// and a big club never signs, and therefore never farms out, a
+    /// young one.
     #[test]
     fn goalkeeper_prospect_is_farmed_out_on_development_loan() {
         let (mut data, purchase) = DevPathwayFixtures::gk_world(8500, 2008);

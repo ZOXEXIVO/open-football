@@ -10,18 +10,15 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
-use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferTrace,
-};
-use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, TeamType};
+use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
+use crate::{Club, Person, PlayerFieldPositionGroup, PlayerPlan, PlayerStatusType, TeamType};
 
 use super::depth::{PromotionBar, SquadSize};
 use super::promotion::{ProfessionalContractPromotion, PromotionEvidence};
 
 /// Why the rebalance wants a player moved. The execution phase reads the
-/// reason rather than a string: an overage player and a depth-cap surplus
-/// must leave whatever it does to the squad they are on, and that used to be
-/// decided by comparing two prose literals.
+/// reason rather than a string: an overage player and a depth-cap
+/// surplus must leave whatever it does to the squad they are on.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MoveReason {
     /// Skill level ready for the first team.
@@ -324,29 +321,11 @@ impl Club {
             }
         }
 
-        // Register the loan intents the surplus walk raised. `Identified`
-        // (not `Listed`) because the country pass is what actually puts
-        // him on the market — it re-checks depth minimums and owns the
-        // asking price. A zero fee reflects what these are: squad-clearing
-        // loans, not assets the club expects a premium for.
+        // Register the loan intents the surplus walk raised, through the
+        // one club-side producer — the purpose has to survive to the
+        // borrower, and the pathway has to know he is on his way out.
         for player_id in loan_out_intents {
-            if self
-                .transfer_plan
-                .loan_out_candidates
-                .iter()
-                .any(|c| c.player_id == player_id)
-            {
-                continue;
-            }
-            self.transfer_plan
-                .loan_out_candidates
-                .push(LoanOutCandidate {
-                    player_id,
-                    reason: LoanOutReason::Surplus,
-                    status: LoanOutStatus::Identified,
-                    loan_fee: 0.0,
-                    preferred_destination: LoanDestinationPreference::Any,
-                });
+            self.on_pathway_loan_staged(player_id, LoanOutReason::Surplus, date);
         }
     }
 
@@ -358,6 +337,7 @@ impl Club {
         main_idx: usize,
         mut moves: Vec<PendingMove>,
     ) -> Vec<usize> {
+        let club_id = self.id;
         // Talent promotions (to main) first, then overage moves.
         moves.sort_by(|a, b| {
             let a_main = (a.to == main_idx) as u8;
@@ -409,6 +389,16 @@ impl Club {
                 // the club has just promoted.
                 if m.withdraws_loan {
                     player.statuses.remove(PlayerStatusType::Loa);
+                    // The stage is the same decision as the badge and the
+                    // row: a boy the club has just promoted is not still
+                    // staged for a loan.
+                    let promoted = player.pathway_stage().promoted();
+                    player.on_pathway_advanced(
+                        club_id,
+                        promoted,
+                        PlayerPlan::SHORT_REVIEW_DAYS,
+                        date,
+                    );
                     player.decision_history.add(
                         date,
                         "dec_loan_withdrawn".to_string(),
@@ -1214,13 +1204,16 @@ mod promotion_guard_tests {
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutReason};
+    use crate::transfers::pipeline::{
+        LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+    };
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
         TeamReputation, TrainingSchedule,
     };
+    use crate::{PathwayStage, PlayerPlan, PlayerPlanRole};
     use chrono::{Datelike, NaiveTime};
 
     struct Fx;
@@ -1391,6 +1384,11 @@ mod promotion_guard_tests {
     fn a_loan_intent_is_withdrawn_when_the_boy_is_promoted_instead() {
         let mut candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, Fx::READY, 19);
         candidate.statuses.add(Fx::date(), PlayerStatusType::Loa);
+        candidate.plan = Some(PlayerPlan::from_existing(
+            PlayerPlanRole::Development,
+            PathwayStage::LoanOut,
+            Fx::date(),
+        ));
         let mut club = Fx::club(candidate);
         club.transfer_plan
             .loan_out_candidates
@@ -1400,6 +1398,8 @@ mod promotion_guard_tests {
                 status: LoanOutStatus::Listed,
                 loan_fee: 0.0,
                 preferred_destination: LoanDestinationPreference::Any,
+                from_pathway: false,
+                band_target: None,
             });
 
         club.rebalance_squads(Fx::date());
@@ -1411,6 +1411,11 @@ mod promotion_guard_tests {
             "the badge goes with the intent"
         );
         assert!(club.transfer_plan.loan_out_candidates.is_empty());
+        assert_eq!(
+            promoted.pathway_stage(),
+            PathwayStage::Rotation,
+            "the stage is the same decision as the badge and the row"
+        );
         assert_eq!(
             club.transfer_plan.loan_withdrawals,
             vec![1],

@@ -19,6 +19,7 @@ use crate::club::player::mind::{
 };
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
+use crate::club::player::statistics::{MatchExperienceBackground, StuckCareerScan};
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::transfer::availability::AvailabilityMarketState;
 use crate::club::player::transfer::free::{FreeAgentMarketState, PreContractAgreement};
@@ -1333,21 +1334,39 @@ impl Player {
             professionalism: self.attributes.professionalism,
             temperament: self.attributes.temperament,
             starter_ratio: self.happiness.starter_ratio,
+            appearances_tracked: self.happiness.appearances_tracked,
             apps_since_goal: self.happiness.apps_since_last_competitive_goal,
             contract_days_left: self
                 .contract
                 .as_ref()
                 .map(|c| (c.expiration - now).num_days().clamp(0, u16::MAX as i64) as u16)
                 .unwrap_or(0),
-            days_at_club: self
-                .days_since_transfer(now)
+            // The one tenure anchor, and the same reading every other
+            // caller takes: no anchor at all is a man who has always been
+            // here, not a man who arrived this morning. Reading it the
+            // other way left five of the eight arcs unreachable for every
+            // homegrown player in the world.
+            days_at_club: StuckCareerScan::club_tenure_days(self, now)
                 .map(|d| d.clamp(0, u16::MAX as i64) as u16)
-                .unwrap_or(0),
+                .unwrap_or(u16::MAX),
             // Through the existing table, so the mind and the happiness
             // path never disagree about what a squad role implies.
             expected_start_share: PlayingTimeFrustrationConfig::expected_start_share(
                 squad_status.as_ref(),
             ),
+            // …and what a season of real football has taught him to
+            // expect, which the paperwork does not know about. The same
+            // record floor the happiness path's own expectation reads.
+            own_expected_start_share: MatchExperienceBackground::from_player(self)
+                .expected_start_share_floor(
+                    self.statistics_history
+                        .current
+                        .iter()
+                        .rev()
+                        .find(|e| e.departed_date.is_none())
+                        .map(|e| e.team_reputation)
+                        .unwrap_or(0),
+                ),
             // The man who picks the side, from the squad pass. `NONE`
             // while the bench is vacant or the side has not ticked yet,
             // which the professional mind reads as "no view".
@@ -1367,6 +1386,7 @@ impl Player {
                 .map(|v| v.same_language_or_nationality())
                 .unwrap_or(0),
             is_on_loan: self.is_on_loan(),
+            in_first_team: matches!(standing.squad_tier, TeamType::Main),
 
             pecking_rank: standing.pecking_rank,
             rivals_at_position: standing.rivals_at_position,
@@ -1398,6 +1418,9 @@ impl Player {
             // further away than any real one.
             months_to_tournament: u8::MAX,
             national_standing: self.national_standing(),
+            // Same shape as the tournament clock above: filled by the
+            // caller that holds the country context.
+            days_to_next_window: u16::MAX,
         }
     }
 
@@ -1522,6 +1545,11 @@ impl Player {
             // reflect on it — so a fallout with the manager on Thursday
             // is already something he remembers when he thinks about his
             // future on Monday, rather than a week later.
+            situation.days_to_next_window = ctx
+                .country
+                .as_ref()
+                .map(|c| c.days_to_next_window)
+                .unwrap_or(u16::MAX);
             self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
             self.mind.tick_with(&mind_ctx, &situation);
             // …and how badly he wants to go home, read here because the

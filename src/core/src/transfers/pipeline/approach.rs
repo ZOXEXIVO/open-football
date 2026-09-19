@@ -127,8 +127,9 @@ pub(in crate::transfers) enum ApproachOutcome {
 pub(in crate::transfers) struct ApproachContext<'a> {
     /// The BUYER's country: its calendar, its deadline, its market.
     pub buy_country: &'a Country,
-    /// The SELLER's. The same object as `buy_country` for a domestic move —
-    /// which is exactly why this used to be one field and two functions.
+    /// The SELLER's. The same object as `buy_country` for a domestic
+    /// move, which is why it is a second field and not a second
+    /// function.
     pub sell_country: &'a Country,
     /// Geography between the two. `MarketMap::default()` for a domestic move:
     /// both the corridor and the buyer's knowledge of the market are 1.0 by
@@ -2818,6 +2819,8 @@ mod dev_pathway_cleanup_tests {
                 status: LoanOutStatus::Identified,
                 loan_fee: 0.0,
                 preferred_destination: LoanDestinationPreference::Any,
+                from_pathway: false,
+                band_target: None,
             }
         }
 

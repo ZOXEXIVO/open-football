@@ -1,5 +1,5 @@
 use crate::club::team::squad::SquadAssetClass;
-use crate::{ContractType, Person, Player, PlayerSquadStatus, TeamType};
+use crate::{ContractType, PathwayStage, Person, Player, PlayerSquadStatus, TeamType};
 use chrono::NaiveDate;
 
 /// Why a player's contract ended and they entered the free-agent pool.
@@ -231,7 +231,13 @@ impl AutomaticReleaseEligibility {
         // `NotYetSet` player whose role hasn't been assigned yet, a
         // recognised name whose ability has dipped, a useful rotation
         // option — and routes them to keep / transfer-list instead.
+        //
+        // A club that has put him on `MoveOn` has already said the
+        // pathway ran out, which is the same statement the classifier
+        // makes — and a returnee whose spell answered the question is
+        // exactly the man the brief's last row releases.
         if ctx.asset_class.is_free_transfer_protected()
+            && player.pathway_stage() != PathwayStage::MoveOn
             && !Self::unused_ageing_squad_filler(player, ctx)
         {
             return Some(AutomaticReleaseBlock::ProtectedAsset);

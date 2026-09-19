@@ -1,105 +1,47 @@
-//! `LoanAssetGuard` — the one place a loan's **destination** is priced.
+//! `LoanAssetGuard` — what a loan COSTS the two clubs that would agree
+//! it.
 //!
-//! Every other loan gate in the pipeline is *relative*: how far the player
-//! sits below his parent's best at his position, how much reputation the
-//! two clubs differ by, whether he would get minutes. None of them ever
-//! asked the two questions a real loan turns on — **is this club's own
-//! year smaller than the asset it is being handed**, and **can it pay the
-//! wage that comes with him**. So a nine-figure teenager who was the joint
-//! best forward at his club could be lent to a second-division side for
-//! nothing: he was labelled a prospect by his birth year, read as
-//! unimportant by every importance model, and the destination floors were
-//! all lifted by a blanket "development" allowance that keyed on age
-//! alone.
+//! Two questions a destination turns on that no relative reading answers:
+//! **is this club's own year smaller than the asset it is being handed**,
+//! and **can it pay the wage that comes with him**. Both are properties
+//! of the *pair*, not of the player: the same man is comfortable at a
+//! peer and ruinous at the club one division down.
 //!
-//! The guard is destination-specific by construction: the same player can
-//! be perfectly loanable to a peer club and untouchable at the club one
-//! division down, because the two terms that decide it — `weight`
-//! (his value against the borrower's annual income) and `carry` (the wage
-//! share against what the borrower can actually pay) — are properties of
-//! the *pair*, not of the player.
-//!
-//! Everything here is pure, continuous and reads TRUTH (current ability,
-//! valuation, wages, reputations). Hidden potential ability is never read;
-//! nothing in it is a per-club special case. It only ever **prevents** a
-//! loan — no path gains a destination because the guard ran.
+//! Nothing here refuses a loan. The parent's own position is priced by
+//! [`ParentWillingness`] and the money by [`LoanMoney`], both of which
+//! live with the agreement; the guard reads the pair and hands those two
+//! the numbers only it can see. Everything it reads is observable —
+//! [`AbilityEstimator::observable_level`], a valuation, a wage, a
+//! reputation. Hidden ability is never read.
 //!
 //! Shape:
 //!
 //! * [`LoanAssetGuard`] is built once per player from the PARENT side.
-//!   [`LoanAssetGuard::parent_holds`] is the destination-independent half
-//!   ("a club does not loan out its own starter"), which the listing and
-//!   loan-intent passes consult before any borrower exists.
+//!   [`LoanAssetGuard::willingness_for`] is the destination-independent
+//!   half, which the listing and loan-intent passes consult before any
+//!   borrower exists.
 //! * [`LoanBorrowerProfile`] is the borrower side, assembled by each call
 //!   site from the club it is about to offer him to.
 //! * [`LoanAssetGuard::assess`] combines them into a [`LoanGuardVerdict`]
-//!   carrying the [`LoanReach`], both money terms, the soft
-//!   `capacity_penalty`, the seller's `refusal_delta` and a one-line
-//!   diagnostic for `OF_TRACE_PLAYER`.
+//!   carrying both money terms, the affordability they come to, the
+//!   seller's `refusal_delta` and a one-line diagnostic for
+//!   `OF_TRACE_PLAYER`.
 
 use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 
+use crate::club::CareerRunway;
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::mind::{CareerArc, CareerPlanView, MindClock};
+use crate::club::player::mind::{CareerPlanView, MindClock, MindSituation};
+use crate::club::player::statistics::MatchExperienceBackground;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::gate::{EffectivePlayerReputation, thresholds};
-use crate::transfers::loan::agreement::{ParentReading, ParentWillingness};
-use crate::transfers::pipeline::trace::MarketSwitches;
-use crate::{
-    Club, ClubLevelAnchor, Person, Player, PlayerFieldPositionGroup, PlayerStatusType,
-    ReputationLevel,
+use crate::transfers::loan::agreement::{
+    LoanMoney, MoneyReading, ParentReading, ParentWillingness,
 };
-
-/// How far down a loan may reach for this player — the verdict the guard
-/// exists to produce.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoanReach {
-    /// No loan at all. Either the parent would not send him (he is its
-    /// first choice and has not asked to go), or the borrower cannot carry
-    /// the asset — its whole year is worth less than the player, or the
-    /// wage is beyond it.
-    Untouchable,
-    /// Peer clubs only: a side at the parent's own level, in a competition
-    /// of the parent's own standard.
-    PeerLevel,
-    /// One step down — the ordinary loan of a squad player who needs
-    /// football. The existing readiness-keyed destination floors own the
-    /// exact depth.
-    OneStepDown,
-    /// The development pathway: a genuinely below-level youngster drops as
-    /// far as the minutes gate allows.
-    Anywhere,
-}
-
-impl LoanReach {
-    /// Stable label for the trace and the census.
-    pub fn label(self) -> &'static str {
-        match self {
-            LoanReach::Untouchable => "untouchable",
-            LoanReach::PeerLevel => "peer_level",
-            LoanReach::OneStepDown => "one_step_down",
-            LoanReach::Anywhere => "anywhere",
-        }
-    }
-
-    /// Does this verdict permit a loan at all?
-    pub fn allows_loan(self) -> bool {
-        !matches!(self, LoanReach::Untouchable)
-    }
-
-    /// Lowest reputation tier a seller-side broadcast may cascade to for
-    /// this verdict, given the parent's own tier. A listing is consent to
-    /// a loan, not consent to any destination: a peer-level asset stops at
-    /// the parent's tier, a one-step-down asset at the tier below, and the
-    /// development pathway keeps the whole market.
-    pub fn cascade_floor(self, parent_tier: ReputationLevel) -> ReputationLevel {
-        match self {
-            LoanReach::Untouchable | LoanReach::PeerLevel => parent_tier,
-            LoanReach::OneStepDown => parent_tier.next_lower(),
-            LoanReach::Anywhere => ReputationLevel::Amateur,
-        }
-    }
-}
+use crate::transfers::pipeline::trace::MarketSwitches;
+use crate::transfers::squad::SquadReviewPass;
+use crate::{Club, ClubLevelAnchor, Person, Player, PlayerFieldPositionGroup, PlayerStatusType};
 
 /// The borrower half of the pair, read off the club a loan is being
 /// offered to. Every field is already in hand at every call site.
@@ -192,13 +134,20 @@ impl LoanBorrowerProfile {
 /// borrower.
 #[derive(Debug, Clone, Copy)]
 pub struct LoanAssetGuard {
-    ca: u8,
+    /// What he looks like from outside. Never hidden ability: the band
+    /// he is placed in, his readiness and the men counted ahead of him
+    /// are all readings a staff takes.
+    level: u8,
     age: u8,
     group: PlayerFieldPositionGroup,
     parent_anchor: ClubLevelAnchor,
     parent_rank: u8,
     parent_best_in_group: u8,
     parent_league_rep: u16,
+    /// Slots the club's own formation starts in this shirt. The
+    /// difference between a first choice and a squad man is a place in
+    /// the side, not a place in a table of typical depths.
+    starting_slots: usize,
     value: f64,
     salary: u32,
     player_requested: bool,
@@ -211,29 +160,9 @@ pub struct LoanAssetGuard {
 }
 
 impl LoanAssetGuard {
-    /// Value ÷ borrower annual income at which the capacity penalty starts
-    /// to bite …
-    pub const W_SOFT: f64 = 0.35;
-    /// … and at which no club on earth borrows the asset. A loan is a
-    /// season of somebody else's money; a club whose entire year is worth
-    /// less than the player is not a destination, it is a liability.
-    pub const W_MAX: f64 = 1.0;
-    /// Wage share ÷ what the borrower can pay. Above one the club is
-    /// borrowing a wage it cannot carry, whatever the fee is.
-    pub const CARRY_MAX: f64 = 1.0;
-    /// Key-player floor gap a `PeerLevel` borrower may sit below the
-    /// parent's. Ten points is one upgrade band — the difference between
-    /// two clubs of the same standing, not between two levels.
-    pub const PEER_BAND: i16 = 10;
-    /// Share of the parent's league standing a `PeerLevel` borrower's own
-    /// competition must reach.
-    pub const PEER_LEAGUE_SHARE: f32 = 0.85;
-    /// Standing at/above which the player is his club's own level — only
-    /// peers borrow him.
+    /// Standing at/above which the player is his club's own level — the
+    /// top of the readiness scale.
     pub const PEER_STANDING: f32 = 1.0;
-    /// Standing below which he is not a first-team asset at his parent at
-    /// all, and the development floors own the destination.
-    pub const RAW_STANDING: f32 = 0.35;
     /// Oldest age the development pathway covers. Development now means
     /// "below his club's level", not "young" — the age band is only the
     /// outer bound on it.
@@ -244,22 +173,27 @@ impl LoanAssetGuard {
     /// Extra share of the base step-down band a boy of sixteen is granted
     /// on top of it. Renown widens with youth; it never vanishes.
     const RENOWN_YOUTH_WIDENING: f32 = 0.8;
-    /// Seller engagement lost when the parent will not send him there at
-    /// all …
-    const REFUSAL_UNTOUCHABLE: f32 = -60.0;
-    /// … when the borrower sits below the verdict's own floor …
-    const REFUSAL_BELOW_REACH: f32 = -25.0;
-    /// … and the most a merely expensive-for-them destination costs.
-    const REFUSAL_CAPACITY_SPAN: f32 = -25.0;
+    /// Seller engagement a parent that will not lend him costs, at total
+    /// reluctance. Measured against [`ParentWillingness::ENTERTAINS`],
+    /// which is already the point at which a club will have the
+    /// conversation: above the bar the destination owns the refusal,
+    /// below it the parent does, and the cost ramps to the whole of this
+    /// at nought.
+    const REFUSAL_UNWILLING: f32 = -60.0;
+    /// … and what a destination that cannot carry him costs, at total
+    /// unaffordability. Both are ramps in their own term: the room and
+    /// the draw price the same two readings or they price two deals.
+    const REFUSAL_UNAFFORDABLE: f32 = -25.0;
 
     /// Assemble the parent side.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        ca: u8,
+        level: u8,
         age: u8,
         group: PlayerFieldPositionGroup,
         parent_anchor: ClubLevelAnchor,
         parent_rank: u8,
+        starting_slots: usize,
         parent_best_in_group: u8,
         parent_league_rep: u16,
         value: f64,
@@ -270,11 +204,12 @@ impl LoanAssetGuard {
         listing_resignation: f32,
     ) -> Self {
         LoanAssetGuard {
-            ca,
+            level,
             age,
             group,
             parent_anchor,
             parent_rank,
+            starting_slots,
             parent_best_in_group,
             parent_league_rep,
             value,
@@ -321,12 +256,15 @@ impl LoanAssetGuard {
         let team = club.teams.main().or_else(|| club.teams.teams.first())?;
         let group = player.position().position_group();
         Some(LoanAssetGuard {
-            ca: player.player_attributes.current_ability,
+            level: AbilityEstimator::observable_level(player),
             age: player.age(date),
             group,
             parent_anchor: ClubLevelAnchor::for_reputation(team.reputation.overall_score()),
             parent_rank: PlayerView::position_group_rank(club, player.id, group),
-            parent_best_in_group: PlayerView::best_ca_in_group(club, group),
+            starting_slots: SquadReviewPass::group_min_needed(group, team.tactics().positions())
+                .saturating_sub(1)
+                .max(1),
+            parent_best_in_group: PlayerView::best_observable_in_group(club, group),
             parent_league_rep,
             value,
             salary: contract.salary,
@@ -339,35 +277,25 @@ impl LoanAssetGuard {
                 true,
             ),
             listing_resignation: player.market_resignation(date),
-            plan_widening: Self::plan_widening_of(player, date),
+            plan_widening: player
+                .mind
+                .career
+                .plan_view(MindClock::day(date))
+                .renown_widening(),
         })
-    }
-
-    /// How far the arc he is living out has already reconciled him to a
-    /// smaller club.
-    fn plan_widening_of(player: &Player, date: NaiveDate) -> f32 {
-        let plan = player.mind.career.plan_view(MindClock::day(date));
-        match plan.arc {
-            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => plan.strength,
-            _ => 0.0,
-        }
     }
 
     /// The parent's own position on lending him out, 0..1 — the
     /// destination-independent half every loan-INTENT pass needs, and
     /// those passes run before any destination exists.
     ///
-    /// This used to be a boolean veto (`parent_holds`) applied at five
-    /// call sites, which is what made the club's own first choice
-    /// unloanable however loudly he asked to go. The same reading is
-    /// still taken — it is the `starter_hold` term — but it is priced
-    /// now rather than enforced, and everything else the parent knows
-    /// about him is priced beside it. 1.0 whenever the parent side
-    /// cannot be read at all, and on the `OF_LOAN_GUARD_OFF` arm, so it
-    /// only ever restrains an intent.
-    pub fn willingness_for(club: &Club, player: &Player, date: NaiveDate) -> f32 {
+    /// Fully willing whenever the parent side cannot be read at all, and
+    /// on the `OF_LOAN_GUARD_OFF` arm, so it only ever restrains an
+    /// intent. The reading it is built from is the one the agreement
+    /// prices with, carried whole rather than flattened to a score.
+    pub fn willingness_for(club: &Club, player: &Player, date: NaiveDate) -> ParentWillingness {
         if MarketSwitches::loan_guard_off() {
-            return 1.0;
+            return ParentWillingness::open();
         }
         // Value and the parent's competition are money / destination
         // terms, which none of the readings below touch — so neither is
@@ -375,45 +303,58 @@ impl LoanAssetGuard {
         // else. The valuation matters: this runs per player per day on
         // the country listing pass.
         let Some(guard) = Self::from_parts(club, player, date, 0, 0.0) else {
-            return 1.0;
+            return ParentWillingness::open();
         };
-        ParentWillingness::of(&guard.parent_reading(club, player, date)).score
+        ParentWillingness::of(&guard.parent_reading(club, player, date))
     }
 
     /// Everything the parent can see about him, gathered from the club
     /// that owns him.
     fn parent_reading(&self, club: &Club, player: &Player, date: NaiveDate) -> ParentReading {
         let group = self.group;
-        // Across every squad the club owns, because the question the
-        // term asks is "can this club still field sides in this shirt",
-        // and the answer runs through the whole building — the reserve
-        // keeper is the first team's cover and the youth keeper is his.
+        // The FIELDING squad, against the formation's own floor. Counting
+        // every roster in the building against a flat `typical_starters`
+        // made `depth_room` 1.0 for any club with two teams, so the term
+        // said nothing at all — and the reserve keeper it counted is not
+        // the man the first team would be short of.
         // Zero means the caller is holding a squad the club's own
         // rosters do not contain, which is no view rather than an empty
         // position group.
         let group_count = club
             .teams
-            .iter()
+            .main()
+            .into_iter()
             .flat_map(|team| team.players.iter())
             .filter(|p| p.position().position_group() == group && !p.is_on_loan())
             .count();
         // A rolling start share is only worth reading once he has played
-        // enough for it to mean anything; before that the neutral 0.5
-        // says "not enough football to judge", exactly as it does in the
-        // mind's own picture.
-        let starter_share = if player.happiness.appearances_tracked >= Self::TRACKED_APPS {
+        // enough for it to mean anything. Before that the club falls back
+        // on the season he did play — the ledger's own record — and only
+        // then on "no view", which the minutes term reads as a full
+        // reason to lend rather than as none: a man nobody has watched is
+        // exactly the man a loan is for.
+        let starter_share = if player.happiness.appearances_tracked >= MindSituation::TRACKED_APPS {
             player.happiness.starter_ratio
         } else {
-            0.5
+            let record = MatchExperienceBackground::from_player(player).recent_start_share;
+            if record > 0.0 {
+                record
+            } else {
+                Self::NO_VIEW_SHARE
+            }
         };
         let plan = player.plan.as_ref();
         ParentReading {
             first_choice: self.first_choice(),
             starter_share,
-            runway: ((34.0_f32 - self.age as f32) / 12.0).clamp(0.0, 1.0),
+            runway: CareerRunway::at(self.age),
             loans_used: plan.map(|p| p.loans_used).unwrap_or(0),
             group_count,
-            group_min_needed: group.typical_starters(),
+            group_min_needed: club
+                .teams
+                .main()
+                .map(|team| SquadReviewPass::group_min_needed(group, team.tactics().positions()))
+                .unwrap_or_else(|| group.typical_starters()),
             rank: self.parent_rank,
             stage: player.pathway_stage(),
             philosophy: club.philosophy,
@@ -426,9 +367,6 @@ impl LoanAssetGuard {
             advertised: self.seller_advertised,
         }
     }
-
-    /// Matches the mind's own bar for trusting a rolling start share.
-    const TRACKED_APPS: u8 = 6;
 
     /// Approximate the parent side across a border, from the facts a
     /// cross-country player summary carries.
@@ -443,7 +381,7 @@ impl LoanAssetGuard {
     /// are all in hand.
     #[allow(clippy::too_many_arguments)]
     pub fn from_summary(
-        ca: u8,
+        level: u8,
         age: u8,
         group: PlayerFieldPositionGroup,
         parent_world_rep: i16,
@@ -454,19 +392,23 @@ impl LoanAssetGuard {
         seller_advertised: bool,
         player_effective_rep: i16,
     ) -> Self {
-        let parent_rank = if parent_best_in_group > 0 && ca >= parent_best_in_group {
+        let parent_rank = if parent_best_in_group > 0 && level >= parent_best_in_group {
             0
         } else {
             group.typical_starters().min(u8::MAX as usize) as u8
         };
         LoanAssetGuard {
-            ca,
+            level,
             age,
             group,
             parent_anchor: ClubLevelAnchor::for_reputation(
                 (parent_world_rep.max(0) as f32 / 10_000.0).clamp(0.0, 1.0),
             ),
             parent_rank,
+            // A summary carries no formation, so the typical shape of the
+            // shirt stands in — named as the approximation it is, like
+            // the two beside it.
+            starting_slots: group.typical_starters(),
             parent_best_in_group,
             parent_league_rep,
             value,
@@ -482,11 +424,31 @@ impl LoanAssetGuard {
     /// The summary path's own plan reading — a borrowing country cannot
     /// reach his mind, so the arc travels on the summary instead.
     pub fn with_plan(mut self, plan: CareerPlanView) -> Self {
-        self.plan_widening = match plan.arc {
-            Some(CareerArc::ProveOnLoan) | Some(CareerArc::StepDownToPlay) => plan.strength,
-            _ => 0.0,
-        };
+        self.plan_widening = plan.renown_widening();
         self
+    }
+
+    /// The shirt he is judged in, the club's own level bands and the
+    /// standard of its competition — the three readings the
+    /// `OF_LOAN_AGREEMENT_OFF` arm rebuilds its peer band from.
+    pub(crate) fn group(&self) -> PlayerFieldPositionGroup {
+        self.group
+    }
+
+    pub(crate) fn parent_anchor(&self) -> ClubLevelAnchor {
+        self.parent_anchor
+    }
+
+    pub(crate) fn parent_league_rep(&self) -> u16 {
+        self.parent_league_rep
+    }
+
+    /// The club's own first choice in this shirt, with nobody having
+    /// opened the door — his request or a loan listing is his decision
+    /// rather than the club's. A reading; the price of it is the
+    /// `starter_hold` term.
+    pub fn parent_holds(&self) -> bool {
+        self.first_choice() && !self.player_requested && !self.seller_advertised
     }
 
     /// Where he stands at his own club, 0..1.25: 0 at the rotation floor,
@@ -496,14 +458,32 @@ impl LoanAssetGuard {
         let key = self.parent_anchor.key_floor(self.group) as f32;
         let rotation = self.parent_anchor.rotation_floor(self.group) as f32;
         let span = (key - rotation).max(1.0);
-        ((self.ca as f32 - rotation) / span).clamp(0.0, 1.25)
+        ((self.level as f32 - rotation) / span).clamp(0.0, 1.25)
     }
 
+    /// Start share that stands the minutes term fully up — a man nobody
+    /// has watched is exactly the man a loan is for, so "no view" reads
+    /// as no football rather than as a full season of it.
+    const NO_VIEW_SHARE: f32 = 0.0;
+
     /// The club's own first choice in this shirt: at its key-player level
-    /// AND inside the slots that actually start.
+    /// AND inside the slots the formation actually starts.
     pub fn first_choice(&self) -> bool {
-        self.ca as i16 >= self.parent_anchor.key_floor(self.group)
-            && (self.parent_rank as usize) < self.group.typical_starters()
+        self.level as i16 >= self.parent_anchor.key_floor(self.group)
+            && (self.parent_rank as usize) < self.starting_slots
+    }
+
+    /// Would a loan of this man be a DEVELOPMENT loan — one he needs
+    /// because he is below his own club's level — rather than merely a
+    /// loan of somebody young?
+    ///
+    /// The one definition. The foreign sweep read a birth year, the
+    /// domestic one read the level, and the guard read both, so the same
+    /// player was a prospect on one path and a squad man on another.
+    pub fn development_loan(player: &Player, club: &Club, date: NaiveDate) -> bool {
+        Self::from_parts(club, player, date, 0, 0.0)
+            .map(|guard| guard.is_development())
+            .unwrap_or(false)
     }
 
     /// Development means BELOW HIS CLUB'S LEVEL, not "young". The age band
@@ -513,7 +493,7 @@ impl LoanAssetGuard {
     /// pathway lifts must not lift for him.
     pub fn is_development(&self) -> bool {
         self.age <= Self::DEVELOPMENT_AGE
-            && (self.ca as i16) < self.parent_anchor.regular_floor(self.group)
+            && (self.level as i16) < self.parent_anchor.regular_floor(self.group)
     }
 
     /// How ready he already is for his parent's own first team, 0..1 —
@@ -521,19 +501,6 @@ impl LoanAssetGuard {
     /// happens to be the best body in the group.
     pub fn readiness(&self) -> f32 {
         (self.standing() / Self::PEER_STANDING).clamp(0.0, 1.0)
-    }
-
-    /// The destination-independent half: would the parent entertain a loan
-    /// AT ALL? A club does not lend its starter by its own choice — but
-    /// the player's own request does open the door, because that is his
-    /// decision rather than the club's.
-    ///
-    /// A seller-advertised loan listing is consent to a loan, so it lifts
-    /// the first-choice hold too (existing doctrine: availability opens
-    /// gates). It never lifts the two money terms, which are the
-    /// borrower's problem and are settled in [`Self::assess`].
-    pub fn parent_holds(&self) -> bool {
-        self.first_choice() && !self.player_requested && !self.seller_advertised
     }
 
     /// Reputation gap a loan destination may sit below the player's own
@@ -581,74 +548,52 @@ impl LoanAssetGuard {
         Self::renown_gap_tolerated_with(self.age, self.listing_resignation, self.plan_widening)
     }
 
-    /// How far a loan could reach on the PARENT side alone — his standing
-    /// at his own club, with no borrower in the picture. The two money
-    /// terms belong to the pair and can only ever narrow this further, so
-    /// this is the reading the seller-side cascade floor is built from.
-    pub fn parent_reach(&self) -> LoanReach {
-        let standing = self.standing();
-        if self.parent_holds() {
-            LoanReach::Untouchable
-        } else if standing < Self::RAW_STANDING || self.is_development() {
-            LoanReach::Anywhere
-        } else if standing >= Self::PEER_STANDING {
-            LoanReach::PeerLevel
-        } else {
-            LoanReach::OneStepDown
-        }
-    }
-
     /// Price one destination.
+    ///
+    /// Reads, never refuses. `willingness` is what [`ParentWillingness`]
+    /// already made of this player, `parent_subsidy` the share of his
+    /// wage the parent means to keep paying — the term that decides what
+    /// the borrower is actually left carrying, and the one the
+    /// negotiation room has no other way to see.
     ///
     /// Both money terms read 0 — "no objection" — when the borrower's
     /// books cannot be read at all. That is not a nicety: a club has no
     /// income history on the day a world is created, and a guard that read
     /// a missing ledger as "this club earns nothing" would call every loan
-    /// in the game untouchable for the first year. Unknown stands the gate
-    /// down, exactly as an unknown competition stands the division gate
-    /// down.
-    pub fn assess(&self, borrower: &LoanBorrowerProfile) -> LoanGuardVerdict {
+    /// in the game unaffordable for the first year.
+    pub fn assess(
+        &self,
+        borrower: &LoanBorrowerProfile,
+        willingness: f32,
+        parent_subsidy: f32,
+    ) -> LoanGuardVerdict {
         let weight = if borrower.income > 0 {
             self.value / borrower.income as f64
         } else {
             0.0
         };
-        let carry = self.carry(borrower);
-        let standing = self.standing();
-
-        let reach = if weight > Self::W_MAX || carry > Self::CARRY_MAX {
-            LoanReach::Untouchable
-        } else {
-            self.parent_reach()
-        };
-
-        let within_reach = match reach {
-            LoanReach::Untouchable => false,
-            LoanReach::PeerLevel => self.clears_peer_band(borrower),
-            // The readiness-keyed destination floors
-            // (`LoanDestinationLevel`) own the exact depth of these two,
-            // and every call site runs them beside this one.
-            LoanReach::OneStepDown | LoanReach::Anywhere => true,
-        };
-
-        let capacity_penalty =
-            (((weight - Self::W_SOFT) / (Self::W_MAX - Self::W_SOFT)) as f32).clamp(0.0, 1.0);
-        let refusal_delta = if matches!(reach, LoanReach::Untouchable) {
-            Self::REFUSAL_UNTOUCHABLE
-        } else if !within_reach {
-            Self::REFUSAL_BELOW_REACH
-        } else {
-            Self::REFUSAL_CAPACITY_SPAN * capacity_penalty
-        };
-
-        LoanGuardVerdict {
-            reach,
-            within_reach,
+        let carry = self.carry(borrower, parent_subsidy);
+        // The fee belongs to the pair the call site is pricing, not to the
+        // asset: what the guard can see is what the borrower earns and
+        // what it already pays.
+        let money = LoanMoney::of(&MoneyReading {
             weight,
             carry,
-            standing,
-            capacity_penalty,
-            refusal_delta,
+            asking: 0.0,
+            max_loan_fee: 0.0,
+            development: parent_subsidy > 0.0,
+        });
+        let willingness = willingness.clamp(0.0, 1.0);
+
+        LoanGuardVerdict {
+            weight,
+            carry,
+            standing: self.standing(),
+            willingness,
+            affordability: money.affordability,
+            refusal_delta: Self::REFUSAL_UNWILLING
+                * (1.0 - willingness / ParentWillingness::ENTERTAINS).clamp(0.0, 1.0)
+                + Self::REFUSAL_UNAFFORDABLE * (1.0 - money.affordability),
             renown_band: self.renown_band(),
             renown_gap: (self.player_effective_rep - borrower.reach) as f32,
         }
@@ -659,32 +604,21 @@ impl LoanAssetGuard {
     /// stretch, or — for a club with no headroom at all — what it already
     /// pays its best-paid player. Above one, the deal is a wage the
     /// borrower cannot carry however free the loan is.
-    fn carry(&self, borrower: &LoanBorrowerProfile) -> f64 {
+    fn carry(&self, borrower: &LoanBorrowerProfile, parent_subsidy: f32) -> f64 {
         // Neither a wage budget nor a single salary on the books: this
         // club's payroll is unknown, not zero. Stand the term down.
         if borrower.wage_headroom <= 0 && borrower.top_earner == 0 {
             return 0.0;
         }
-        let (borrower_wage, _) =
-            WageCalculator::loan_wage_split_v2(self.salary, borrower.wage_split_score(), 0.0);
+        let (borrower_wage, _) = WageCalculator::loan_wage_split_v2(
+            self.salary,
+            borrower.wage_split_score(),
+            parent_subsidy,
+        );
         let ceiling = (borrower.wage_headroom.max(0) as f64 * 1.30)
             .max(borrower.top_earner as f64 * 1.50)
             .max(1.0);
         borrower_wage as f64 / ceiling
-    }
-
-    /// Peer band: a club of the parent's own standing, in a competition of
-    /// the parent's own standard. An unknown competition on either side
-    /// stands the division half down — the club half still speaks.
-    fn clears_peer_band(&self, borrower: &LoanBorrowerProfile) -> bool {
-        let club_ok = borrower.anchor.key_floor(self.group)
-            >= self.parent_anchor.key_floor(self.group) - Self::PEER_BAND;
-        let league_ok = if self.parent_league_rep == 0 || borrower.league_rep == 0 {
-            true
-        } else {
-            borrower.league_rep as f32 >= self.parent_league_rep as f32 * Self::PEER_LEAGUE_SHARE
-        };
-        club_ok && league_ok
     }
 
     /// Total wage bill is carried for the diagnostics line only — the
@@ -696,16 +630,17 @@ impl LoanAssetGuard {
         verdict: &LoanGuardVerdict,
     ) -> String {
         format!(
-            "reach={} within={} standing={:.2} rank={}/{} ca={} parent_best={} \
-             first_choice={} development={} \
+            "willingness={:.2} affordable={:.2} within={} standing={:.2} rank={}/{} ca={} \
+             parent_best={} first_choice={} development={} \
              weight={:.2} (value={:.0} income={}) carry={:.2} (salary={} headroom={} \
              top_earner={} bill={}) renown_gap={:.0}/{:.0} refusal={:+.0}",
-            verdict.reach.label(),
-            verdict.within_reach,
+            verdict.willingness,
+            verdict.affordability,
+            verdict.within_reach(),
             verdict.standing,
             self.parent_rank,
             self.group.typical_starters(),
-            self.ca,
+            self.level,
             self.parent_best_in_group,
             self.first_choice(),
             self.is_development(),
@@ -727,19 +662,17 @@ impl LoanAssetGuard {
 /// One priced (player, borrower) pair.
 #[derive(Debug, Clone, Copy)]
 pub struct LoanGuardVerdict {
-    pub reach: LoanReach,
-    /// The borrower sits inside the verdict's own floor.
-    pub within_reach: bool,
     /// Player value ÷ borrower annual income.
     pub weight: f64,
-    /// Borrower wage share ÷ what the borrower can pay.
+    /// Borrower wage share ÷ what the borrower can pay, after the
+    /// parent's subsidy is written into the split.
     pub carry: f64,
     /// Standing at the parent, 0..1.25.
     pub standing: f32,
-    /// Soft 0..1 ramp between [`LoanAssetGuard::W_SOFT`] and
-    /// [`LoanAssetGuard::W_MAX`] — the borrower can carry him, but not
-    /// comfortably.
-    pub capacity_penalty: f32,
+    /// The parent's own position on lending him out, 0..1.
+    pub willingness: f32,
+    /// What [`LoanMoney`] makes of the two terms above, 0..1.
+    pub affordability: f32,
     /// Added to the seller's engagement chance at the initial approach.
     pub refusal_delta: f32,
     /// The player's own renown band, and how far this borrower falls
@@ -750,10 +683,15 @@ pub struct LoanGuardVerdict {
 }
 
 impl LoanGuardVerdict {
-    /// The one predicate every call site consults: may this loan happen at
-    /// all, to THIS borrower?
-    pub fn allows(&self) -> bool {
-        self.reach.allows_loan() && self.within_reach
+    /// Affordability below which the borrower is not really a
+    /// destination at all.
+    const AFFORDABLE: f32 = 0.2;
+
+    /// The parent would entertain it and the borrower could carry it.
+    /// Not a veto — what it decides is whether an approach starts from
+    /// the listing's own "he is available" base or from a cold one.
+    pub fn within_reach(&self) -> bool {
+        self.willingness >= ParentWillingness::ENTERTAINS && self.affordability >= Self::AFFORDABLE
     }
 }
 
@@ -816,6 +754,7 @@ mod tests {
                 Self::FORWARD,
                 Self::barcelona(),
                 0,
+                1,
                 176,
                 Self::LA_LIGA,
                 189_000_000.0,
@@ -829,147 +768,118 @@ mod tests {
     }
 
     #[test]
-    fn a_nine_figure_first_choice_is_untouchable_on_all_three_terms() {
+    fn a_nine_figure_asset_is_priced_out_of_a_small_club_rather_than_barred() {
         let guard = Fx::yamal(false, false);
         assert!(guard.first_choice(), "co-best forward, rank 0");
         assert!(
             !guard.is_development(),
             "a first-team regular is not on a development pathway"
         );
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert_eq!(verdict.reach, LoanReach::Untouchable);
-        assert!(verdict.weight > LoanAssetGuard::W_MAX, "{verdict:?}");
-        assert!(verdict.carry > LoanAssetGuard::CARRY_MAX, "{verdict:?}");
-        assert!(!verdict.allows());
+        // A club that would send him anywhere; the destination is still
+        // the problem.
+        let verdict = guard.assess(&Fx::cordoba_borrower(), 1.0, 0.0);
+        assert!(verdict.weight > 1.0, "{verdict:?}");
+        assert!(verdict.carry > 1.0, "{verdict:?}");
+        assert!(verdict.affordability < 0.1, "{verdict:?}");
+        assert!(!verdict.within_reach());
+        assert!(verdict.refusal_delta < -20.0, "{verdict:?}");
     }
 
     #[test]
-    fn a_request_lifts_the_first_choice_hold_but_never_the_money() {
+    fn the_same_player_is_affordable_at_a_peer() {
+        let verdict = Fx::yamal(true, false).assess(&Fx::peer_borrower(), 1.0, 0.0);
+        assert!(verdict.affordability > 0.5, "{verdict:?}");
+        assert!(verdict.within_reach(), "{verdict:?}");
+    }
+
+    /// The parent's own reluctance and the borrower's own poverty are two
+    /// separate readings, and each costs the approach in proportion to
+    /// itself. Nothing here is a veto.
+    #[test]
+    fn the_refusal_is_a_ramp_on_each_reading_and_zero_when_both_are_clear() {
         let guard = Fx::yamal(true, false);
-        assert!(!guard.parent_holds(), "his own request opens the door");
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert_eq!(
-            verdict.reach,
-            LoanReach::Untouchable,
-            "the borrower still cannot carry him"
+        let borrower = Fx::peer_borrower();
+        let content = guard.assess(&borrower, 1.0, 0.0);
+        assert!(content.refusal_delta > -15.0, "{content:?}");
+
+        let reluctant = guard.assess(&borrower, 0.0, 0.0);
+        assert!(
+            reluctant.refusal_delta < content.refusal_delta - 40.0,
+            "{reluctant:?} vs {content:?}"
         );
+        assert!(!reluctant.within_reach(), "a club that will not send him");
     }
 
+    /// The case the old `Untouchable` verdict killed: a borrower that can
+    /// only cover a fraction of the wage, and a parent that means to keep
+    /// paying the rest.
     #[test]
-    fn a_seller_advertised_listing_lifts_the_hold_but_not_the_weight() {
-        let guard = Fx::yamal(false, true);
-        assert!(!guard.parent_holds());
-        assert!(Fx::yamal(false, false).parent_holds());
-        assert_eq!(
-            guard.assess(&Fx::cordoba_borrower()).reach,
-            LoanReach::Untouchable
-        );
-    }
-
-    #[test]
-    fn the_same_player_reaches_a_peer_when_his_club_consents() {
-        let guard = Fx::yamal(true, false);
-        let verdict = guard.assess(&Fx::peer_borrower());
-        assert_eq!(verdict.reach, LoanReach::PeerLevel);
-        assert!(verdict.allows(), "{verdict:?}");
-        assert!(verdict.weight <= LoanAssetGuard::W_MAX);
-        assert!(verdict.carry <= LoanAssetGuard::CARRY_MAX);
-    }
-
-    #[test]
-    fn a_raw_seventeen_year_old_under_the_same_best_goes_anywhere() {
-        let guard = LoanAssetGuard::new(
-            120,
-            17,
-            Fx::FORWARD,
-            Fx::barcelona(),
-            4,
-            176,
-            Fx::LA_LIGA,
-            2_000_000.0,
-            120_000,
-            false,
-            true,
-            1_200,
-            0.0,
-        );
-        assert!(guard.is_development());
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert_eq!(verdict.reach, LoanReach::Anywhere);
-        assert!(verdict.allows());
-    }
-
-    #[test]
-    fn a_rotation_player_is_one_step_down_and_stops_at_the_tier_below() {
-        // A 22-year-old at his club's regular level but short of its key
-        // floor: a squad player, not a prospect and not a starter.
-        let anchor = Fx::barcelona();
-        let ca = (anchor.key_floor(Fx::FORWARD) - 4) as u8;
-        let guard = LoanAssetGuard::new(
-            ca,
-            22,
-            Fx::FORWARD,
-            anchor,
-            3,
-            176,
-            Fx::LA_LIGA,
-            8_000_000.0,
-            900_000,
-            false,
-            true,
-            3_000,
-            0.0,
-        );
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert_eq!(verdict.reach, LoanReach::OneStepDown, "{verdict:?}");
-        assert!(verdict.allows());
-        assert_eq!(
-            LoanReach::OneStepDown.cascade_floor(ReputationLevel::Elite),
-            ReputationLevel::Continental
-        );
-        assert_eq!(
-            LoanReach::PeerLevel.cascade_floor(ReputationLevel::Elite),
-            ReputationLevel::Elite
-        );
-    }
-
-    #[test]
-    fn carry_fails_on_a_big_wage_at_a_small_club_even_at_a_zero_fee() {
-        // Value scaled down so `weight` clears; only the wage is the
-        // problem, which is the term a free development loan hides.
+    fn a_parent_paying_the_wage_changes_what_the_borrower_carries() {
         let guard = LoanAssetGuard::new(
             140,
             22,
             Fx::FORWARD,
             Fx::barcelona(),
             3,
+            1,
             176,
             Fx::LA_LIGA,
             5_000_000.0,
-            14_600_000,
+            3_000_000,
             false,
             true,
             3_000,
             0.0,
         );
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert!(verdict.weight <= LoanAssetGuard::W_MAX, "{verdict:?}");
-        assert!(verdict.carry > LoanAssetGuard::CARRY_MAX, "{verdict:?}");
-        assert_eq!(verdict.reach, LoanReach::Untouchable);
+        let unpaid = guard.assess(&Fx::cordoba_borrower(), 1.0, 0.0);
+        let subsidised = guard.assess(&Fx::cordoba_borrower(), 1.0, 1.0);
+        assert!(subsidised.carry < unpaid.carry, "{subsidised:?} {unpaid:?}");
+        assert!(
+            subsidised.affordability > unpaid.affordability,
+            "{subsidised:?} {unpaid:?}"
+        );
     }
 
     #[test]
-    fn the_peer_band_refuses_a_club_two_levels_below() {
-        let guard = Fx::yamal(true, false);
-        // Money terms neutralised: the club half of the band is what is
-        // under test.
-        let mut borrower = Fx::peer_borrower();
-        borrower.anchor = Fx::cordoba();
-        borrower.league_rep = Fx::SEGUNDA;
-        let verdict = guard.assess(&borrower);
-        assert_eq!(verdict.reach, LoanReach::PeerLevel);
-        assert!(!verdict.within_reach, "{verdict:?}");
-        assert!(!verdict.allows());
+    fn a_borrower_whose_books_cannot_be_read_objects_to_nothing() {
+        let guard = Fx::yamal(false, false);
+        let unknown = LoanBorrowerProfile {
+            income: 0,
+            wage_headroom: 0,
+            top_earner: 0,
+            ..Fx::cordoba_borrower()
+        };
+        let verdict = guard.assess(&unknown, 1.0, 0.0);
+        assert_eq!(verdict.weight, 0.0);
+        assert_eq!(verdict.carry, 0.0);
+        assert!(verdict.within_reach(), "{verdict:?}");
+    }
+
+    #[test]
+    fn affordability_falls_continuously_as_the_asset_outgrows_the_borrower() {
+        let at = |value: f64| {
+            LoanAssetGuard::new(
+                140,
+                22,
+                Fx::FORWARD,
+                Fx::barcelona(),
+                3,
+                1,
+                176,
+                Fx::LA_LIGA,
+                value,
+                400_000,
+                false,
+                true,
+                3_000,
+                0.0,
+            )
+            .assess(&Fx::cordoba_borrower(), 1.0, 0.0)
+            .affordability
+        };
+        assert!(at(4_000_000.0) > at(13_500_000.0));
+        assert!(at(13_500_000.0) > at(20_000_000.0));
+        assert!(at(20_000_000.0) > 0.0, "dear, not impossible");
     }
 
     #[test]
@@ -991,31 +901,5 @@ mod tests {
                 > LoanAssetGuard::renown_gap_tolerated(19, 0.0),
             "months unsold widen what he will listen to"
         );
-    }
-
-    #[test]
-    fn capacity_penalty_ramps_between_the_two_weight_bars() {
-        let guard = LoanAssetGuard::new(
-            140,
-            22,
-            Fx::FORWARD,
-            Fx::barcelona(),
-            3,
-            176,
-            Fx::LA_LIGA,
-            // Half-way between W_SOFT and W_MAX of a 20M income.
-            13_500_000.0,
-            400_000,
-            false,
-            true,
-            3_000,
-            0.0,
-        );
-        let verdict = guard.assess(&Fx::cordoba_borrower());
-        assert!(
-            verdict.capacity_penalty > 0.3 && verdict.capacity_penalty < 0.7,
-            "{verdict:?}"
-        );
-        assert!(verdict.refusal_delta < 0.0 && verdict.refusal_delta > -25.0);
     }
 }

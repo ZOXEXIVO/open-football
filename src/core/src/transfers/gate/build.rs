@@ -6,11 +6,9 @@
 //! out of the shapes the pipeline actually carries, whether that is a live
 //! roster or a pre-built [`PlayerSummary`] from another country snapshot.
 //!
-//! The two used to sit in one file, separated by a banner comment and a
-//! mid-file `use` block. That is the whole reason the layer kept collapsing:
-//! nothing stopped a gate from reaching for a club, because the club was
-//! already in scope. [`stance`] and [`fit`] are the same shape — hydration
-//! beside the model it serves.
+//! Hydration lives apart from the model it feeds — [`stance`] and
+//! [`fit`] are the same shape. Put the two in one file and nothing stops
+//! a gate reaching for a club, because the club is already in scope.
 //!
 //! Keeping the builder methods inside a single struct means call sites stay
 //! one-liners and the wage policy / importance heuristics never silently
@@ -29,8 +27,8 @@ use super::{
     TransferPlausibilityEvaluator, TransferPlausibilityInputs, TransferPlausibilityVerdict,
 };
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::mind::MindClock;
 use crate::club::team::squad::SquadEvidenceContext;
+use crate::transfers::loan::agreement::LoanTerms;
 use crate::transfers::market::route::TransferRoutePolicy;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::{
@@ -136,10 +134,10 @@ impl TransferPlausibilityBuilder {
     /// seller-side context carried on the summary
     /// ([`crate::transfers::pipeline::SellerPlausibilityContext`]) instead of
     /// re-resolving the selling club, so a **foreign** target assesses with
-    /// the same rigour as a domestic one. Previously this looked the seller
-    /// club up in the *buyer's* country and returned `None` for every
-    /// cross-country target — which callers read as "not rejected", letting
-    /// a lower-league club publicly chase a first-team player abroad.
+    /// the same rigour as a domestic one. Resolving the seller club in
+    /// the *buyer's* country instead answers `None` for every
+    /// cross-border target, which callers read as "not rejected" — and a
+    /// lower-league club publicly chases a first-team player abroad.
     ///
     /// Returns `Option` for signature stability with the staged callers; the
     /// seller context is always present on a pool-built summary, so the only
@@ -243,6 +241,8 @@ impl TransferPlausibilityBuilder {
             seller_marketed: seller.is_marketed,
             buyer_annual_income: buyer_ctx.buyer_annual_income,
             buyer_top_earner: buyer_ctx.buyer_top_earner,
+            parent_subsidy: target.parent_subsidy,
+            pathway_stage: target.pathway_stage,
         })
     }
 
@@ -387,6 +387,8 @@ impl TransferPlausibilityBuilder {
             date,
         );
 
+        let loan_terms = LoanTerms::of(selling_club, player, date);
+
         TransferPlausibilityInputs {
             manager_affinity: PlayerManagerAffinity::of(player, buying_club, date),
             buyer_rep: buyer_ctx.buyer_rep,
@@ -430,7 +432,7 @@ impl TransferPlausibilityBuilder {
             seller_in_debt: selling_club.finance.balance.balance < 0,
             release_clause_triggered,
             listing_resignation: player.market_resignation(date),
-            player_plan: player.mind.career.plan_view(MindClock::day(date)),
+            player_plan: loan_terms.plan,
             same_country,
             same_league_or_division,
             country_pair_blocked,
@@ -444,6 +446,8 @@ impl TransferPlausibilityBuilder {
             seller_marketed: selling_club.transfer_plan.is_marketed(player.id),
             buyer_annual_income: buyer_ctx.buyer_annual_income,
             buyer_top_earner: buyer_ctx.buyer_top_earner,
+            parent_subsidy: loan_terms.parent_subsidy,
+            pathway_stage: player.pathway_stage(),
         }
     }
 

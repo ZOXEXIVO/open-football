@@ -848,9 +848,10 @@ impl PersonalTermsPackager {
     /// fallback.
     fn promise_from_squad_status(status: &PlayerSquadStatus) -> Option<PromisedSquadStatus> {
         match status {
+            PlayerSquadStatus::MainBackupPlayer => Some(PromisedSquadStatus::MainBackupPlayer),
             PlayerSquadStatus::KeyPlayer => Some(PromisedSquadStatus::KeyPlayer),
             PlayerSquadStatus::FirstTeamRegular => Some(PromisedSquadStatus::FirstTeamRegular),
-            PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::MainBackupPlayer => {
+            PlayerSquadStatus::FirstTeamSquadRotation => {
                 Some(PromisedSquadStatus::FirstTeamSquadRotation)
             }
             PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {

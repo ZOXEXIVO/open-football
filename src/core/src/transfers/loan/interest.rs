@@ -453,12 +453,8 @@ impl InterestDraw {
 /// A club's memory of loan approaches that came to nothing, and of where it
 /// has already sent players.
 ///
-/// Neither existed. A rejected loan bid left no trace at all, so the next
-/// Monday's scan re-ran the same decision against the same market and made the
-/// same approach — the "keeps chasing the same player" half of the symptom,
-/// entirely separate from the argmax. Real recruitment moves on for a while
-/// after a knock-back, and moves on for longer the more often it is knocked
-/// back.
+/// Real recruitment moves on for a while after a knock-back, and moves on
+/// for longer the more often it is knocked back.
 pub(in crate::transfers) struct LoanApproachMemory;
 
 impl LoanApproachMemory {

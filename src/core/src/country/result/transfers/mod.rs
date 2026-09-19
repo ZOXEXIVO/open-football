@@ -174,6 +174,11 @@ impl TransferTick {
         country.transfer_market.check_transfer_window(window_open);
         if window_just_closed {
             ListingPass::emit_window_close_limbo(country, current_date);
+            // A loan the club staged and nobody took lapses with the
+            // window it was staged in.
+            for club in country.clubs.iter_mut() {
+                club.on_window_closed(current_date);
+            }
         }
 
         Self::settle_open_business(

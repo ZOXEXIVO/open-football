@@ -35,7 +35,8 @@ use crate::transfers::gate::{
     TransferPlausibilityEvaluator, TransferPlausibilityInputs, TransferPlausibilityVerdict,
 };
 use crate::transfers::loan::LoanPipeline;
-use crate::transfers::loan::guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGuardVerdict};
+use crate::transfers::loan::agreement::LoanTerms;
+use crate::transfers::loan::guard::{LoanBorrowerProfile, LoanGuardVerdict};
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -56,14 +57,13 @@ use chrono::NaiveDate;
 /// against the one number that decides these deals in real life: the
 /// seller's own annual income.
 ///
-/// Both resolvers used to read the fee only against the ASKING PRICE. That
-/// is the right yardstick between peers — a Serie A club selling to
-/// another Serie A club is haggling over a valuation — and it is the wrong
-/// one when a giant calls a mid-table club abroad. A key man at asking
-/// from a far bigger club engaged at 26% per approach and then went on a
-/// rejection cooldown, no matter that the offer was worth half the
-/// seller's yearly revenue. Real clubs at that level do not turn that
-/// down; the decision leaves the coach's hands and becomes the chairman's.
+/// The asking price is the right yardstick between peers — a Serie A club
+/// selling to another Serie A club is haggling over a valuation — and the
+/// wrong one when a giant calls a mid-table club abroad. Read against
+/// asking alone, a key man engages at 26% per approach and then goes on a
+/// rejection cooldown however many times the seller's yearly revenue the
+/// offer is worth. Real clubs at that level do not turn that down: the
+/// decision leaves the coach's hands and becomes the chairman's.
 ///
 /// So: a second axis. `windfall` is 0 for an ordinary fee and 1 for one
 /// that changes the club's year, and it does exactly two things —
@@ -155,8 +155,8 @@ pub(crate) struct NegotiationOutcomes {
     pub(crate) free_agent_rejected_ids: Vec<u32>,
     /// Saga beats for players who live in ANOTHER country — this pass
     /// runs inside the buying country's borrow, so the event is carried
-    /// up and delivered in the serial Phase-C drain. Cross-border moves
-    /// used to be silent to the player at every stage.
+    /// up and delivered in the serial Phase-C drain. Without it a
+    /// cross-border move is silent to the player at every stage.
     pub(crate) player_signals: Vec<PendingPlayerSignal>,
 }
 
@@ -737,44 +737,56 @@ impl NegotiationPass {
         }
     }
 
-    /// Price this loan's destination from the seller's side — the same
-    /// [`LoanAssetGuard`] verdict every loan-scan gate reads, re-read here
-    /// because the approach can also arrive from a path that never ran
-    /// them (a broadcast response, a resumed cascade).
-    ///
-    /// `None` for permanent moves and whenever either side cannot be read
-    /// in this country's borrow — a cross-border seller, above all — which
-    /// leaves the acceptance roll exactly as it was.
     /// Seller engagement for a man his club has advertised and a
-    /// destination inside the verdict's reach. Raised with the
-    /// agreement model: the refusal deltas below price the destination
-    /// continuously now, so the base no longer has to leave room for a
-    /// gate that has already spoken.
+    /// destination it can carry.
     const ENGAGED_BASE: f32 = 90.0;
+    /// … for one nobody asked about …
+    const COLD_BASE: f32 = 35.0;
+    /// … and for one the club has not advertised but was asked about.
+    const WARM_BASE: f32 = 55.0;
     /// How much a parent that actively wants him out adds on top.
     const ENGAGED_WILLINGNESS: f32 = 15.0;
 
-    /// The parent's own position on lending him out, 0..1. Zero when
-    /// the pair cannot be read from this country — a cross-border loan
-    /// resolves in the borrower's borrow, where the parent's squad is
-    /// out of scope.
-    fn loan_willingness(country: &Country, neg_data: &NegotiationData, date: NaiveDate) -> f32 {
-        if neg_data.selling_country_id.is_some() {
-            return 0.0;
-        }
-        let Some(selling_club) = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.selling_club_id)
-        else {
-            return 0.0;
+    /// How likely the seller is to engage at all, before the
+    /// plausibility adjustments.
+    ///
+    /// A loan listing says the club will lend him out; it says nothing
+    /// about lending him to a club whose whole year is worth less than
+    /// he is. So the advertised base applies only when the pair is
+    /// within reach, the destination's own refusal is priced on top,
+    /// and the parent's appetite for lending him is priced beside it.
+    /// No verdict — a permanent move, or a seller this country cannot
+    /// read — leaves the roll where it always was.
+    fn engagement_chance(
+        available: bool,
+        unsolicited: bool,
+        is_loan: bool,
+        verdict: Option<&LoanGuardVerdict>,
+    ) -> f32 {
+        let within_reach = verdict.map(|v| v.within_reach()).unwrap_or(true);
+        let base = if available && within_reach {
+            Self::ENGAGED_BASE
+        } else if unsolicited {
+            Self::COLD_BASE
+        } else {
+            Self::WARM_BASE
         };
-        let Some(player) = CountryRoster::find(country, neg_data.player_id) else {
-            return 0.0;
+        let refusal = verdict.map(|v| v.refusal_delta).unwrap_or(0.0);
+        let appetite = if is_loan {
+            Self::ENGAGED_WILLINGNESS * verdict.map(|v| v.willingness).unwrap_or(0.0)
+        } else {
+            0.0
         };
-        LoanAssetGuard::willingness_for(selling_club, player, date)
+        base + refusal + appetite
     }
 
+    /// Price this loan's destination from the seller's side — the same
+    /// [`LoanAssetGuard`] reading every loan scan takes, re-read here
+    /// because the approach can also arrive from a path that never ran
+    /// one (a broadcast response, a resumed cascade).
+    ///
+    /// `None` for permanent moves and whenever either side cannot be read
+    /// in this country's borrow — a cross-border seller, above all.
     fn loan_guard_verdict(
         country: &Country,
         neg_data: &NegotiationData,
@@ -796,9 +808,10 @@ impl NegotiationPass {
         let borrower_league_rep = LoanPipeline::club_league_reputation(country, borrower);
         let profile =
             LoanBorrowerProfile::of(borrower, date, borrower_league_rep)?.with_best_in_group(
-                PlayerView::best_ca_in_group(borrower, player.position().position_group()),
+                PlayerView::best_observable_in_group(borrower, player.position().position_group()),
             );
-        Some(guard.assess(&profile))
+        let terms = LoanTerms::of(selling_club, player, date);
+        Some(guard.assess(&profile, terms.willingness.score, terms.parent_subsidy))
     }
 
     fn resolve_initial_approach(
@@ -835,35 +848,13 @@ impl NegotiationPass {
             1.0
         };
 
-        // The parent's answer to WHERE, not merely to whether. A loan
-        // listing says the club will lend him out; it says nothing about
-        // lending him to a club whose whole year is worth less than he is,
-        // and the 80-point "he's available" base was handing exactly those
-        // approaches a near-certain yes. So the base applies only when the
-        // borrower is inside the verdict's own reach, and the verdict's
-        // refusal is added on top: a flat no for a man the club will not
-        // send anywhere, a firm one for a destination below his level, and
-        // a continuous grumble for a borrower he is merely expensive for.
         let loan_verdict = Self::loan_guard_verdict(country, neg_data, date);
-        let within_reach = loan_verdict.map(|v| v.within_reach).unwrap_or(true);
-        let mut chance: f32 = if neg_data.player_is_available && within_reach {
-            Self::ENGAGED_BASE
-        } else if neg_data.is_unsolicited {
-            35.0
-        } else {
-            55.0
-        };
-        if let Some(verdict) = loan_verdict.as_ref() {
-            chance += verdict.refusal_delta;
-        }
-        // …and the parent's own position on lending him out at all. A
-        // club that WANTS him out rarely refuses the conversation,
-        // whatever the destination costs it — the refusal deltas above
-        // price the destination, and this prices the club.
-        if neg_data.is_loan {
-            chance += Self::ENGAGED_WILLINGNESS
-                * Self::loan_willingness(country, neg_data, date).clamp(0.0, 1.0);
-        }
+        let mut chance: f32 = Self::engagement_chance(
+            neg_data.player_is_available,
+            neg_data.is_unsolicited,
+            neg_data.is_loan,
+            loan_verdict.as_ref(),
+        );
 
         // Reservation-price guardrails: randomness adds texture, but it
         // should not let insulting bids or unaffordable rival taps through.
@@ -964,6 +955,22 @@ impl NegotiationPass {
         if roll < chance {
             Self::open_talks(country, neg_id, neg_data, date, outcomes);
         } else {
+            // Being told no is what buys the standoff. A LIVE approach is
+            // already held off by the negotiation itself, so stamping
+            // every approach barred the pair for a month on top of that,
+            // and was most of why a borrower and a target only ever met
+            // once a window.
+            if neg_data.is_loan {
+                if let Some(buyer) = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == neg_data.buying_club_id)
+                {
+                    buyer
+                        .transfer_plan
+                        .record_loan_approach(neg_data.player_id, date);
+                }
+            }
             Self::refuse_talks(country, neg_id, neg_data, outcomes);
         }
     }
@@ -1111,23 +1118,15 @@ impl NegotiationPass {
 
     /// The player's side of the deal — [`PlayerOfferAppraisal`], once.
     ///
-    /// This used to be an additive pile of roughly twenty hand-set bumps
-    /// rolled once against a uniform, with a hard willingness floor in
-    /// front of it and a separate reservation-wage ladder behind it. A
-    /// player whose wage demand was already met got ONE roll, so a
-    /// 60-point deal died four times in ten on luck alone; a Gulf club
-    /// offering a Premier League star four times his money was refused by
-    /// a −110-per-prestige-point wall before the money was even read; and
-    /// a contented starter halved his wage for a smaller club half the
-    /// time because nothing in the chain knew what he currently earned.
+    /// One utility, one seeded disposition per negotiation, and a
+    /// reservation wage that falls out of the same arithmetic. Wage
+    /// rounds move the utility rather than re-rolling the die, so an
+    /// offer raised to his demand IS accepted rather than dying on luck.
     ///
-    /// Now: one utility, one seeded disposition per negotiation, and a
-    /// reservation wage that falls out of the same arithmetic. Wage rounds
-    /// move the utility rather than re-rolling the die, so an offer raised
-    /// to his demand IS accepted. The old willingness floor survives as a
-    /// *consequence* — an important starter with no push has an `S + P − A`
-    /// no wage a club can hold will pay for — and its three reasons
-    /// survive as [`TermsRefusalCause`] labels.
+    /// A refusal is a consequence rather than a gate in front of the
+    /// money: an important starter with no push has an `S + P − A` no
+    /// wage a club can hold will pay for, and the reasons why reach the
+    /// feed as [`TermsRefusalCause`] labels.
     fn resolve_personal_terms(
         country: &mut Country,
         neg_id: u32,
@@ -1506,9 +1505,8 @@ impl NegotiationPass {
     /// that carries the tier and the opening wage.
     ///
     /// Read and apply are two calls because the completion can fail: a
-    /// stale row makes `complete_transfer` return `None`, and the draw
-    /// used to have been taken already and was never given back. A move
-    /// that did not happen must not spend the owner's money.
+    /// stale row makes `complete_transfer` return `None`, and a move that
+    /// did not happen must not spend the owner's money.
     fn owner_envelope_draw(country: &Country, neg_id: u32) -> Option<(BriefTier, f64)> {
         let negotiation = country.transfer_market.negotiations.get(&neg_id)?;
         if negotiation.is_loan {
@@ -3927,6 +3925,8 @@ mod development_pathway_protection_tests {
                             status: LoanOutStatus::Listed,
                             loan_fee: 0.0,
                             preferred_destination: LoanDestinationPreference::Any,
+                            from_pathway: false,
+                            band_target: None,
                         });
                 }
                 club
@@ -5257,6 +5257,130 @@ mod sunk_cost_floor_tests {
                 SellerDistress::None,
             ),
             0.0
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::mind::{CareerArc, CareerPlanView, PlanStage};
+    use crate::transfers::loan::agreement::{ParentReading, ParentWillingness};
+    use crate::transfers::loan::guard::LoanAssetGuard;
+    use crate::{ClubLevelAnchor, ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
+
+    struct Fx;
+
+    impl Fx {
+        const BACK: PlayerFieldPositionGroup = PlayerFieldPositionGroup::Defender;
+
+        /// A first-choice full-back at a big club who has decided he is
+        /// going out to play — the archetype the old `Untouchable` verdict
+        /// made unloanable however loudly he asked.
+        fn asking_first_choice() -> ParentWillingness {
+            ParentWillingness::of(&ParentReading {
+                first_choice: true,
+                starter_share: 0.9,
+                runway: 0.8,
+                loans_used: 0,
+                group_count: 8,
+                group_min_needed: 4,
+                rank: 0,
+                stage: PathwayStage::Prospect,
+                philosophy: ClubPhilosophy::Balanced,
+                plan_push: Self::asking_plan().loan_push(),
+                requested: false,
+                advertised: false,
+            })
+        }
+
+        fn asking_plan() -> CareerPlanView {
+            CareerPlanView {
+                arc: Some(CareerArc::ProveOnLoan),
+                stage: Some(PlanStage::Asking),
+                band_floor: -0.2,
+                band_floor_home: -0.2,
+                band_target: 0.9,
+                deadline_pressure: 0.3,
+                attempts: 0,
+                strength: 0.8,
+            }
+        }
+
+        /// A club one band below the parent, with room on its wage bill.
+        fn one_band_down() -> LoanBorrowerProfile {
+            LoanBorrowerProfile {
+                income: 60_000_000,
+                wage_bill: 30_000_000,
+                top_earner: 3_000_000,
+                wage_headroom: 6_000_000,
+                best_in_group: 120,
+                anchor: ClubLevelAnchor::for_reputation(0.62),
+                world_rep: 6_200,
+                league_rep: 7_000,
+                reach: 6_500,
+            }
+        }
+
+        fn full_back() -> LoanAssetGuard {
+            LoanAssetGuard::new(
+                135,
+                22,
+                Self::BACK,
+                ClubLevelAnchor::for_reputation(0.88),
+                0,
+                1,
+                140,
+                9_200,
+                14_000_000.0,
+                2_000_000,
+                false,
+                false,
+                6_000,
+                0.0,
+            )
+        }
+    }
+
+    /// The whole point of the agreement: a man his club would lend, at a
+    /// club that can carry him, gets a conversation rather than a 9 %
+    /// roll against a `-60` refusal.
+    #[test]
+    fn a_first_choice_who_has_asked_to_go_gets_a_real_conversation() {
+        let willingness = Fx::asking_first_choice();
+        assert!(
+            willingness.score >= ParentWillingness::ENTERTAINS,
+            "his own plan opens the hold: {willingness:?}"
+        );
+        let verdict = Fx::full_back().assess(&Fx::one_band_down(), willingness.score, 0.0);
+        assert!(verdict.within_reach(), "{verdict:?}");
+        let chance = NegotiationPass::engagement_chance(true, false, true, Some(&verdict));
+        assert!(chance >= 60.0, "{chance} from {verdict:?}");
+    }
+
+    /// And the same deal at a borrower that can only cover a fifth of the
+    /// wage is priced lower when the parent pays nothing, not refused
+    /// when it pays everything.
+    #[test]
+    fn a_parent_that_pays_the_wage_keeps_a_poor_borrower_in_the_conversation() {
+        let poor = LoanBorrowerProfile {
+            income: 12_000_000,
+            wage_bill: 7_000_000,
+            top_earner: 500_000,
+            wage_headroom: 1_400_000,
+            ..Fx::one_band_down()
+        };
+        let guard = Fx::full_back();
+        let unpaid = guard.assess(&poor, 1.0, 0.0);
+        let subsidised = guard.assess(&poor, 1.0, 1.0);
+        assert!(
+            subsidised.affordability > unpaid.affordability,
+            "{subsidised:?} {unpaid:?}"
+        );
+        assert!(
+            NegotiationPass::engagement_chance(true, false, true, Some(&subsidised))
+                > NegotiationPass::engagement_chance(true, false, true, Some(&unpaid)),
+            "a development loan the parent is funding is a better conversation"
         );
     }
 }

@@ -65,7 +65,7 @@ impl LoanSweep {
                         // depth (he is on this roster today); he is simply
                         // never the body that leaves.
                         p.is_force_match_selection
-                            || LoanAssetGuard::willingness_for(club, p, date)
+                            || LoanAssetGuard::willingness_for(club, p, date).score
                                 < ParentWillingness::ENTERTAINS,
                     )
                 })
@@ -180,7 +180,7 @@ impl LoanSweep {
                         // the first team is a promotion, not a development
                         // loan. He still counts toward the youth side's
                         // fielding minimum — he is on this roster today.
-                        LoanAssetGuard::willingness_for(club, p, date)
+                        LoanAssetGuard::willingness_for(club, p, date).score
                             < ParentWillingness::ENTERTAINS,
                     )
                 })

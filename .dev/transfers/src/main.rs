@@ -110,12 +110,11 @@ use core::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use core::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
 use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
+use core::transfers::scouting::recruitment::{
+    RecruitmentDecisionType, ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring,
+};
 use core::transfers::squad::plan::BriefTier;
 use core::transfers::value::PlayerValuationCalculator;
-use core::transfers::scouting::recruitment::{
-    RecruitmentDecisionType, ScoutMonitoringSource, ScoutMonitoringStatus,
-    ScoutPlayerMonitoring,
-};
 use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
 use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as GeographyMoveKind};
 use core::transfers::{
@@ -123,9 +122,9 @@ use core::transfers::{
 };
 use core::utils::DateUtils;
 use core::{
-    Club, ClubLevelAnchor, FootballSimulator, Person, Player, PlayerFieldPositionGroup,
-    PlayerSquadStatus, PlayerStatusType, ReputationLevel, SimulationResult, SimulatorData,
-    TeamType,
+    Club, ClubLevelAnchor, ClubPhilosophy, FootballSimulator, LoanSpellVerdict, PathwayStage,
+    Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
+    SimulationResult, SimulatorData, TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
@@ -397,6 +396,128 @@ impl LoanFlowCensus {
     }
 }
 
+/// What the career-pathway campaign actually claims, counted.
+///
+/// Volume alone says nothing about it: a market can post the same number
+/// of loans while sending only teenagers, only from giants, and never
+/// reading what the spell was worth. These are the rows §5 of the brief
+/// asks for — who lends, who borrows, how far down, at what age, and
+/// what a club does with a man when he comes back.
+#[derive(Debug, Default)]
+struct PathwayCensus {
+    /// Loans out and in, keyed by the band of the league the club plays
+    /// in — the same ladder every other flow row in this harness uses.
+    out_by_band: HashMap<&'static str, usize>,
+    in_by_band: HashMap<&'static str, usize>,
+    /// Club-seasons observed per band, so the rows above read per
+    /// club-season rather than as a raw total.
+    club_seasons_by_band: HashMap<&'static str, usize>,
+    /// Loans whose lender plays in a league worth more than
+    /// [`Self::DEEP_DROP`] times the borrower's.
+    deep_drops: usize,
+    loans_with_leagues: usize,
+    /// Loanee ages at the moment the spell started.
+    loanees_young: usize,
+    loanees_old: usize,
+    loanees_aged: usize,
+    /// What the club did with a returnee, by what the spell was worth.
+    good_returns: usize,
+    good_returns_promoted: usize,
+    poor_returns: usize,
+    poor_returns_moved_on: usize,
+    /// Seniors carrying a live arc, and which one.
+    seniors: usize,
+    seniors_with_plan: usize,
+    arcs: HashMap<&'static str, usize>,
+    /// Stages the clubs of the world have their players on.
+    stages: HashMap<&'static str, usize>,
+    /// What the clubs of the world are FOR.
+    philosophies: HashMap<&'static str, usize>,
+    develop_and_sell_club_seasons: usize,
+    sell_at_peak_sales: usize,
+}
+
+impl PathwayCensus {
+    /// League-reputation ratio at which a loan is a genuine drop in
+    /// level rather than a move between peers.
+    const DEEP_DROP: f32 = 1.5;
+    /// The two ends of the age distribution the brief reads.
+    const YOUNG: u8 = 23;
+    const OLD: u8 = 28;
+    /// Days a club has to act on what a spell was worth before the
+    /// census reads it as not having acted.
+    const PROMOTED_WITHIN_DAYS: i64 = 180;
+    const MOVED_ON_WITHIN_DAYS: i64 = 90;
+
+    fn share(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            return 0.0;
+        }
+        part as f64 / whole as f64
+    }
+
+    /// What a club did with a returnee, by what his spell was worth.
+    fn record_return(
+        &mut self,
+        verdict: Option<LoanSpellVerdict>,
+        stage: PathwayStage,
+        days_since_stage: i64,
+    ) {
+        let Some(verdict) = verdict else {
+            return;
+        };
+        if verdict.is_positive() {
+            self.good_returns += 1;
+            if stage.is_first_team() && days_since_stage <= Self::PROMOTED_WITHIN_DAYS {
+                self.good_returns_promoted += 1;
+            }
+            return;
+        }
+        if matches!(
+            verdict,
+            LoanSpellVerdict::Peripheral | LoanSpellVerdict::Struggled
+        ) {
+            self.poor_returns += 1;
+            let acted = matches!(stage, PathwayStage::LoanOut) || stage.is_terminal();
+            if acted && days_since_stage <= Self::MOVED_ON_WITHIN_DAYS {
+                self.poor_returns_moved_on += 1;
+            }
+        }
+    }
+
+    /// One executed loan, read from both ends.
+    fn record_loan(&mut self, from: Option<&ClubFacts>, to: Option<&ClubFacts>, age: Option<u8>) {
+        if let Some(from) = from {
+            *self.out_by_band.entry(from.band()).or_insert(0) += 1;
+        }
+        if let Some(to) = to {
+            *self.in_by_band.entry(to.band()).or_insert(0) += 1;
+        }
+        if let (Some(from), Some(to)) = (from, to) {
+            if from.league_reputation > 0 && to.league_reputation > 0 {
+                self.loans_with_leagues += 1;
+                if from.league_reputation as f32 > to.league_reputation as f32 * Self::DEEP_DROP {
+                    self.deep_drops += 1;
+                }
+            }
+        }
+        if let Some(age) = age {
+            self.loanees_aged += 1;
+            if age <= Self::YOUNG {
+                self.loanees_young += 1;
+            }
+            if age >= Self::OLD {
+                self.loanees_old += 1;
+            }
+        }
+    }
+
+    fn per_club_season(&self, counts: &HashMap<&'static str, usize>, band: &str) -> f64 {
+        let seasons = self.club_seasons_by_band.get(band).copied().unwrap_or(0);
+        Self::share(counts.get(band).copied().unwrap_or(0), seasons)
+    }
+}
+
 // ---------------------------------------------------------------------
 // Springboard census
 // ---------------------------------------------------------------------
@@ -656,6 +777,7 @@ struct MarketReport {
     clubs: usize,
     free_agents: usize,
     live: LiveMarketCensus,
+    pathway: PathwayCensus,
 }
 
 // ---------------------------------------------------------------------
@@ -902,6 +1024,13 @@ impl MarketCensus {
                             report.moves.loan += 1;
                             entry.1 += 1;
                             report.loan_flow.record(t.from_club_id, t.to_club_id);
+                            report.pathway.record_loan(
+                                club_facts.get(&t.from_club_id),
+                                club_facts.get(&t.to_club_id),
+                                birth_dates
+                                    .get(&t.player_id)
+                                    .map(|b| DateUtils::age(*b, t.transfer_date)),
+                            );
                         }
                         TransferType::Free => {
                             report.moves.free += 1;
@@ -1029,7 +1158,9 @@ impl MarketCensus {
                 for club in &country.clubs {
                     report.clubs += 1;
                     // Strength of the stage this club competes on — the
-                    // yardstick the big-stage pull is measured against.
+                    // yardstick the big-stage pull is measured against,
+                    // and the band the pathway rows are read per
+                    // club-season against.
                     let club_league_reputation = club
                         .teams
                         .main()
@@ -1037,6 +1168,21 @@ impl MarketCensus {
                         .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                         .map(|l| l.reputation)
                         .unwrap_or(0);
+                    *report
+                        .pathway
+                        .club_seasons_by_band
+                        .entry(league_band(club_league_reputation))
+                        .or_insert(0) += 1;
+                    let philosophy = match club.philosophy {
+                        ClubPhilosophy::DevelopAndSell => "develop_and_sell",
+                        ClubPhilosophy::SignToCompete => "sign_to_compete",
+                        ClubPhilosophy::LoanFocused => "loan_focused",
+                        ClubPhilosophy::Balanced => "balanced",
+                    };
+                    *report.pathway.philosophies.entry(philosophy).or_insert(0) += 1;
+                    if club.philosophy == ClubPhilosophy::DevelopAndSell {
+                        report.pathway.develop_and_sell_club_seasons += 1;
+                    }
                     for team in club.teams.teams.iter() {
                         let band = SquadBand::of(team.team_type);
                         // Classify against the player's own squad: that is
@@ -1048,6 +1194,32 @@ impl MarketCensus {
                                 continue;
                             };
                             report.players.total += 1;
+
+                            // ---- pathway ------------------------------
+                            let stage = player.pathway_stage();
+                            *report.pathway.stages.entry(stage.as_token()).or_insert(0) += 1;
+                            if player.age(date) >= PathwayCensus::YOUNG {
+                                report.pathway.seniors += 1;
+                                if let Some(arc) = player.mind.career.plan.map(|plan| plan.arc) {
+                                    report.pathway.seniors_with_plan += 1;
+                                    *report.pathway.arcs.entry(arc.as_token()).or_insert(0) += 1;
+                                }
+                            }
+                            if stage == PathwayStage::SellAtPeak
+                                && club.philosophy == ClubPhilosophy::DevelopAndSell
+                            {
+                                report.pathway.sell_at_peak_sales += 1;
+                            }
+                            // What the club did with a man who came back,
+                            // read off the verdict it recorded and how
+                            // long ago it last moved him.
+                            if let Some(plan) = player.plan.as_ref() {
+                                report.pathway.record_return(
+                                    plan.last_verdict,
+                                    stage,
+                                    (date - plan.stage_since).num_days(),
+                                );
+                            }
 
                             for status in player.statuses.statuses.iter() {
                                 let label = match status.status {
@@ -1265,6 +1437,100 @@ const HOARD_ROWS: usize = 20;
 struct ReportPrinter;
 
 impl ReportPrinter {
+    /// The career-pathway rows: who lends, who borrows, how far down, at
+    /// what age, what a club does with a returnee, and what the players
+    /// of the world have decided about themselves.
+    fn print_pathway(report: &MarketReport) {
+        let p = &report.pathway;
+        println!("\n-- pathway --");
+        for band in BandLadder::RUNGS.iter().rev() {
+            if p.club_seasons_by_band.get(band).copied().unwrap_or(0) == 0 {
+                continue;
+            }
+            println!(
+                "{band:<20} out {:.3} / club-season  in {:.3} / club-season",
+                p.per_club_season(&p.out_by_band, band),
+                p.per_club_season(&p.in_by_band, band),
+            );
+        }
+        println!(
+            "deep drops (lender league > {:.1}x borrower's): {:.1}% of {} priced loans",
+            PathwayCensus::DEEP_DROP,
+            PathwayCensus::share(p.deep_drops, p.loans_with_leagues) * 100.0,
+            p.loans_with_leagues,
+        );
+        println!(
+            "loanee ages: {:.1}% <= {}  |  {:.1}% >= {}  ({} loans dated)",
+            PathwayCensus::share(p.loanees_young, p.loanees_aged) * 100.0,
+            PathwayCensus::YOUNG,
+            PathwayCensus::share(p.loanees_old, p.loanees_aged) * 100.0,
+            PathwayCensus::OLD,
+            p.loanees_aged,
+        );
+        println!(
+            "returnees: {:.1}% of {} good spells back in the reckoning within {}d  |  {:.1}% of {} poor ones re-loaned or listed within {}d",
+            PathwayCensus::share(p.good_returns_promoted, p.good_returns) * 100.0,
+            p.good_returns,
+            PathwayCensus::PROMOTED_WITHIN_DAYS,
+            PathwayCensus::share(p.poor_returns_moved_on, p.poor_returns) * 100.0,
+            p.poor_returns,
+            PathwayCensus::MOVED_ON_WITHIN_DAYS,
+        );
+        println!(
+            "seniors with a live arc: {:.1}% of {}",
+            PathwayCensus::share(p.seniors_with_plan, p.seniors) * 100.0,
+            p.seniors,
+        );
+        let mut arcs: Vec<(&&str, &usize)> = p.arcs.iter().collect();
+        arcs.sort_by(|a, b| b.1.cmp(a.1));
+        if !arcs.is_empty() {
+            let line: Vec<String> = arcs
+                .iter()
+                .map(|(arc, n)| {
+                    format!(
+                        "{arc} {:.0}%",
+                        PathwayCensus::share(**n, p.seniors_with_plan) * 100.0
+                    )
+                })
+                .collect();
+            println!("  arcs: {}", line.join("  "));
+        }
+        let mut stages: Vec<(&&str, &usize)> = p.stages.iter().collect();
+        stages.sort_by(|a, b| b.1.cmp(a.1));
+        let total_stages: usize = p.stages.values().sum();
+        if total_stages > 0 {
+            let line: Vec<String> = stages
+                .iter()
+                .map(|(stage, n)| {
+                    format!(
+                        "{stage} {:.0}%",
+                        PathwayCensus::share(**n, total_stages) * 100.0
+                    )
+                })
+                .collect();
+            println!("  stages: {}", line.join("  "));
+        }
+        let mut philosophies: Vec<(&&str, &usize)> = p.philosophies.iter().collect();
+        philosophies.sort_by(|a, b| b.1.cmp(a.1));
+        let total_clubs: usize = p.philosophies.values().sum();
+        if total_clubs > 0 {
+            let line: Vec<String> = philosophies
+                .iter()
+                .map(|(what, n)| {
+                    format!(
+                        "{what} {:.0}%",
+                        PathwayCensus::share(**n, total_clubs) * 100.0
+                    )
+                })
+                .collect();
+            println!("  philosophies: {}", line.join("  "));
+        }
+        println!(
+            "sell-at-peak staged at trading clubs: {:.2} / club-season",
+            PathwayCensus::share(p.sell_at_peak_sales, p.develop_and_sell_club_seasons),
+        );
+    }
+
     fn pct(part: usize, whole: usize) -> f64 {
         if whole == 0 {
             0.0
@@ -1659,6 +1925,8 @@ impl ReportPrinter {
                 lf.busiest_borrower_share() * 100.0,
             );
         }
+
+        Self::print_pathway(report);
 
         println!("\n-- listings --");
         println!(
@@ -3914,7 +4182,11 @@ impl LoanAssetPrinter {
         );
         println!("  players: {}  [target ~0 from day 30]", census.trap.len());
         let listed = census.trap.iter().filter(|r| r.listed).count();
-        let loan = census.trap.iter().filter(|r| r.loan_intent && !r.listed).count();
+        let loan = census
+            .trap
+            .iter()
+            .filter(|r| r.loan_intent && !r.listed)
+            .count();
         let clean = census.trap.len() - listed - loan;
         println!(
             "  held by Lst: {listed}  |  by Loa alone: {loan}  |  NO status gate at all:              {clean} ({:.1}%)",
@@ -4174,7 +4446,7 @@ struct HarnessUsage;
 
 impl HarnessUsage {
     /// Env switches, in the order the design's Part III runs them.
-    const ARMS: [(&'static str, &'static str); 6] = [
+    const ARMS: [(&'static str, &'static str); 8] = [
         (
             "OF_HOME_REACH_OFF",
             "a club sees only what its own scouts cover — no compatriot reach",
@@ -4196,6 +4468,16 @@ impl HarnessUsage {
             "OF_LOAN_ROUTE_OFF",
             "a loan is priced on the player's passport alone — no corridor \
              between the lending league and the borrowing one",
+        ),
+        (
+            "OF_LOAN_AGREEMENT_OFF",
+            "a loan passes the HEAD gate stack instead of being priced — \
+             see `transfers/loan/legacy.rs`",
+        ),
+        (
+            "OF_CAREER_PLAN_OFF",
+            "no player carries a career arc: every want is re-derived weekly \
+             from ground truth",
         ),
         (
             "OF_CORRIDOR_FLOOR_OFF",

@@ -45,17 +45,18 @@ impl Club {
         loan_players: &mut Vec<SquadDecision>,
         transfer_players: &mut Vec<SquadDecision>,
     ) {
-        /// From this age a senior reserve squad has stopped being a
-        /// development pathway and started being a waiting room. Matches
-        /// the reserve-ambition audit's own prime threshold. A ledger that
-        /// already shows the waiting opens the room earlier.
-        const PARKED_PRIME_AGE: u8 = 24;
-        /// Seasons without a first-team shirt that make a younger man the
-        /// same case as a twenty-four-year-old.
+        /// Prime left at or below which a senior reserve squad has
+        /// stopped being a development pathway and started being a
+        /// waiting room. A ledger that already shows the waiting opens
+        /// the room earlier.
+        const PARKED_RUNWAY: f32 = 0.85;
+        /// Seasons without a first-team shirt that make a man with more
+        /// of a career left the same case.
         const WAITED_SEASONS: u16 = 2;
-        /// Past this age a loan is no longer a career step — the answer is
-        /// a permanent move to a club that will pick him.
-        const LOAN_VIABLE_MAX_AGE: u8 = 27;
+        /// Prime left at or above which a loan is still a career step.
+        /// Below it the answer is a permanent move to a club that will
+        /// pick him.
+        const LOAN_IS_STILL_A_STEP: f32 = 0.55;
         /// Observable level within this much of the first team's promotion
         /// bar means he is genuine cover, not a forgotten man.
         const PROMOTION_REACH: u8 = 6;
@@ -80,7 +81,7 @@ impl Club {
         }
 
         for player in team.players.iter() {
-            let age = player.age(date);
+            let runway = player.career_runway(date);
             if player.is_on_loan() || player.is_force_match_selection {
                 continue;
             }
@@ -108,7 +109,7 @@ impl Club {
             if player.signing_protection_active(date) {
                 continue;
             }
-            if age < PARKED_PRIME_AGE
+            if runway > PARKED_RUNWAY
                 && !StuckCareerScan::of_in_squad(player, date, team.team_type)
                     .is_some_and(|scan| scan.stuck_years >= WAITED_SEASONS)
             {
@@ -147,7 +148,7 @@ impl Club {
                 SquadAssetClass::RotationUseful
                 | SquadAssetClass::UnknownNeedsEvaluation
                 | SquadAssetClass::TrueSurplus => {
-                    if age <= LOAN_VIABLE_MAX_AGE {
+                    if runway >= LOAN_IS_STILL_A_STEP {
                         loan_players.push(SquadDecision::loan(
                             team_idx,
                             player.id,

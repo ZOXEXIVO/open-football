@@ -2,14 +2,17 @@ use super::CountryResult;
 use super::transfers::settlement::TransferClauseSettler;
 use crate::ContractBonusType;
 use crate::PlayerContractProposal;
+use crate::club::CareerRunway;
 use crate::club::SquadDepartures;
 use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
 use crate::club::staff::SeparationCause;
 use crate::club::staff::SpellCloser;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
+use crate::transfers::squad::LevelBand;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::world::SimulatorData;
 use crate::{
@@ -1235,6 +1238,11 @@ impl CountryResult {
         data.continents[pci].countries[pcoi].clubs[pcli]
             .finance
             .add_transfer_income(fee as f64);
+        // The shirt is free at the parent too. A buyout is a sale, and
+        // the man behind him moves up a rung exactly as he would on any
+        // other one — the permanent-move branch has always said so and
+        // this one never did.
+        data.continents[pci].countries[pcoi].clubs[pcli].on_asset_sold(event.player_id, date);
 
         // Mutate the player in place — he stays in the borrower roster.
         let Some((ci, coi, cli, ti)) = data.find_player_position(event.player_id) else {
@@ -1324,6 +1332,14 @@ impl CountryResult {
         date: NaiveDate,
         record_return: bool,
     ) {
+        /// A season of starts at a decent standard: the record that says
+        /// he can play, whatever his birth year.
+        const PROVING_STARTS: u16 = 12;
+        const PROVING_RATING: f32 = 6.5;
+        /// How much of the slight a man with his whole career ahead of
+        /// him still feels.
+        const YOUNGEST_STILL_MINDS: f32 = 0.35;
+
         // Find parent club location first — abort early if missing
         let parent_pos = data.find_club_main_team(event.parent_club_id);
         if parent_pos.is_none() {
@@ -1444,19 +1460,27 @@ impl CountryResult {
                 )
             })
             .unwrap_or(false);
-        let age = DateUtils::age(player.birth_date, date);
-        if fringe_at_parent && age >= 21 && loan_starts >= 12 && loan_rating >= 6.6 {
+        // What the spell was worth is the record, not the birthday: a
+        // season of starts at a decent standard is a man proving he can
+        // play, at any age. What differs is what he came home to.
+        let proved_himself = loan_starts >= PROVING_STARTS && loan_rating >= PROVING_RATING;
+        let runway = CareerRunway::at(DateUtils::age(player.birth_date, date));
+        if fringe_at_parent && proved_himself {
+            // Proved it, and came home to the bench anyway. It costs him
+            // in proportion to how little career he has left to spend
+            // waiting — a boy minds, a twenty-nine-year-old minds more.
             let magnitude = HappinessConfig::default()
                 .catalog
-                .unsettled_after_loan_return;
+                .unsettled_after_loan_return
+                * (1.0f32 - runway).max(YOUNGEST_STILL_MINDS);
             player
                 .happiness
                 .add_event(HappinessEventType::UnsettledAfterLoanReturn, magnitude);
-        } else if age <= 23 && loan_starts >= 12 && loan_rating >= 6.5 {
-            // The young player who went out a prospect comes back a
-            // footballer — quiet confidence rather than grievance. The
-            // record keeps working after this beat fades: the frozen
-            // loan spell raises his own playing-time bar
+        } else if proved_himself {
+            // He went out to be found out and came back a footballer,
+            // into a shirt that is his — quiet confidence rather than
+            // grievance. The record keeps working after this beat fades:
+            // the frozen loan spell raises his own playing-time bar
             // (`own_expected_start_share`) and feeds the monthly
             // returnee-breakthrough audit if the parent never gives him
             // the minutes his record earned.
@@ -1492,10 +1516,17 @@ impl CountryResult {
         // 7.12" instead of "returned from loan".
         let spell_verdict = spell.verdict;
         // The spell is over and he has read it too. What a man does next
-        // after a season away is his own decision, held on his plan —
-        // this replaces the mood that used to be carried across the
-        // return by hand so a later audit could notice it.
-        player.on_loan_spell_reviewed(spell_verdict, data.continents[pci].countries[pcoi].id, date);
+        // after a season away is his own decision, held on his plan.
+        // The band he played it at travels with the verdict: a level he
+        // has held for a season is one he has proved he belongs at, and
+        // it is the floor he will not go below if the next answer is a
+        // permanent drop.
+        let loan_band = LevelBand::at_reputation(
+            AbilityEstimator::observable_level(&player),
+            player.position().position_group(),
+            (event.borrowing_info.reputation as f32 / 10_000.0).clamp(0.0, 1.0),
+        );
+        player.on_loan_spell_reviewed(spell_verdict, loan_band, date);
         let review = LoanEventContext::new(LoanEventKind::LoanSpellReviewed)
             .with_parent_club(event.parent_club_id)
             .with_loan_club(event.borrowing_club_id)
@@ -1547,7 +1578,8 @@ impl CountryResult {
         // he is home.
         data.continents[pci].countries[pcoi].clubs[pcli].on_loanee_returned(
             event.player_id,
-            spell_verdict,
+            &spell,
+            loan_band,
             date,
         );
 
@@ -1609,7 +1641,11 @@ impl CountryResult {
     /// `execute_loan_return` — a recalled thriving senior walking into a
     /// fringe role picks up `UnsettledAfterLoanReturn` there.
     pub(super) fn process_loan_recalls(data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
-        if date.day() != 1 {
+        // Twice a month. A spell that has gone wrong is a fortnight of a
+        // boy's season, and a depth emergency at the parent is this
+        // weekend's problem — a monthly pass answered either of them an
+        // average of a fortnight late.
+        if date.day() != 1 && date.day() != 15 {
             return;
         }
         // An imminent natural return needs no recall.
@@ -2738,6 +2774,7 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::CareerArc;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
     use crate::league::{
@@ -3792,6 +3829,107 @@ mod tests {
         assert_eq!(
             review.magnitude, 0.0,
             "the report states the record; the return moods carry the feeling"
+        );
+    }
+
+    /// A spell worth something buys him a claim on a shirt, and the
+    /// claim has to survive the weeks before he is next picked.
+    ///
+    /// The drive home resets the rolling start share to its neutral 0.5
+    /// and the count behind it to zero. Read as football, that placeholder
+    /// says he is playing, which answers the very claim the spell earned
+    /// — on the first weekly think, before the parent has named him in a
+    /// squad.
+    #[test]
+    fn a_standout_returnee_keeps_his_claim_until_somebody_plays_him() {
+        let mut data = recall_world(None);
+        {
+            let country = data.continents[0].countries.get_mut(0).unwrap();
+            let borrower = country.clubs.iter_mut().find(|c| c.id == 200).unwrap();
+            let loanee = borrower.teams.teams[0]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == 55)
+                .unwrap();
+            loanee.statistics.played = 28;
+            loanee.statistics.played_subs = 3;
+            loanee.statistics.rating_points = 7.45 * 31.0;
+            loanee.statistics.rating_weight = 31.0;
+            let loan = loanee.contract_loan.as_mut().unwrap();
+            loan.started = Some(d(2025, 8, 1));
+            loan.expiration = d(2026, 6, 1);
+        }
+
+        CountryResult::process_loan_returns(&mut data, 1, d(2026, 6, 1));
+
+        let arc_after = |data: &SimulatorData| {
+            data.country(1)
+                .unwrap()
+                .clubs
+                .iter()
+                .find(|c| c.id == 100)
+                .unwrap()
+                .teams
+                .teams
+                .iter()
+                .flat_map(|t| t.players.players.iter())
+                .find(|p| p.id == 55)
+                .expect("he is home")
+                .mind
+                .career
+                .plan
+                .map(|plan| plan.arc)
+        };
+        assert_eq!(
+            arc_after(&data),
+            Some(CareerArc::ClaimMyPlace),
+            "a standout spell is a claim on the shirt"
+        );
+
+        let think = |data: &mut SimulatorData, date: NaiveDate| {
+            for club in data.continents[0].countries[0].clubs.iter_mut() {
+                for team in club.teams.teams.iter_mut() {
+                    let Some(player) = team.players.players.iter_mut().find(|p| p.id == 55) else {
+                        continue;
+                    };
+                    let ctx = player.mind_context(date, Some(club.id));
+                    let situation = player.mind_situation(date, 1, "");
+                    player.mind.tick_with(&ctx, &situation);
+                }
+            }
+        };
+
+        for week in 1..=4 {
+            think(&mut data, d(2026, 6, 1) + chrono::Duration::days(7 * week));
+        }
+        assert_eq!(
+            arc_after(&data),
+            Some(CareerArc::ClaimMyPlace),
+            "nobody has picked him yet, so nothing has answered him"
+        );
+
+        // Two months of it, and he is in the side. That answers it.
+        {
+            let parent = data.continents[0].countries[0]
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == 100)
+                .unwrap();
+            let returnee = parent.teams.teams[0]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == 55)
+                .unwrap();
+            returnee.happiness.starter_ratio = 0.6;
+            returnee.happiness.appearances_tracked = 8;
+        }
+        think(&mut data, d(2026, 8, 1));
+        assert_ne!(
+            arc_after(&data),
+            Some(CareerArc::ClaimMyPlace),
+            "the club gave him the look his record earned"
         );
     }
 

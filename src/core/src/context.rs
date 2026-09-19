@@ -7,6 +7,7 @@ use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, 
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
+use crate::transfers::market::window::TransferWindowManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -61,10 +62,20 @@ impl<'gc> GlobalContext<'gc> {
         season_dates: SeasonDates,
     ) -> Self {
         let mut ctx = GlobalContext::clone(self);
+        // The registration calendar, resolved once per country per tick.
+        // A man who means to be somewhere else lives against this date,
+        // not against a flat season.
+        let date = self.simulation.date.date();
+        let days_to_next_window =
+            TransferWindowManager::for_country(country_id, &country_code, date)
+                .next_registration_open_date(country_id, date)
+                .map(|open| (open - date).num_days().clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(u16::MAX);
         ctx.country = Some(
             CountryContext::with_people_names(country_id, people_names)
                 .with_code(country_code)
-                .with_season_dates(season_dates),
+                .with_season_dates(season_dates)
+                .with_window_clock(days_to_next_window),
         );
         ctx
     }

@@ -65,11 +65,11 @@ impl TeamBehaviour {
             // High priority: unhappy players. A player the club is moving
             // on has had his conversation — he was told he is not in the
             // plans when he was listed — and the market owns him now. The
-            // weekly playing-time talk used to promise him minutes the
-            // manager could not give, and every successful one cleared his
-            // unhappiness, so the six-month clock behind his own transfer
-            // request never completed: seventeen promises in a season to a
-            // keeper the board had listed three times.
+            // weekly playing-time talk would otherwise promise him
+            // minutes the manager cannot give, and every successful one
+            // clears his unhappiness, so the six-month clock behind his
+            // own transfer request never completes — seventeen promises
+            // in a season to a keeper the board has listed three times.
             if player.statuses.has(PlayerStatusType::Unh) && !player.is_being_moved_on() {
                 // Decide between playing time talk and morale talk
                 let talk_type = if player.happiness.factors.playing_time < -5.0 {
@@ -466,25 +466,20 @@ impl TeamBehaviour {
 
             // ── Check 1: what his own plan says ──
             //
-            // One channel, and it is his. Three ad-hoc formulas used to
-            // sit here — a senior-stuck ladder keyed on age bands, a
-            // homesick-loan branch keyed on a mood, and a prospect
-            // branch with its own ambition × determination × age-urgency
-            // desire — and they disagreed about the same man: a
-            // twenty-three-year-old non-starter fell through all three
-            // while the mind was carrying `GoOutOnLoan` the whole time.
-            //
-            // The arc he is living out already knows what he wants and
-            // how loudly (its rung IS the goal's rung), so the talk is
-            // simply the moment he takes it to the manager.
+            // One channel, and it is his. The arc he is living out
+            // already knows what he wants and how loudly — its rung IS
+            // the goal's rung — so the talk is simply the moment he
+            // takes it to the manager.
             let plan = player.mind.career.plan_view(MindClock::day(current_date));
             if let (Some(arc), Some(stage)) = (plan.arc, plan.stage) {
                 let talk = match arc {
                     CareerArc::ProveOnLoan if stage.is_asking() => {
                         Some(ManagerTalkType::LoanRequest)
                     }
+                    // He has outgrown the place. That is a conversation
+                    // about leaving, not about the team sheet.
                     CareerArc::StepUp if stage.is_asking() => {
-                        Some(ManagerTalkType::PlayingTimeRequest)
+                        Some(ManagerTalkType::TransferDiscussion)
                     }
                     // He came home with a record and the club has not
                     // acted on it. He does not ask for another loan —
@@ -1781,12 +1776,8 @@ mod coach_termination_tests {
 
 #[cfg(test)]
 mod plan_escalation_tests {
-    //! A player takes his own plan to the manager. Three ad-hoc ladders
-    //! used to decide this — an age-banded stuck-career escalation, a
-    //! homesick-loan branch keyed on a mood, and a prospect branch with
-    //! its own desire formula — and they disagreed about the same man.
-    //! One channel now: the arc he is living out, at the rung he has
-    //! said it out loud.
+    //! A player takes his own plan to the manager. One channel: the arc
+    //! he is living out, at the rung he has said it out loud.
     use super::*;
     use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
@@ -1862,7 +1853,7 @@ mod plan_escalation_tests {
                 // resolves to; the plan holds the date, not the number.
                 let left = ((1.0 - deadline_pressure) * CareerPlan::DEADLINE_HORIZON) as u16;
                 let mut career_plan =
-                    CareerPlan::new(arc, GoalOrigin::Survival, 0.7, today, left, 0.6, true);
+                    CareerPlan::new(arc, GoalOrigin::Survival, 0.7, today, left, 0.6);
                 career_plan.escalate(stage);
                 player.mind.career.plan = Some(career_plan);
             }
@@ -1907,8 +1898,8 @@ mod plan_escalation_tests {
         assert_eq!(result.manager_talks.len(), 1);
         assert_eq!(
             result.manager_talks[0].talk_type,
-            ManagerTalkType::PlayingTimeRequest,
-            "a man who has outgrown the club asks for the move, not a loan"
+            ManagerTalkType::TransferDiscussion,
+            "a man who has outgrown the club asks for the move, not for the team sheet"
         );
     }
 

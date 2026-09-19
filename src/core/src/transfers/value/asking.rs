@@ -15,10 +15,10 @@ use crate::utils::FormattingUtils;
 use crate::{Club, Country, Player};
 
 /// The seller's ask.
-pub(in crate::transfers) struct AskingPrice;
+pub(crate) struct AskingPrice;
 
 impl AskingPrice {
-    pub(in crate::transfers) fn calculate_asking_price(
+    pub(crate) fn calculate_asking_price(
         player: &Player,
         country: &Country,
         club: &Club,

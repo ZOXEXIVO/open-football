@@ -14,6 +14,7 @@
 //! player his club never loan-listed at all. The order is load-bearing: the
 //! cap and the per-group dedupe carry across all four.
 
+use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::window::MarketCadence;
 use crate::transfers::view::club::ClubView;
@@ -32,18 +33,20 @@ use crate::transfers::loan::interest::{
 use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
+use crate::transfers::pipeline::TransferRequest;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::pipeline::trace::TransferTrace;
-use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    Club, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus, ReputationLevel, TeamType,
+    Club, Country, PathwayStage, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
+    ReputationLevel, TeamType,
 };
 use std::collections::HashMap;
 
 use super::*;
+use crate::transfers::loan::legacy::{LegacyDomesticGate, LoanDestinationLevel};
 /// A player the market is offering on loan — listed by his club, or one a
 /// bigger club never listed but would let go.
 // Collect available loan listings (Pass 1 read)
@@ -74,11 +77,10 @@ struct LoanListing {
     /// `None` only when the parent side could not be read at all
     /// (no contract, no squad), which stands the guard down.
     guard: Option<LoanAssetGuard>,
-    /// How willing the parent is to send him anywhere at all, 0..1 —
-    /// read once per listing rather than per candidate borrower,
-    /// because it is a property of the club and the man, not of the
-    /// pair.
-    willingness: f32,
+    /// What the parent makes of sending him anywhere at all — read once
+    /// per listing rather than per candidate borrower, because it is a
+    /// property of the club and the man, not of the pair.
+    willingness: ParentWillingness,
     /// The arc he is living out, so the consent term can tell a drop he
     /// meant to take from one he is being talked into.
     plan: CareerPlanView,
@@ -86,6 +88,11 @@ struct LoanListing {
     /// the subsidy that decides whether a poorer borrower can carry
     /// him at all.
     parent_subsidy: f32,
+    /// Where the parent's pathway has him, and the band the club means
+    /// this spell to put him at when it has said — the two fallbacks the
+    /// agreement reads for a man with no plan of his own.
+    stage: PathwayStage,
+    club_band_target: Option<f32>,
 }
 
 /// A loan approach one club decided to make. The scan reads the whole
@@ -186,9 +193,9 @@ impl LoanBoard {
                 // drop a level or two to do so) either when the loan is
                 // game-time-driven (development pathway, blocked prospect,
                 // needs-minutes) or when the player is genuinely below his
-                // own club's level. "Under 23" alone used to be enough,
-                // which handed the whole allowance to a teenager who was
-                // already his club's first-choice. Pure older-surplus /
+                // own club's level — never on a birth year alone, which
+                // hands the whole allowance to a teenager who is already
+                // his club's first choice. Pure older-surplus /
                 // financial loans keep the looser cover bar.
                 let is_development =
                     LoanPipeline::is_development_loan(guard.as_ref(), player.age(date))
@@ -204,7 +211,7 @@ impl LoanBoard {
                     player_id: listing.player_id,
                     club_id: listing.club_id,
                     asking_price: listing.asking_price.amount,
-                    ability: player.player_attributes.current_ability,
+                    ability: AbilityEstimator::observable_level(player),
                     age: player.age(date),
                     position_group: group,
                     parent_rep,
@@ -216,12 +223,21 @@ impl LoanBoard {
                     guard,
                     willingness: parent_club
                         .map(|c| LoanAssetGuard::willingness_for(c, player, date))
-                        .unwrap_or(1.0),
+                        .unwrap_or_else(ParentWillingness::open),
                     plan: player.mind.career.plan_view(MindClock::day(date)),
                     parent_subsidy: LoanMoney::parent_desire(
                         player.pathway_stage(),
                         player.plan.as_ref().and_then(|p| p.loan_purpose),
                     ),
+                    stage: player.pathway_stage(),
+                    club_band_target: parent_club
+                        .and_then(|c| {
+                            c.transfer_plan
+                                .loan_out_candidates
+                                .iter()
+                                .find(|cand| cand.player_id == player.id)
+                        })
+                        .and_then(|cand| cand.band_target),
                 });
             }
         }
@@ -272,7 +288,7 @@ impl LoanBoard {
                             seller_club_rep,
                         );
                         let willingness = LoanAssetGuard::willingness_for(club, player, date);
-                        let parent_holds = willingness < ParentWillingness::ENTERTAINS;
+                        let parent_holds = willingness.score < ParentWillingness::ENTERTAINS;
                         if TransferTrace::is(player.id) {
                             TransferTrace::line(
                                 player.id,
@@ -280,7 +296,7 @@ impl LoanBoard {
                                 format!(
                                     "parent={} squad={:?} label={:?} asset={} rank={} \
                              standing={:.2} first_choice={} development={} \
-                             parent_holds={parent_holds} reach={}",
+                             parent_holds={parent_holds} willingness={:.2}",
                                     club.name,
                                     team.team_type,
                                     player
@@ -297,7 +313,7 @@ impl LoanBoard {
                                     guard.map(|g| g.standing()).unwrap_or(0.0),
                                     guard.map(|g| g.first_choice()).unwrap_or(false),
                                     guard.map(|g| g.is_development()).unwrap_or(false),
-                                    guard.map(|g| g.parent_reach().label()).unwrap_or("unknown"),
+                                    willingness.score,
                                 ),
                             );
                         }
@@ -376,7 +392,7 @@ impl LoanBoard {
                             player_id: player.id,
                             club_id: club.id,
                             asking_price,
-                            ability: player.player_attributes.current_ability,
+                            ability: AbilityEstimator::observable_level(player),
                             age,
                             position_group: group,
                             parent_rep,
@@ -390,6 +406,13 @@ impl LoanBoard {
                                 player.pathway_stage(),
                                 player.plan.as_ref().and_then(|p| p.loan_purpose),
                             ),
+                            stage: player.pathway_stage(),
+                            club_band_target: club
+                                .transfer_plan
+                                .loan_out_candidates
+                                .iter()
+                                .find(|cand| cand.player_id == player.id)
+                                .and_then(|cand| cand.band_target),
                         });
                     }
                 }
@@ -412,10 +435,9 @@ struct BorrowerScan<'a> {
     country: &'a Country,
     club: &'a Club,
     date: NaiveDate,
-    is_january: bool,
+    mid_season_window: bool,
     scan_unsolicited: bool,
     rep_level: ReputationLevel,
-    has_critical_shortage: bool,
     max_loan_fee: f64,
     max_scans: usize,
     avg_ability: u8,
@@ -424,7 +446,10 @@ struct BorrowerScan<'a> {
     borrower_league_rep: u16,
     borrower_profile: Option<LoanBorrowerProfile>,
     taste: BorrowerTaste,
-    open_request_groups: Vec<PlayerFieldPositionGroup>,
+    /// What the club has actually asked for — the band, not just the
+    /// shirt, so a request for a first-team defender does not read as an
+    /// invitation for anybody who plays there.
+    open_requests: Vec<TransferRequest>,
 }
 
 impl<'a> BorrowerScan<'a> {
@@ -437,7 +462,7 @@ impl<'a> BorrowerScan<'a> {
         pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
     ) -> Option<Self> {
         let date = tick.date;
-        let is_january = tick.is_january;
+        let mid_season_window = tick.mid_season_window;
         let club = &country.clubs[club_idx];
         if club.teams.teams.is_empty() {
             return None;
@@ -451,7 +476,6 @@ impl<'a> BorrowerScan<'a> {
         // here — an Elite club that "never loans in August" was the
         // refusal that walked other clubs' prospects down two
         // divisions, a fortnight at a time.
-        let has_critical_shortage = LoanBorrowerAppetite::assess(team).critical_shortage;
 
         let plan = &club.transfer_plan;
         if !plan.initialized {
@@ -526,14 +550,14 @@ impl<'a> BorrowerScan<'a> {
             avg_ability,
             max_loan_fee,
         );
-        let open_request_groups: Vec<PlayerFieldPositionGroup> = plan
+        let open_requests: Vec<TransferRequest> = plan
             .transfer_requests
             .iter()
             .filter(|r| {
                 r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
             })
-            .map(|r| r.position.position_group())
+            .cloned()
             .collect();
         // Scarcity pressure per group, so a club a man short at the back
         // wants a defender more than it wants the best name on the list.
@@ -542,10 +566,9 @@ impl<'a> BorrowerScan<'a> {
             country,
             club,
             date,
-            is_january,
+            mid_season_window,
             scan_unsolicited: tick.scan_unsolicited,
             rep_level,
-            has_critical_shortage,
             max_loan_fee,
             max_scans,
             avg_ability,
@@ -554,7 +577,7 @@ impl<'a> BorrowerScan<'a> {
             borrower_league_rep,
             borrower_profile,
             taste,
-            open_request_groups,
+            open_requests,
         })
     }
 
@@ -572,7 +595,28 @@ impl<'a> BorrowerScan<'a> {
     /// other in the same tree.
     fn agreement_for(&self, l: &LoanListing) -> Option<f32> {
         if LoanAgreement::disarmed() {
-            return self.legacy_gates(l).then_some(1.0);
+            let level = LoanDestinationLevel {
+                ability: l.ability,
+                parent_best_in_group: l.parent_best_in_group,
+                parent_rep: l.parent_rep,
+                borrower_rep: self.borrower_world_rep,
+                parent_league_rep: l.parent_league_rep,
+                borrower_league_rep: self.borrower_league_rep,
+                is_development: l.is_development,
+            };
+            return LegacyLoanGuard::domestic_allows(&LegacyDomesticGate {
+                player_id: l.player_id,
+                borrower_name: &self.club.name,
+                group: l.position_group,
+                ability: l.ability,
+                is_development: l.is_development,
+                parent_best_in_group: l.parent_best_in_group,
+                level: &level,
+                depth: &self.borrower_depth,
+                guard: l.guard.as_ref(),
+                borrower: self.borrower_for(l.position_group),
+            })
+            .then_some(1.0);
         }
         let group = l.position_group;
         let borrower = self.borrower_for(group);
@@ -580,30 +624,26 @@ impl<'a> BorrowerScan<'a> {
             .guard
             .as_ref()
             .zip(borrower.as_ref())
-            .map(|(g, b)| g.assess(b));
+            .map(|(g, b)| g.assess(b, l.willingness.score, l.parent_subsidy));
         let inputs = AgreementInputs {
-            willingness: l.willingness,
+            parent: l.willingness,
             parent_rep: l.parent_rep,
             parent_league_rep: l.parent_league_rep,
             parent_best_in_group: l.parent_best_in_group,
             parent_subsidy: l.parent_subsidy,
-            borrower_tier: TierBands::rep_level_value(&self.rep_level),
+            borrower_tier: self.rep_level,
             borrower_rep: self.borrower_world_rep,
             borrower_league_rep: self.borrower_league_rep,
             group,
             count: self.borrower_depth.headcount(group),
             best_here: self.borrower_depth.best_in_group(group),
             clearly_better_ahead: self.borrower_depth.clearly_better_ahead(group, l.ability),
-            need: if self.open_request_groups.contains(&group) {
-                1.0
-            } else if self.has_critical_shortage {
-                0.6
-            } else {
-                0.35
-            },
-            is_january: self.is_january,
+            need: self.need_for(l).score(),
+            mid_season_window: self.mid_season_window,
             candidate: l.ability,
             is_development: l.is_development,
+            stage: l.stage,
+            club_band_target: l.club_band_target,
             plan: l.plan,
             renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
             renown_band: l.guard.as_ref().map(|g| g.renown_band()).unwrap_or(0.0),
@@ -632,42 +672,27 @@ impl<'a> BorrowerScan<'a> {
         LoanAgreement::price(&inputs)
     }
 
-    /// The conjunctive gate stack the agreement replaced, kept for the
-    /// `OF_LOAN_AGREEMENT_OFF` arm.
-    fn legacy_gates(&self, l: &LoanListing) -> bool {
-        let level = LoanDestinationLevel {
-            ability: l.ability,
-            parent_best_in_group: l.parent_best_in_group,
-            parent_rep: l.parent_rep,
-            borrower_rep: self.borrower_world_rep,
-            parent_league_rep: l.parent_league_rep,
-            borrower_league_rep: self.borrower_league_rep,
-            is_development: l.is_development,
-        };
-        LoanPipeline::trace_loan_destination(
-            l.player_id,
-            &self.club.name,
-            l.position_group,
-            l.ability,
-            l.is_development,
-            l.parent_best_in_group,
-            &level,
-            &self.borrower_depth,
-        ) && self
-            .borrower_depth
-            .has_room_for(l.position_group, l.ability, l.is_development)
-            && self.borrower_depth.would_get_loan_minutes(
-                l.position_group,
-                l.ability,
-                l.is_development,
-                l.parent_best_in_group,
-            )
-            && level.is_plausible()
-            && LoanPipeline::loan_guard_allows(
-                l.guard.as_ref(),
-                self.borrower_for(l.position_group).as_ref(),
-                l.player_id,
-            )
+    /// How badly this club wants a body in that shirt, for one
+    /// candidate. The same reading the broadcast and the cross-border
+    /// scan take, so the three of them describe one borrower.
+    fn need_for(&self, l: &LoanListing) -> BorrowerNeed {
+        let group = l.position_group;
+        let request = self
+            .open_requests
+            .iter()
+            .find(|r| r.position.position_group() == group);
+        let ideal = group.ideal_squad_depth();
+        let held = self.borrower_depth.headcount(group);
+        BorrowerNeed {
+            requested: request.is_some(),
+            level_shortfall: request
+                .map(|r| r.min_ability as i16 - l.ability as i16)
+                .unwrap_or(0),
+            age_excess: request
+                .map(|r| l.age as i16 - r.preferred_age_max as i16)
+                .unwrap_or(0),
+            vacancy: ((ideal as f32 - held as f32) / ideal.max(1) as f32).clamp(0.0, 1.0),
+        }
     }
 
     /// This club's carrying capacity folded with the group a candidate plays in.
@@ -690,14 +715,6 @@ impl<'a> BorrowerScan<'a> {
             .has_room_for(group, loan_ability, development)
     }
 
-    /// A small club looks for a loan all year round, not just in January.
-    fn is_small_club(&self) -> bool {
-        matches!(
-            self.rep_level,
-            ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
-        )
-    }
-
     /// Scarcity pressure per group, so a club a man short at the back wants a
     /// defender more than it wants the best name on the list.
     fn thinness_of(&self, group: PlayerFieldPositionGroup) -> f32 {
@@ -712,7 +729,10 @@ impl<'a> BorrowerScan<'a> {
             is_development: l.is_development,
             fee,
             group_thinness: self.thinness_of(l.position_group),
-            answers_open_request: self.open_request_groups.contains(&l.position_group),
+            answers_open_request: self
+                .open_requests
+                .iter()
+                .any(|r| r.position.position_group() == l.position_group),
         }
     }
 
@@ -806,10 +826,6 @@ impl<'a> BorrowerScan<'a> {
                     .transfer_market
                     .has_active_negotiation_for(l.player_id, club.id)
                 && !actions.iter().any(|a| a.player_id == l.player_id)
-                // Every destination gate's own reading, taken before any
-                // of them can short-circuit it away — the funnel is a
-                // table, not a re-derivation.
-                && self.agreement_for(l).is_some()
                 })
                 .collect();
 
@@ -822,6 +838,9 @@ impl<'a> BorrowerScan<'a> {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, l)| {
+                    // Priced once per pair: the score IS the filter, and
+                    // running the agreement twice emitted the trace line
+                    // twice for every candidate a club looked at.
                     let agreement = self.agreement_for(l)?;
                     taste
                         .interest_in(&profile_of(l, l.asking_price * 0.8))
@@ -862,11 +881,9 @@ impl<'a> BorrowerScan<'a> {
         let club = self.club;
         let plan = &self.club.transfer_plan;
         let date = self.date;
-        let rep_level = self.rep_level.clone();
         let max_loan_fee = self.max_loan_fee;
         let max_scans = self.max_scans;
         let taste = &self.taste;
-        let has_critical_shortage = self.has_critical_shortage;
         let avg_ability = self.avg_ability;
         let profile_of =
             |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
@@ -878,15 +895,13 @@ impl<'a> BorrowerScan<'a> {
         // their squad has a genuine shortage — the critical-need
         // override above already let them in past `should_scan`,
         // but the opportunistic branch was small-club-only and
-        // would otherwise leave them empty-handed.
-        let is_small_club = matches!(
-            rep_level,
-            ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
-        );
-
-        // Small clubs (always) and National clubs in critical
-        // shortage scan for available loan players.
-        if (is_small_club || has_critical_shortage) && scans_this_club < max_scans {
+        // Every club reads the loan market. How many looks it spends is
+        // the scan budget above — a bigger club simply has fewer, because
+        // fewer of the names on it are for it. Reserving the whole
+        // opportunistic sweep for small clubs and emergencies was a
+        // category gate in front of an appetite term that already prices
+        // the same fact.
+        if scans_this_club < max_scans {
             let opps: Vec<&LoanListing> = loan_listings
                 .iter()
                 .filter(|l| {
@@ -902,10 +917,6 @@ impl<'a> BorrowerScan<'a> {
                     .transfer_market
                     .has_active_negotiation_for(l.player_id, club.id)
                 && !actions.iter().any(|a| a.player_id == l.player_id)
-                // Every destination gate's own reading, taken before any
-                // of them can short-circuit it away — the funnel is a
-                // table, not a re-derivation.
-                && self.agreement_for(l).is_some()
                 })
                 .collect();
 
@@ -916,6 +927,9 @@ impl<'a> BorrowerScan<'a> {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, l)| {
+                    // Priced once per pair: the score IS the filter, and
+                    // running the agreement twice emitted the trace line
+                    // twice for every candidate a club looked at.
                     let agreement = self.agreement_for(l)?;
                     taste
                         .interest_in(&profile_of(l, l.asking_price * 0.8))
@@ -973,16 +987,16 @@ impl<'a> BorrowerScan<'a> {
         let max_loan_fee = self.max_loan_fee;
         let max_scans = self.max_scans;
         let taste = &self.taste;
-        let is_january = self.is_january;
+        let mid_season_window = self.mid_season_window;
         let avg_ability = self.avg_ability;
-        let is_small_club = self.is_small_club();
         let profile_of =
             |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
         let scans_this_club = state.scans_this_club;
         let scanned_position_groups = std::mem::take(&mut state.scanned_position_groups);
 
-        // January extra: even National clubs look for opportunistic loans
-        if is_january && scans_this_club < max_scans && !is_small_club {
+        // The mid-season window is a second look for everybody: the
+        // shape of a season is known by then and a hole is a hole.
+        if mid_season_window && scans_this_club < max_scans {
             let mid_season: Vec<&LoanListing> = loan_listings
                 .iter()
                 .filter(|l| {
@@ -998,10 +1012,6 @@ impl<'a> BorrowerScan<'a> {
                     .transfer_market
                     .has_active_negotiation_for(l.player_id, club.id)
                 && !actions.iter().any(|a| a.player_id == l.player_id)
-                // Every destination gate's own reading, taken before any
-                // of them can short-circuit it away — the funnel is a
-                // table, not a re-derivation.
-                && self.agreement_for(l).is_some()
                 })
                 .collect();
 
@@ -1009,6 +1019,9 @@ impl<'a> BorrowerScan<'a> {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, l)| {
+                    // Priced once per pair: the score IS the filter, and
+                    // running the agreement twice emitted the trace line
+                    // twice for every candidate a club looked at.
                     let agreement = self.agreement_for(l)?;
                     taste
                         .interest_in(&profile_of(l, l.asking_price * 0.8))
@@ -1048,7 +1061,6 @@ impl<'a> BorrowerScan<'a> {
         let club = self.club;
         let plan = &self.club.transfer_plan;
         let date = self.date;
-        let rep_level = self.rep_level.clone();
         let max_loan_fee = self.max_loan_fee;
         let max_scans = self.max_scans;
         let borrower_world_rep = self.borrower_world_rep;
@@ -1069,22 +1081,10 @@ impl<'a> BorrowerScan<'a> {
         // when the target pool was built, so this never strips a club of
         // a key player.
         //
-        // Every tier cold-calls now. A Continental club used to be
-        // held to PEER-LEVEL targets by a second reach gate on top of
-        // the destination floors; the agreement prices the same
-        // distance continuously, so a second hard reading of it is a
-        // gate doing a price's job.
-        if scan_unsolicited
-            && scans_this_club < max_scans
-            && matches!(
-                rep_level,
-                ReputationLevel::Continental
-                    | ReputationLevel::National
-                    | ReputationLevel::Regional
-                    | ReputationLevel::Local
-                    | ReputationLevel::Amateur
-            )
-        {
+        // Every tier cold-calls, Elite included: the agreement prices
+        // the distance between two clubs continuously, and a second
+        // hard reading of it is a gate doing a price's job.
+        if scan_unsolicited && scans_this_club < max_scans {
             let cold: Vec<&LoanListing> = unsolicited_targets
                 .iter()
                 .filter(|l| {
@@ -1100,10 +1100,6 @@ impl<'a> BorrowerScan<'a> {
                     .transfer_market
                     .has_active_negotiation_for(l.player_id, club.id)
                 && !actions.iter().any(|a| a.player_id == l.player_id)
-                // Every destination gate's own reading, taken before any
-                // of them can short-circuit it away — the funnel is a
-                // table, not a re-derivation.
-                && self.agreement_for(l).is_some()
                 })
                 .collect();
 
@@ -1111,6 +1107,9 @@ impl<'a> BorrowerScan<'a> {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, l)| {
+                    // Priced once per pair: the score IS the filter, and
+                    // running the agreement twice emitted the trace line
+                    // twice for every candidate a club looked at.
                     let agreement = self.agreement_for(l)?;
                     taste
                         .interest_in(&profile_of(l, l.asking_price * 0.8))
@@ -1294,17 +1293,6 @@ impl LoanScanCommit {
                     negotiation.selling_club_name = sc_name;
                 }
 
-                // The club has made its move on this target; it does not
-                // reopen the file next Monday. Stamped whatever the outcome —
-                // if the bid succeeds the player is on loan and filtered out
-                // anyway, and if it fails this is exactly the repeat approach
-                // that made one club look welded to one player.
-                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                    buyer
-                        .transfer_plan
-                        .record_loan_approach(action.player_id, date);
-                }
-
                 debug!(
                     "Loan scan: Club {} started loan negotiation for player {}",
                     action.club_id, action.player_id
@@ -1318,7 +1306,7 @@ impl LoanScanCommit {
 #[derive(Clone, Copy)]
 struct LoanScanTick {
     date: NaiveDate,
-    is_january: bool,
+    mid_season_window: bool,
     /// The cold-approach sweep is weekly; the listed market is read daily.
     scan_unsolicited: bool,
 }
@@ -1331,7 +1319,7 @@ impl LoanMarketScan {
     pub(in crate::transfers::loan) fn run(country: &mut Country, date: NaiveDate) {
         let tick = LoanScanTick {
             date,
-            is_january: MarketCadence::is_mid_season_window_for(&country.code, date),
+            mid_season_window: MarketCadence::is_mid_season_window_for(&country.code, date),
             scan_unsolicited: LoanPipeline::is_market_day(date),
         };
 

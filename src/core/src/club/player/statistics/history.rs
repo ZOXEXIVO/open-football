@@ -2138,6 +2138,33 @@ impl PlayerStatisticsHistory {
             .map(|e| e.team_slug.as_str())
     }
 
+    /// Distinct seasons this club sent him out on loan.
+    ///
+    /// The count, not a flag: `StuckCareerScan::serial_loanee` is a
+    /// boolean about a whole career and was standing in for this, so a
+    /// backfilled pathway read every player as having had nought spells
+    /// or two.
+    pub fn loan_spells_at_current_club(&self) -> u8 {
+        let Some(active) = self.active_team_slug() else {
+            return 0;
+        };
+        let mut years: Vec<u16> = self
+            .season_ledger
+            .iter()
+            .map(|e| (e.team_slug.as_str(), e.is_loan, e.season_start_year))
+            .chain(
+                self.items
+                    .iter()
+                    .map(|i| (i.team_slug.as_str(), i.is_loan, i.season.start_year)),
+            )
+            .filter(|(slug, is_loan, _)| *is_loan && !slug.is_empty() && *slug != active)
+            .map(|(_, _, year)| year)
+            .collect();
+        years.sort_unstable();
+        years.dedup();
+        years.len().min(u8::MAX as usize) as u8
+    }
+
     /// True when every completed season on the player's record was played
     /// for the club he is at now — the career one-club man, academy products
     /// included (youth seasons alias to the parent club's slug, so a homegrown
