@@ -2361,28 +2361,6 @@ a:active {
     width: 32px;
 }
 
-/* What the CLUB means to do with him, beside what he is. The dot marks
-   a row carrying more than the stage — a loan's purpose, or the verdict
-   on the last one — which the title attribute holds. */
-.fm-squad .sq-pathway {
-    color: #7a868e;
-    font-size: 11px;
-    white-space: nowrap;
-    width: 8em;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.fm-squad .sq-pathway-note {
-    display: inline-block;
-    width: 3px;
-    height: 3px;
-    margin-left: 4px;
-    border-radius: 50%;
-    background: #4a7c9e;
-    vertical-align: 2px;
-}
-
 .fm-squad .sq-ability {
     width: 3.5em;
 }

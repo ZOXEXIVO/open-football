@@ -1235,6 +1235,15 @@ mod page_tests {
                     i18n.t("concern_transfer_request").to_string(),
                 ],
                 behaviour: i18n.t("behaviour_good").to_string(),
+                career_plan: Some(CareerPlanDto {
+                    arc: i18n.t("career_arc_step_down_to_play").to_string(),
+                    stage: i18n.t("plan_stage_asking").to_string(),
+                    unspoken: false,
+                    deadline: Some("Has given it until 01.09.2034".to_string()),
+                    band_floor: i18n.t("career_band_floor_one_level").to_string(),
+                    last_verdict: Some(i18n.t("loan_verdict_steady").to_string()),
+                    pathway: i18n.t("pathway_stage_reassess").to_string(),
+                }),
                 manager_relationship: Some(ManagerRelationshipDto {
                     manager_name: "Riccardo Greco".to_string(),
                     bond: Some(ManagerBondDto {
