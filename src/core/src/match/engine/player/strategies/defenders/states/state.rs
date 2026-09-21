@@ -119,6 +119,12 @@ impl DefenderStrategies {
         };
 
         let mut result = Self::dispatch(state, state_processor);
+        // An imposed movement with its own effort floor (keeper release
+        // spacing) takes priority over goal-side recovery. Otherwise this
+        // reverses the outlet run and pins teammates behind their keeper.
+        if result.effort_floor > 0.0 {
+            return result;
+        }
         if let (Some((depth, weight)), Some(velocity)) = (depth_override, result.velocity) {
             // Blend rather than replace. The recovery depth is an order of
             // magnitude larger than a state's own velocity, so overwriting

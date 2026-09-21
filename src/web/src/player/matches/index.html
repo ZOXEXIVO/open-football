@@ -6,9 +6,29 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>{{ i18n.t("season_matches") }}</h3>
-            <span class="fm-panel-count">{{ items.len() }}</span>
+            <div class="fm-panel-head-lead">
+                <h3>{{ i18n.t("matches") }}</h3>
+                <span class="fm-panel-count">{{ items.len() }}</span>
+            </div>
+            {% if let Some(nav) = years %}
+            <div class="fm-yearstep">
+                {% if let Some(previous) = nav.previous %}
+                <a class="fm-yearstep-arrow" href="/{{ lang }}/players/{{ player_slug }}/matches?year={{ previous }}" aria-label="{{ i18n.t("previous_year") }}">&#8249;</a>
+                {% else %}
+                <span class="fm-yearstep-arrow is-end" aria-hidden="true">&#8249;</span>
+                {% endif %}
+                <span class="fm-yearstep-value">{{ nav.selected }}</span>
+                {% if let Some(next) = nav.next %}
+                <a class="fm-yearstep-arrow" href="/{{ lang }}/players/{{ player_slug }}/matches?year={{ next }}" aria-label="{{ i18n.t("next_year") }}">&#8250;</a>
+                {% else %}
+                <span class="fm-yearstep-arrow is-end" aria-hidden="true">&#8250;</span>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
+        {% if items.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("no_match_history") }}</div>
+        {% else %}
         <table class="fm-schedule">
             <thead>
                 <tr>
@@ -49,6 +69,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        {% endif %}
     </section>
 </div>
 {% endblock %}

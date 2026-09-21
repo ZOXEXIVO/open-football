@@ -4,12 +4,12 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
-use crate::player::matches::collector::PlayerMatchCollector;
+use crate::player::matches::collector::{PlayerMatchCollector, PlayerMatchYears};
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
@@ -18,6 +18,11 @@ use serde::Deserialize;
 pub struct PlayerMatchesRequest {
     pub lang: String,
     pub player_slug: String,
+}
+
+#[derive(Deserialize)]
+pub struct PlayerMatchesQuery {
+    pub year: Option<i32>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -51,10 +56,12 @@ pub struct PlayerMatchesTemplate {
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
+    pub years: Option<PlayerMatchYears>,
     pub items: Vec<PlayerMatchItem>,
 }
 
 pub struct PlayerMatchItem {
+    pub year: i32,
     pub date: String,
     pub time: String,
     pub opponent_slug: String,
@@ -73,6 +80,7 @@ pub struct PlayerMatchResult {
 pub async fn player_matches_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerMatchesRequest>,
+    Query(query): Query<PlayerMatchesQuery>,
 ) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -114,6 +122,11 @@ pub async fn player_matches_action(
     // everything played before a move, and the whole table for a player who
     // is between clubs.
     let items = PlayerMatchCollector::collect(simulator_data, player, team_opt);
+    let years = PlayerMatchYears::resolve(&items, query.year);
+    let items = match &years {
+        Some(years) => years.keep(items),
+        None => items,
+    };
 
     let title = format!(
         "{} {}",
@@ -183,6 +196,7 @@ pub async fn player_matches_action(
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
+        years,
         items,
     }
     .into_response())

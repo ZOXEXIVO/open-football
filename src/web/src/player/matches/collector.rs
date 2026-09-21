@@ -32,7 +32,7 @@
 //! from his present registration.
 
 use super::{PlayerMatchItem, PlayerMatchResult};
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use core::league::League;
 use core::r#match::{FieldSquad, MatchResult};
 use core::{Country, Player, SimulatorData, Team};
@@ -277,6 +277,7 @@ impl PlayerMatchCollector {
                 kickoff,
                 match_id: match_result.id.clone(),
                 item: PlayerMatchItem {
+                    year: kickoff.year(),
                     date: kickoff.format("%d.%m.%Y").to_string(),
                     // Only a kickoff the schedule vouched for carries a
                     // clock; the id fallback knows the day and nothing more.
@@ -352,6 +353,7 @@ impl PlayerMatchCollector {
                 kickoff,
                 match_id: match_id.to_string(),
                 item: PlayerMatchItem {
+                    year: date.year(),
                     date: date.format("%d.%m.%Y").to_string(),
                     time: "20:00".to_string(),
                     opponent_slug,
@@ -415,6 +417,7 @@ impl PlayerMatchCollector {
                 kickoff,
                 match_id: fixture.match_id.clone(),
                 item: PlayerMatchItem {
+                    year: fixture.date.year(),
                     date: fixture.date.format("%d.%m.%Y").to_string(),
                     time: "20:00".to_string(),
                     opponent_slug: String::new(),
@@ -513,6 +516,45 @@ impl PlayerMatchCollector {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .ok()
             .and_then(|d| d.and_hms_opt(0, 0, 0))
+    }
+}
+
+/// The calendar years a player has football in, and where the one on
+/// screen sits among them. Only years he actually played are reachable,
+/// so stepping never lands on an empty table.
+pub struct PlayerMatchYears {
+    pub selected: i32,
+    pub previous: Option<i32>,
+    pub next: Option<i32>,
+}
+
+impl PlayerMatchYears {
+    /// `None` for a player with no appearances at all — there is no year
+    /// to name, so the page shows its empty state instead of a stepper.
+    pub fn resolve(items: &[PlayerMatchItem], requested: Option<i32>) -> Option<Self> {
+        let mut years: Vec<i32> = items.iter().map(|item| item.year).collect();
+        years.sort_unstable();
+        years.dedup();
+
+        // A year the player sat out — or a hand-typed one — falls back to
+        // his most recent football rather than to a blank table.
+        let at = match requested.and_then(|year| years.iter().position(|y| *y == year)) {
+            Some(at) => at,
+            None => years.len().checked_sub(1)?,
+        };
+
+        Some(Self {
+            selected: years[at],
+            previous: at.checked_sub(1).map(|i| years[i]),
+            next: years.get(at + 1).copied(),
+        })
+    }
+
+    pub fn keep(&self, items: Vec<PlayerMatchItem>) -> Vec<PlayerMatchItem> {
+        items
+            .into_iter()
+            .filter(|item| item.year == self.selected)
+            .collect()
     }
 }
 
@@ -688,5 +730,58 @@ mod tests {
         PlayerMatchCollector::remember(&mut ids, 0);
         PlayerMatchCollector::remember(&mut ids, 9);
         assert_eq!(ids, vec![7, 9]);
+    }
+
+    fn appearance(year: i32) -> PlayerMatchItem {
+        PlayerMatchItem {
+            year,
+            date: format!("01.01.{}", year),
+            time: String::new(),
+            opponent_slug: String::new(),
+            opponent_name: String::new(),
+            is_home: true,
+            competition_name: String::new(),
+            result: None,
+        }
+    }
+
+    #[test]
+    fn the_stepper_lands_on_the_players_most_recent_football() {
+        let items = vec![appearance(2024), appearance(2026), appearance(2026)];
+        let years = PlayerMatchYears::resolve(&items, None).unwrap();
+        assert_eq!(years.selected, 2026);
+        assert_eq!(years.previous, Some(2024));
+        assert_eq!(years.next, None);
+    }
+
+    #[test]
+    fn stepping_skips_the_years_the_player_did_not_play() {
+        let items = vec![appearance(2022), appearance(2026)];
+        let years = PlayerMatchYears::resolve(&items, Some(2022)).unwrap();
+        assert_eq!(years.previous, None);
+        // 2023..2025 are silent, so one step forward is 2026 rather than a
+        // walk through four empty tables.
+        assert_eq!(years.next, Some(2026));
+    }
+
+    #[test]
+    fn a_year_without_football_falls_back_to_the_newest_one() {
+        let items = vec![appearance(2025), appearance(2026)];
+        let years = PlayerMatchYears::resolve(&items, Some(1999)).unwrap();
+        assert_eq!(years.selected, 2026);
+    }
+
+    #[test]
+    fn a_player_who_never_played_has_no_year_to_name() {
+        assert!(PlayerMatchYears::resolve(&[], None).is_none());
+    }
+
+    #[test]
+    fn keep_takes_the_selected_year_only() {
+        let items = vec![appearance(2025), appearance(2026), appearance(2025)];
+        let years = PlayerMatchYears::resolve(&items, Some(2025)).unwrap();
+        let kept = years.keep(items);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|item| item.year == 2025));
     }
 }

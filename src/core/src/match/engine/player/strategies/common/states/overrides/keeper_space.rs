@@ -1,7 +1,10 @@
-use crate::r#match::{PlayerSide, StateProcessingContext, SteeringBehavior};
+use crate::r#match::common_states::TackleEngagement;
+use crate::r#match::player::state::PlayerState;
+use crate::r#match::{PassOriginRestart, PlayerSide, StateProcessingContext, SteeringBehavior};
 use nalgebra::Vector3;
 
-/// **The ball is in the goalkeeper's hands — get out of his area.**
+/// Give a goalkeeper room to distribute: teammates offer outlets, while
+/// opponents leave the area unless they are engaging a live foot possession.
 ///
 /// # Why this exists
 ///
@@ -16,6 +19,11 @@ use nalgebra::Vector3;
 /// on 22%**. On screen that is a forward standing over a keeper who is
 /// holding the ball, which reads as trying to take it off him whether or
 /// not the ownership layer would ever allow it.
+///
+/// Restricting this to opponents and hand possession left teammates
+/// crowding his feet, and surplus pressers waiting beside him for a
+/// challenge the engagement election would never allow. The same movement
+/// override now supplies outlets and respects that election on live balls.
 ///
 /// It is also the football. A keeper in possession of the ball with his
 /// hands cannot be challenged — Law 12 makes even attempting to kick it
@@ -69,11 +77,23 @@ impl KeeperReleaseSpace {
     /// box has.
     const BACK_OFF_EFFORT: f32 = 0.65;
 
-    /// The velocity that takes this player out of the area of a keeper
-    /// holding the ball and the effort floor to serve it at, or `None`
-    /// when there is nothing to do — which is almost always.
+    /// Teammates inside 10 m open out to offer a pass instead of waiting
+    /// beside the keeper. Targets are further away so they cross this
+    /// boundary at a jog rather than stopping inside it.
+    const SUPPORT_SPACE: f32 = 80.0;
+    const SUPPORT_DEPTH: f32 = 96.0;
+    const SUPPORT_WIDTH: f32 = 64.0;
+
+    /// The outlet/retreat velocity and the effort floor to serve it at,
+    /// or `None` when the player's normal movement should apply.
     pub fn retreat(ctx: &StateProcessingContext) -> Option<(Vector3<f32>, f32)> {
-        if !ctx.tick_context.ball.held_in_hands {
+        if matches!(ctx.player.state, PlayerState::Injured)
+            || ctx
+                .player
+                .tactical_position
+                .current_position
+                .is_goalkeeper()
+        {
             return None;
         }
         // Which end the holder defends, read off the LIVE position store
@@ -84,7 +104,16 @@ impl KeeperReleaseSpace {
         // instrumentation showed: the retreat fired on 3,383 player-ticks
         // a match against the ~7,300 opponent-in-area ticks it should have,
         // i.e. one team's keeper was protected and the other's was not.
-        let holder_id = ctx.tick_context.ball.current_owner?;
+        let ball = &ctx.tick_context.ball;
+        let goal_kick =
+            ball.pass_origin_restart == PassOriginRestart::GoalKick && ball.restart_taker.is_some();
+        // During the run-up the ball has no owner. The awarded taker
+        // still needs room, and nobody may press this dead ball.
+        let holder_id = if goal_kick {
+            ball.restart_taker?
+        } else {
+            ball.current_owner?
+        };
         // ⚠ **And he has to be a KEEPER.** `held_in_hands` used to be a
         // goalkeeper's flag and nothing else, so the owner check above was
         // the whole test. A throw-in's taker holds the ball in his hands
@@ -99,21 +128,38 @@ impl KeeperReleaseSpace {
         {
             return None;
         }
-        let holder_side = ctx
+        let holder = ctx
             .tick_context
             .positions
             .players
             .as_slice()
             .iter()
-            .find(|e| e.player_id == holder_id)
-            .map(|e| e.side)?;
+            .find(|e| e.player_id == holder_id)?;
+        let holder_side = holder.side;
         if Some(holder_side) == ctx.player.side {
-            return None;
+            return Self::offer_outlet(ctx, holder.position, holder_side);
         }
         let area = ctx.context.penalty_area(holder_side == PlayerSide::Left);
+        // A keeper playing as an outfielder does not clear his own box
+        // of opponents at the other end of the field.
+        if !ball.held_in_hands
+            && !goal_kick
+            && (!(area.min.x..=area.max.x).contains(&holder.position.x)
+                || !(area.min.y..=area.max.y).contains(&holder.position.y))
+        {
+            return None;
+        }
         let me = ctx.player.position;
         if !(area.min.x..=area.max.x).contains(&me.x) || !(area.min.y..=area.max.y).contains(&me.y)
         {
+            return None;
+        }
+
+        // Use the same election as the tackle states. Calling off every
+        // opponent here would make back-passes impossible to press;
+        // letting the others pursue leaves them queued beside the keeper
+        // even though the engagement gate refuses their challenges.
+        if !ball.held_in_hands && !goal_kick && TackleEngagement::may_engage_carrier(ctx) {
             return None;
         }
 
@@ -144,12 +190,12 @@ impl KeeperReleaseSpace {
         // of all hand-ticks. That one is two metres of movement, and it is
         // the one an official would actually intervene over — so it gets
         // its own direct term and its own urgency.
-        let gap = ctx.player.position - ctx.tick_context.positions.ball.position;
+        let gap = ctx.player.position - holder.position;
         let dist = gap.magnitude();
         if dist < Self::PERSONAL_SPACE {
             let away = gap
                 .try_normalize(1.0e-3)
-                .unwrap_or_else(|| Vector3::new(-holder_side.forward_dir_x(), 0.0, 0.0));
+                .unwrap_or_else(|| Vector3::new(holder_side.forward_dir_x(), 0.0, 0.0));
             let urgency = 1.0 - dist / Self::PERSONAL_SPACE;
             velocity += away * ctx.player.max_speed_with_condition_cached() * urgency * 0.6;
             effort = Self::BACK_OFF_EFFORT;
@@ -161,5 +207,40 @@ impl KeeperReleaseSpace {
             d::keeper_ball_add(21, (velocity.magnitude() * 1000.0) as u64);
         }
         Some((velocity, effort))
+    }
+
+    fn offer_outlet(
+        ctx: &StateProcessingContext,
+        keeper: Vector3<f32>,
+        side: PlayerSide,
+    ) -> Option<(Vector3<f32>, f32)> {
+        if (ctx.player.position - keeper).norm_squared() >= Self::SUPPORT_SPACE.powi(2) {
+            return None;
+        }
+        // The formation lane is stable even when players overlap. Using
+        // the current gap alone would send an entire cluster the same way
+        // (and has no direction at all for coincident positions).
+        let wide = if ctx.player.start_position.y < ctx.context.field_size.height as f32 * 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        let target = Vector3::new(
+            (keeper.x + side.forward_dir_x() * Self::SUPPORT_DEPTH)
+                .clamp(8.0, ctx.context.field_size.width as f32 - 8.0),
+            (keeper.y + wide * Self::SUPPORT_WIDTH)
+                .clamp(8.0, ctx.context.field_size.height as f32 - 8.0),
+            0.0,
+        );
+        Some((
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 24.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * Self::PACE,
+            Self::BACK_OFF_EFFORT,
+        ))
     }
 }

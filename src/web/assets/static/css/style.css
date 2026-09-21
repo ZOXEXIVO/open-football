@@ -778,6 +778,66 @@ a:active {
     color: #c8d6e0;
 }
 
+/* Panel head: title and its count travel together on the left so the right
+   corner is free for a control. */
+.fm-panel-head-lead {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+/* Year stepper — one inset instrument, the year carrying the weight and the
+   chevrons staying quiet until pointed at. Arrows are links, so a year is a
+   URL; at the ends of the range the chevron is a dimmed span. */
+.fm-yearstep {
+    display: inline-flex;
+    align-items: stretch;
+    background: #16202a;
+    border: 1px solid #263340;
+    border-radius: 3px;
+    overflow: hidden;
+    line-height: 1;
+}
+
+.fm-yearstep-value {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 12px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #dfe7ee;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.4px;
+}
+
+.fm-yearstep-arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    padding: 5px 0;
+    font-size: 19px;
+    color: #8b9dab;
+    text-decoration: none !important;
+    transition:
+        color 0.12s ease,
+        background 0.12s ease;
+}
+
+a.fm-yearstep-arrow:hover {
+    background: rgba(74, 157, 91, 0.14);
+    color: #5cb86c;
+}
+
+.fm-yearstep-arrow:focus-visible {
+    outline: 2px solid #4a9d5b;
+    outline-offset: -2px;
+}
+
+.fm-yearstep-arrow.is-end {
+    color: #3a4a56;
+}
+
 .fm-empty {
     padding: 32px 20px;
     text-align: center;
@@ -8593,6 +8653,23 @@ html.match-scroll-locked body {
 
     .fm-schedule .sch-time {
         display: none;
+    }
+
+    /* The panel scrolls sideways here and its head stretches to the table's
+       full width, so anything right-aligned lands past the first screen.
+       Keep the stepper beside the title, inside the sticky zone. */
+    .fm-panel-head:has(.fm-yearstep) {
+        justify-content: flex-start;
+        gap: 12px;
+    }
+
+    .fm-yearstep-value {
+        font-size: 13px;
+        padding: 0 9px;
+    }
+
+    .fm-yearstep-arrow {
+        width: 22px;
     }
 
     .fm-schedule .sch-venue .fm-venue {

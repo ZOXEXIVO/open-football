@@ -689,8 +689,8 @@ impl<'p> StateProcessor<'p> {
         let processing_ctx = self.into_ctx();
         let mut result = StateProcessingResult::new();
 
-        // **The opposing keeper has the ball in his hands: leave his
-        // area.** Ahead of everything else, and deliberately ahead of
+        // Give the keeper space to distribute: teammates open out and
+        // opponents without a pressing duty leave his area. Ahead of
         // `ShapeDiscipline` — the attacking plan's box slots are inside
         // the area he has to vacate, so shaping this would pull him
         // straight back in. It also has to sit outside the `if let`,
