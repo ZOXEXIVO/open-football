@@ -49,7 +49,7 @@ pub mod goal;
 pub mod stack;
 
 pub use bridge::{GoalBridge, ReasonMapping};
-pub use catalog::{GoalDirection, GoalKind, GoalMask, GoalSpec};
+pub use catalog::{GoalDirection, GoalKind, GoalMask, GoalSpec, GoalSubject, SubjectMask};
 pub use escalation::{Escalation, StatusChange};
 pub use evidence::{GoalBlocker, GoalDomain, GoalEvidence, GoalOrigin};
 pub use goal::{GoalStatus, MindGoal};

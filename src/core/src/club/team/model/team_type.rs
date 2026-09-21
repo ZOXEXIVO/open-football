@@ -58,6 +58,21 @@ impl TeamType {
         }
     }
 
+    /// The oldest a squad of this type may REGISTER a player, borrowed or
+    /// its own. `None` for senior squads, which have no cap.
+    ///
+    /// A development competition tolerates overage players — that is what
+    /// the overage quota is for — but it is still age-limited football,
+    /// and the oldest band the game has is the U23. A senior borrowed from
+    /// the reserves to make up a youth-side bench is not eligible for the
+    /// competition he would be registered in, however short that side is.
+    pub fn registration_age_cap(&self) -> Option<u8> {
+        /// The oldest age-limited band there is. Every development squad
+        /// may reach it and none may pass it.
+        const YOUTH_CEILING: u8 = 23;
+        self.development_age_cap().map(|cap| cap.max(YOUTH_CEILING))
+    }
+
     /// Age-restricted development squads (U18..U23). They compete in
     /// friendly youth leagues, so they never accumulate the *official*
     /// appearances the senior squad-utilization audit reads — the idle-days

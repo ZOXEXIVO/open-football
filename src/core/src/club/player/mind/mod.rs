@@ -80,11 +80,11 @@ pub use situation::{MindSituation, NationalStanding};
 pub use social::SocialMind;
 pub use submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind, WeightedReason};
 
-pub use organs::MindOrgans;
+pub use organs::{MindOrgans, SpellChange};
 pub use organs::goals::{
     Escalation, FormedWant, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalEvidence,
-    GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, MindGoal,
-    ReasonMapping, StatusChange,
+    GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, GoalSubject,
+    MindGoal, ReasonMapping, StatusChange, SubjectMask,
 };
 pub use organs::journal::{MindJournal, MindNote, MindNoteKind, MindNoteStore};
 // `GoalDomain` is re-exported from the goals organ, but the name reads
@@ -573,29 +573,36 @@ impl PlayerMind {
         }
     }
 
-    /// Called when the player changes club.
+    /// Called when the player's spell turns over — sold, loaned out,
+    /// home from a loan, released, signed as a free agent.
     ///
     /// The two organs answer this differently, and the difference is the
     /// design. **Memory keeps everything** — a career is the one thing a
     /// player carries between clubs, and every other per-club field on
-    /// `Player` resets (`reset_on_club_change`). **Goals resolve**: what
-    /// he wanted *out of* is answered by the move, what he wanted *at*
-    /// the old club is moot, and what he wants for himself travels with
-    /// him.
-    pub fn on_club_change(&mut self, leaving_club_id: u32) {
-        self.organs.memory.on_club_change(leaving_club_id);
-        self.organs.goals.on_club_change();
+    /// `Player` resets (`reset_on_club_change`). **Goals are answered by
+    /// their subject**: a want about the club he has left is finished,
+    /// a want about himself travels with him.
+    ///
+    /// Every faculty resets on the same signal rather than on the fact
+    /// of a move, which is what makes a loan work: belonging and the
+    /// read of a manager are about the room he has just walked out of
+    /// and go either way, while the career plan is about the club that
+    /// owns him and survives a spell away from it in both directions.
+    /// Being underpaid is not settled by changing employer, so the
+    /// financial faculty is never touched.
+    pub fn on_spell_change(&mut self, change: SpellChange) {
+        self.organs.memory.on_club_change(change.former_club_id);
+        self.organs.goals.on_spell_change(change.changed);
 
-        // Belonging is about a place and does not travel; the read of a
-        // manager is about a person and is reset when it becomes someone
-        // else. The career faculty carries its trajectory over untouched
-        // — a career is continuous — but the ARC it was living out was
-        // about the club he has left, so that resolves with the goals.
-        // Being underpaid is not settled by changing employer, so the
-        // financial faculty is untouched.
-        self.social.on_club_change();
-        self.professional.on_club_change();
-        self.career.on_club_change();
+        if change.changed.contains(GoalSubject::ThisClub) {
+            self.social.on_club_change();
+        }
+        if change.changed.contains(GoalSubject::ThisManager) {
+            self.professional.on_club_change();
+        }
+        if change.changed.contains(GoalSubject::OwningClub) {
+            self.career.on_club_change();
+        }
     }
 
     /// Census for the `.dev/mind` harness and the player profile UI.
@@ -758,7 +765,7 @@ mod tests {
         mind.remember(EpisodeKind::WonLeagueTitle, ActorRef::NONE, &c);
         let before = mind.census();
 
-        mind.on_club_change(7);
+        mind.on_spell_change(SpellChange::transfer(7, false));
 
         assert_eq!(
             mind.census(),
@@ -889,7 +896,7 @@ mod tests {
         let before = mind.journal().len();
         assert!(before > 0);
 
-        mind.on_club_change(7);
+        mind.on_spell_change(SpellChange::transfer(7, false));
 
         assert_eq!(
             mind.journal().len(),

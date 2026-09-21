@@ -26,7 +26,7 @@ pub mod memory;
 pub use goals::{
     Escalation, FormedWant, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalDomain,
     GoalEvidence, GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack,
-    GoalStatus, GoalStore, MindGoal, ReasonMapping, StatusChange,
+    GoalStatus, GoalStore, GoalSubject, MindGoal, ReasonMapping, StatusChange, SubjectMask,
 };
 pub use journal::{MindJournal, MindNote, MindNoteKind, MindNoteStore};
 pub use memory::{
@@ -36,6 +36,83 @@ pub use memory::{
     MindEpisode, MindHolder, MindMemory, Recall, RecallContext, RecallCue, RecallResult,
     RecalledEpisode, Semantic, SemanticFact, SemanticStore,
 };
+
+/// A turn in a man's spell at a club, stated as facts by whoever owns
+/// the move.
+///
+/// There is no "kind of move" enum here on purpose. A loan out and a
+/// permanent sale differ in exactly two observable ways — whether the
+/// club that owns him changed, and whether the club he walked out of is
+/// now a former club — and saying those two things directly is what
+/// keeps the mind free of `if is_loan` branches.
+#[derive(Debug, Clone, Copy)]
+pub struct SpellChange {
+    /// The club whose episodes become "the place I used to be". 0 when
+    /// there is none: a loan out leaves nothing former behind, because
+    /// he is coming back to it.
+    pub former_club_id: u32,
+    /// What the move replaced.
+    pub changed: SubjectMask,
+}
+
+impl SpellChange {
+    /// Sold, signed, or arriving from nowhere on a free. Ownership has
+    /// changed hands, so everything changes with it.
+    pub fn transfer(leaving_club_id: u32, same_league: bool) -> Self {
+        SpellChange {
+            former_club_id: leaving_club_id,
+            changed: Self::moved(same_league).with(GoalSubject::OwningClub),
+        }
+    }
+
+    /// Released. He walks out with nothing left of the place, and no new
+    /// league to compare it with.
+    pub fn release(leaving_club_id: u32) -> Self {
+        Self::transfer(leaving_club_id, false)
+    }
+
+    /// The club he was on loan at has bought him. The only thing that
+    /// moved is who owns him — he keeps the room, the manager and the
+    /// league he was already playing in.
+    pub fn loan_buyout(parent_club_id: u32) -> Self {
+        SpellChange {
+            former_club_id: parent_club_id,
+            changed: SubjectMask::of(&[GoalSubject::OwningClub]),
+        }
+    }
+
+    /// Out on loan. The club that owns him is the one thing that does
+    /// not move, which is what lets him want to prove himself there
+    /// while he is away.
+    pub fn loan_out(same_league: bool) -> Self {
+        SpellChange {
+            former_club_id: 0,
+            changed: Self::moved(same_league),
+        }
+    }
+
+    /// Home from a loan. The borrowing club is behind him for good; the
+    /// club he is walking back into never stopped owning him.
+    pub fn loan_return(borrowing_club_id: u32, same_league: bool) -> Self {
+        SpellChange {
+            former_club_id: borrowing_club_id,
+            changed: Self::moved(same_league),
+        }
+    }
+
+    /// The dressing room and the man picking the team change on every
+    /// move there is; the standard he plays at only changes when the
+    /// league does.
+    fn moved(same_league: bool) -> SubjectMask {
+        const ROOM: SubjectMask =
+            SubjectMask::of(&[GoalSubject::ThisClub, GoalSubject::ThisManager]);
+        if same_league {
+            ROOM
+        } else {
+            ROOM.with(GoalSubject::ThisLeague)
+        }
+    }
+}
 
 /// The shared state of one mind.
 ///

@@ -1,12 +1,14 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::year_step::YearStep;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
+use chrono::Datelike;
 use core::SimulatorData;
 use serde::Deserialize;
 
@@ -14,6 +16,11 @@ use serde::Deserialize;
 pub struct TeamScheduleGetRequest {
     lang: String,
     team_slug: String,
+}
+
+#[derive(Deserialize)]
+pub struct TeamScheduleQuery {
+    pub year: Option<i32>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -40,6 +47,8 @@ pub struct TeamScheduleTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
+    pub year_base: String,
+    pub years: Option<YearStep>,
     pub items: Vec<TeamScheduleItem>,
 }
 
@@ -62,6 +71,7 @@ pub struct TeamScheduleItemResult {
 pub async fn team_schedule_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamScheduleGetRequest>,
+    Query(query): Query<TeamScheduleQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let guard = state.data.read().await;
 
@@ -239,6 +249,14 @@ pub async fn team_schedule_get_action(
 
     // Sort all matches by date
     items.sort_by_key(|(dt, _)| *dt);
+    let years = YearStep::resolve(
+        items.iter().map(|(dt, _)| dt.year()),
+        query.year,
+        simulator_data.date.date().year(),
+    );
+    if let Some(step) = &years {
+        items.retain(|(dt, _)| dt.year() == step.selected);
+    }
     let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, item)| item).collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
@@ -286,6 +304,8 @@ pub async fn team_schedule_get_action(
         show_academy_tab: team.team_type == core::TeamType::Main
             || team.team_type == core::TeamType::U18,
         newspaper_count: NewspaperCounter::count(simulator_data, team),
+        year_base: current_path,
+        years,
         items,
     })
 }

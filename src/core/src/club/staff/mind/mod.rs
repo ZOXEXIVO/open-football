@@ -89,6 +89,7 @@ pub use submind::{
 };
 pub use welfare::WelfareMind;
 
+use crate::club::mind::organs::SpellChange;
 use crate::club::mind::organs::goals::{
     GoalCensus, GoalDomain, GoalEvidence, GoalKind, GoalOrigin, GoalReviewReport, GoalStack,
     MindGoal,
@@ -536,8 +537,9 @@ impl StaffMind {
     /// what he wanted at the old club is moot, and what he wants for
     /// himself travels with him.
     pub fn on_club_change(&mut self, leaving_club_id: u32) {
-        self.organs.shared.memory.on_club_change(leaving_club_id);
-        self.organs.shared.goals.on_club_change();
+        let change = SpellChange::release(leaving_club_id);
+        self.organs.shared.memory.on_club_change(change.former_club_id);
+        self.organs.shared.goals.on_spell_change(change.changed);
 
         // Standing is about a specific board, a specific room and a
         // specific crowd, and none of it travels. What he believes about

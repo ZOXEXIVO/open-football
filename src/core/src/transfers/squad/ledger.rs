@@ -28,6 +28,8 @@
 
 use chrono::NaiveDate;
 
+use crate::club::board::ClubBoard;
+use crate::club::board::mandate::ReservationVerdict;
 use crate::club::team::squad::SquadAssetClass;
 use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
 
@@ -93,6 +95,60 @@ pub struct AssetRow {
     /// True while the player is unavailable for reasons that make a sale
     /// impossible right now (long-term injury).
     pub unsellable: bool,
+    /// Spells the club has already arranged for him. A man out of loans is
+    /// out of ways to be somebody else's problem.
+    pub loans_used: u8,
+    /// What is left of the fee the club paid for him on its own books —
+    /// [`crate::Player::book_value`]. Zero for everyone it did not buy.
+    pub book_value: f64,
+}
+
+impl AssetRow {
+    /// Spells a club arranges before a player's answer has to be the
+    /// market. Same number the pathway plans against.
+    pub const MAX_LOANS: u8 = 2;
+}
+
+/// What the club's own books are doing to every price on its ledger.
+///
+/// Two continuous readings, built once per club: how badly it needs money
+/// and how hard its wage bill is pressing. Both the sell list and the
+/// board's own reservation read THESE numbers rather than each deriving
+/// its own, so what the club advertises and what it will take come from
+/// one view of its finances.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LedgerPressure {
+    pub cash_need: f64,
+    pub wage_pressure: f64,
+}
+
+impl LedgerPressure {
+    /// Share of the wage mandate at which a solvent club starts wanting the
+    /// wage off the books.
+    const WAGE_PRESSURE_BAR: f64 = 0.95;
+
+    pub fn of(ctx: &LedgerContext) -> Self {
+        let wage_pressure = if ctx.wage_budget > 0.0 {
+            ((ctx.annual_wages / ctx.wage_budget - Self::WAGE_PRESSURE_BAR)
+                / (1.0 - Self::WAGE_PRESSURE_BAR).max(0.05))
+            .clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        // The brief wants more than the budget holds — and a club running a
+        // negative balance has a standing cash need whatever its brief says,
+        // which is what makes a distressed seller answer the phone.
+        let brief_shortfall =
+            if ctx.brief_envelope > 0.0 && ctx.available_budget < ctx.brief_envelope {
+                ((ctx.brief_envelope - ctx.available_budget) / ctx.brief_envelope).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+        LedgerPressure {
+            cash_need: brief_shortfall.max(if ctx.in_debt { 0.5 } else { 0.0 }),
+            wage_pressure,
+        }
+    }
 }
 
 /// What the club is, financially and by plan, when it prices its squad.
@@ -116,8 +172,14 @@ pub struct LedgerContext {
 #[derive(Debug, Clone)]
 pub struct SellListEntry {
     pub player_id: u32,
-    /// What the club would want for him.
+    /// What the club would want for him — the board's reservation, which
+    /// is the market curve or the book floor, whichever is higher.
     pub asking: f64,
+    /// Below this the club would rather keep him or lend him out: what is
+    /// left of his fee on the books, less what the board will write off.
+    pub floor: f64,
+    /// What the board does when the market will not clear that floor.
+    pub verdict: ReservationVerdict,
     /// 0..1 readiness. Above [`AssetLedger::MARKET_BAR`] the entry is
     /// marketed to buyers in the right band.
     pub score: f32,
@@ -212,6 +274,39 @@ impl SellScore {
     }
 }
 
+/// How ready a club is to be talked out of a player.
+///
+/// One reading of two things it already is: the plan it runs on, and how
+/// short of money it is this window. A club built to trade holds its core
+/// players a little more cheaply and reads a peak-value asset a little more
+/// loudly; a club built to compete does the opposite; a club that needs the
+/// money moves toward the first whatever its plan says.
+#[derive(Debug, Clone, Copy)]
+pub struct TradeAppetite(f32);
+
+impl TradeAppetite {
+    pub fn of(philosophy: &ClubPhilosophy, cash_need: f64) -> Self {
+        let plan = match philosophy {
+            ClubPhilosophy::DevelopAndSell => 0.8,
+            ClubPhilosophy::SignToCompete => 0.2,
+            _ => 0.5,
+        };
+        TradeAppetite((plan + 0.2 * cash_need as f32).clamp(0.0, 1.0))
+    }
+
+    /// What it does to the premium the shirt puts on a price. A trading
+    /// club asks less to keep a man it means to sell one day anyway.
+    pub fn premium_scale(self) -> f64 {
+        1.0 - 0.20 * (self.0 as f64 - 0.5)
+    }
+
+    /// What it does to the two asset motives on the sell list — a peak-value
+    /// player and a running-down contract.
+    pub fn asset_weight(self) -> f32 {
+        1.0 + 0.7 * (self.0 - 0.5)
+    }
+}
+
 /// Prices a squad and decides who the club would sell.
 pub struct AssetLedger;
 
@@ -253,11 +348,12 @@ impl AssetLedger {
     /// Contract runway below which an unrenewed player is marketed rather
     /// than walked to a free transfer.
     pub const RUNWAY_SELL_MONTHS: i32 = 18;
-    /// Share of the wage mandate at which a solvent club starts wanting the
-    /// wage off the books.
-    const WAGE_PRESSURE_BAR: f64 = 0.95;
     /// Readiness at or above which the club will answer a call.
     pub const MARKET_BAR: f32 = 0.35;
+    /// How much of that readiness a full write-off takes away. A club
+    /// carrying a man on its books at twice what the market will pay has a
+    /// reason not to market him at all.
+    const BOOK_LOSS_WEIGHT: f32 = 0.35;
     /// Longest sell list the club carries. A window is a few decisions, and
     /// a club marketing a dozen players is in a fire sale, not a plan.
     const MAX_ENTRIES: usize = 6;
@@ -268,9 +364,10 @@ impl AssetLedger {
     /// needs a seller's number: the club's own advertised price and an
     /// unsolicited approach alike. The distress discount still applies
     /// downstream — this is what the club wants, not what it will take.
-    pub fn asking_for(row: &AssetRow) -> f64 {
+    pub fn asking_for(row: &AssetRow, appetite: TradeAppetite) -> f64 {
         row.estimated_value.max(0.0)
             * Self::role_premium(row)
+            * appetite.premium_scale()
             * Self::pathway_premium(row)
             * Self::runway_curve(row.contract_months_remaining)
             * Self::age_trajectory(row.age, row.group)
@@ -380,24 +477,15 @@ impl AssetLedger {
     /// one of those reasons alone, which is exactly how real sales cluster.
     /// Asset protection is NOT overridden here: an entry is acceptance
     /// readiness, and the auto-listing sweeps keep their own vetoes.
-    pub fn build(rows: &[AssetRow], ctx: &LedgerContext, date: NaiveDate) -> Vec<SellListEntry> {
-        let wage_pressure = if ctx.wage_budget > 0.0 {
-            ((ctx.annual_wages / ctx.wage_budget - Self::WAGE_PRESSURE_BAR)
-                / (1.0 - Self::WAGE_PRESSURE_BAR).max(0.05))
-            .clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        // The brief wants more than the budget holds — and a club running a
-        // negative balance has a standing cash need whatever its brief says,
-        // which is what makes a distressed seller answer the phone.
-        let brief_shortfall =
-            if ctx.brief_envelope > 0.0 && ctx.available_budget < ctx.brief_envelope {
-                ((ctx.brief_envelope - ctx.available_budget) / ctx.brief_envelope).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-        let cash_need = brief_shortfall.max(if ctx.in_debt { 0.5 } else { 0.0 });
+    pub fn build(
+        rows: &[AssetRow],
+        ctx: &LedgerContext,
+        board: &ClubBoard,
+        date: NaiveDate,
+    ) -> Vec<SellListEntry> {
+        let pressure = LedgerPressure::of(ctx);
+        let wage_pressure = pressure.wage_pressure;
+        let cash_need = pressure.cash_need;
         let roster_pressure = if ctx.max_squad_size > 0 && ctx.squad_size > ctx.max_squad_size {
             ((ctx.squad_size - ctx.max_squad_size) as f64 / 5.0).clamp(0.0, 1.0)
         } else {
@@ -407,7 +495,8 @@ impl AssetLedger {
         // asset motives — peak value and a running-down contract — harder
         // than a club whose plan is to keep its best players.
         let trader = matches!(ctx.philosophy, ClubPhilosophy::DevelopAndSell);
-        let asset_weight = if trader { 1.35 } else { 1.0 };
+        let appetite = TradeAppetite::of(&ctx.philosophy, cash_need);
+        let asset_weight = appetite.asset_weight();
 
         let mut entries: Vec<SellListEntry> = Vec::new();
         for row in rows {
@@ -501,6 +590,17 @@ impl AssetLedger {
             };
             score.add(pathway_term, SellMotive::PathwayMature);
 
+            // ── What the market will not pay ──
+            // A man the market values below what the club still has on its
+            // books for him is not a sale the club wants to make. This is
+            // the term that makes the loan market the natural home of an
+            // unrealised mandate: he is lent out before he is marketed.
+            let market_ask = Self::asking_for(row, appetite);
+            if row.book_value > 0.0 {
+                let shortfall = (1.0 - market_ask / row.book_value).clamp(0.0, 1.0) as f32;
+                score.total -= Self::BOOK_LOSS_WEIGHT * shortfall;
+            }
+
             // ── He is pushing ──
             let push_term = if row.is_transfer_requested {
                 0.60
@@ -512,9 +612,12 @@ impl AssetLedger {
             if score.total <= 0.0 {
                 continue;
             }
+            let reservation = board.reservation_for(row, market_ask, row.book_value, &pressure);
             entries.push(SellListEntry {
                 player_id: row.player_id,
-                asking: Self::asking_for(row),
+                asking: reservation.ask,
+                floor: reservation.floor,
+                verdict: reservation.verdict,
                 score: score.total.clamp(0.0, 1.0),
                 motive: score.motive,
                 marked_on: date,
@@ -558,23 +661,44 @@ mod asking_price_tests {
                 renewal_blocked: false,
                 signing_protected: false,
                 unsellable: false,
+                loans_used: 0,
+                book_value: 0.0,
                 stage: PathwayStage::Starter,
                 verdict_multiple: None,
             }
+        }
+
+        /// A club with no plan to trade and no need for money — the
+        /// neutral middle of the appetite scale, so these tests read the
+        /// curves and nothing else.
+        fn appetite() -> TradeAppetite {
+            TradeAppetite::of(&ClubPhilosophy::Balanced, 0.0)
         }
     }
 
     #[test]
     fn a_core_player_costs_more_than_a_surplus_one() {
-        let core = AssetLedger::asking_for(&Fx::row(SquadAssetClass::CorePlayer, 26, 48));
-        let surplus = AssetLedger::asking_for(&Fx::row(SquadAssetClass::TrueSurplus, 26, 48));
+        let core = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::CorePlayer, 26, 48),
+            Fx::appetite(),
+        );
+        let surplus = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::TrueSurplus, 26, 48),
+            Fx::appetite(),
+        );
         assert!(core > surplus * 2.0, "{core} vs {surplus}");
     }
 
     #[test]
     fn a_running_down_contract_halves_the_price() {
-        let long = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 26, 48));
-        let short = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 26, 6));
+        let long = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 26, 48),
+            Fx::appetite(),
+        );
+        let short = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 26, 6),
+            Fx::appetite(),
+        );
         assert!(
             (short / long - 0.5).abs() < 0.02,
             "six months out is half the price: {}",
@@ -584,8 +708,14 @@ mod asking_price_tests {
 
     #[test]
     fn the_price_keeps_falling_below_six_months_rather_than_stepping() {
-        let six = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 26, 6));
-        let two = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 26, 2));
+        let six = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 26, 6),
+            Fx::appetite(),
+        );
+        let two = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 26, 2),
+            Fx::appetite(),
+        );
         assert!(two < six);
         assert!(two > 0.0);
     }
@@ -597,14 +727,26 @@ mod asking_price_tests {
         raw.believed_ceiling = 160;
         let mut capped = raw;
         capped.believed_ceiling = 112;
-        assert!(AssetLedger::asking_for(&raw) > AssetLedger::asking_for(&capped));
+        assert!(
+            AssetLedger::asking_for(&raw, Fx::appetite())
+                > AssetLedger::asking_for(&capped, Fx::appetite())
+        );
     }
 
     #[test]
     fn the_arc_rises_before_the_prime_and_falls_after_it() {
-        let young = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 20, 48));
-        let prime = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 26, 48));
-        let old = AssetLedger::asking_for(&Fx::row(SquadAssetClass::FirstTeamUseful, 33, 48));
+        let young = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 20, 48),
+            Fx::appetite(),
+        );
+        let prime = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 26, 48),
+            Fx::appetite(),
+        );
+        let old = AssetLedger::asking_for(
+            &Fx::row(SquadAssetClass::FirstTeamUseful, 33, 48),
+            Fx::appetite(),
+        );
         assert!(young > prime);
         assert!(old < prime);
     }
@@ -614,7 +756,10 @@ mod asking_price_tests {
         let mut keeper = Fx::row(SquadAssetClass::FirstTeamUseful, 30, 48);
         keeper.group = PlayerFieldPositionGroup::Goalkeeper;
         let outfield = Fx::row(SquadAssetClass::FirstTeamUseful, 30, 48);
-        assert!(AssetLedger::asking_for(&keeper) > AssetLedger::asking_for(&outfield));
+        assert!(
+            AssetLedger::asking_for(&keeper, Fx::appetite())
+                > AssetLedger::asking_for(&outfield, Fx::appetite())
+        );
     }
 }
 
@@ -660,6 +805,8 @@ mod sell_list_tests {
                 renewal_blocked: false,
                 signing_protected: false,
                 unsellable: false,
+                loans_used: 0,
+                book_value: 0.0,
                 stage: PathwayStage::Starter,
                 verdict_multiple: None,
             }
@@ -668,7 +815,12 @@ mod sell_list_tests {
 
     #[test]
     fn a_settled_core_player_in_his_prime_is_not_marketed() {
-        let list = AssetLedger::build(&[Fx::settled_core(25)], &Fx::ctx(), Fx::date());
+        let list = AssetLedger::build(
+            &[Fx::settled_core(25)],
+            &Fx::ctx(),
+            &ClubBoard::new(),
+            Fx::date(),
+        );
         assert!(
             list.is_empty(),
             "nothing about him says the club would sell: {list:?}"
@@ -677,7 +829,12 @@ mod sell_list_tests {
 
     #[test]
     fn the_same_player_past_his_peak_is() {
-        let list = AssetLedger::build(&[Fx::settled_core(31)], &Fx::ctx(), Fx::date());
+        let list = AssetLedger::build(
+            &[Fx::settled_core(31)],
+            &Fx::ctx(),
+            &ClubBoard::new(),
+            Fx::date(),
+        );
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].motive, SellMotive::PeakValue);
     }
@@ -687,7 +844,7 @@ mod sell_list_tests {
         let mut row = Fx::settled_core(27);
         row.contract_months_remaining = Some(9);
         row.renewal_blocked = true;
-        let list = AssetLedger::build(&[row], &Fx::ctx(), Fx::date());
+        let list = AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date());
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].motive, SellMotive::ExpiringRunway);
     }
@@ -696,7 +853,7 @@ mod sell_list_tests {
     fn a_player_asking_to_leave_is_marketed_whatever_else_is_true() {
         let mut row = Fx::settled_core(24);
         row.is_transfer_requested = true;
-        let list = AssetLedger::build(&[row], &Fx::ctx(), Fx::date());
+        let list = AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date());
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].motive, SellMotive::PlayerPushing);
     }
@@ -705,7 +862,7 @@ mod sell_list_tests {
     fn a_recent_signing_is_never_marketed() {
         let mut row = Fx::settled_core(31);
         row.signing_protected = true;
-        assert!(AssetLedger::build(&[row], &Fx::ctx(), Fx::date()).is_empty());
+        assert!(AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date()).is_empty());
     }
 
     #[test]
@@ -718,7 +875,7 @@ mod sell_list_tests {
         let mut modest = Fx::settled_core(26);
         modest.player_id = 2;
         modest.annual_wage = 500_000.0;
-        let list = AssetLedger::build(&[top, modest], &ctx, Fx::date());
+        let list = AssetLedger::build(&[top, modest], &ctx, &ClubBoard::new(), Fx::date());
         assert_eq!(list.first().map(|e| e.player_id), Some(1));
         assert_eq!(list[0].motive, SellMotive::WageRelief);
     }
@@ -728,8 +885,8 @@ mod sell_list_tests {
         let mut trader = Fx::ctx();
         trader.philosophy = ClubPhilosophy::DevelopAndSell;
         let row = Fx::settled_core(31);
-        let keeper_club = AssetLedger::build(&[row], &Fx::ctx(), Fx::date());
-        let trading_club = AssetLedger::build(&[row], &trader, Fx::date());
+        let keeper_club = AssetLedger::build(&[row], &Fx::ctx(), &ClubBoard::new(), Fx::date());
+        let trading_club = AssetLedger::build(&[row], &trader, &ClubBoard::new(), Fx::date());
         let keeper_score = keeper_club.first().map(|e| e.score).unwrap_or(0.0);
         let trader_score = trading_club.first().map(|e| e.score).unwrap_or(0.0);
         assert!(
@@ -748,7 +905,7 @@ mod sell_list_tests {
         surplus.observable_level = 110;
         let mut core = Fx::settled_core(26);
         core.player_id = 2;
-        let list = AssetLedger::build(&[surplus, core], &ctx, Fx::date());
+        let list = AssetLedger::build(&[surplus, core], &ctx, &ClubBoard::new(), Fx::date());
         assert_eq!(
             list.first().map(|e| e.player_id),
             Some(1),
@@ -765,7 +922,7 @@ mod sell_list_tests {
                 r
             })
             .collect();
-        let list = AssetLedger::build(&rows, &Fx::ctx(), Fx::date());
+        let list = AssetLedger::build(&rows, &Fx::ctx(), &ClubBoard::new(), Fx::date());
         assert!(list.len() <= AssetLedger::MAX_ENTRIES);
     }
 }
@@ -801,9 +958,17 @@ mod sell_at_peak_tests {
                 renewal_blocked: false,
                 signing_protected: false,
                 unsellable: false,
+                loans_used: 0,
+                book_value: 0.0,
                 stage,
                 verdict_multiple: None,
             }
+        }
+
+        /// The neutral middle of the appetite scale: these tests read the
+        /// pathway, not the club's willingness to trade.
+        fn appetite() -> TradeAppetite {
+            TradeAppetite::of(&ClubPhilosophy::Balanced, 0.0)
         }
 
         fn ctx(philosophy: ClubPhilosophy) -> LedgerContext {
@@ -828,6 +993,7 @@ mod sell_at_peak_tests {
         let holding = AssetLedger::build(
             &[Fx::row(PathwayStage::Starter)],
             &Fx::ctx(ClubPhilosophy::DevelopAndSell),
+            &ClubBoard::new(),
             Fx::date(),
         );
         assert!(
@@ -838,6 +1004,7 @@ mod sell_at_peak_tests {
         let selling = AssetLedger::build(
             &[Fx::row(PathwayStage::SellAtPeak)],
             &Fx::ctx(ClubPhilosophy::DevelopAndSell),
+            &ClubBoard::new(),
             Fx::date(),
         );
         let entry = selling.first().expect("the decision reaches the sell list");
@@ -854,6 +1021,7 @@ mod sell_at_peak_tests {
                 ..Fx::row(PathwayStage::Starter)
             }],
             &Fx::ctx(ClubPhilosophy::SignToCompete),
+            &ClubBoard::new(),
             Fx::date(),
         );
         assert!(peak_but_not_trading.is_empty());
@@ -863,9 +1031,9 @@ mod sell_at_peak_tests {
     /// finished with a man costs something.
     #[test]
     fn the_pathway_moves_the_asking_price_both_ways() {
-        let held = AssetLedger::asking_for(&Fx::row(PathwayStage::Starter));
-        let peak = AssetLedger::asking_for(&Fx::row(PathwayStage::SellAtPeak));
-        let done = AssetLedger::asking_for(&Fx::row(PathwayStage::MoveOn));
+        let held = AssetLedger::asking_for(&Fx::row(PathwayStage::Starter), Fx::appetite());
+        let peak = AssetLedger::asking_for(&Fx::row(PathwayStage::SellAtPeak), Fx::appetite());
+        let done = AssetLedger::asking_for(&Fx::row(PathwayStage::MoveOn), Fx::appetite());
         assert!(peak > held);
         assert!(done < held);
     }

@@ -786,23 +786,18 @@ a:active {
     gap: 8px;
 }
 
-/* Year stepper — one inset instrument, the year carrying the weight and the
-   chevrons staying quiet until pointed at. Arrows are links, so a year is a
-   URL; at the ends of the range the chevron is a dimmed span. */
+/* Year stepper — flat: the year IS the control. The chevrons are drawn
+   rather than typeset, so their stroke matches its weight and their height
+   matches its digits instead of inheriting the font's own thin glyph. The
+   margin re-centres a rotated square, whose drawn mass sits off to one
+   side of its box. */
 .fm-yearstep {
     display: inline-flex;
-    align-items: stretch;
-    background: #16202a;
-    border: 1px solid #263340;
-    border-radius: 3px;
-    overflow: hidden;
-    line-height: 1;
+    align-items: center;
+    gap: 3px;
 }
 
 .fm-yearstep-value {
-    display: inline-flex;
-    align-items: center;
-    padding: 0 12px;
     font-size: 14px;
     font-weight: 700;
     color: #dfe7ee;
@@ -814,18 +809,31 @@ a:active {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    padding: 5px 0;
-    font-size: 19px;
-    color: #8b9dab;
+    padding: 6px 9px;
+    color: #7d8f9d;
     text-decoration: none !important;
-    transition:
-        color 0.12s ease,
-        background 0.12s ease;
+    transition: color 0.12s ease;
+}
+
+.fm-yearstep-arrow::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+}
+
+.fm-yearstep-arrow:first-child::before {
+    transform: rotate(45deg);
+    margin-left: 3px;
+}
+
+.fm-yearstep-arrow:last-child::before {
+    transform: rotate(-135deg);
+    margin-right: 3px;
 }
 
 a.fm-yearstep-arrow:hover {
-    background: rgba(74, 157, 91, 0.14);
     color: #5cb86c;
 }
 
@@ -835,7 +843,7 @@ a.fm-yearstep-arrow:hover {
 }
 
 .fm-yearstep-arrow.is-end {
-    color: #3a4a56;
+    color: #37454f;
 }
 
 .fm-empty {
@@ -8661,15 +8669,6 @@ html.match-scroll-locked body {
     .fm-panel-head:has(.fm-yearstep) {
         justify-content: flex-start;
         gap: 12px;
-    }
-
-    .fm-yearstep-value {
-        font-size: 13px;
-        padding: 0 9px;
-    }
-
-    .fm-yearstep-arrow {
-        width: 22px;
     }
 
     .fm-schedule .sch-venue .fm-venue {

@@ -3,14 +3,16 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::common::year_step::YearStep;
 use crate::player::events::PlayerEventsCounter;
-use crate::player::matches::collector::{PlayerMatchCollector, PlayerMatchYears};
+use crate::player::matches::collector::PlayerMatchCollector;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
+use chrono::Datelike;
 use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
 
@@ -56,7 +58,8 @@ pub struct PlayerMatchesTemplate {
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
-    pub years: Option<PlayerMatchYears>,
+    pub year_base: String,
+    pub years: Option<YearStep>,
     pub items: Vec<PlayerMatchItem>,
 }
 
@@ -121,12 +124,17 @@ pub async fn player_matches_action(
     // see `collector` for why the schedule alone loses youth football,
     // everything played before a move, and the whole table for a player who
     // is between clubs.
-    let items = PlayerMatchCollector::collect(simulator_data, player, team_opt);
-    let years = PlayerMatchYears::resolve(&items, query.year);
-    let items = match &years {
-        Some(years) => years.keep(items),
-        None => items,
-    };
+    let mut items = PlayerMatchCollector::collect(simulator_data, player, team_opt);
+    let years = YearStep::resolve(
+        items.iter().map(|item| item.year),
+        query.year,
+        simulator_data.date.date().year(),
+    );
+    if let Some(step) = &years {
+        items.retain(|item| item.year == step.selected);
+    }
+
+    let year_base = format!("/{}/players/{}/matches", &route_params.lang, &canonical);
 
     let title = format!(
         "{} {}",
@@ -196,6 +204,7 @@ pub async fn player_matches_action(
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
+        year_base,
         years,
         items,
     }

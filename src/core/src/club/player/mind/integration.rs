@@ -13,7 +13,7 @@ use crate::club::player::core::player::{
 };
 use crate::club::player::mind::{
     ActorRef, CareerArc, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind,
-    GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue,
+    GoalOrigin, GoalStatus, MindClock, MindSituation, RecallCue, SpellChange,
 };
 use crate::shared::fullname::FullName;
 use crate::{
@@ -227,7 +227,7 @@ fn a_pattern_of_broken_promises_becomes_a_judgement_that_outlives_them() {
 
     // A decade on, at another club entirely. Every episode has long since
     // been pushed out by a career's worth of newer memories.
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
     let much_later = Fixture::date(2037, 7, 1);
     let late_ctx = p.mind_context(much_later, Some(99));
 
@@ -276,7 +276,7 @@ fn a_return_to_the_old_club_brings_it_back_and_makes_it_vivid_again() {
     let early = p.mind_context(Fixture::date(2026, 1, 10), Some(CLUB));
     p.mind
         .remember(EpisodeKind::SeniorDebut, ActorRef::NONE, &early);
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
 
     let much_later = p.mind_context(Fixture::date(2036, 1, 10), Some(99));
     let faded = p
@@ -540,7 +540,7 @@ fn moving_answers_what_he_wanted_out_of_but_not_what_he_is_owed() {
     DesireRun::sustain(&mut p, TransferRequestReason::SalaryUnresolved, 16, start);
     assert!(p.mind.goals().get(GoalKind::LeaveThisClub).is_some());
 
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
 
     assert!(
         p.mind.goals().get(GoalKind::LeaveThisClub).is_none(),
@@ -596,7 +596,7 @@ fn a_career_of_wanting_things_never_fills_the_stack() {
         );
         p.mind.tick(&ctx);
         if index % 30 == 29 {
-            p.mind.on_club_change(CLUB);
+            p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
         }
     }
 
@@ -667,7 +667,7 @@ fn settling_in_lifts_the_hold_a_move_put_on_what_he_brought_with_him() {
 
     // Sold. Being underpaid travels with him — on hold, because the new
     // club is owed a fair look before he presses it.
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
     let held = p
         .mind
         .goals()
@@ -973,7 +973,7 @@ fn a_move_resets_belonging_and_the_manager_read_but_not_the_career() {
     assert!(p.mind.professional.feels_rated() > 0.0);
     assert_eq!(p.mind.career.honours, 1);
 
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
 
     assert_eq!(p.mind.social.belonging(), 0.0, "belonging is about a place");
     assert_eq!(
@@ -1075,7 +1075,7 @@ fn a_full_career_of_thinking_never_grows_the_mind() {
         let situation = &situations[(season % 2) as usize];
         day = Weeks::run(&mut p, situation, 40, day);
         if season % 3 == 2 {
-            p.mind.on_club_change(CLUB);
+            p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
         }
     }
 
@@ -1583,7 +1583,7 @@ fn the_club_where_he_made_his_name_argues_for_itself_a_decade_later() {
             .remember(EpisodeKind::FansAdoration, ActorRef::fans(CLUB), &ctx);
     }
     p.mind.memory_mut().maybe_consolidate(&ctx.memory());
-    p.mind.on_club_change(CLUB);
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
 
     let elsewhere = 88;
     let home = p.mind.deliberate(MindOption::JoinClub(CLUB));
@@ -1659,5 +1659,94 @@ fn a_one_club_man_at_his_own_level_means_to_stay_and_lead() {
     assert_eq!(
         p.mind.career.plan.map(|plan| plan.arc),
         Some(CareerArc::StayAndLead)
+    );
+}
+
+/// The page said he wanted the manager's trust six months after he last
+/// saw that manager.
+///
+/// A loan never reached the mind at all — only `complete_transfer` did —
+/// so a man playing his football somewhere else went on carrying the
+/// parent club's grievances, the parent manager, and the parent dressing
+/// room, and the profile printed all three as things he wants *here*.
+#[test]
+fn going_out_on_loan_leaves_the_old_club_behind() {
+    let today = Fixture::date(2030, 8, 1);
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(today, Some(CLUB));
+
+    for (kind, origin) in [
+        (GoalKind::WinTheManagersTrust, GoalOrigin::SelfDrive),
+        (GoalKind::WinBackMyPlace, GoalOrigin::SelfDrive),
+        (GoalKind::LeaveThisClub, GoalOrigin::Grievance),
+        (GoalKind::ProveMyselfAtMyParentClub, GoalOrigin::SelfDrive),
+        (GoalKind::BePaidWhatImWorth, GoalOrigin::Grievance),
+    ] {
+        p.mind.pursue(kind, origin, GoalEvidence::EMPTY, 0.9, &ctx);
+    }
+
+    p.mind.on_spell_change(SpellChange::loan_out(false));
+
+    for gone in [
+        GoalKind::WinTheManagersTrust,
+        GoalKind::WinBackMyPlace,
+        GoalKind::LeaveThisClub,
+    ] {
+        assert!(
+            p.mind.goals().get(gone).is_none(),
+            "{gone:?} was about a club he is no longer playing for"
+        );
+    }
+    assert!(
+        p.mind.goals().get(GoalKind::ProveMyselfAtMyParentClub).is_some(),
+        "the club that owns him did not change — that is what a loan is"
+    );
+    assert!(
+        p.mind.goals().get(GoalKind::BePaidWhatImWorth).is_some(),
+        "and his wage is his wage wherever he is playing"
+    );
+    assert!(
+        p.mind.career.plan_view(MindClock::day(today)).arc.is_none(),
+        "no plan was formed yet; the point is the loan does not clear one"
+    );
+}
+
+/// The other end of the same hole: a loanee who signs permanently
+/// somewhere else was still carrying what he wanted at the club that
+/// used to own him, and what he wanted at the one that borrowed him.
+#[test]
+fn a_loanee_sold_on_keeps_neither_club() {
+    let today = Fixture::date(2031, 1, 10);
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(today, Some(CLUB));
+    p.mind.pursue(
+        GoalKind::ProveMyselfAtMyParentClub,
+        GoalOrigin::SelfDrive,
+        GoalEvidence::EMPTY,
+        0.9,
+        &ctx,
+    );
+    p.mind.pursue(
+        GoalKind::StayAtThisLoanClub,
+        GoalOrigin::Attachment,
+        GoalEvidence::EMPTY,
+        0.9,
+        &ctx,
+    );
+    p.mind.pursue(
+        GoalKind::GoHome,
+        GoalOrigin::Attachment,
+        GoalEvidence::of(&[GoalEvidence::HOMESICK]),
+        0.9,
+        &ctx,
+    );
+
+    p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
+
+    assert!(p.mind.goals().get(GoalKind::ProveMyselfAtMyParentClub).is_none());
+    assert!(p.mind.goals().get(GoalKind::StayAtThisLoanClub).is_none());
+    assert!(
+        p.mind.goals().get(GoalKind::GoHome).is_some(),
+        "a third foreign club is not home"
     );
 }

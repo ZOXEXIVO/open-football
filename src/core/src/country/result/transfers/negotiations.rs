@@ -6,6 +6,7 @@ use super::types::{
 };
 use crate::club::WageReliefSale;
 use crate::club::board::ownership::ClubBenefactor;
+use crate::club::news::affairs::ClubAffair;
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
@@ -42,6 +43,7 @@ use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::squad::ledger::ReplacementScarcity;
+use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
 use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::value::wage::{BuyerLevelWage, OwnerEnvelopeReservations, WagePower};
@@ -304,9 +306,11 @@ impl NegotiationPass {
                         ),
                         personal_terms: n.current_offer.personal_terms.clone(),
                         foreign_seller_importance: n.foreign_seller_importance,
+                        foreign_seller_floor: n.foreign_seller_floor,
                         foreign_seller_finances: n.foreign_seller_finances,
                         staged_stance: n.staged_stance,
                         staged_sporting_drop: n.staged_sporting_drop,
+                        mandate: n.mandate,
                     }
                 }
                 None => continue,
@@ -1816,7 +1820,7 @@ impl NegotiationPass {
         // the floor, and only the FINAL round terminally rejects a bid that
         // still falls short. A triggered release clause above already
         // short-circuited, so a forced sale is never blocked.
-        let floor = SellerFeeFloor::for_permanent_domestic(country, neg_data, date);
+        let floor = SellerFeeFloor::for_permanent(country, neg_data, date);
         let below_floor = floor
             .as_ref()
             .map(|f| neg_data.offer_amount < f.min_fee)
@@ -2085,6 +2089,7 @@ impl NegotiationPass {
             .unwrap_or(true);
 
         let mut buyer_walks = false;
+        let mut exception: Option<f64> = None;
         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
             let reservation_mult = seller_reservation.clamp(1.0, 1.55);
             let mut target = if neg_data.asking_price > 0.0 && listing_matches_deal_type {
@@ -2095,12 +2100,6 @@ impl NegotiationPass {
             if let Some(f) = &floor {
                 target = target.max(f.min_fee);
             }
-            // What the buyer would have reached for before any of the
-            // market layers existed: the seller's reservation, inside
-            // its budget. This is the calibrated baseline reach and the
-            // floor of everything below.
-            let legacy_target = target;
-
             // ── The auction ─────────────────────────────────────
             //
             // Somebody else is already in front. A buyer that wants him
@@ -2124,31 +2123,39 @@ impl NegotiationPass {
                 target += neg_data.asking_price * premium;
             }
 
-            // ── The buyer's own number ──────────────────────────
+            // ── The board's own number ──────────────────────────
             //
             // Everything above says what it would TAKE to win him.
-            // This says what he is worth to this buyer. A club walks
-            // away from a bidding war at its own ceiling, which is why
-            // two clubs chasing one player do not converge on the same
-            // fee — the richer one, whose marginal dollar is worth less,
-            // simply has further to go.
+            // This says what the board approved him FOR, and how far
+            // past that it will go. A club walks away from a bidding war
+            // at its own number, which is why two clubs chasing one
+            // player do not converge on the same fee — the richer one,
+            // whose marginal dollar is worth less, simply has further to
+            // go.
             //
-            // The ceiling caps only the EXTENSION above the legacy
-            // reach — the auction floor and the deadline premium —
-            // never the reach itself. Three censuses showed why: with
-            // this market's fees an order of magnitude below its wages,
-            // the deal value nets wages off a small sporting benefit and
-            // comes out under the seller's price for exactly the deals
-            // real clubs do (a strong-league side buying an elite club's
-            // surplus, a mid-rich elite side buying a modest upgrade),
-            // and those cells fell 40 % below HEAD. Until the fee scale
-            // is reconciled the ceiling is not a trustworthy walk-away
-            // price below the calibrated baseline, so it does not act
-            // there. Where it does act — who keeps raising once a
-            // bidding war has pushed the price past the ask — is the
-            // half of the story it was built for.
+            // It now acts on the whole reach rather than only on the
+            // extension above the seller's price. That exception existed
+            // because the walk-away sat under every plausible ask at the
+            // old fee scale; with the envelope priced off the minutes a
+            // mandate actually promises, it is the buyer's number for
+            // every deal — and it is the only thing that stops a
+            // seller's ask dragging a buyer past its own doctrine one
+            // round at a time.
+            let mut doctrine_blocked = false;
+            if let Some(approved) = negotiation.approved_fee {
+                // Crossing the approved fee sends it back to the board,
+                // which grants the exception once. The rope it grants is
+                // already in `buyer_ceiling_fee`.
+                if target > approved && negotiation.rehearings == 0 {
+                    negotiation.rehearings = 1;
+                    exception = Some(target.min(negotiation.buyer_ceiling_fee.unwrap_or(target)));
+                }
+            }
             if let Some(ceiling) = negotiation.buyer_ceiling_fee {
-                target = target.min(ceiling.max(legacy_target));
+                if target > ceiling {
+                    target = ceiling;
+                    doctrine_blocked = true;
+                }
             }
 
             let escalation = 0.45 + urgency * 0.25;
@@ -2178,7 +2185,11 @@ impl NegotiationPass {
                     budget_blocked = true;
                 }
             }
-            if budget_blocked && new_amount <= current_amount {
+            // Whatever stopped the bid improving — the budget or the
+            // board — a buyer that cannot raise again is out of the
+            // conversation, and says so now rather than orbiting below
+            // the seller's number for six more rounds.
+            if (budget_blocked || doctrine_blocked) && new_amount <= current_amount {
                 buyer_walks = true;
             } else {
                 let mut escalated = negotiation.current_offer.clone();
@@ -2186,6 +2197,24 @@ impl NegotiationPass {
                 escalated.offered_date = date;
                 negotiation.counter_offer(escalated);
                 negotiation.advance_club_negotiation_round(date);
+            }
+        }
+        // The board was asked again and raised its own number. A decision
+        // a supporter learns about while the deal is still live, which is
+        // the only boardroom fact in a negotiation that ever reaches him.
+        if let Some(fee) = exception {
+            if let Some(buyer) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == neg_data.buying_club_id)
+            {
+                buyer.record_affair(
+                    ClubAffair::TransferExceptionApproved {
+                        player_id: neg_data.player_id,
+                        fee: fee as i64,
+                    },
+                    date,
+                );
             }
         }
         if buyer_walks {
@@ -2731,6 +2760,7 @@ impl NegotiationPass {
                 loan_future_fee: neg_data.loan_future_fee,
                 personal_terms: neg_data.personal_terms.clone(),
                 offer_clauses,
+                mandate: neg_data.mandate,
             });
 
             ApproachPass::on_negotiation_resolved(
@@ -3299,18 +3329,36 @@ impl SellerFeeFloor {
     const DURABLE_UNHAPPY_STREAK: u8 = 6;
     const DURABLE_AMBITION_FIT: f32 = -8.0;
 
-    /// The floor for the current negotiation, or `None` when none applies (a
-    /// loan, a cross-country move where the seller-side data lives abroad, an
-    /// unrated surplus/development player, or an unrated player with no
-    /// distressed reason). The caller rejects any permanent bid below
-    /// `min_fee`.
-    pub(crate) fn for_permanent_domestic(
+    /// The floor for the current negotiation, or `None` when none applies
+    /// (a loan, an unrated surplus/development player with nothing on the
+    /// books, or an unrated player with no distressed reason). The caller
+    /// rejects any permanent bid below `min_fee`.
+    ///
+    /// A cross-border seller lives in another country's borrow by the time
+    /// this runs, so his own number travels with the negotiation — staged
+    /// at creation exactly as `foreign_seller_importance` is. Leaving it
+    /// `None` there is what let every foreign sale ignore what the club
+    /// had paid.
+    pub(crate) fn for_permanent(
         country: &Country,
         neg_data: &NegotiationData,
         date: NaiveDate,
     ) -> Option<SellerFloorVerdict> {
-        if neg_data.is_loan || neg_data.selling_country_id.is_some() {
+        if neg_data.is_loan {
             return None;
+        }
+        if neg_data.selling_country_id.is_some() {
+            return neg_data
+                .foreign_seller_floor
+                .filter(|min_fee| *min_fee > 0.0)
+                .map(|min_fee| SellerFloorVerdict {
+                    min_fee,
+                    market_value: min_fee,
+                    fraction: 1.0,
+                    asset_class: SquadAssetClass::UnknownNeedsEvaluation,
+                    distress: SellerDistress::None,
+                    reason: NegotiationRejectionReason::AskingPriceTooHigh,
+                });
         }
         let seller = country
             .clubs
@@ -3349,61 +3397,28 @@ impl SellerFeeFloor {
             _ => NegotiationRejectionReason::AskingPriceTooHigh,
         };
 
-        // Sunk cost. A club does not book a loss on a man it paid a large
-        // fee for months ago — it loans him out, or it waits. The paid fee
-        // holds as a floor for two years and decays 15 % a year over that
-        // span, and severe distress (six months left, a fire sale) lifts it,
-        // because a club with no leverage takes what it can get.
-        let sunk_cost_floor = SellerFeeFloor::sunk_cost_floor(player, date, distress);
+        // What the club still has him on its books for. A club does not
+        // book a loss on a man it paid a large fee for months ago — it
+        // loans him out, or it waits — and how much of that loss it WILL
+        // book is its board's decision, not a decay constant.
+        //
+        // Player-side distress goes on easing the market fraction above
+        // exactly as it always did, and never touches this: a transfer
+        // request is the player's business, and his mood does not change
+        // what the club paid.
+        let book_floor = seller.board.book_floor(
+            player.book_value(date),
+            &LedgerPressure::of(&LedgerContext::of(seller)),
+        );
 
         Some(SellerFloorVerdict {
-            min_fee: (market_value * fraction).max(sunk_cost_floor),
+            min_fee: (market_value * fraction).max(book_floor),
             market_value,
             fraction,
             asset_class,
             distress,
             reason,
         })
-    }
-
-    /// Years over which a paid fee stops anchoring the asking price.
-    const SUNK_COST_YEARS: f64 = 2.0;
-    /// Share of the paid fee written off per year inside that window.
-    const SUNK_COST_DECAY_PER_YEAR: f64 = 0.15;
-
-    /// The floor a recently-paid fee puts under a sale, or `0.0` when there
-    /// isn't one.
-    ///
-    /// This is the Galatasaray → Gaziantep shape in one line: a marquee
-    /// signing bought in the summer, sold in January for a fraction of the
-    /// fee, because nothing in the seller's arithmetic remembered what he
-    /// had cost. A club that has just spent eighteen million does not accept
-    /// six for the same player five months later; it holds, or it loans him.
-    /// Anchored on the TRANSFER, not the contract. `contract.started` is
-    /// re-stamped by every renewal (`accept_contract.rs`, `contract.rs`), so
-    /// reading it here re-armed a full-fee floor on a player bought three
-    /// years ago the day he signed an extension — and left it armed for two
-    /// more years. `last_transfer_date` is written by the same completion
-    /// that sets `sold_from`, so the fee and the clock come from one event.
-    fn sunk_cost_floor(player: &Player, date: NaiveDate, distress: SellerDistress) -> f64 {
-        if matches!(distress, SellerDistress::Strong) {
-            return 0.0;
-        }
-        let Some(acquired) = player.last_transfer_date() else {
-            return 0.0;
-        };
-        // `sold_from` carries `(selling club, fee)` for the move that brought
-        // him HERE — see `Player::on_transfer_completed`. That fee is the
-        // number the current owner actually spent.
-        let paid = player.sold_from.map(|(_, fee)| fee).unwrap_or(0.0);
-        if paid <= 0.0 {
-            return 0.0;
-        }
-        let years = (date - acquired).num_days().max(0) as f64 / 365.0;
-        if years >= SellerFeeFloor::SUNK_COST_YEARS {
-            return 0.0;
-        }
-        paid * (1.0 - SellerFeeFloor::SUNK_COST_DECAY_PER_YEAR * years)
     }
 
     /// Days a genuine permanent listing persists before the floor fully eases
@@ -3817,7 +3832,9 @@ mod seller_bid_valuation_tests {
 #[cfg(test)]
 mod development_pathway_protection_tests {
     use super::*;
+    use crate::PlayerFieldPositionGroup;
     use crate::academy::ClubAcademy;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
@@ -3871,10 +3888,17 @@ mod development_pathway_protection_tests {
                 .player_attributes(attrs)
                 .build()
                 .unwrap();
-            player.plan = Some(PlayerPlan::from_signing(
-                18,
-                2_000_000.0,
-                Self::d(2026, 7, 1),
+            let signed_on = Self::d(2026, 7, 1);
+            player.plan = Some(PlayerPlan::from_mandate(
+                SigningMandate::new(
+                    MandatePurpose::Prospect,
+                    PlayerFieldPositionGroup::Midfielder,
+                    18,
+                    signed_on,
+                    MandateAuthor::Manager,
+                )
+                .with_money(2_000_000.0, 0.0),
+                signed_on,
             ));
             player
         }
@@ -4026,6 +4050,8 @@ mod development_pathway_protection_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_floor: None,
+                mandate: None,
                 foreign_seller_finances: None,
             }
         }
@@ -4290,6 +4316,8 @@ mod seller_fee_floor_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_floor: None,
+                mandate: None,
                 foreign_seller_finances: None,
             }
         }
@@ -4329,7 +4357,7 @@ mod seller_fee_floor_tests {
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
-        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+        let v = SellerFeeFloor::for_permanent(&country, &nd, Ff::date())
             .expect("a core player must carry a fee floor");
         assert_eq!(v.asset_class, SquadAssetClass::CorePlayer);
         assert_eq!(v.distress, SellerDistress::None);
@@ -4569,7 +4597,7 @@ mod seller_fee_floor_tests {
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
-        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+        let v = SellerFeeFloor::for_permanent(&country, &nd, Ff::date())
             .expect("a valuable NotNeeded player keeps a distressed residual floor");
         assert_eq!(v.distress, SellerDistress::Strong);
         assert_eq!(v.fraction, SellerFeeFloor::DISTRESSED_RESIDUAL);
@@ -4598,7 +4626,7 @@ mod seller_fee_floor_tests {
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
-        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+        let v = SellerFeeFloor::for_permanent(&country, &nd, Ff::date())
             .expect("a listed first-team player still carries a floor");
         assert_eq!(v.asset_class, SquadAssetClass::FirstTeamUseful);
         assert_eq!(v.distress, SellerDistress::Modest);
@@ -4646,7 +4674,7 @@ mod seller_fee_floor_tests {
         let nd = Ff::neg_data(100, 340_000.0, 400_000.0);
 
         assert!(
-            SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date()).is_none(),
+            SellerFeeFloor::for_permanent(&country, &nd, Ff::date()).is_none(),
             "a genuine low-value surplus player must carry no importance floor"
         );
     }
@@ -4667,7 +4695,7 @@ mod seller_fee_floor_tests {
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
-        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date())
+        let v = SellerFeeFloor::for_permanent(&country, &nd, Ff::date())
             .expect("a near-expiry first-team player keeps the residual floor");
         assert_eq!(v.distress, SellerDistress::Strong);
         assert_eq!(v.fraction, SellerFeeFloor::DISTRESSED_RESIDUAL);
@@ -4693,7 +4721,7 @@ mod seller_fee_floor_tests {
         let country = Ff::country(vec![target]);
         let nd = Ff::neg_data(100, 340_000.0, 408_000.0);
 
-        let v = SellerFeeFloor::for_permanent_domestic(&country, &nd, Ff::date()).unwrap();
+        let v = SellerFeeFloor::for_permanent(&country, &nd, Ff::date()).unwrap();
         let deepest_decay_bid = v.market_value * 0.6; // market.rs decay floor
         assert!(
             deepest_decay_bid < v.min_fee,
@@ -4886,6 +4914,8 @@ mod saga_visibility_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 foreign_seller_importance: None,
+                foreign_seller_floor: None,
+                mandate: None,
                 foreign_seller_finances: None,
             }
         }
@@ -5147,21 +5177,25 @@ mod seller_windfall_tests {
 }
 
 #[cfg(test)]
-mod sunk_cost_floor_tests {
+mod book_floor_tests {
     use super::*;
+    use crate::club::board::ClubBoard;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
+    use crate::transfers::squad::ledger::LedgerPressure;
     use crate::{
-        PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
-        PlayerPositions, PlayerSkills,
+        PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPlan,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
     };
 
-    /// A player bought for a fee, with the contract clock and the TRANSFER
-    /// clock set independently — which is the whole point: they are two
-    /// different dates and the floor must read the second one.
-    struct SunkCostFixtures;
+    /// Replaces `sunk_cost_floor_tests`. Same shape, different owner: the
+    /// paid fee is no longer a decay constant on the player but an
+    /// unamortised balance on his mandate, and how much of it the club
+    /// will write off is its board's decision.
+    struct BookFixtures;
 
-    impl SunkCostFixtures {
+    impl BookFixtures {
         const PAID: f64 = 18_000_000.0;
 
         fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -5193,7 +5227,25 @@ mod sunk_cost_floor_tests {
             if let Some(contract) = player.contract.as_mut() {
                 contract.started = Some(contract_started);
             }
+            player.plan = Some(PlayerPlan::from_mandate(
+                SigningMandate::new(
+                    MandatePurpose::Starter,
+                    PlayerFieldPositionGroup::Forward,
+                    28,
+                    last_transfer,
+                    MandateAuthor::Manager,
+                )
+                .with_money(Self::PAID, 24_000_000.0),
+                last_transfer,
+            ));
             player
+        }
+
+        fn quiet() -> LedgerPressure {
+            LedgerPressure {
+                cash_need: 0.0,
+                wage_pressure: 0.0,
+            }
         }
     }
 
@@ -5201,63 +5253,68 @@ mod sunk_cost_floor_tests {
     /// market in January. The fee has to still be a floor.
     #[test]
     fn a_fee_paid_five_months_ago_still_floors_the_sale() {
-        let bought_on = SunkCostFixtures::d(2026, 7, 1);
-        let player = SunkCostFixtures::bought(bought_on, bought_on);
-        let floor = SellerFeeFloor::sunk_cost_floor(
-            &player,
-            SunkCostFixtures::d(2026, 12, 1),
-            SellerDistress::None,
+        let bought_on = BookFixtures::d(2026, 7, 1);
+        let player = BookFixtures::bought(bought_on, bought_on);
+        let floor = ClubBoard::new().book_floor(
+            player.book_value(BookFixtures::d(2026, 12, 1)),
+            &BookFixtures::quiet(),
         );
         assert!(
-            floor > SunkCostFixtures::PAID * 0.85,
+            floor > BookFixtures::PAID * 0.70,
             "five months after an 18M purchase the floor read {floor}"
         );
     }
 
-    /// The defect: `contract.started` is re-stamped by every renewal, so a
-    /// player bought three years ago re-armed a full-fee floor the day he
-    /// signed an extension — and kept it armed for two more years.
+    /// `contract.started` is re-stamped by every renewal. The book is
+    /// anchored on the TRANSFER, so an extension changes nothing.
     #[test]
     fn a_renewal_does_not_reinstate_the_floor_on_an_old_purchase() {
-        let bought_on = SunkCostFixtures::d(2023, 7, 1);
-        let renewed_on = SunkCostFixtures::d(2026, 7, 1);
-        let player = SunkCostFixtures::bought(renewed_on, bought_on);
-        let floor = SellerFeeFloor::sunk_cost_floor(
-            &player,
-            SunkCostFixtures::d(2026, 8, 1),
-            SellerDistress::None,
-        );
+        let bought_on = BookFixtures::d(2023, 7, 1);
+        let renewed_on = BookFixtures::d(2026, 7, 1);
+        let player = BookFixtures::bought(renewed_on, bought_on);
         assert_eq!(
-            floor, 0.0,
-            "a three-year-old fee is a sunk cost the club has written off"
+            player.book_value(BookFixtures::d(2027, 8, 1)),
+            0.0,
+            "a four-year-old fee has been amortised to nothing"
         );
     }
 
-    /// A fire sale lifts it, and a player who arrived for nothing never had
-    /// one.
+    /// A player who arrived for nothing never had one.
     #[test]
-    fn distress_and_a_free_arrival_both_leave_no_floor() {
-        let bought_on = SunkCostFixtures::d(2026, 7, 1);
-        let player = SunkCostFixtures::bought(bought_on, bought_on);
-        assert_eq!(
-            SellerFeeFloor::sunk_cost_floor(
-                &player,
-                SunkCostFixtures::d(2026, 12, 1),
-                SellerDistress::Strong,
+    fn a_free_arrival_has_no_book() {
+        let bought_on = BookFixtures::d(2026, 7, 1);
+        let mut free_arrival = BookFixtures::bought(bought_on, bought_on);
+        free_arrival.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Forward,
+                28,
+                bought_on,
+                MandateAuthor::Board,
             ),
-            0.0
-        );
+            bought_on,
+        ));
+        assert_eq!(free_arrival.book_value(BookFixtures::d(2026, 12, 1)), 0.0);
+    }
 
-        let mut free_arrival = SunkCostFixtures::bought(bought_on, bought_on);
-        free_arrival.sold_from = None;
-        assert_eq!(
-            SellerFeeFloor::sunk_cost_floor(
-                &free_arrival,
-                SunkCostFixtures::d(2026, 12, 1),
-                SellerDistress::None,
-            ),
-            0.0
+    /// The difference the doctrine makes: the same book, two boards. The
+    /// one that needs the money books the loss; the solvent one does not,
+    /// and the player's own transfer request has no say in either.
+    #[test]
+    fn what_a_club_writes_off_is_its_boards_decision_not_the_players() {
+        let bought_on = BookFixtures::d(2026, 7, 1);
+        let player = BookFixtures::bought(bought_on, bought_on);
+        let book = player.book_value(BookFixtures::d(2026, 12, 1));
+
+        let solvent = ClubBoard::new().book_floor(book, &BookFixtures::quiet());
+        let squeezed = ClubBoard::new().book_floor(
+            book,
+            &LedgerPressure {
+                cash_need: 1.0,
+                wage_pressure: 1.0,
+            },
         );
+        assert!(squeezed < solvent * 0.5, "{squeezed} vs {solvent}");
     }
 }
 

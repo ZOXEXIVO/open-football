@@ -83,6 +83,38 @@ impl RoomFixture {
         self
     }
 
+    /// A senior keeper the club BOUGHT to take a named man's gloves.
+    fn bought_heir(
+        mut self,
+        id: u32,
+        age: u8,
+        level: u8,
+        incumbent: u32,
+        handover_in_days: i64,
+    ) -> Self {
+        use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+        use crate::{PlayerFieldPositionGroup, PlayerPlan};
+
+        let mut player = KeeperFixture::build(id, age, level);
+        let signed = today();
+        player.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Heir {
+                    incumbent_id: incumbent,
+                    handover: signed + chrono::Duration::days(handover_in_days),
+                },
+                PlayerFieldPositionGroup::Goalkeeper,
+                age,
+                signed,
+                MandateAuthor::Manager,
+            )
+            .with_money(40_000_000.0, 4_000_000.0),
+            signed,
+        ));
+        self.squads.push((1, TeamType::Main, player));
+        self
+    }
+
     fn academy_with_season(mut self, id: u32, age: u8, level: u8, apps: u16, rating: f32) -> Self {
         let mut player = KeeperFixture::build(id, age, level);
         player.friendly_statistics.played = apps;
@@ -222,6 +254,39 @@ fn a_credible_young_keeper_is_named_the_heir_and_calms_the_clock() {
     assert!(
         plan.advice_for(3)
             .any(|r| r.advice == KeeperAdvice::MakeHimNumberOne)
+    );
+}
+
+/// The heir the club PAID for is the heir.
+///
+/// The department used to infer a successor from age gaps and ceilings —
+/// so a twenty-five-year-old the board had just spent forty million on to
+/// inherit the gloves was on no handover path at all, and the shirt never
+/// moved. A named mandate outranks the inference, and the handover date it
+/// carries is what the succession clock reads.
+#[test]
+fn a_bought_heir_outranks_the_inferred_one() {
+    let fixture = RoomFixture::new()
+        .senior(1, 33, 145)
+        .senior(2, 20, 120)
+        .bought_heir(3, 25, 130, 1, 730);
+    let plan = review(&fixture.assemble(), &KeeperRoomPlan::new());
+
+    assert_eq!(
+        plan.heir(),
+        Some(3),
+        "the club already answered this question and paid for the answer"
+    );
+
+    // …and when the season the club named for the handover arrives, the
+    // clock is that date rather than the incumbent's birthday.
+    let due = RoomFixture::new()
+        .senior(1, 33, 145)
+        .senior(2, 20, 120)
+        .bought_heir(3, 25, 130, 1, 0);
+    assert_eq!(
+        review(&due.assemble(), &KeeperRoomPlan::new()).succession(),
+        KeeperSuccession::Pressing
     );
 }
 

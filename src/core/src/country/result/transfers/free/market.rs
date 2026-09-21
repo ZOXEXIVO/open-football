@@ -1241,6 +1241,9 @@ impl FreeAgentMarketPass {
                 // Free-agent signings carry no transfer-fee clauses
                 // (no fee, no sell-on, no installments).
                 offer_clauses: Vec::new(),
+                // Nobody heard a proposal for a man who cost nothing — his
+                // purpose is the role the contract promises him.
+                mandate: None,
             };
             // The country IS the world here: this pass runs inside Phase A
             // on one country borrow, and a free signing off a domestic

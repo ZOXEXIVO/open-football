@@ -651,6 +651,7 @@ impl WatchlistEntry {
 #[cfg(test)]
 mod watchlist_tests {
     use super::*;
+    use crate::club::board::mandate::ReservationVerdict;
     use crate::PlayerPositionType;
     use crate::transfers::squad::ledger::{SellListEntry, SellMotive};
     use crate::transfers::squad::plan::BriefTier;
@@ -762,6 +763,8 @@ mod watchlist_tests {
             SellListEntry {
                 player_id: 7,
                 asking: 30_000_000.0,
+                floor: 0.0,
+                verdict: ReservationVerdict::Sell,
                 score: 0.8,
                 motive: SellMotive::PeakValue,
                 marked_on: Fx::date(),
@@ -770,6 +773,8 @@ mod watchlist_tests {
             SellListEntry {
                 player_id: 8,
                 asking: 5_000_000.0,
+                floor: 0.0,
+                verdict: ReservationVerdict::Sell,
                 score: 0.1,
                 motive: SellMotive::SurplusByPlan,
                 marked_on: Fx::date(),

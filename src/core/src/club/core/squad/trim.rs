@@ -1,6 +1,7 @@
 //! Season-start positional trim: the depth a club is actually allowed to
 //! carry, and what happens to the bodies above it.
 
+use crate::club::board::mandate::{MandateExit, SigningMandate};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -60,6 +61,11 @@ impl Club {
         // free — only genuine surplus is. Owns its data, so the mutable trim
         // loop below holds no borrow on it.
         let asset_ctx = SquadAssetContext::build(self, date);
+
+        // Mandates the trim closes. Collected rather than closed in place:
+        // the board is on the club and the player is inside a mutable team
+        // borrow, so the two cannot be reached at once.
+        let mut released: Vec<(u32, SigningMandate, f32)> = Vec::new();
 
         for (group, max_count) in &limits {
             // Active players only: if a player has already been released
@@ -167,6 +173,13 @@ impl Club {
                                 termination_cost,
                                 team_name
                             );
+                            // A man the club paid for, leaving for nothing:
+                            // the whole unamortised book is a loss, and it
+                            // is the loss the board's own record exists to
+                            // remember.
+                            if let Some(mandate) = player.mandate().filter(|m| m.is_purchase()) {
+                                released.push((player.id, *mandate, player.delivered_minutes().0));
+                            }
                             player.contract = None;
                             if !player.statuses.has(PlayerStatusType::Frt) {
                                 player.statuses.add(date, PlayerStatusType::Frt);
@@ -228,13 +241,19 @@ impl Club {
                 }
             }
         }
+
+        for (player_id, mandate, delivered) in released {
+            self.on_mandate_closed(player_id, mandate, delivered, MandateExit::Released, date);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerFieldPositionGroup;
     use crate::academy::ClubAcademy;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::country::result::transfers::ListingPass;
     use crate::country::result::transfers::types::TransferActivitySummary;
@@ -453,10 +472,17 @@ mod tests {
         // season-start trim must leave him alone instead of flagging the
         // player it just paid for.
         let mut new_signing = Fixture::goalkeeper(5, 95, 28, 50_000, 12);
-        new_signing.plan = Some(PlayerPlan::from_signing(
-            28,
-            1_000_000.0,
-            Fixture::date() - Duration::days(21),
+        let signed_on = Fixture::date() - Duration::days(21);
+        new_signing.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Rotation,
+                PlayerFieldPositionGroup::Goalkeeper,
+                28,
+                signed_on,
+                MandateAuthor::Manager,
+            )
+            .with_money(1_000_000.0, 0.0),
+            signed_on,
         ));
         let mut club = Fixture::club(vec![
             Fixture::goalkeeper(1, 100, 28, 50_000, 12),

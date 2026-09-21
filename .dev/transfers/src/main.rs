@@ -71,6 +71,28 @@
 //!                                 a J-League club borrows a Brazilian from
 //!                                 Russia as readily as from Brazil. The
 //!                                 baseline arm for the LOAN routes table.
+//!   * `OF_LOAN_SLOTS_OFF`       — the borrower's REGISTRATION quota. Disarmed,
+//!                                 a league that counts passports says nothing
+//!                                 about how badly a club wants a loanee, and
+//!                                 loans land at clubs already over quota.
+//!                                 The baseline arm for the quota row.
+//!   * `OF_LOAN_REACH_OFF`       — the borrower's REACH. Disarmed, the
+//!                                 cross-border scan hands the staged
+//!                                 plausibility model no market reach and
+//!                                 `MARKET_REACH_FLOOR` is dead on the loan
+//!                                 path, which is what let a club borrow out
+//!                                 of a league it has never dealt with.
+//!   * `OF_LOAN_PLACEMENT_OFF`   — the LENDER's half of the geography: the
+//!                                 placement ledger, its day-0 bootstrap and
+//!                                 the trust term it puts on the parent's
+//!                                 willingness. Disarmed, a parent is
+//!                                 destination-blind. The baseline arm for the
+//!                                 lender-concentration row.
+//!   * `OF_LOAN_FAMILIARITY_OFF` — what the PLAYER knows of the place: his
+//!                                 country's export corridor, his diaspora and
+//!                                 the language. Disarmed, a year in a league
+//!                                 whose language he does not speak scores
+//!                                 exactly what a year next door scores.
 //!   * `OF_CORRIDOR_FLOOR_OFF`   — the corridor FLOOR: a pair a card names
 //!                                 never reads below its own derived prior.
 //!                                 Disarmed, a card weight replaces the prior,
@@ -98,6 +120,7 @@
 //! whole run into silence; redirect directly instead.
 
 use core::club::board::ChairmanAmbition;
+use core::club::board::mandate::{MandateExit, MandateOutcome, MandatePurpose};
 use core::club::board::ownership::{ClubBenefactor, OwnershipType};
 use core::club::player::core::player::TransferRequestReason;
 use core::club::player::mind::GoalKind;
@@ -108,6 +131,7 @@ use core::club::staff::perception::AbilityEstimator;
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use core::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
+use core::transfers::deal::negotiation::NegotiationRejectionReason;
 use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
 use core::transfers::scouting::recruitment::{
@@ -122,9 +146,9 @@ use core::transfers::{
 };
 use core::utils::DateUtils;
 use core::{
-    Club, ClubLevelAnchor, ClubPhilosophy, FootballSimulator, LoanSpellVerdict, PathwayStage,
-    Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
-    SimulationResult, SimulatorData, TeamType,
+    Club, ClubLevelAnchor, ClubPhilosophy, Country, FootballSimulator, LoanSpellVerdict,
+    PathwayStage, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
+    ReputationLevel, SimulationResult, SimulatorData, TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
@@ -138,7 +162,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 use chrono::{Datelike, Duration, NaiveDate};
 use env_logger::Env;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::pin;
@@ -4347,6 +4371,11 @@ struct SimHarness {
     /// walk: the transfer record carries no wage, so the only way to see a
     /// pay cut at all is to hold yesterday's number and compare.
     player_side: PlayerSideCensus,
+    /// What the boards bought, and what they got for it. Running for the
+    /// same reason: a mandate's seller-context value stops existing the
+    /// moment the player moves, and a closed one is dropped from the
+    /// board's own ledger two seasons later.
+    mandates: MandateCensus,
 }
 
 impl SimHarness {
@@ -4370,11 +4399,13 @@ impl SimHarness {
             loan_assets: LoanAssetCensus::default(),
             odb_clubs,
             player_side: PlayerSideCensus::default(),
+            mandates: MandateCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
         harness.player_side.observe(&harness.data, 0);
         harness.loan_assets.observe(&harness.data, 0);
+        harness.mandates.observe(&harness.data, 0);
         harness
     }
 
@@ -4402,6 +4433,7 @@ impl SimHarness {
             self.tick();
             self.player_side.observe(&self.data, day);
             self.loan_assets.observe(&self.data, day);
+            self.mandates.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -4421,6 +4453,7 @@ impl SimHarness {
                 self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
                 LoanAssetPrinter::print(&self.loan_assets);
+                MandatePrinter::print(&self.mandates);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
@@ -4430,10 +4463,450 @@ impl SimHarness {
         self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
         LoanAssetPrinter::print(&self.loan_assets);
+        MandatePrinter::print(&self.mandates);
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()
         );
+    }
+}
+
+/// One signing the board signed a cheque for, followed from the hearing
+/// to the exit.
+///
+/// The census this binary could not take before: every other report here
+/// measures a MOVE, and a move says nothing about whether the club got
+/// what it paid for. A mandate does — it names the purpose, the money and
+/// the minutes promised, so "a starter's fee for a bench purpose" is a
+/// row rather than an anecdote.
+#[derive(Debug, Clone)]
+struct MandateRow {
+    /// The name to feed `OF_TRACE_PLAYER` when a row looks wrong.
+    player_id: u32,
+    club: String,
+    purpose: &'static str,
+    fee: f64,
+    /// The player's market value in his SELLER's context, snapshotted the
+    /// last week before the move. Zero when the harness never saw him
+    /// before he arrived (a world-creation squad, a first-window buy).
+    seller_value: f64,
+    /// The buying club's trailing annual income at the hearing.
+    buyer_income: f64,
+    /// Share of the season the mandate promised, against the share he
+    /// actually had, at twelve and twenty-four months.
+    promised_12: Option<(f32, f32)>,
+    promised_24: Option<(f32, f32)>,
+    exit: Option<&'static str>,
+    /// What the club never got back, as a share of the fee.
+    loss_share: Option<f64>,
+}
+
+/// Board hearings, by what the club said it was buying.
+#[derive(Debug, Default, Clone, Copy)]
+struct HearingCell {
+    opened: u32,
+    reheard: u32,
+    walked: u32,
+}
+
+/// The two reports the doctrine is judged on.
+#[derive(Debug, Default)]
+struct MandateCensus {
+    /// Live rows, keyed by player so a mandate is followed rather than
+    /// re-counted every day.
+    rows: HashMap<u32, MandateRow>,
+    /// Closed ones, in the order the boards closed them.
+    closed: Vec<MandateRow>,
+    /// Seller-context market value, refreshed weekly — the denominator
+    /// the acceptance band is written against, and the one number that
+    /// stops existing the moment the player moves.
+    seller_values: HashMap<u32, f64>,
+    hearings: HashMap<&'static str, HearingCell>,
+    /// Stretch decile → hearings opened at it, so the rope the doctrine
+    /// grants can be read as a distribution rather than a mean.
+    stretch_deciles: [u32; 11],
+    /// Negotiations already counted, so a deal in flight for a fortnight
+    /// is one hearing — and one re-hearing, and one walk-away. A live
+    /// negotiation is re-read every day this binary ticks.
+    seen: HashSet<u32>,
+    seen_reheard: HashSet<u32>,
+    seen_walked: HashSet<u32>,
+    /// Senior players named in an age-limited squad — the eligibility
+    /// gate's own acceptance band, which is zero.
+    overage_registrations: u32,
+}
+
+impl MandateCensus {
+    /// Days between seller-value snapshots. A market value moves slowly
+    /// and the walk is the expensive part of this binary.
+    const VALUE_SAMPLE_DAYS: u32 = 7;
+    /// A mandate is read at these anniversaries, in whole seasons.
+    const FIRST_REVIEW: u8 = 1;
+    const SECOND_REVIEW: u8 = 2;
+
+    fn purpose_label(purpose: MandatePurpose) -> &'static str {
+        match purpose {
+            MandatePurpose::Starter => "starter",
+            MandatePurpose::Heir { .. } => "heir",
+            MandatePurpose::Rotation => "rotation",
+            MandatePurpose::Cover => "cover",
+            MandatePurpose::Asset => "asset",
+            MandatePurpose::Prospect => "prospect",
+        }
+    }
+
+    fn exit_label(exit: MandateExit) -> &'static str {
+        match exit {
+            MandateExit::Sold(_) => "sold",
+            MandateExit::Loaned => "loaned",
+            MandateExit::Released => "released",
+            MandateExit::Retired => "retired",
+            MandateExit::Kept => "kept",
+        }
+    }
+
+    fn observe(&mut self, data: &SimulatorData, day: u32) {
+        let date = data.date.date();
+        let sample_values = day % Self::VALUE_SAMPLE_DAYS == 0;
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let income = club.finance.estimated_annual_income(date).max(0) as f64;
+                    let (league_rep, club_rep) =
+                        PlayerValuationCalculator::seller_context(country, club);
+
+                    for team in &club.teams.teams {
+                        for player in team.players.players.iter() {
+                            if sample_values {
+                                self.seller_values.insert(
+                                    player.id,
+                                    PlayerValuationCalculator::calculate_value(
+                                        player, date, league_rep, club_rep,
+                                    )
+                                    .amount,
+                                );
+                            }
+                            self.follow(player, club, income, date);
+                        }
+                    }
+
+                    self.close_from(club, date);
+                    self.hearings_from(country, club);
+                }
+            }
+        }
+        self.overage_registrations += Self::count_overage(data, date);
+    }
+
+    /// Open a row the first time a purchase is seen, and read it at each
+    /// anniversary after that.
+    fn follow(&mut self, player: &Player, club: &Club, income: f64, date: NaiveDate) {
+        let Some(mandate) = player.mandate().filter(|m| m.is_purchase()) else {
+            return;
+        };
+        let season = mandate.season_index(date);
+        let (delivered, _) = player.delivered_minutes();
+        let entry = self.rows.entry(player.id).or_insert_with(|| MandateRow {
+            player_id: player.id,
+            club: club.name.clone(),
+            purpose: Self::purpose_label(mandate.purpose),
+            fee: mandate.approved_fee,
+            seller_value: 0.0,
+            buyer_income: income,
+            promised_12: None,
+            promised_24: None,
+            exit: None,
+            loss_share: None,
+        });
+        if entry.seller_value == 0.0 {
+            entry.seller_value = self.seller_values.get(&player.id).copied().unwrap_or(0.0);
+        }
+        if season >= Self::FIRST_REVIEW && entry.promised_12.is_none() {
+            entry.promised_12 = Some((mandate.minutes.share(Self::FIRST_REVIEW), delivered));
+        }
+        if season >= Self::SECOND_REVIEW && entry.promised_24.is_none() {
+            entry.promised_24 = Some((mandate.minutes.share(Self::SECOND_REVIEW), delivered));
+        }
+    }
+
+    /// Drain the board's own record of the mandates it has closed.
+    fn close_from(&mut self, club: &Club, _date: NaiveDate) {
+        for outcome in club.board.mandate_ledger.rows() {
+            let Some(mut row) = self.rows.remove(&outcome.player_id) else {
+                continue;
+            };
+            row.exit = Some(Self::exit_label(outcome.exit));
+            row.loss_share = (row.fee > 0.0).then(|| outcome.loss / row.fee);
+            if row.promised_24.is_none() {
+                row.promised_24 = Some((outcome.minutes_promised, outcome.minutes_delivered));
+            }
+            self.closed.push(row);
+        }
+    }
+
+    /// Every negotiation the board has heard, counted once.
+    fn hearings_from(&mut self, country: &Country, club: &Club) {
+        for negotiation in country.transfer_market.negotiations.values() {
+            if negotiation.buying_club_id != club.id {
+                continue;
+            }
+            let Some(mandate) = negotiation.mandate else {
+                continue;
+            };
+            let label = Self::purpose_label(mandate.purpose);
+            let fresh = self.seen.insert(negotiation.id);
+            let cell = self.hearings.entry(label).or_default();
+            if fresh {
+                cell.opened += 1;
+                if let (Some(approved), Some(ceiling)) =
+                    (negotiation.approved_fee, negotiation.buyer_ceiling_fee)
+                {
+                    let stretch: f64 = if approved > 0.0 {
+                        ceiling / approved
+                    } else {
+                        1.0
+                    };
+                    let decile = (((stretch - 1.0) * 10.0).round().max(0.0) as usize).min(10);
+                    self.stretch_deciles[decile] += 1;
+                }
+            }
+            if negotiation.rehearings > 0 && self.seen_reheard.insert(negotiation.id) {
+                cell.reheard += 1;
+            }
+            if matches!(
+                negotiation.rejection_reason,
+                Some(NegotiationRejectionReason::AskingPriceTooHigh)
+            ) && self.seen_walked.insert(negotiation.id)
+            {
+                cell.walked += 1;
+            }
+        }
+    }
+
+    /// Seniors sitting on an age-limited roster. The gate is about
+    /// REGISTRATION, so this counts the population it could ever name.
+    fn count_overage(data: &SimulatorData, date: NaiveDate) -> u32 {
+        let mut over = 0;
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        let Some(cap) = team.team_type.registration_age_cap() else {
+                            continue;
+                        };
+                        over += team
+                            .players
+                            .players
+                            .iter()
+                            .filter(|p| p.age(date) > cap)
+                            .count() as u32;
+                    }
+                }
+            }
+        }
+        over
+    }
+}
+
+/// Prints the two reports.
+struct MandatePrinter;
+
+impl MandatePrinter {
+    fn print(census: &MandateCensus) {
+        println!("\n---- MANDATE LEDGER ----");
+        println!("  (every signing the board signed a cheque for)");
+
+        let mut live: Vec<&MandateRow> = census.rows.values().collect();
+        live.sort_by(|a, b| b.fee.partial_cmp(&a.fee).unwrap_or(Ordering::Equal));
+
+        let mut by_purpose: BTreeMap<&str, (usize, f64, f64, f64)> = BTreeMap::new();
+        for row in live.iter().copied().chain(census.closed.iter()) {
+            let cell = by_purpose.entry(row.purpose).or_insert((0, 0.0, 0.0, 0.0));
+            cell.0 += 1;
+            cell.1 += row.fee;
+            if row.seller_value > 0.0 {
+                cell.2 += row.fee / row.seller_value;
+                cell.3 += 1.0;
+            }
+        }
+        println!(
+            "  {:<10} {:>6} {:>14} {:>12}",
+            "purpose", "n", "mean fee", "fee ÷ value"
+        );
+        for (purpose, (n, fee, ratio, rated)) in &by_purpose {
+            println!(
+                "  {:<10} {:>6} {:>14} {:>12}",
+                purpose,
+                n,
+                format!("{:.1}M", fee / *n as f64 / 1_000_000.0),
+                if *rated > 0.0 {
+                    format!("{:.2}", ratio / rated)
+                } else {
+                    "—".to_string()
+                },
+            );
+        }
+
+        Self::print_biggest(&live);
+        Self::print_delivery(census);
+        Self::print_exits(census);
+        Self::print_hearings(census);
+        println!(
+            "  seniors on age-limited rosters (target 0, sampled daily): {}",
+            census.overage_registrations
+        );
+    }
+
+    /// The biggest cheques in the world, and what they bought. A spot
+    /// check rather than a band: the Vítek shape is one row, and a report
+    /// that only prints means could never show it.
+    fn print_biggest(live: &[&MandateRow]) {
+        println!(
+            "
+  biggest live mandates"
+        );
+        println!(
+            "    {:<22} {:<10} {:>10} {:>10} {:>10} {:>9}",
+            "club", "purpose", "fee", "÷ value", "÷ income", "played"
+        );
+        for row in live.iter().take(10) {
+            let delivered = row
+                .promised_24
+                .or(row.promised_12)
+                .map(|(_, d)| format!("{:.2}", d))
+                .unwrap_or_else(|| "—".to_string());
+            println!(
+                "    {:<22} {:<10} {:>10} {:>10} {:>10} {:>9}  #{}",
+                row.club.chars().take(22).collect::<String>(),
+                row.purpose,
+                format!("{:.1}M", row.fee / 1_000_000.0),
+                if row.seller_value > 0.0 {
+                    format!("{:.2}", row.fee / row.seller_value)
+                } else {
+                    "—".to_string()
+                },
+                if row.buyer_income > 0.0 {
+                    format!("{:.2}", row.fee / row.buyer_income)
+                } else {
+                    "—".to_string()
+                },
+                delivered,
+                row.player_id,
+            );
+        }
+    }
+
+    /// Promised against delivered, at the two anniversaries the doctrine
+    /// judges a mandate on.
+    fn print_delivery(census: &MandateCensus) {
+        println!("\n  promised vs delivered minutes");
+        for (label, pick) in [("12 months", 0usize), ("24 months", 1usize)] {
+            let mut n = 0usize;
+            let mut behind = 0usize;
+            let mut promised_total = 0.0f32;
+            let mut delivered_total = 0.0f32;
+            for row in census.rows.values().chain(census.closed.iter()) {
+                let read = if pick == 0 {
+                    row.promised_12
+                } else {
+                    row.promised_24
+                };
+                let Some((promised, delivered)) = read else {
+                    continue;
+                };
+                n += 1;
+                promised_total += promised;
+                delivered_total += delivered;
+                if promised > 0.0 && delivered < promised * MandateOutcome::DELIVERED_BAR {
+                    behind += 1;
+                }
+            }
+            if n == 0 {
+                println!("    {label}: no mandate has reached it yet");
+                continue;
+            }
+            println!(
+                "    {label}: n={n}  promised {:.2}  delivered {:.2}  unrealised {:.0}%",
+                promised_total / n as f32,
+                delivered_total / n as f32,
+                behind as f32 / n as f32 * 100.0,
+            );
+        }
+    }
+
+    /// How the ones that ended, ended.
+    fn print_exits(census: &MandateCensus) {
+        if census.closed.is_empty() {
+            println!("\n  exits: none closed yet");
+            return;
+        }
+        let mut by_exit: BTreeMap<&str, (usize, f64)> = BTreeMap::new();
+        let mut unrealised = 0usize;
+        let mut unrealised_loaned = 0usize;
+        let mut unrealised_sold_below = 0usize;
+        for row in &census.closed {
+            let cell = by_exit.entry(row.exit.unwrap_or("—")).or_insert((0, 0.0));
+            cell.0 += 1;
+            cell.1 += row.loss_share.unwrap_or(0.0);
+            if let Some((promised, delivered)) = row.promised_24 {
+                if promised > 0.0 && delivered < promised * MandateOutcome::DELIVERED_BAR {
+                    unrealised += 1;
+                    match row.exit {
+                        Some("loaned") => unrealised_loaned += 1,
+                        Some("sold") if row.loss_share.unwrap_or(0.0) > 0.5 => {
+                            unrealised_sold_below += 1
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        println!("\n  exits");
+        for (exit, (n, loss)) in &by_exit {
+            println!(
+                "    {:<9} n={:<5} mean loss {:.0}% of fee",
+                exit,
+                n,
+                loss / *n as f64 * 100.0
+            );
+        }
+        if unrealised > 0 {
+            println!(
+                "    unrealised mandates: n={unrealised}  resolved by loan {:.0}%  sold at a \
+                 heavy loss {:.0}%",
+                unrealised_loaned as f32 / unrealised as f32 * 100.0,
+                unrealised_sold_below as f32 / unrealised as f32 * 100.0,
+            );
+        }
+    }
+
+    /// What the boardroom did, by purpose and by the rope it granted.
+    fn print_hearings(census: &MandateCensus) {
+        println!("\n---- BOARD HEARINGS ----");
+        if census.hearings.is_empty() {
+            println!("  no hearing carried a mandate yet");
+            return;
+        }
+        println!(
+            "  {:<10} {:>8} {:>10} {:>10}",
+            "purpose", "opened", "re-heard", "walked"
+        );
+        let ordered: BTreeMap<&str, HearingCell> =
+            census.hearings.iter().map(|(k, v)| (*k, *v)).collect();
+        for (purpose, cell) in &ordered {
+            println!(
+                "  {:<10} {:>8} {:>10} {:>10}",
+                purpose, cell.opened, cell.reheard, cell.walked
+            );
+        }
+        println!("  stretch over the walk-away, by decile");
+        for (decile, n) in census.stretch_deciles.iter().enumerate() {
+            if *n == 0 {
+                continue;
+            }
+            println!("    ×{:.1}  {:>6}", 1.0 + decile as f32 / 10.0, n);
+        }
     }
 }
 
@@ -4758,6 +5231,12 @@ struct CorridorMove {
     nationality: u32,
     from_country: u32,
     to_country: u32,
+    /// Both ends as CLUBS. A loan's geography is a deal between two of
+    /// them — who lent him and where he landed — and the country pair
+    /// alone cannot answer either the quota row or the lender
+    /// concentration row.
+    from_club: u32,
+    to_club: u32,
     kind: MoveGeographyKind,
 }
 
@@ -4818,6 +5297,7 @@ impl CorridorCensus {
         Self::print_matrix(data, &moves, &countries);
         Self::print_kind_matrix(data, &moves, &countries);
         Self::print_loan_routes(data, &moves, &countries);
+        Self::print_loan_geography(data, &moves, &countries, day);
         Self::print_returning_flow(&moves, &countries);
         Self::print_implausible(data, &moves, &countries);
         Self::print_import_capacity(data, &countries);
@@ -4930,6 +5410,8 @@ impl CorridorCensus {
                         nationality: *nat,
                         from_country,
                         to_country: *to_country,
+                        from_club: t.from_club_id,
+                        to_club: t.to_club_id,
                         kind: match t.transfer_type {
                             TransferType::Permanent => MoveGeographyKind::Permanent,
                             TransferType::Loan(_) => MoveGeographyKind::Loan,
@@ -5241,6 +5723,260 @@ impl CorridorCensus {
             .take(Self::TOP_DESTINATIONS)
         {
             line(pair, count);
+        }
+    }
+
+    /// The shipped world's own loans-in per club, by borrower country —
+    /// the ruler every volume row below is read against.
+    ///
+    /// Counted directly off `players[].loan` in the shipped database: 3,226
+    /// loans that resolve to two clubs, 1,056 of them cross-border. These
+    /// are FACTS about the 2026 world rather than targets, so they are
+    /// written here once and never derived from anything the model moves.
+    const SHIPPED_LOANS_IN_PER_CLUB: [(&'static str, f32); 12] = [
+        ("gr", 2.64),
+        ("py", 2.17),
+        ("pt", 1.97),
+        ("nl", 1.89),
+        ("es", 1.83),
+        ("cl", 1.75),
+        ("us", 1.10),
+        ("ae", 0.79),
+        ("sa", 0.37),
+        ("ua", 0.25),
+        ("ru", 0.10),
+        ("ir", 0.00),
+    ];
+    /// The same world's lender concentration: over parents with three or
+    /// more cross-border loans, the mean number of distinct destination
+    /// countries and the mean share taken by the top one.
+    const SHIPPED_LENDER_COUNTRIES: f32 = 3.6;
+    const SHIPPED_LENDER_TOP_SHARE: f32 = 0.40;
+    /// Cross-border loans a lender needs before its spread means anything.
+    const CONCENTRATION_MIN_LOANS: usize = 3;
+
+    /// The four rows the loan-geography model is judged on: where loans
+    /// land, whether they land inside the registration rules, who lends
+    /// them, and whether the pairs are ones any card names.
+    ///
+    /// Read per destination and on the third-country cohort, never on the
+    /// aggregate — the aggregate is dominated by nationals going home and
+    /// hides every defect these rows exist to show.
+    fn print_loan_geography(
+        data: &SimulatorData,
+        moves: &[CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+        day: u32,
+    ) {
+        let seasons = (day as f32 / 365.0).max(0.01);
+        let quotas = Self::quota_index(data);
+        let clubs_per_country = Self::clubs_per_country(data);
+
+        let loans: Vec<&CorridorMove> = moves
+            .iter()
+            .filter(|m| m.kind == MoveGeographyKind::Loan)
+            .filter(|m| {
+                countries.contains_key(&m.from_country) && countries.contains_key(&m.to_country)
+            })
+            .collect();
+
+        Self::print_loans_in_per_club(&loans, countries, &clubs_per_country, seasons);
+        Self::print_quota_landings(&loans, &quotas);
+        Self::print_lender_concentration(&loans);
+        Self::print_derived_only_loans(data, &loans, countries);
+    }
+
+    /// club -> (country, foreigner quota, foreigners registered) for every
+    /// club in the executed world.
+    fn quota_index(data: &SimulatorData) -> HashMap<u32, (u32, Option<u8>, usize)> {
+        let mut out = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let limit = country.regulations.foreign_player_limit;
+                for club in &country.clubs {
+                    let foreigners = club
+                        .teams
+                        .main()
+                        .map(|team| {
+                            team.players
+                                .iter()
+                                .filter(|p| p.country_id != country.id)
+                                .count()
+                        })
+                        .unwrap_or(0);
+                    out.insert(club.id, (country.id, limit, foreigners));
+                }
+            }
+        }
+        out
+    }
+
+    fn clubs_per_country(data: &SimulatorData) -> HashMap<u32, usize> {
+        let mut out: HashMap<u32, usize> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                out.insert(country.id, country.clubs.len());
+            }
+        }
+        out
+    }
+
+    /// Row 1 — cross-border loans IN per club per season, beside the
+    /// shipped world's own figure for the same country.
+    fn print_loans_in_per_club(
+        loans: &[&CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+        clubs_per_country: &HashMap<u32, usize>,
+        seasons: f32,
+    ) {
+        let mut by_destination: HashMap<u32, usize> = HashMap::new();
+        for m in loans {
+            *by_destination.entry(m.to_country).or_insert(0) += 1;
+        }
+
+        println!("\n-- LOANS IN per club per season, against the shipped world --");
+        println!(
+            "  {:>4} {:>8} {:>10} {:>10}   [target: within 2x shipped; a shipped 0 reads <= 0.5]",
+            "cc", "loans", "per club", "shipped",
+        );
+        for (code, shipped) in Self::SHIPPED_LOANS_IN_PER_CLUB {
+            let Some((id, _)) = countries.iter().find(|(_, c)| c.code == code) else {
+                continue;
+            };
+            let count = by_destination.get(id).copied().unwrap_or(0);
+            let clubs = clubs_per_country.get(id).copied().unwrap_or(0).max(1);
+            println!(
+                "  {code:>4} {count:>8} {:>10.2} {shipped:>10.2}",
+                count as f32 / clubs as f32 / seasons,
+            );
+        }
+    }
+
+    /// Row 2 — loans landing at a club that is at or over its league's
+    /// foreigner quota once the signing is counted. The model's answer has
+    /// to be zero: a slot nobody holds cannot be spent.
+    fn print_quota_landings(
+        loans: &[&CorridorMove],
+        quotas: &HashMap<u32, (u32, Option<u8>, usize)>,
+    ) {
+        let mut into_quota_leagues = 0usize;
+        let mut over_quota = 0usize;
+        for m in loans {
+            let Some((country_id, Some(limit), foreigners)) = quotas.get(&m.to_club) else {
+                continue;
+            };
+            if m.nationality == *country_id {
+                continue;
+            }
+            into_quota_leagues += 1;
+            if *foreigners > *limit as usize {
+                over_quota += 1;
+            }
+        }
+        println!("\n-- LOANS into leagues that count passports --");
+        println!(
+            "  foreign-passport loans into a quota league: {into_quota_leagues}   \
+             of them at a club now OVER quota: {over_quota} ({:.1}%)   [target 0]",
+            Self::share(over_quota, into_quota_leagues) * 100.0,
+        );
+    }
+
+    /// Row 3 — lender concentration. A club that lends abroad lends to the
+    /// same two or three places; the shipped world says 3.6 distinct
+    /// destinations and 40% of the traffic on the top one.
+    fn print_lender_concentration(loans: &[&CorridorMove]) {
+        let mut by_lender: HashMap<u32, HashMap<u32, usize>> = HashMap::new();
+        for m in loans {
+            *by_lender
+                .entry(m.from_club)
+                .or_default()
+                .entry(m.to_country)
+                .or_insert(0) += 1;
+        }
+        let busy: Vec<&HashMap<u32, usize>> = by_lender
+            .values()
+            .filter(|dests| dests.values().sum::<usize>() >= Self::CONCENTRATION_MIN_LOANS)
+            .collect();
+        let lenders = busy.len();
+        let mean_countries = if lenders == 0 {
+            0.0
+        } else {
+            busy.iter().map(|d| d.len()).sum::<usize>() as f32 / lenders as f32
+        };
+        let mean_top_share = if lenders == 0 {
+            0.0
+        } else {
+            busy.iter()
+                .map(|d| {
+                    let total: usize = d.values().sum();
+                    d.values().copied().max().unwrap_or(0) as f32 / total.max(1) as f32
+                })
+                .sum::<f32>()
+                / lenders as f32
+        };
+        println!("\n-- LENDER concentration (parents with >= 3 cross-border loans) --");
+        println!(
+            "  lenders: {lenders}   mean distinct destinations: {mean_countries:.2} \
+             [shipped {:.1}]   mean top-country share: {mean_top_share:.2} [shipped {:.2}]",
+            Self::SHIPPED_LENDER_COUNTRIES,
+            Self::SHIPPED_LENDER_TOP_SHARE,
+        );
+    }
+
+    /// Row 4 — loans on a pair NO card names, split by whether the
+    /// destination is a league that imports at all.
+    ///
+    /// The derived prior hands every country in a region the whole
+    /// region's corridor table, so a league that imports nothing inherits
+    /// the reach of the one in its region that does. If this row stays
+    /// populated below `LOW_CAPACITY` after the three parties are priced,
+    /// the prior is where the rest of it lives.
+    fn print_derived_only_loans(
+        data: &SimulatorData,
+        loans: &[&CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        let mut derived_low = 0usize;
+        let mut derived_high = 0usize;
+        let mut total = 0usize;
+        let mut worst: HashMap<(u32, u32), usize> = HashMap::new();
+        for m in loans {
+            if m.nationality == m.to_country {
+                continue;
+            }
+            total += 1;
+            let reading = data.market_map.corridor(m.from_country, m.to_country);
+            if reading.data_import.is_some() || reading.data_export.is_some() {
+                continue;
+            }
+            if data.market_map.import_capacity(m.to_country) < Self::LOW_CAPACITY {
+                derived_low += 1;
+                *worst.entry((m.from_country, m.to_country)).or_insert(0) += 1;
+            } else {
+                derived_high += 1;
+            }
+        }
+        println!("\n-- LOANS on a pair no card names --");
+        println!(
+            "  into a league that imports (capacity >= {:.1}): {derived_high} ({:.1}%)",
+            Self::LOW_CAPACITY,
+            Self::share(derived_high, total) * 100.0,
+        );
+        println!(
+            "  into one that does not     (capacity <  {:.1}): {derived_low} ({:.1}%)   \
+             [target <= 1.0%]",
+            Self::LOW_CAPACITY,
+            Self::share(derived_low, total) * 100.0,
+        );
+        let mut ranked: Vec<((u32, u32), usize)> = worst.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for ((from, to), count) in ranked.iter().take(Self::TOP_DESTINATIONS) {
+            println!(
+                "    {:>3} -> {:<3} {count:>5} loans   capacity {:.2}",
+                Self::code(countries, *from),
+                Self::code(countries, *to),
+                data.market_map.import_capacity(*to),
+            );
         }
     }
 

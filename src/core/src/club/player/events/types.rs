@@ -3,6 +3,7 @@
 //! Constructed by callers (league/match-result pipeline, transfer
 //! pipeline) and handed to the player one outcome at a time.
 
+use crate::club::board::mandate::SigningMandate;
 use chrono::NaiveDate;
 
 use crate::TeamInfo;
@@ -199,6 +200,12 @@ pub struct TransferCompletion<'a> {
     /// individually `Option` so a partial package is honoured field-
     /// by-field.
     pub personal_terms: Option<PersonalTermsOffer>,
+    /// What the board approved this signing FOR — the purpose and the
+    /// minutes it promised him, staged on the negotiation when the club
+    /// opened it. `None` for moves no board heard: a manual move, a loan
+    /// bought out, a fixture. The player then forms one from the role his
+    /// new contract promises him.
+    pub mandate: Option<SigningMandate>,
     /// Whether to stamp a "permanent transfer" row on the player's
     /// decision history. True for a genuine club-to-club move; false for
     /// the loan-buyout path, which flips ownership through this same

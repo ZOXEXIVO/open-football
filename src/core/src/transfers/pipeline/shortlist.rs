@@ -8,7 +8,9 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 
 use crate::club::BoardTransferProposal;
+use crate::club::board::mandate::{MandatePurpose, SigningMandate, TargetBelief};
 use crate::club::board::{BoardDossierSummary, BoardTransferEconomics};
+use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::staff::StaffEventType;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::ClubTransferPlan;
@@ -21,6 +23,9 @@ use crate::transfers::pipeline::{
     ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
     TransferRequestStatus, TransferShortlist,
 };
+use crate::transfers::squad::plan::{MoneySlack, PlanningCadence};
+use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::value::upgrade::UpgradeMath;
 use crate::transfers::view::player::CountryPlayerLookup;
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
@@ -94,6 +99,13 @@ impl PositionDepth {
 struct PlayerApprovalSnapshot {
     age: u8,
     ability: u8,
+    /// Where on the pitch he plays, and the reputation of the league he
+    /// plays it in. Both are facts about the deal the board is being
+    /// asked to price, not about the player: the shirt decides what a
+    /// point of improvement is worth, and the league decides how much of
+    /// the headline number the board should believe.
+    group: PlayerFieldPositionGroup,
+    league_reputation: u16,
     potential: u8,
     /// Current annual wage — the best signal we have at shortlist
     /// stage for what the player would commit the club to.
@@ -128,6 +140,10 @@ struct BoardClubFinances {
     committed_wages: f64,
     wage_budget: Option<f64>,
     league_country_id: u32,
+    /// The buyer's own standing — what a point of improvement is worth
+    /// here, and how far above the seller's football this club plays.
+    rep_score: f32,
+    league_reputation: u16,
 }
 
 /// Turning scouting reports and market rows into a ranked list, and putting the top name to the board.
@@ -293,7 +309,7 @@ impl ShortlistPass {
 
         let player_snapshots = Self::snapshot_players(country, date);
 
-        Self::review_shortlists(country, &player_snapshots, &mut decisions);
+        Self::review_shortlists(country, &player_snapshots, date, &mut decisions);
 
         // Board-approved pursuits go public in the rumour mill after the
         // drain below — collected first because the drain holds a mutable
@@ -758,6 +774,16 @@ impl ShortlistPass {
         date: NaiveDate,
     ) -> HashMap<u32, PlayerApprovalSnapshot> {
         let mut player_snapshots: HashMap<u32, PlayerApprovalSnapshot> = HashMap::new();
+        let league_reps: HashMap<u32, u16> = country
+            .clubs
+            .iter()
+            .map(|c| {
+                (
+                    c.id,
+                    PlayerValuationCalculator::seller_context(country, c).0,
+                )
+            })
+            .collect();
 
         for club in &country.clubs {
             for team in &club.teams.teams {
@@ -767,6 +793,8 @@ impl ShortlistPass {
                         PlayerApprovalSnapshot {
                             age: player.age(date),
                             ability: player.player_attributes.current_ability,
+                            group: player.position().position_group(),
+                            league_reputation: league_reps.get(&club.id).copied().unwrap_or(0),
                             // Board approvals read the observable ceiling
                             // — hidden biological PA stays hidden.
                             potential: PotentialEstimator::observable_ceiling(player, date),
@@ -788,9 +816,11 @@ impl ShortlistPass {
     fn review_shortlists(
         country: &Country,
         player_snapshots: &HashMap<u32, PlayerApprovalSnapshot>,
+        date: NaiveDate,
         decisions: &mut Vec<Decision>,
     ) {
         let league_country_id = country.id;
+        let days_left_frac = PlanningCadence::deadline_window(country, date).days_left_fraction();
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             let finances = BoardClubFinances {
@@ -820,6 +850,12 @@ impl ShortlistPass {
                     .as_ref()
                     .map(|t| t.wage_budget.max(0) as f64),
                 league_country_id,
+                rep_score: club
+                    .teams
+                    .main()
+                    .map(|t| t.reputation.overall_score())
+                    .unwrap_or(0.0),
+                league_reputation: PlayerValuationCalculator::seller_context(country, club).0,
             };
 
             for shortlist in &plan.shortlists {
@@ -847,9 +883,18 @@ impl ShortlistPass {
                 let alloc = req.budget_allocation.max(1.0);
                 let fee = top.estimated_fee;
 
-                let (proposal, lead_scout_id) =
-                    Self::board_proposal(plan, req, top, fee, alloc, finances, player_snapshots);
-                let board_decision = club.board.review_transfer_proposal(&proposal);
+                let (proposal, lead_scout_id) = Self::board_proposal(
+                    club,
+                    req,
+                    top,
+                    fee,
+                    alloc,
+                    finances,
+                    player_snapshots,
+                    date,
+                    days_left_frac,
+                );
+                let board_decision = club.board.hear(&proposal);
                 let veto_reason: Option<&str> = if board_decision.is_approved() {
                     None
                 } else {
@@ -1045,15 +1090,19 @@ impl ShortlistPass {
     /// Returns the lead scout alongside it, so the staff feed can show who
     /// took the dossier in.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn board_proposal(
-        plan: &ClubTransferPlan,
+        club: &Club,
         req: &TransferRequest,
         top: &ShortlistCandidate,
         fee: f64,
         alloc: f64,
         finances: BoardClubFinances,
         player_snapshots: &HashMap<u32, PlayerApprovalSnapshot>,
+        date: NaiveDate,
+        days_left_frac: f32,
     ) -> (BoardTransferProposal, Option<u32>) {
+        let plan = &club.transfer_plan;
         let remaining_transfer_budget = finances.remaining_transfer_budget;
         let squad_avg_ability = finances.squad_avg_ability;
         let committed_wages = finances.committed_wages;
@@ -1135,8 +1184,65 @@ impl ShortlistPass {
             }
         });
 
+        // What the club says it is buying him FOR, and what its own board
+        // says that purpose is worth. A hearing that knows only the fee and
+        // the allocation cannot tell a starter from an heir, which is how a
+        // bench purpose came to carry a starter's fee.
+        let slot = plan.brief.as_ref().and_then(|b| b.slot_for(req.position));
+        let group = snapshot
+            .map(|s| s.group)
+            .unwrap_or(req.position.position_group());
+        let age = snapshot
+            .map(|s| s.age)
+            .or_else(|| foreign_memory.map(|m| m.age))
+            .unwrap_or(24);
+        let mandate = SigningMandate::new(
+            MandatePurpose::from_request(req, slot, date),
+            group,
+            age,
+            date,
+            club.board.mandate_author(),
+        );
+        let believed_level = snapshot
+            .map(|s| s.ability)
+            .or_else(|| foreign_memory.map(|m| m.assessed_ability))
+            .unwrap_or(0) as f32;
+        let seller_league = snapshot
+            .map(|s| s.league_reputation)
+            .unwrap_or(finances.league_reputation);
+        let envelope = club.board.fee_envelope(
+            &mandate,
+            &TargetBelief {
+                group,
+                tier: req.tier,
+                believed_level,
+                incumbent_level: slot
+                    .map(|s| s.incumbent_level as f32)
+                    .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group)),
+                replacement_level: ClubLevelAnchor::for_reputation(finances.rep_score)
+                    .rotation_floor(group) as f32,
+                believed_ceiling: snapshot
+                    .map(|s| s.potential)
+                    .or_else(|| foreign_memory.map(|m| m.assessed_potential))
+                    .unwrap_or(0) as f32,
+                league_gap: ((finances.league_reputation as f32 - seller_league as f32) / 10_000.0)
+                    .clamp(0.0, 1.0),
+                confidence: dossier_summary
+                    .map(|d| d.avg_confidence)
+                    .or_else(|| foreign_memory.map(|m| m.confidence))
+                    .unwrap_or(0.0),
+                age,
+                annual_wage: snapshot.map(|s| s.annual_salary as f64).unwrap_or(0.0),
+            },
+            &MoneySlack::of(club, date, alloc, 0.0),
+            alloc,
+            days_left_frac,
+        );
+
         let proposal = BoardTransferProposal {
             fee,
+            mandate,
+            envelope,
             allocated_budget: alloc,
             remaining_transfer_budget,
             priority: req.priority.clone(),

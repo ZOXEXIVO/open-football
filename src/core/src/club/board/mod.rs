@@ -15,6 +15,7 @@
 //! * [`ownership`] — who owns the club and how they exercise power
 //! * [`targets`] — the season mandate and the budget arithmetic behind it
 //! * [`governance`] — the transfer hearing
+//! * [`mandate`] — what a signing is FOR, and the money doctrine behind it
 //! * [`manager`] — the seat, the search, and the market for head coaches
 //! * [`scoring`] — the four component scores of a monthly review
 //! * [`pressure`] — supporter, media, dressing-room and regulatory heat
@@ -34,6 +35,7 @@ pub mod core;
 pub mod decision;
 pub mod governance;
 pub mod infrastructure;
+pub mod mandate;
 pub mod manager;
 mod mood;
 pub mod ownership;
@@ -56,6 +58,7 @@ pub use core::*;
 pub use decision::*;
 pub use governance::*;
 pub use infrastructure::*;
+pub use mandate::*;
 pub use manager::*;
 pub use mood::*;
 pub use ownership::*;

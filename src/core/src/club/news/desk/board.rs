@@ -206,6 +206,16 @@ impl BoardroomDesk {
                 ClubAffair::ManagerUltimatum { staff_id } => {
                     NewsStory::new(NewsStoryKind::ManagerUltimatum, date).by_staff(staff_id)
                 }
+                ClubAffair::MandateWrittenOff { player_id, loss } => {
+                    NewsStory::new(NewsStoryKind::FeeWrittenOff, date)
+                        .about(player_id)
+                        .with_money(loss)
+                }
+                ClubAffair::TransferExceptionApproved { player_id, fee } => {
+                    NewsStory::new(NewsStoryKind::BoardRaisesItsOffer, date)
+                        .about(player_id)
+                        .with_money(fee)
+                }
                 ClubAffair::TakeoverRumour => NewsStory::new(NewsStoryKind::TakeoverRumour, date),
                 ClubAffair::TakeoverCompleted => {
                     NewsStory::new(NewsStoryKind::TakeoverCompleted, date)

@@ -1,3 +1,4 @@
+use crate::club::board::mandate::SigningMandate;
 use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::deal::negotiation::NegotiationPhase;
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause};
@@ -119,6 +120,10 @@ pub(crate) struct NegotiationData {
     /// `None` for domestic moves, whose importance is recomputed live in
     /// the resolver.
     pub(crate) foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the absolute floor the seller's books put under
+    /// the fee, staged at creation — see the twin field on
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`].
+    pub(crate) foreign_seller_floor: Option<f64>,
     /// Foreign moves only: `(annual income, annual wage bill, wage budget)`
     /// for the selling club, staged at creation — see the twin field on
     /// [`crate::transfers::deal::negotiation::TransferNegotiation`]. `None` for
@@ -130,6 +135,9 @@ pub(crate) struct NegotiationData {
     pub(crate) staged_stance: Option<PlayerStance>,
     /// Sporting distance of the move, staged with the stance.
     pub(crate) staged_sporting_drop: Option<f32>,
+    /// What the board approved the signing FOR. Stamped on the player's
+    /// pathway when the deal completes.
+    pub(crate) mandate: Option<SigningMandate>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.
@@ -168,6 +176,9 @@ pub struct DeferredTransfer {
     /// market's `pending_clauses` queue without re-reading the
     /// negotiation (which is about to be dropped).
     pub(crate) offer_clauses: Vec<TransferClause>,
+    /// What the board approved the signing FOR. Stamped on the player's
+    /// pathway at execution.
+    pub(crate) mandate: Option<SigningMandate>,
 }
 
 /// Finding a player inside one country's rosters.

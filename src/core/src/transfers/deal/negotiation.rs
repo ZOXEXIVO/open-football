@@ -1,3 +1,4 @@
+use crate::club::board::mandate::SigningMandate;
 use crate::PlayerFieldPositionGroup;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
@@ -129,6 +130,13 @@ pub struct TransferNegotiation {
     /// equivalent domestic move. `None` for domestic moves, whose importance
     /// recomputes live.
     pub foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the absolute floor the SELLER's own books put
+    /// under the fee, captured at creation. The seller lives in another
+    /// country's borrow at resolution time, so what he still carries this
+    /// player at has to travel with the negotiation — without it every
+    /// cross-border sale forgot what the club had paid. `None` for
+    /// domestic moves, which read the seller's books live.
+    pub foreign_seller_floor: Option<f64>,
     /// Foreign moves only: the selling club's annualised income, wage bill
     /// and wage budget, captured at creation. The seller lives in another
     /// country's borrow at resolution time, so the one number that decides
@@ -156,7 +164,23 @@ pub struct TransferNegotiation {
     /// `None` for negotiations opened by paths that do not value a squad
     /// improvement (loans, free agents, legacy rows); the escalation then
     /// falls back to its budget cap exactly as before.
+    /// The board's final number: its walk-away for this purpose, times the
+    /// rope its temperament and its recent record earn the deal. Past this
+    /// the buyer leaves the table whatever the seller is asking.
     pub buyer_ceiling_fee: Option<f64>,
+    /// The fee the board signed off when it heard the proposal, before any
+    /// exception. The escalation re-hears the moment it would cross this,
+    /// which is what stops a seller's ask dragging a buyer past its own
+    /// doctrine one round at a time.
+    pub approved_fee: Option<f64>,
+    /// Exceptions the board has granted on this deal. One is a decision;
+    /// a second is a manager asking twice, and it costs him.
+    pub rehearings: u8,
+    /// What the board approved the signing FOR — the purpose and the
+    /// minutes it promised. Travels to the player's pathway at completion,
+    /// which is where "what did we buy him for" stops being derived from
+    /// his age and his fee.
+    pub mandate: Option<SigningMandate>,
     /// How transformative the buying club means this signing to be — the
     /// [`crate::transfers::squad::plan::BriefTier`] of the request it
     /// answers, captured at creation. Drives the opening ratio and the
@@ -247,9 +271,13 @@ impl TransferNegotiation {
             player_name: String::new(),
             selling_club_name: String::new(),
             foreign_seller_importance: None,
+            foreign_seller_floor: None,
             foreign_seller_finances: None,
             loan_target_profile: None,
             buyer_ceiling_fee: None,
+            approved_fee: None,
+            rehearings: 0,
+            mandate: None,
             brief_tier: None,
             staged_stance: None,
             staged_sporting_drop: None,

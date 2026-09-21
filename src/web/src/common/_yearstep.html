@@ -1,0 +1,15 @@
+{% if let Some(nav) = years %}
+<div class="fm-yearstep">
+    {% if let Some(previous) = nav.previous %}
+    <a class="fm-yearstep-arrow" href="{{ year_base }}?year={{ previous }}" aria-label="{{ i18n.t("previous_year") }}"></a>
+    {% else %}
+    <span class="fm-yearstep-arrow is-end" aria-hidden="true"></span>
+    {% endif %}
+    <span class="fm-yearstep-value">{{ nav.selected }}</span>
+    {% if let Some(next) = nav.next %}
+    <a class="fm-yearstep-arrow" href="{{ year_base }}?year={{ next }}" aria-label="{{ i18n.t("next_year") }}"></a>
+    {% else %}
+    <span class="fm-yearstep-arrow is-end" aria-hidden="true"></span>
+    {% endif %}
+</div>
+{% endif %}

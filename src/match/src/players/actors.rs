@@ -122,6 +122,14 @@ pub struct PlayerActor {
     flat: f32,
     /// Height last frame, so the rise above can be measured at all.
     previous_height: f32,
+    /// Current vertical speed and the leg selected at take-off, held through flight.
+    vertical_speed: f32,
+    jump_foot: f32,
+    /// Recorded take-off approaching: load the knees before leaving the turf.
+    coil: f32,
+    /// Match-clock timestamps, so reactions survive slow motion and seeking.
+    goal_since: Option<f32>,
+    save_time: Option<f32>,
     /// Which way he is tipping, in his own frame: x onto his right, y over
     /// his toes, each −1..1.
     ///
@@ -2268,6 +2276,12 @@ impl Actors {
         // has it at his feet at all. See [`BallState::led_by`].
         let mut led: Option<(u32, Vec3, f32, bool)> = None;
         for (mut actor, mut transform, mut visibility, undressed) in &mut players {
+            actor.coil = if actor.is_goalkeeper {
+                tracks.players.get_mut(&actor.id)
+                    .map_or(0.0, |track| Self::keeper_coil(track, now))
+            } else {
+                0.0
+            };
             let position = tracks
                 .players
                 .get_mut(&actor.id)
@@ -3300,13 +3314,14 @@ impl Actors {
         mut joints: Query<(&Joint, &mut Transform), Without<PlayerActor>>,
     ) {
         let delta = time.delta_secs().max(1e-4);
+        let match_delta = delta * playback.speed.max(0.1);
         // Exponential catch-up, framerate independent.
-        let turn = 1.0 - (-delta / Self::TURN_RESPONSE).exp();
-        let pace = 1.0 - (-delta / Self::PACE_RESPONSE).exp();
+        let turn = 1.0 - (-match_delta / Self::TURN_RESPONSE).exp();
+        let pace = 1.0 - (-match_delta / Self::PACE_RESPONSE).exp();
         // Slower than either, because a man's shoulders drop over about half
         // a second and his arms come up over about the same. Snapping the
         // mood on the frame the ball crosses the line reads as a cut.
-        let mood = 1.0 - (-delta / Self::MOOD_RESPONSE).exp();
+        let mood = 1.0 - (-match_delta / Self::MOOD_RESPONSE).exp();
         // …and the threat picture at each end, before anybody is moved.
         // See [`Siege`]: a keeper's right to turn his back on the play is a
         // claim about HIS GOAL, so it cannot be worked out from his own
@@ -3333,6 +3348,7 @@ impl Actors {
             // anything. See [`Aftermath`].
             let wanted_despair = aftermath.despair(actor.is_home);
             let wanted_elation = aftermath.elation(actor.is_home);
+            actor.goal_since = aftermath.since().map(|ms| (ms * 0.001) as f32);
             let settle = if playback.seeked { 1.0 } else { mood };
             actor.despair += (wanted_despair - actor.despair) * settle;
             actor.elation += (wanted_elation - actor.elation) * settle;
@@ -3414,7 +3430,7 @@ impl Actors {
             let settling = if playback.seeked {
                 1.0
             } else {
-                1.0 - (-delta / Self::TRAVEL_RESPONSE).exp()
+                1.0 - (-match_delta / Self::TRAVEL_RESPONSE).exp()
             };
             let was = actor.travel;
             actor.travel = was + (travelling - was) * settling;
@@ -3491,6 +3507,10 @@ impl Actors {
             // so a dive that pushes off from one starts its vector fresh on
             // the frame the height says it is a dive.
             let was_airborne = actor.air > 0.0 && !actor.bounce;
+            // Capture touchdown before track_flight advances previous_height.
+            let landed = !playback.seeked
+                && actor.previous_height > Self::AIRBORNE_FEET
+                && actor.height <= Self::AIRBORNE_FEET;
             let airborne = actor.track_flight(match_delta, launch, observed, playback.seeked);
             // And which way, recomputed every frame he is up there — for
             // exactly the reason it looks as though it should be latched.
@@ -3527,12 +3547,6 @@ impl Actors {
                     None => Vec2::ZERO,
                 };
             }
-
-            // **Has he just come down?** Read before the flight is advanced,
-            // while `previous_height` is still last frame's. See
-            // [`PlayerActor::absorb`].
-            let landed =
-                actor.previous_height > Self::AIRBORNE_FEET && actor.height <= Self::AIRBORNE_FEET;
 
             let facing = Self::facing(&actor, &ball, position, step, gathering || heedless);
             let mut turn_signal = 0.0_f32;
@@ -3603,7 +3617,7 @@ impl Actors {
             let settle = if playback.seeked {
                 1.0
             } else {
-                1.0 - (-delta / Self::COURSE_RESPONSE).exp()
+                1.0 - (-match_delta / Self::COURSE_RESPONSE).exp()
             };
             let was = actor.course;
             actor.course = (was + (wanted_course - was) * settle).clamp_length_max(1.0);
@@ -3718,6 +3732,12 @@ impl Actors {
             // the hands arrive with the ball at 1x, at 8x and wherever the
             // playhead is dropped, exactly as a kick's backswing does.
             let arriving = actor.arrival.filter(|_| !heedless);
+            if playback.seeked || heedless {
+                actor.save_time = None;
+            }
+            if let Some(save) = arriving {
+                actor.save_time = Some(actor.clock + save.delay);
+            }
             let wanted_reaction =
                 arriving.map_or(0.0, |save| Self::ease(1.0 - save.delay / Self::SAVE_ONSET));
             if playback.seeked || wanted_reaction > actor.reaction {
@@ -3739,7 +3759,13 @@ impl Actors {
                     * 2.0
                     - 1.0;
                 let wanted_aim = Vec2::new(across.clamp(-1.0, 1.0), up.clamp(-1.0, 1.0));
-                let settle = if playback.seeked { 1.0 } else { pace };
+                // Gloves must meet the contact point, not trail it by the
+                // locomotion filter's 180 ms. Tighten as contact approaches.
+                let settle = if playback.seeked {
+                    1.0
+                } else {
+                    1.0 - (-match_delta / (0.025 + 0.20 * save.delay.max(0.0))).exp()
+                };
                 let aim = actor.aim;
                 actor.aim = aim + (wanted_aim - aim) * settle;
                 let parry = actor.parry;
@@ -4508,6 +4534,11 @@ impl PlayerActor {
             climb: 0.0,
             flat: 0.0,
             previous_height: 0.0,
+            vertical_speed: 0.0,
+            jump_foot: Complexion::footedness(id),
+            coil: 0.0,
+            goal_since: None,
+            save_time: None,
             tip: Vec2::ZERO,
             flight: Vec3::ZERO,
             declared: KeeperFlight::Unknown,
@@ -4884,7 +4915,9 @@ impl PlayerActor {
             self.apex = self.apex.max(self.height);
         }
         if landed {
-            self.brace_rate += Actors::LANDING_KICK * self.apex * (1.0 - self.dive);
+            // A leap uses dive as its flight envelope too. Only a body
+            // actually falling onto its side bypasses the standing landing.
+            self.brace_rate += Actors::LANDING_KICK * self.apex * (1.0 - self.committed());
             self.apex = 0.0;
         }
         Actors::BRACE_SPRING.settle(&mut self.brace, &mut self.brace_rate, 0.0, match_delta);
@@ -5033,6 +5066,7 @@ impl PlayerActor {
             (self.height - self.previous_height) / match_delta
         };
         self.previous_height = self.height;
+        self.vertical_speed = climb;
         // Only ever a keeper: twelve outfield players leave the turf in a
         // recorded match to head a ball, and every one of them used to be
         // drawn toppling sideways with both arms over his head.
@@ -5046,8 +5080,11 @@ impl PlayerActor {
             self.air = 0.0;
             self.down = 0.0;
             self.climb = 0.0;
-            self.flat = 1.0;
-            self.bounce = airborne && self.height <= Actors::HOP_CEILING;
+            self.flat = Self::flatness(0.0, self.declared);
+            self.tip = Vec2::ZERO;
+            self.flight = Vec3::ZERO;
+            self.bounce = airborne && self.height <= Actors::HOP_CEILING
+                && self.declared == KeeperFlight::Unknown;
             self.hop = f32::from(self.bounce);
             self.land = 0.0;
             self.dive = f32::from(airborne && !self.bounce);
@@ -5079,6 +5116,11 @@ impl PlayerActor {
             // however gently the first sample says he left the ground — see
             // [`KeeperFlight`], which is the same answer the topple reads.
             if self.air <= 0.0 {
+                self.jump_foot = if self.speed > Actors::MOVING {
+                    if self.phase.sin() < 0.0 { -1.0 } else { 1.0 }
+                } else {
+                    Complexion::footedness(self.id)
+                };
                 self.bounce = climb < Actors::HOP_CLIMB && self.declared == KeeperFlight::Unknown;
             } else if self.bounce
                 && (self.height > Actors::HOP_CEILING
@@ -5146,7 +5188,7 @@ impl PlayerActor {
             let hurry = (ground / Actors::SPRAWL_URGENCY).clamp(0.0, 1.0);
             // …and a beaten keeper stays down, for a length of time that is
             // his own. See [`Actors::BEATEN_HOLD`].
-            let beaten = self.despair
+            let beaten = self.despair * self.keeper_grief()
                 * (1.0 + Actors::BEATEN_SPREAD * Complexion::carriage(self.id))
                 * (Actors::BEATEN_HOLD - 1.0);
             let hold = Actors::SPRAWL_HOLD * (1.0 - hurry) * (1.0 + beaten);
@@ -5164,7 +5206,7 @@ impl PlayerActor {
                 // like a robot. The floor is what puts a beat in the middle
                 // of it: he kneels, and stays kneeling until the recording
                 // gives him somewhere to be. See [`Actors::KNEELING`].
-                let kneel = Actors::KNEELING * self.despair * (1.0 - hurry);
+                let kneel = Actors::KNEELING * self.despair * self.keeper_grief() * (1.0 - hurry);
                 self.dive -= (self.dive - kneel).max(0.0) * release;
                 // The EXTENSION goes all the way back regardless: a man on
                 // his knees is not still at full stretch, whatever else he
@@ -5709,6 +5751,7 @@ impl PlayerActor {
             * (1.0 - grounded)
             * (1.0 - (self.speed / Actors::SPRINT).clamp(0.0, 1.0));
         let (on_head, on_hips, doubled) = self.taking_it();
+        let reaction_gesture = self.keeper_gesture();
         // …and what he is doing with a match in which nothing has happened
         // to him, which is most of one.
         let idle = self.gesturing();
@@ -5786,6 +5829,9 @@ impl PlayerActor {
             // while he is swinging at it either.
             carrying: self.carrying * (1.0 - off_his_feet) * (1.0 - jump) * (1.0 - self.hop),
             jump,
+            jump_phase: self.jump_progress(),
+            jump_foot: self.jump_foot,
+            save_recoil: self.save_recoil() * (1.0 - off_his_feet),
             // A keeper is set whenever the ball is near his goal — but not
             // while he is off his feet or holding it, both of which are
             // things a man in the set position is by definition not doing.
@@ -5832,13 +5878,13 @@ impl PlayerActor {
             elation: self.elation * (1.0 - self.carry) * (1.0 - self.dive),
             // Which of the four reactions is his. Whole weights, mood
             // included — see [`Gait::hands_to_head`].
-            hands_to_head: taking * on_head,
+            hands_to_head: taking * on_head * reaction_gesture,
             // Hands on the hips are two things at once: how some men take a
             // goal, and what a man does standing about. They cannot both be
             // on — `gesturing` is gated on nothing having happened — so the
             // two channels simply add. Bent over his knees likewise.
-            hands_on_hips: (taking * on_hips + idle.hands_on_hips).clamp(0.0, 1.0),
-            doubled_over: (taking * doubled + idle.doubled_over).clamp(0.0, 1.0),
+            hands_on_hips: (taking * on_hips * reaction_gesture + idle.hands_on_hips).clamp(0.0, 1.0),
+            doubled_over: (taking * doubled * reaction_gesture + idle.doubled_over).clamp(0.0, 1.0),
             urging: idle.urging,
             pointing: idle.pointing,
             rising: self.rising(),
@@ -5909,7 +5955,8 @@ impl PlayerActor {
             // slerps the stride away at whatever weight it has, and a man
             // who stopped for half a second and set off again would
             // otherwise take his first two strides on bent knees.
-            land: self.land.max(
+            land: self.coil * afoot * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation))
+                + self.land.max(
                 self.brace.max(0.0)
                     * afoot
                     * (1.0 - Actors::ease((self.tread - Actors::STEPPING) / Actors::BRACE_LETGO)),
@@ -5922,6 +5969,7 @@ impl PlayerActor {
 
 #[cfg(test)]
 mod keeper_census;
+mod keeper_motion;
 
 #[cfg(test)]
 mod flight {
@@ -8908,13 +8956,12 @@ pub(crate) mod replayed {
         ///    twenty metres where the maximum separates them by nothing.
         pub fn keepers(tracks: &mut ReplayTracks, start: f64) -> Vec<u32> {
             /// States only a goalkeeper is ever in.
-            const HIS_ALONE: [&str; 6] = [
+            const HIS_ALONE: [&str; 5] = [
                 "Preparing for Save",
                 "Coming Out",
                 "Returning to Goal",
                 "Distributing",
                 "Holding Ball",
-                "Take Ball",
             ];
             let ids: Vec<u32> = tracks.players.keys().copied().collect();
             let named: Vec<u32> = ids

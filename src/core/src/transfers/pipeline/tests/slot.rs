@@ -1,5 +1,6 @@
 //! Moved verbatim out of `helpers.rs` — see that file's `mod slot_need_tests`.
 
+use crate::club::board::mandate::MandateIncumbent;
 use crate::club::team::squad::SquadAssetClass;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::squad::SquadReviewPass;
@@ -61,7 +62,7 @@ impl SlotFx {
     fn coverage(
         squad: &[SquadPlayerInfo],
         formation: &[PlayerPositionType; 11],
-    ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
+    ) -> Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)> {
         let mut used: Vec<u32> = Vec::new();
         let mut out = Vec::new();
         for &slot in formation.iter() {
@@ -81,13 +82,19 @@ impl SlotFx {
                         return None;
                     }
                     let effective = RoleFamiliarity::effective_ability(p.current_ability, in_group);
-                    Some((p.player_id, effective))
+                    Some((
+                        MandateIncumbent {
+                            player_id: p.player_id,
+                            age: p.age,
+                        },
+                        effective,
+                    ))
                 })
                 .max_by_key(|&(_, effective)| effective);
             match pick {
-                Some((id, quality)) => {
-                    used.push(id);
-                    out.push((slot, Some(id), quality));
+                Some((incumbent, quality)) => {
+                    used.push(incumbent.player_id);
+                    out.push((slot, Some(incumbent), quality));
                 }
                 None => out.push((slot, None, 0)),
             }

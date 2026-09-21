@@ -964,6 +964,9 @@ pub struct CareerPlanDto {
     /// Where the club has him on its own pathway — the other side of the
     /// same conversation.
     pub pathway: String,
+    /// What the board signed the cheque FOR, when it signed one. Absent
+    /// for everybody the club did not buy.
+    pub purpose: Option<String>,
 }
 
 /// Builds it.
@@ -995,6 +998,10 @@ impl CareerPlanCard {
                 .and_then(|p| p.last_verdict)
                 .map(|verdict| i18n.t(verdict.as_i18n_key()).to_string()),
             pathway: i18n.t(player.pathway_stage().as_i18n_key()).to_string(),
+            purpose: player
+                .mandate()
+                .filter(|mandate| mandate.is_purchase())
+                .map(|mandate| i18n.t(mandate.purpose.as_i18n_key()).to_string()),
         })
     }
 
@@ -1243,6 +1250,7 @@ mod page_tests {
                     band_floor: i18n.t("career_band_floor_one_level").to_string(),
                     last_verdict: Some(i18n.t("loan_verdict_steady").to_string()),
                     pathway: i18n.t("pathway_stage_reassess").to_string(),
+                    purpose: None,
                 }),
                 manager_relationship: Some(ManagerRelationshipDto {
                     manager_name: "Riccardo Greco".to_string(),

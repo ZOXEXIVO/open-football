@@ -1,4 +1,6 @@
+use crate::club::board::mandate::{MandateAuthor, MandatePurpose, MinutesCurve, SigningMandate};
 use crate::club::player::happiness::LoanSpellVerdict;
+use crate::club::player::mind::MindSituation;
 use crate::club::player::mind::{ActorRef, EpisodeKind, MindClock};
 use crate::transfers::deal::offer::PromisedSquadStatus;
 use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
@@ -136,10 +138,11 @@ pub struct PlayerPlan {
     pub role: PlayerPlanRole,
     /// When the plan started (transfer date).
     pub started: NaiveDate,
-    /// Minimum appearances before the club can fairly judge the player.
-    pub min_games: u8,
-    /// Months from `started` before the evaluation period ends.
-    pub evaluation_months: u8,
+    /// What the board signed him for: the purpose, the minutes it promised
+    /// him season by season, the money it approved and the years it writes
+    /// that money off over. Every question the plan used to answer from
+    /// (age, fee > 0) is answered from here instead.
+    pub mandate: SigningMandate,
 
     pub stage: PathwayStage,
     pub stage_since: NaiveDate,
@@ -181,48 +184,44 @@ impl PlayerPlan {
     /// Days a promoted returnee is given to hold the shirt he was promised.
     pub const PROMISE_REVIEW_DAYS: i64 = 180;
 
-    /// Create a plan based on who the player is and what the club paid.
+    /// The pathway a mandate implies.
     ///
-    /// Real clubs decide the role based on fee, age, and ability:
-    /// - A 19yo for 8M → development project, give 2 years
-    /// - A 26yo for 20M → compete for starting spot, give 1 year
-    /// - A 31yo for 5M → experienced depth, evaluate in 6 months
-    /// - A free agent → short trial period
-    pub fn from_signing(age: u8, fee: f64, date: NaiveDate) -> Self {
-        let (role, min_games, evaluation_months) = if age <= 21 {
-            // Young player: long development runway
-            (PlayerPlanRole::Development, 10, 18)
-        } else if age <= 23 && fee > 0.0 {
-            // Young-ish paid signing: still developing but expected to contribute
-            (PlayerPlanRole::CompeteForStarting, 12, 12)
-        } else if age <= 29 && fee > 0.0 {
-            // Prime age paid signing: expected to compete for the team
-            (PlayerPlanRole::CompeteForStarting, 15, 12)
-        } else if age >= 30 && fee > 0.0 {
-            // Experienced paid signing: should contribute quickly
-            (PlayerPlanRole::ImmediateStarter, 10, 6)
-        } else {
-            // Free transfer / low investment: shorter evaluation
-            (PlayerPlanRole::DepthRotation, 5, 6)
+    /// Role and stage are the curve read at two points — what he is
+    /// promised on day one, and whether that promise is a shirt, a share
+    /// of one, or a place to grow. Nothing here reads his age or his fee:
+    /// those decided the purpose, and the purpose decided the minutes.
+    pub fn from_mandate(mandate: SigningMandate, date: NaiveDate) -> Self {
+        let role = match mandate.purpose {
+            MandatePurpose::Starter => PlayerPlanRole::ImmediateStarter,
+            MandatePurpose::Asset | MandatePurpose::Heir { .. } => {
+                PlayerPlanRole::CompeteForStarting
+            }
+            MandatePurpose::Rotation | MandatePurpose::Cover => PlayerPlanRole::DepthRotation,
+            MandatePurpose::Prospect => PlayerPlanRole::Development,
         };
-
-        let stage = match role {
-            PlayerPlanRole::Development => PathwayStage::Prospect,
-            PlayerPlanRole::DepthRotation => PathwayStage::Rotation,
-            PlayerPlanRole::CompeteForStarting => PathwayStage::Rotation,
-            PlayerPlanRole::ImmediateStarter => PathwayStage::Starter,
+        let stage = match mandate.purpose {
+            MandatePurpose::Starter => PathwayStage::Starter,
+            MandatePurpose::Asset
+            | MandatePurpose::Heir { .. }
+            | MandatePurpose::Rotation
+            | MandatePurpose::Cover => PathwayStage::Rotation,
+            MandatePurpose::Prospect => PathwayStage::Prospect,
         };
-
-        PlayerPlan::at_stage(role, min_games, evaluation_months, stage, date)
+        PlayerPlan::at_stage(role, mandate, stage, date)
     }
 
     /// The pathway an academy graduate starts on: a boy with a senior
     /// contract and no senior football yet.
-    pub fn from_graduation(date: NaiveDate) -> Self {
+    pub fn from_graduation(group: crate::PlayerFieldPositionGroup, date: NaiveDate) -> Self {
         PlayerPlan::at_stage(
             PlayerPlanRole::Development,
-            10,
-            18,
+            SigningMandate::new(
+                MandatePurpose::Prospect,
+                group,
+                18,
+                date,
+                MandateAuthor::Board,
+            ),
             PathwayStage::Academy,
             date,
         )
@@ -230,22 +229,29 @@ impl PlayerPlan {
 
     /// The pathway derived once for a squad that existed before the club
     /// held pathways at all. The stage comes from what the club already
-    /// believes about him, so nothing is invented.
-    pub fn from_existing(role: PlayerPlanRole, stage: PathwayStage, date: NaiveDate) -> Self {
-        let (_, evaluation_months) = match role {
-            PlayerPlanRole::Development => (10, 18),
-            PlayerPlanRole::CompeteForStarting => (12, 12),
-            PlayerPlanRole::ImmediateStarter => (10, 6),
-            PlayerPlanRole::DepthRotation => (5, 6),
-        };
-        // An existing squad member has already served whatever commitment
-        // the club made to him, so the protection window opens behind him.
-        let started = date - Duration::days(evaluation_months as i64 * 31);
+    /// believes about him, so nothing is invented — and the mandate it
+    /// derives carries no approved fee, because none was ever signed.
+    pub fn from_existing(
+        role: PlayerPlanRole,
+        stage: PathwayStage,
+        group: crate::PlayerFieldPositionGroup,
+        age: u8,
+        date: NaiveDate,
+    ) -> Self {
+        let mandate = SigningMandate::new(
+            MandatePurpose::from_stage(stage),
+            group,
+            age,
+            // An existing squad member has already served whatever
+            // commitment the club made to him, so the window opens behind
+            // him rather than in front.
+            date - Duration::days(MinutesCurve::MAX_HORIZON as i64 * 365),
+            MandateAuthor::Board,
+        );
         PlayerPlan {
             role,
-            started,
-            min_games: 0,
-            evaluation_months,
+            started: mandate.issued,
+            mandate,
             stage,
             stage_since: date,
             review_on: date + Duration::days(Self::REVIEW_DAYS),
@@ -259,16 +265,14 @@ impl PlayerPlan {
 
     fn at_stage(
         role: PlayerPlanRole,
-        min_games: u8,
-        evaluation_months: u8,
+        mandate: SigningMandate,
         stage: PathwayStage,
         date: NaiveDate,
     ) -> Self {
         PlayerPlan {
             role,
             started: date,
-            min_games,
-            evaluation_months,
+            mandate,
             stage,
             stage_since: date,
             review_on: date + Duration::days(Self::REVIEW_DAYS),
@@ -310,29 +314,43 @@ impl PlayerPlan {
         self.review_on = date + Duration::days(days);
     }
 
-    /// Has the plan's evaluation period concluded?
-    ///
-    /// A plan is "evaluated" only when BOTH conditions are met:
-    /// 1. Enough time has passed (the club gave the player a fair window)
-    /// 2. The player had enough appearances (they got a real chance)
-    ///
-    /// If either condition isn't met, the plan is still active and the player
-    /// should not be listed for sale.
-    pub fn is_evaluated(&self, current_date: NaiveDate, appearances: u16) -> bool {
-        let months_elapsed = (current_date - self.started).num_days() / 30;
-        let time_served = months_elapsed >= self.evaluation_months as i64;
-        let games_played = appearances >= self.min_games as u16;
-
-        time_served && games_played
+    /// Whole seasons the mandate has been running.
+    #[inline]
+    pub fn season_index(&self, date: NaiveDate) -> u8 {
+        self.mandate.season_index(date)
     }
 
-    /// Has enough time passed, regardless of appearances?
-    /// Used as a fallback — even if a player never played, after a very long
-    /// time the club should be allowed to move on.
-    pub fn is_expired(&self, current_date: NaiveDate) -> bool {
-        let months_elapsed = (current_date - self.started).num_days() / 30;
-        // Double the evaluation period as absolute maximum
-        months_elapsed >= (self.evaluation_months as i64) * 2
+    /// Is he getting what the club promised him?
+    ///
+    /// One tolerance against the curve, at whatever season the mandate is
+    /// in. This is the question every sweep that used to count idle days
+    /// or appearances is really asking.
+    pub fn on_schedule(&self, date: NaiveDate, delivered_share: f32, tracked: u8) -> bool {
+        !Self::has_playing_view(tracked) || self.mandate.on_schedule(date, delivered_share)
+    }
+
+    /// Has the club seen enough of him to judge?
+    ///
+    /// It has when a season has gone by and it gave him the minutes it
+    /// said it would. A man who never got them has not been evaluated —
+    /// that is the club's own failure to integrate him, and it is why the
+    /// automatic surplus sweeps leave him alone until the mandate's own
+    /// horizon runs out.
+    pub fn is_evaluated(&self, date: NaiveDate, delivered_share: f32, tracked: u8) -> bool {
+        self.season_index(date) >= 1
+            && Self::has_playing_view(tracked)
+            && self.mandate.on_schedule(date, delivered_share)
+    }
+
+    /// Has the mandate run its course, whatever the minutes said?
+    pub fn is_expired(&self, date: NaiveDate) -> bool {
+        self.season_index(date) >= self.mandate.minutes.review_horizon()
+    }
+
+    /// Has he played enough for a share of the season to mean anything?
+    #[inline]
+    fn has_playing_view(tracked: u8) -> bool {
+        tracked >= MindSituation::TRACKED_APPS
     }
 }
 
@@ -351,11 +369,69 @@ impl Player {
     pub fn signing_protection_active(&self, date: NaiveDate) -> bool {
         match &self.plan {
             Some(plan) => {
-                let appearances = self.statistics.played + self.statistics.played_subs;
-                !plan.is_evaluated(date, appearances) && !plan.is_expired(date)
+                !plan.is_evaluated(
+                    date,
+                    self.happiness.starter_ratio,
+                    self.happiness.appearances_tracked,
+                ) && !plan.is_expired(date)
             }
             None => false,
         }
+    }
+
+    /// The share of his club's matches he has actually started, and the
+    /// matches behind it. The one reading every mandate-aware pass
+    /// compares against what he was promised.
+    #[inline]
+    pub fn delivered_minutes(&self) -> (f32, u8) {
+        (
+            self.happiness.starter_ratio,
+            self.happiness.appearances_tracked,
+        )
+    }
+
+    /// He is getting what the club said he would when it signed him.
+    /// `true` for a player nobody has written a plan for — a man the club
+    /// has made no promise to cannot be behind on one.
+    pub fn mandate_on_schedule(&self, date: NaiveDate) -> bool {
+        let (share, tracked) = self.delivered_minutes();
+        self.plan
+            .as_ref()
+            .map(|p| p.on_schedule(date, share, tracked))
+            .unwrap_or(true)
+    }
+
+    /// What is left of the fee the club paid for him on its own books.
+    /// Zero for everyone it did not buy.
+    pub fn book_value(&self, date: NaiveDate) -> f64 {
+        self.plan
+            .as_ref()
+            .map(|p| p.mandate.book_value(date))
+            .unwrap_or(0.0)
+    }
+
+    /// The purpose the club bought him for, when it bought him.
+    #[inline]
+    pub fn mandate(&self) -> Option<&SigningMandate> {
+        self.plan.as_ref().map(|p| &p.mandate)
+    }
+
+    /// The pathway a club writes for a man it has never written one for.
+    /// His own position and age are the only things it needs that the
+    /// caller does not already hold.
+    pub fn default_plan(
+        &self,
+        role: PlayerPlanRole,
+        stage: PathwayStage,
+        date: NaiveDate,
+    ) -> PlayerPlan {
+        PlayerPlan::from_existing(
+            role,
+            stage,
+            self.position().position_group(),
+            self.age(date),
+            date,
+        )
     }
 
     /// Where the club has him on its pathway. `Prospect` when it has not
@@ -446,6 +522,8 @@ impl Player {
                 self.plan = Some(PlayerPlan::from_existing(
                     PlayerPlanRole::CompeteForStarting,
                     stage,
+                    self.position().position_group(),
+                    self.age(date),
                     date,
                 ));
             }

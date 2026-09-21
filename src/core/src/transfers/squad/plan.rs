@@ -22,6 +22,7 @@
 //! income, and how far each slot already sits above what the objective asks
 //! for.
 
+use crate::club::board::mandate::MandateIncumbent;
 use crate::transfers::squad::bands::TierBands;
 use std::collections::HashMap;
 
@@ -479,6 +480,9 @@ pub struct BriefSlot {
     /// the clubs that buy them.
     pub baseline_level: u8,
     pub incumbent_level: u8,
+    /// The man in that shirt, when there is one. What lets the board write
+    /// a mandate ABOUT somebody rather than about a position.
+    pub incumbent: Option<MandateIncumbent>,
     /// The motive the request carries downstream — the existing enum, so
     /// scouting, the loan market and the UI are unchanged.
     pub reason: TransferNeedReason,
@@ -567,7 +571,7 @@ pub(in crate::transfers) struct PlanInputs<'a> {
     pub squad: &'a [SquadPlayerInfo],
     /// `(shirt, incumbent, effective ability there)` for the eleven
     /// formation slots — exactly what the evaluator already builds.
-    pub position_coverage: &'a [(PlayerPositionType, Option<u32>, u8)],
+    pub position_coverage: &'a [(PlayerPositionType, Option<MandateIncumbent>, u8)],
     pub formation_positions: &'a [PlayerPositionType; 11],
     pub rep_score: f32,
     /// The club's spendable transfer budget this window.
@@ -649,6 +653,7 @@ impl SquadPlanner {
                 group,
                 target,
                 incumbent_level,
+                incumbent: *incumbent,
                 gap,
                 appetite,
                 demand,
@@ -715,6 +720,7 @@ impl SquadPlanner {
                 target_level: cand.target,
                 baseline_level: plan.baseline_for(cand.position),
                 incumbent_level: cand.incumbent_level,
+                incumbent: cand.incumbent,
                 reason,
                 priority,
             });
@@ -907,6 +913,7 @@ impl SquadPlanner {
                 // against a starter: a bench player who is merely somewhere
                 // near the level is doing his job.
                 incumbent_level: plan.baseline_for(position).saturating_sub(15),
+                incumbent: None,
                 reason: TransferNeedReason::DepthCover,
                 priority: TransferNeedPriority::Optional,
             });
@@ -974,6 +981,7 @@ struct SlotDemand {
     group: PlayerFieldPositionGroup,
     target: u8,
     incumbent_level: u8,
+    incumbent: Option<MandateIncumbent>,
     gap: i16,
     appetite: f32,
     demand: f32,
@@ -1078,6 +1086,7 @@ mod planning_tests {
                 target_level: 140,
                 baseline_level: 140,
                 incumbent_level: 0,
+                incumbent: None,
                 reason: TransferNeedReason::FormationGap,
                 priority: TransferNeedPriority::Critical,
             }
@@ -1089,6 +1098,7 @@ mod planning_tests {
                 group: PlayerFieldPositionGroup::Midfielder,
                 target: 150,
                 incumbent_level,
+                incumbent: None,
                 gap,
                 appetite,
                 demand: gap.max(0) as f32 + appetite,
@@ -1315,7 +1325,7 @@ mod planning_tests {
         fn coverage(
             level: u8,
             hole: Option<PlayerPositionType>,
-        ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
+        ) -> Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)> {
             Self::formation()
                 .iter()
                 .enumerate()
@@ -1323,7 +1333,14 @@ mod planning_tests {
                     if Some(*pos) == hole {
                         (*pos, None, 0)
                     } else {
-                        (*pos, Some(i as u32 + 1), level)
+                        (
+                            *pos,
+                            Some(MandateIncumbent {
+                                player_id: i as u32 + 1,
+                                age: 27,
+                            }),
+                            level,
+                        )
                     }
                 })
                 .collect()
@@ -1331,7 +1348,7 @@ mod planning_tests {
 
         fn inputs<'a>(
             club: &'a Club,
-            coverage: &'a [(PlayerPositionType, Option<u32>, u8)],
+            coverage: &'a [(PlayerPositionType, Option<MandateIncumbent>, u8)],
             squad: &'a [SquadPlayerInfo],
             available_budget: f64,
         ) -> PlanInputs<'a> {

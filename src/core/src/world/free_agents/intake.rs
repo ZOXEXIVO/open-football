@@ -1,5 +1,6 @@
 use crate::club::SquadDepartures;
 use crate::club::player::calculators::{FreeAgentReleaseReason, WageCalculator};
+use crate::club::player::mind::SpellChange;
 use crate::club::player::transfer::ReleaseContext;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::reason::TransferReason;
@@ -191,6 +192,7 @@ impl SimulatorData {
                                 // `Frt` marker above, so nothing here
                                 // still needs it.
                                 p.reset_on_club_change();
+                                p.on_spell_change(SpellChange::release(club_id), 0, date);
                                 released_in_country.push(p);
                             }
                         }

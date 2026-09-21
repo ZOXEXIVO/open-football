@@ -7,7 +7,7 @@
 //! rules mean the strong wants actively suppress the ones that
 //! contradict them.
 
-use super::catalog::{GoalDirection, GoalKind};
+use super::catalog::{GoalDirection, GoalKind, SubjectMask};
 use super::escalation::{Escalation, StatusChange};
 use super::evidence::{GoalBlocker, GoalDomain, GoalEvidence, GoalOrigin};
 use super::goal::{GoalStatus, MindGoal};
@@ -108,6 +108,11 @@ impl GoalStack {
     /// decided to stay does not instantly stop wanting to go, he stops
     /// wanting it over a season.
     pub const COMPETITION_PRESSURE: f32 = 0.08;
+
+    /// How much heat a fresh start takes out of a want that travelled
+    /// with him. He has not stopped wanting it — everything around him
+    /// is simply new enough that it is not what he is thinking about.
+    pub const FRESH_START_RELIEF: f32 = 0.35;
 
     pub fn new() -> Self {
         Self::default()
@@ -459,35 +464,40 @@ impl GoalStack {
         }
     }
 
-    /// Called when the player changes club. Wants that were about *this*
-    /// club are met or moot; wants about himself travel with him.
+    /// Called when the player's spell turns over — sold, loaned out,
+    /// come home from a loan, released. `changed` names what the move
+    /// replaced.
     ///
-    /// Deliberately not a blanket clear. A man who moved to get first-team
-    /// football still wants first-team football, and if the new club does
-    /// not give it to him the want is already there rather than having to
-    /// be rediscovered from scratch.
-    pub fn on_club_change(&mut self) {
+    /// Every want is answered by the same question: is the thing it was
+    /// about still the thing it is about? If it is not, the want is
+    /// finished here, and which way it pointed decides whether it reads
+    /// as achieved or as let go. If it is, the want travels — softened,
+    /// because a fresh start takes some heat out, and held back until he
+    /// has settled, because the new place is owed a fair look before he
+    /// presses anything at it.
+    ///
+    /// Deliberately not a blanket clear. A man who moved to get
+    /// first-team football still wants first-team football, and if the
+    /// new club does not give it to him the want is already there rather
+    /// than having to be rediscovered from scratch — and equally, a man
+    /// who wanted to go home and was sold to a third foreign club has
+    /// not been given anything.
+    pub fn on_spell_change(&mut self, changed: SubjectMask) {
         for goal in self.goals.iter_mut() {
             if !goal.is_live() {
                 continue;
             }
-            match goal.kind.direction() {
-                // He got out. Whatever he wanted out *of* is answered.
-                GoalDirection::Leave => {
-                    goal.set_progress(1.0);
-                    goal.status = GoalStatus::Satisfied;
-                }
-                // Wants that were about staying somewhere he no longer is.
-                GoalDirection::Stay => {
-                    goal.status = GoalStatus::Abandoned;
-                }
-                // Being underpaid, wanting a trophy, missing home — none
-                // of that is settled by changing employer. It travels,
-                // softened: a fresh start does take some heat out.
-                GoalDirection::Neutral => {
-                    goal.yield_to_competition(0.35);
-                    goal.blocked_by = GoalBlocker::JustArrived;
-                }
+            if !changed.contains(goal.kind.subject()) {
+                goal.carry_over(Self::FRESH_START_RELIEF);
+                goal.blocked_by = GoalBlocker::JustArrived;
+                continue;
+            }
+            // He got out of whatever it was about, or he lost it.
+            if goal.kind.direction() == GoalDirection::Leave {
+                goal.set_progress(1.0);
+                goal.status = GoalStatus::Satisfied;
+            } else {
+                goal.status = GoalStatus::Abandoned;
             }
         }
         self.goals.retain(|g| g.is_live());
@@ -533,6 +543,7 @@ impl GoalCensus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::catalog::GoalSubject;
 
     const TODAY: EpochDay = 10_000;
 
@@ -768,6 +779,22 @@ mod tests {
         assert_eq!(report.frustrated, 1);
     }
 
+    /// A permanent sale: the room, the man picking the team, the
+    /// league and the club that owns him all change.
+    const SOLD: SubjectMask = SubjectMask::of(&[
+        GoalSubject::ThisClub,
+        GoalSubject::ThisManager,
+        GoalSubject::ThisLeague,
+        GoalSubject::OwningClub,
+    ]);
+
+    /// A loan: he keeps the club that owns him, and nothing else.
+    const LOANED: SubjectMask = SubjectMask::of(&[
+        GoalSubject::ThisClub,
+        GoalSubject::ThisManager,
+        GoalSubject::ThisLeague,
+    ]);
+
     #[test]
     fn a_move_answers_what_he_wanted_out_of_and_keeps_the_rest() {
         let mut stack = GoalStack::new();
@@ -776,7 +803,7 @@ mod tests {
         feed(&mut stack, GoalKind::WinBackMyPlace, 8, TODAY);
         stack.review(TODAY);
 
-        stack.on_club_change();
+        stack.on_spell_change(SOLD);
 
         assert!(
             stack.get(GoalKind::LeaveThisClub).is_none(),
@@ -793,12 +820,90 @@ mod tests {
     }
 
     #[test]
+    fn a_want_arrives_owing_the_new_club_nothing() {
+        let mut stack = GoalStack::new();
+        feed(&mut stack, GoalKind::PlayFirstTeamFootball, 8, TODAY);
+        stack.advance(GoalKind::PlayFirstTeamFootball, 0.9);
+        stack.commit_until(GoalKind::PlayFirstTeamFootball, TODAY + 90);
+        stack.review(TODAY);
+
+        stack.on_spell_change(SOLD);
+
+        let carried = stack.get(GoalKind::PlayFirstTeamFootball).unwrap();
+        assert_eq!(
+            carried.progress(),
+            0.0,
+            "the games he was getting were somebody else's"
+        );
+        assert!(
+            !carried.has_deadline(),
+            "and the date he gave himself was a date he gave that club"
+        );
+    }
+
+    #[test]
+    fn a_want_survives_a_move_that_did_not_answer_it() {
+        let mut stack = GoalStack::new();
+        feed(&mut stack, GoalKind::GoHome, 8, TODAY);
+        feed(&mut stack, GoalKind::PlayFirstTeamFootball, 8, TODAY);
+        feed(&mut stack, GoalKind::PlayForMyBoyhoodClub, 8, TODAY);
+        stack.review(TODAY);
+
+        stack.on_spell_change(SOLD);
+
+        // All three point out of a club, and none of them is ABOUT the
+        // club — which is why reading the direction alone declared a man
+        // sold to a third foreign club to have got home.
+        assert!(stack.get(GoalKind::GoHome).is_some());
+        assert!(stack.get(GoalKind::PlayFirstTeamFootball).is_some());
+        assert!(stack.get(GoalKind::PlayForMyBoyhoodClub).is_some());
+    }
+
+    #[test]
+    fn a_loan_leaves_what_he_wants_at_the_club_that_owns_him() {
+        let mut stack = GoalStack::new();
+        feed(&mut stack, GoalKind::ProveMyselfAtMyParentClub, 8, TODAY);
+        feed(&mut stack, GoalKind::WinTheManagersTrust, 8, TODAY);
+        stack.review(TODAY);
+
+        stack.on_spell_change(LOANED);
+
+        assert!(
+            stack.get(GoalKind::ProveMyselfAtMyParentClub).is_some(),
+            "the club that owns him did not change — that is what a loan is"
+        );
+        assert!(
+            stack.get(GoalKind::WinTheManagersTrust).is_none(),
+            "the man picking the team is somebody else now"
+        );
+    }
+
+    #[test]
+    fn a_domestic_move_keeps_what_he_thinks_of_the_league() {
+        let build = |changed| {
+            let mut stack = GoalStack::new();
+            feed(&mut stack, GoalKind::PlayInAStrongerLeague, 8, TODAY);
+            stack.review(TODAY);
+            stack.on_spell_change(changed);
+            stack.get(GoalKind::PlayInAStrongerLeague).is_some()
+        };
+        let domestic = SubjectMask::of(&[
+            GoalSubject::ThisClub,
+            GoalSubject::ThisManager,
+            GoalSubject::OwningClub,
+        ]);
+
+        assert!(build(domestic), "a ceiling he has not moved off is still a ceiling");
+        assert!(!build(SOLD), "abroad answers it");
+    }
+
+    #[test]
     fn lifting_a_blocker_frees_only_the_goals_held_for_that_reason() {
         let mut stack = GoalStack::new();
         feed(&mut stack, GoalKind::BePaidWhatImWorth, 8, TODAY);
         feed(&mut stack, GoalKind::WinATrophy, 8, TODAY);
         stack.review(TODAY);
-        stack.on_club_change();
+        stack.on_spell_change(SOLD);
         stack.block(GoalKind::WinATrophy, GoalBlocker::FrozenOut);
 
         stack.unblock(GoalBlocker::JustArrived);

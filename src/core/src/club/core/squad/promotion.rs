@@ -66,7 +66,8 @@ impl Club {
                     player.plan.as_ref().map(|p| p.stage),
                     None | Some(PathwayStage::Academy)
                 ) {
-                    player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
+                    let group = player.position().position_group();
+                    player.assign_pathway(club_id, PlayerPlan::from_graduation(group, date), date);
                 }
                 debug!(
                     "youth → pro contract on merit: {} (CA={}, age={}) at {}",

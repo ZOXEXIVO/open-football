@@ -7,6 +7,7 @@ use crate::club::SquadDepartures;
 use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
+use crate::club::player::mind::SpellChange;
 use crate::club::staff::SeparationCause;
 use crate::club::staff::SpellCloser;
 use crate::club::staff::perception::AbilityEstimator;
@@ -1271,6 +1272,9 @@ impl CountryResult {
                 selling_league_reputation,
                 record_sell_on: None,
                 personal_terms: None,
+                // A buyout is a fresh purchase with no hearing behind it —
+                // the purpose comes from the shirt he is already wearing.
+                mandate: None,
                 // Buyout of a player already in this dressing room — no
                 // arrival reception of any kind (pending is cleared below).
                 source_is_rival: false,
@@ -1438,6 +1442,17 @@ impl CountryResult {
         };
 
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
+        // The borrowing club is behind him for good; the club that owns
+        // him never stopped owning him, so his plan and what he wanted
+        // back here both survive the spell away.
+        player.on_spell_change(
+            SpellChange::loan_return(
+                event.borrowing_club_id,
+                event.borrowing_info.league_slug == parent_info.league_slug,
+            ),
+            0,
+            date,
+        );
         player.contract_loan = None;
         player.happiness = PlayerHappiness::new();
         // The canonical transient reset — the wholesale `statuses.clear()`

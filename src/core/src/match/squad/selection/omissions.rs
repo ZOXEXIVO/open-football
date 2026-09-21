@@ -567,9 +567,7 @@ impl OmissionReasonMap {
                 SelectionOmissionReason::ManagerDoesNotTrustPlayer
             }
             CoachDecisionReason::FrozenOut => SelectionOmissionReason::FrozenOutByManager,
-            CoachDecisionReason::OutOfFavour => {
-                SelectionOmissionReason::ManagerDoesNotTrustPlayer
-            }
+            CoachDecisionReason::OutOfFavour => SelectionOmissionReason::ManagerDoesNotTrustPlayer,
             CoachDecisionReason::RoleMismatch => SelectionOmissionReason::PositionFitIssue,
             CoachDecisionReason::FatigueRisk => SelectionOmissionReason::FatigueManagement,
             CoachDecisionReason::InjuryRisk => SelectionOmissionReason::FitnessProtection,

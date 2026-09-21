@@ -1,5 +1,6 @@
 //! Moved verbatim out of `helpers.rs` — see that file's `mod group_need_tests`.
 
+use crate::club::board::mandate::MandateIncumbent;
 use crate::club::team::squad::SquadAssetClass;
 use crate::transfers::gate::fit::SquadFitSnapshot;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
@@ -49,7 +50,7 @@ impl GroupFx {
     fn coverage_from_squad(
         squad: &[SquadPlayerInfo],
         formation: &[PlayerPositionType; 11],
-    ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
+    ) -> Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)> {
         let mut used: Vec<u32> = Vec::new();
         let mut out = Vec::new();
         for &slot in formation.iter() {
@@ -61,7 +62,14 @@ impl GroupFx {
             match pick {
                 Some(p) => {
                     used.push(p.player_id);
-                    out.push((slot, Some(p.player_id), p.current_ability));
+                    out.push((
+                        slot,
+                        Some(MandateIncumbent {
+                            player_id: p.player_id,
+                            age: p.age,
+                        }),
+                        p.current_ability,
+                    ));
                 }
                 None => out.push((slot, None, 0)),
             }

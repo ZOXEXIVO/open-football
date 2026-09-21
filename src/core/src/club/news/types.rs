@@ -1125,6 +1125,13 @@ pub enum NewsStoryKind {
     /// The window shuts: what came in, what went out, and the shape
     /// the club is stuck with until it opens again.
     WindowShuts,
+    /// A fee the club paid and never got back. The quietest kind of
+    /// boardroom news and the one a chairman is asked about for two
+    /// seasons.
+    FeeWrittenOff,
+    /// The board went back into the room and raised its own number. A
+    /// club that wanted somebody enough to be asked twice.
+    BoardRaisesItsOffer,
 
     // ── The goalkeeper's versions ──────────────────────────────────
     // Five stories the catalogue could only tell about an outfielder,
@@ -1157,7 +1164,7 @@ impl NewsStoryKind {
     /// each one has a headline and a body in every translation bundle,
     /// so adding a variant without its copy fails a test rather than
     /// printing a raw key on the front page.
-    pub const ALL: [NewsStoryKind; 359] = [
+    pub const ALL: [NewsStoryKind; 361] = [
         NewsStoryKind::LeagueWin,
         NewsStoryKind::LeagueDraw,
         NewsStoryKind::GoallessDraw,
@@ -1512,6 +1519,8 @@ impl NewsStoryKind {
         NewsStoryKind::DealDiesAtDeadline,
         NewsStoryKind::WindowOpens,
         NewsStoryKind::WindowShuts,
+        NewsStoryKind::FeeWrittenOff,
+        NewsStoryKind::BoardRaisesItsOffer,
         NewsStoryKind::KeeperLoanReturnTriumph,
         NewsStoryKind::KeeperLoanReturnWasted,
         NewsStoryKind::KeeperLoanReturn,
@@ -1885,7 +1894,10 @@ impl NewsStoryKind {
             | NewsStoryKind::TargetSaysNo
             | NewsStoryKind::MedicalFailed
             | NewsStoryKind::DealDiesAtDeadline => NewsDesk::Targets,
-            NewsStoryKind::WindowOpens | NewsStoryKind::WindowShuts => NewsDesk::Boardroom,
+            NewsStoryKind::WindowOpens
+            | NewsStoryKind::WindowShuts
+            | NewsStoryKind::FeeWrittenOff
+            | NewsStoryKind::BoardRaisesItsOffer => NewsDesk::Boardroom,
         }
     }
 
@@ -2252,6 +2264,8 @@ impl NewsStoryKind {
             NewsStoryKind::DealDiesAtDeadline => "deal_dies_at_deadline",
             NewsStoryKind::WindowOpens => "window_opens",
             NewsStoryKind::WindowShuts => "window_shuts",
+            NewsStoryKind::FeeWrittenOff => "fee_written_off",
+            NewsStoryKind::BoardRaisesItsOffer => "board_raises_its_offer",
         }
     }
 
@@ -2394,6 +2408,11 @@ impl NewsStoryKind {
             NewsStoryKind::DealDiesAtDeadline => 440,
             NewsStoryKind::WindowOpens => 350,
             NewsStoryKind::WindowShuts => 520,
+            // A fee the club never got back outranks the window audit: it
+            // is the one boardroom number a supporter still argues about
+            // two seasons later.
+            NewsStoryKind::FeeWrittenOff => 560,
+            NewsStoryKind::BoardRaisesItsOffer => 500,
             // A shoot-out kept out is the save a town retells for
             // twenty years, and it decided the tie it happened in.
             NewsStoryKind::KeeperPenaltySave => 575,
@@ -3364,7 +3383,9 @@ impl NewsStoryKind {
             | NewsStoryKind::BidLodged
             | NewsStoryKind::LoanApproach
             | NewsStoryKind::WindowOpens
-            | NewsStoryKind::WindowShuts => NewsRecurrence::Event,
+            | NewsStoryKind::WindowShuts
+            | NewsStoryKind::FeeWrittenOff
+            | NewsStoryKind::BoardRaisesItsOffer => NewsRecurrence::Event,
             // Conditions read off state or a fortnight window: the
             // table, a negotiation still open, an injury list.
             NewsStoryKind::TopOfTheTable
@@ -3569,6 +3590,11 @@ impl NewsStoryKind {
                 | NewsStoryKind::BidLodged
                 | NewsStoryKind::FeeAgreed
                 | NewsStoryKind::PricedOut
+                // The two boardroom numbers the doctrine produces: what a
+                // fee cost and never returned, and what the board raised
+                // its own offer to. A write-off of nothing is not one.
+                | NewsStoryKind::FeeWrittenOff
+                | NewsStoryKind::BoardRaisesItsOffer
         )
     }
 

@@ -183,11 +183,8 @@ impl LoanOutScan {
             // …and the evaluation window it bought him. A club that just
             // signed a man does not lend him out because a depth cap says
             // so.
-            if let Some(ref plan) = player.plan {
-                let appearances = player.statistics.played + player.statistics.played_subs;
-                if !plan.is_evaluated(date, appearances) && !plan.is_expired(date) {
-                    return true;
-                }
+            if player.signing_protection_active(date) {
+                return true;
             }
         }
 

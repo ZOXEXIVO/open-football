@@ -7,9 +7,11 @@ use crate::MatchTacticType;
 use crate::club::board::BoardFacility;
 use crate::club::board::chairman::{ChairmanAmbition, ChairmanPatience};
 use crate::club::board::context::FfpStatus;
+use crate::PlayerFieldPositionGroup;
 use crate::club::board::governance::{
     BoardTransferConcern, BoardTransferDecision, BoardTransferEconomics, BoardTransferProposal,
 };
+use crate::club::board::mandate::{FeeEnvelope, MandateAuthor, MandatePurpose, SigningMandate};
 use crate::club::board::ownership::{OwnershipModel, OwnershipType};
 use crate::club::board::promise::PromiseType;
 use crate::club::board::roll::DeterministicRoll;
@@ -87,6 +89,20 @@ impl Scenario {
             remaining_transfer_budget: 10_000_000.0,
             priority,
             reason,
+            mandate: SigningMandate::new(
+                MandatePurpose::Starter,
+                PlayerFieldPositionGroup::Midfielder,
+                age,
+                NaiveDate::from_ymd_opt(2028, 7, 1).unwrap(),
+                MandateAuthor::Manager,
+            ),
+            // These scenarios are about ownership archetypes, not about
+            // price: the envelope is set wide enough that the money gate
+            // never speaks and the governance rules are what decide.
+            envelope: FeeEnvelope {
+                open: fee * 0.7,
+                walk_away: fee * 1.5,
+            },
             player_age: Some(age),
             player_ability: Some(ability),
             squad_avg_ability: 65,
@@ -374,7 +390,7 @@ fn conservative_owner_blocks_wage_heavy_transfer() {
         ..Default::default()
     });
     assert!(matches!(
-        board.review_transfer_proposal(&p),
+        board.hear(&p),
         BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
     ));
 }
@@ -398,7 +414,7 @@ fn private_equity_board_flags_poor_resale() {
     });
     assert!(
         matches!(
-            board.review_transfer_proposal(&p),
+            board.hear(&p),
             BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision)
         ),
         "PE owner should flag an ageing, poor-resale signing"
@@ -425,7 +441,7 @@ fn state_backed_board_allows_elite_exception_despite_wage_breach() {
         ..Default::default()
     });
     assert!(
-        board.review_transfer_proposal(&p).is_approved(),
+        board.hear(&p).is_approved(),
         "state-backed board should grant the elite exception"
     );
 }
@@ -450,16 +466,19 @@ fn member_owned_board_values_homegrown_fit() {
             homegrown_fit: homegrown,
             ..Default::default()
         });
+        // Priced so the identity term is what decides: the homegrown
+        // stretch clears the fee and the import's does not.
+        p.envelope.walk_away = 1_500_000.0;
         p
     };
 
     assert!(
-        board.review_transfer_proposal(&make(true)).is_approved(),
+        board.hear(&make(true)).is_approved(),
         "member-owned board should back the homegrown signing"
     );
     assert!(
         matches!(
-            board.review_transfer_proposal(&make(false)),
+            board.hear(&make(false)),
             BoardTransferDecision::Vetoed(_)
         ),
         "the same deal for an import gets less rope and is vetoed"
@@ -480,7 +499,7 @@ fn youth_board_accepts_weak_young_blocks_old_depth() {
         TransferNeedReason::DevelopmentSigning,
     );
     assert!(
-        board.review_transfer_proposal(&young).is_approved(),
+        board.hear(&young).is_approved(),
         "youth board should accept a promising teenager"
     );
 
@@ -493,7 +512,7 @@ fn youth_board_accepts_weak_young_blocks_old_depth() {
         TransferNeedReason::DepthCover,
     );
     assert!(matches!(
-        board.review_transfer_proposal(&old),
+        board.hear(&old),
         BoardTransferDecision::Vetoed(BoardTransferConcern::ConflictsWithVision)
     ));
 }

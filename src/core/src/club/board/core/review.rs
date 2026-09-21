@@ -236,8 +236,13 @@ impl ClubBoard {
     /// events (relegation scrap, winless run, promotion push, youth break).
     pub(crate) fn refresh_pressure(&mut self, ctx: &BoardContext) {
         self.pressure.decay();
-        self.pressure
-            .set_financial(ctx.wage_budget_usage, ctx.debt_ratio, ctx.profit_loss_12m);
+        let written_off = self.mandate_ledger.burn() as f32;
+        self.pressure.set_financial(
+            ctx.wage_budget_usage,
+            ctx.debt_ratio,
+            ctx.profit_loss_12m,
+            written_off,
+        );
         self.pressure.set_regulatory(
             matches!(ctx.ffp_status, FfpStatus::Breach),
             matches!(ctx.ffp_status, FfpStatus::Watchlist),

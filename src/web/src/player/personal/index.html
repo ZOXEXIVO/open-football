@@ -213,6 +213,9 @@
                     <div class="fm-mh-plan-note">{{ i18n.t("career_plan_last_spell") }} {{ verdict }}</div>
                     {% endif %}
                     <div class="fm-mh-plan-note is-club">{{ i18n.t("career_plan_club_view") }} {{ plan.pathway }}</div>
+                    {% if let Some(purpose) = plan.purpose %}
+                    <div class="fm-mh-plan-note is-club">{{ i18n.t("career_plan_bought_for") }} {{ purpose }}</div>
+                    {% endif %}
                 </div>
                 {% endif %}
                 <h4 class="fm-section-subtitle{% if career_plan.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("mind_what_he_wants") }}</h4>

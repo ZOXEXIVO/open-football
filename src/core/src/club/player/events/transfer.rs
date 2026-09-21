@@ -10,16 +10,20 @@ use chrono::{Duration, NaiveDate};
 
 use super::types::{LoanCompletion, TransferCompletion};
 use crate::TeamInfo;
+use crate::club::CareerRunway;
 use crate::club::PlayerClubContract;
+use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
+use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::player::contract::contract::{
     ContractBonus, ContractClause, ContractClauseType, is_inert_bonus, is_inert_clause,
 };
 use crate::club::player::load::PlayerLoad;
+use crate::club::player::mind::SpellChange;
 use crate::club::player::player::{Player, SellOnObligation};
-use crate::club::staff::perception::PotentialEstimator;
+use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::{
     ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerSquadStatus,
@@ -56,18 +60,37 @@ impl Player {
                     &leaving,
                 );
             }
-            // Memory keeps everything; belonging and the read of a
-            // manager do not travel. Never called from the live sim
-            // before this — a player carried his old dressing room into
-            // the new one.
-            self.mind.on_club_change(t.selling_club_id);
         }
+        // A buyout is the one permanent move that changes nothing he can
+        // see: the club that owns him is now the club he was already
+        // playing for, and he keeps the room, the manager and the league.
+        let change = if t.loan_buyout {
+            SpellChange::loan_buyout(t.selling_club_id)
+        } else {
+            SpellChange::transfer(t.selling_club_id, t.from.league_slug == t.to.league_slug)
+        };
+        self.on_spell_change(change, t.buying_club_id, t.date);
+    }
 
-        if t.buying_club_id != 0 {
-            let arriving = self.mind_context(t.date, Some(t.buying_club_id));
+    /// His spell turned over — sold, loaned out, home from a loan,
+    /// released, signed off the free-agent pool.
+    ///
+    /// The one entry every move path runs, so that what a move does to
+    /// what a man wants is decided in a single place instead of once per
+    /// pipeline. The caller states the move as facts ([`SpellChange`])
+    /// and names the club he is walking into, if any; the mind decides
+    /// which wants that ends and which travel with him.
+    ///
+    /// `joining_club_id` is 0 when he is joining nobody — a release, or
+    /// a loanee walking back into the club that has employed him all
+    /// along, which is not signing for anyone.
+    pub fn on_spell_change(&mut self, change: SpellChange, joining_club_id: u32, date: NaiveDate) {
+        self.mind.on_spell_change(change);
+        if joining_club_id != 0 {
+            let arriving = self.mind_context(date, Some(joining_club_id));
             self.mind.remember(
                 EpisodeKind::SignedForClub,
-                ActorRef::club(t.buying_club_id),
+                ActorRef::club(joining_club_id),
                 &arriving,
             );
         }
@@ -77,6 +100,55 @@ impl Player {
     /// doing, even with no formal request on file. Below it he is being
     /// moved rather than moving.
     const MOVE_WAS_HIS_IDEA: f32 = 0.45;
+
+    /// Write the board's purpose onto his pathway.
+    ///
+    /// The fee it actually cost replaces the fee that was approved: from
+    /// here on the mandate is what the club has on its books for him, and
+    /// the same number its finance department amortises. A move no board
+    /// heard forms its mandate from the role the contract just promised
+    /// him, which is the same claim about minutes said another way.
+    ///
+    /// Called after the contract is installed — the promise it carries is
+    /// what the fallback reads.
+    fn install_mandate(
+        &mut self,
+        mandate: Option<SigningMandate>,
+        fee: f64,
+        club_reputation: u16,
+        date: NaiveDate,
+    ) {
+        let group = self.position().position_group();
+        let mandate = mandate.unwrap_or_else(|| {
+            let promise = self
+                .contract
+                .as_ref()
+                .map(|c| c.squad_status.clone())
+                .unwrap_or(PlayerSquadStatus::NotYetSet);
+            let below_first_team =
+                ClubLevelAnchor::for_reputation(club_reputation as f32 / 10_000.0)
+                    .is_below_rotation_band(AbilityEstimator::observable_level(self), group);
+            SigningMandate::new(
+                MandatePurpose::from_promise(
+                    &promise,
+                    CareerRunway::at(self.age(date)),
+                    below_first_team,
+                ),
+                group,
+                self.age(date),
+                date,
+                MandateAuthor::Board,
+            )
+        });
+        let annual_wage = self
+            .contract
+            .as_ref()
+            .map(|c| c.salary as f64 * 12.0)
+            .unwrap_or(0.0);
+        let mut stamped = mandate.with_money(fee, annual_wage);
+        stamped.issued = date;
+        self.plan = Some(PlayerPlan::from_mandate(stamped, date));
+    }
 
     /// React to a completed permanent transfer. Resets stats history,
     /// clears transient statuses and happiness, installs a fresh contract
@@ -110,7 +182,7 @@ impl Player {
             t.agreed_wage,
             t.personal_terms.as_ref(),
         );
-        self.plan = Some(PlayerPlan::from_signing(self.age(t.date), t.fee, t.date));
+        self.install_mandate(t.mandate, t.fee, t.to.reputation, t.date);
         if let Some(pct) = t.record_sell_on {
             if pct > 0.0 && self.sell_on_obligations.len() < 3 {
                 self.sell_on_obligations.push(SellOnObligation {
@@ -178,10 +250,14 @@ impl Player {
             .last_known_senior_team_reputation()
             .unwrap_or(0);
         self.on_free_agent_signing(to, date);
+        // He arrives from nowhere: there is no club to leave and no
+        // league to compare with, which is exactly what a free signing
+        // is.
+        self.on_spell_change(SpellChange::transfer(0, false), buying_club_id, date);
         self.reset_on_club_change();
         self.clear_free_agent_state();
         self.install_permanent_contract(date, to.reputation, buying_league_reputation, agreed_wage);
-        self.plan = Some(PlayerPlan::from_signing(self.age(date), 0.0, date));
+        self.install_mandate(None, 0.0, to.reputation, date);
         self.pending_signing = Some(PendingSigning {
             previous_salary,
             fee: 0.0,
@@ -231,6 +307,14 @@ impl Player {
         let source_club_reputation = l.from.reputation;
         let source_league_reputation = l.parent_league_reputation;
         self.on_loan(l.history_source, l.to, l.loan_fee, l.date);
+        // The club that owns him does not move, so his plan and what he
+        // wants back there survive the spell away; the room he walks
+        // into is somebody else's.
+        self.on_spell_change(
+            SpellChange::loan_out(l.from.league_slug == l.to.league_slug),
+            borrowing_id,
+            l.date,
+        );
         self.reset_on_club_change();
         if let Some(parent) = self.contract.as_mut() {
             parent.loan_to_club_id = Some(borrowing_id);
@@ -970,6 +1054,7 @@ mod free_agent_source_aware_tests {
                 to,
                 fee,
                 date,
+                mandate: None,
                 selling_club_id: 10,
                 buying_club_id: 20,
                 agreed_wage: None,

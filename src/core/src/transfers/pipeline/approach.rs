@@ -10,6 +10,10 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::SimulatorData;
+use crate::club::CareerRunway;
+use crate::club::board::mandate::{FeeEnvelope, MandatePurpose, SigningMandate};
+use crate::club::player::contract::PlayerSquadStatus;
+use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutMonitoringStatus;
@@ -28,6 +32,18 @@ use crate::transfers::gate::{
 mod domestic;
 mod foreign;
 
+/// What the board decided one deal is, and what it is worth to it.
+///
+/// The three numbers a negotiation needs and could never state before: the
+/// purpose it was approved for, the fee that purpose is worth, and how far
+/// past that fee this board would go before it walks.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::transfers) struct MandatedPrice {
+    pub mandate: SigningMandate,
+    pub envelope: FeeEnvelope,
+    pub stretch: f64,
+}
+
 use crate::transfers::MarketMap;
 use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
@@ -40,8 +56,9 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::pool::FreeAgentBumpBatch;
 use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
-use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
-use crate::transfers::value::upgrade::{DealValue, TargetBelief, UpgradeMath};
+use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
+use crate::transfers::squad::plan::{BriefTier, MoneySlack, PlanningCadence};
+use crate::transfers::value::upgrade::{TargetBelief, UpgradeMath};
 use crate::transfers::value::wage::BuyerLevelWage;
 use crate::transfers::view::club::ClubView;
 use crate::utils::FormattingUtils;
@@ -354,14 +371,17 @@ impl ApproachBuilder {
         (asking_price, actual_asking, offer)
     }
 
-    /// What this deal is worth to THIS buyer.
+    /// What this deal is worth to THIS buyer, for the purpose the board
+    /// signed it off for.
     ///
     /// The strategy prices the offer off the asking price and the budget; it
     /// has no way to say that the same player is worth three times as much to
     /// a club sitting on years of income as to a break-even one, and that
-    /// asymmetry is the whole reason a market has ladders. [`UpgradeMath`]
-    /// supplies the buyer's own ceiling — the fee at which the deal stops
-    /// being worth doing — and the tier supplies how boldly it opens.
+    /// asymmetry is the whole reason a market has ladders. The board's
+    /// [`FeeEnvelope`] supplies the buyer's own number — where to open and
+    /// where to stop — and it is a number about a PURPOSE: the same player
+    /// is worth a fraction as much bought to sit behind the man in the shirt
+    /// as bought to take it off him.
     ///
     /// Loans are left alone: a loan fee is a rental, not an asset purchase,
     /// and the upgrade model prices assets.
@@ -374,7 +394,7 @@ impl ApproachBuilder {
         drift: &ApproachDrift,
         actual_asking: &CurrencyValue,
         offer: &mut TransferOffer,
-    ) -> (u32, Option<DealValue>, BriefTier) {
+    ) -> (u32, Option<MandatedPrice>, BriefTier) {
         let club = buyer.club;
         let plan = buyer.plan;
         let buying_rep_score = buyer.rep_score;
@@ -438,7 +458,7 @@ impl ApproachBuilder {
             });
 
         let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
-        let deal = if is_loan {
+        let priced = if is_loan {
             None
         } else {
             let group = player.position().position_group();
@@ -461,23 +481,81 @@ impl ApproachBuilder {
             // its bid improved — the first census showed a
             // window's worth of ordinary business frozen at its
             // opening offers because of exactly that.
-            let incumbent_level = request
-                .and_then(|r| plan.brief.as_ref()?.slot_for(r.position))
+            let slot = request.and_then(|r| plan.brief.as_ref()?.slot_for(r.position));
+            let incumbent_level = slot
                 .map(|s| s.incumbent_level as f32)
                 .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group));
-            UpgradeMath::priced(
-                club,
+            // What a free body gives in this shirt at this club. The bottom
+            // of every contribution, and the man a bench purpose actually
+            // displaces.
+            let replacement_level =
+                ClubLevelAnchor::for_reputation(buying_rep_score).rotation_floor(group) as f32;
+            // How far the football he has played sits below the football he
+            // is being bought for. A step-up is the one thing no amount of
+            // watching resolves, so it widens the spread the board discounts
+            // and shortens the resale it counts on.
+            let league_gap = ((buying_league_reputation as f32
+                - target.selling_league_reputation as f32)
+                / 10_000.0)
+                .clamp(0.0, 1.0);
+            let confidence = monitoring
+                .map(|m| m.confidence)
+                .or_else(|| scouting_report.map(|r| r.confidence))
+                .unwrap_or(0.0);
+            let purpose = match request {
+                Some(request) => MandatePurpose::from_request(request, slot, date),
+                // Nobody raised a request for him — an unsolicited look, a
+                // broadcast, an opportunity. What the club is offering him
+                // is the only claim about minutes it has made.
+                None => MandatePurpose::from_promise(
+                    &player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.squad_status.clone())
+                        .unwrap_or(PlayerSquadStatus::NotYetSet),
+                    CareerRunway::at(player.age(date)),
+                    ClubLevelAnchor::for_reputation(buying_rep_score)
+                        .is_below_rotation_band(believed_level as u8, group),
+                ),
+            };
+            let mandate = SigningMandate::new(
+                purpose,
+                group,
+                player.age(date),
                 date,
+                club.board.mandate_author(),
+            );
+            let deadline = PlanningCadence::deadline_window(buy_country, date);
+            let envelope = club.board.fee_envelope(
+                &mandate,
                 &TargetBelief {
                     group,
                     tier,
                     believed_level,
                     incumbent_level,
+                    replacement_level,
                     believed_ceiling,
+                    league_gap,
+                    confidence,
                     age: player.age(date),
                     annual_wage: offered_annual_wage as f64,
                 },
-            )
+                &MoneySlack::of(club, date, 0.0, 0.0),
+                allocated_for_move,
+                deadline.days_left_fraction(),
+            );
+            (envelope.walk_away > 0.0).then(|| MandatedPrice {
+                mandate: mandate.with_money(envelope.walk_away, offered_annual_wage as f64),
+                envelope,
+                stretch: club
+                    .board
+                    .stretch(
+                        &request
+                            .map(|r| r.priority.clone())
+                            .unwrap_or(TransferNeedPriority::Optional),
+                    )
+                    .value(),
+            })
         };
 
         // Open where the tier and the calendar say, not where
@@ -487,18 +565,18 @@ impl ApproachBuilder {
         // season is not negotiating, it is wasting a window. A
         // request under negotiation is by definition still
         // unfilled, so the deadline premium reads the tier alone.
-        if let Some(deal) = deal.as_ref() {
+        if let Some(priced) = priced.as_ref() {
             let deadline = PlanningCadence::deadline_window(buy_country, date);
             let open_ratio = UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
             let premium = deadline.premium_for(tier, true);
             let opening = actual_asking.amount * (open_ratio + premium);
-            let capped = opening.min(deal.ceiling_fee).min(allocated_for_move);
+            let capped = opening.min(priced.envelope.open).min(allocated_for_move);
             if capped > offer.base_fee.amount {
                 offer.base_fee.amount = FormattingUtils::round_fee(capped);
             }
         }
 
-        (offered_annual_wage, deal, tier)
+        (offered_annual_wage, priced, tier)
     }
 
     /// The clauses, the negotiator, the reason, and the last plausibility
@@ -515,7 +593,7 @@ impl ApproachBuilder {
         actual_asking: &CurrencyValue,
         mut offer: TransferOffer,
         offered_annual_wage: u32,
-        deal: Option<DealValue>,
+        priced: Option<MandatedPrice>,
         tier: BriefTier,
     ) -> ApproachOutcome {
         let club = buyer.club;
@@ -614,7 +692,17 @@ impl ApproachBuilder {
             buying_league_reputation,
             selling_league_reputation,
             player_stage_inclination: player.big_stage_inclination,
-            buyer_ceiling_fee: deal.as_ref().map(|d| d.ceiling_fee),
+            // What the seller still carries him at, and how much of that
+            // his own board will write off. Only the cross-border path
+            // stages it — a domestic seller is readable live — but it is
+            // built here because this is where both have the club.
+            seller_book_floor: selling_club.board.book_floor(
+                player.book_value(date),
+                &LedgerPressure::of(&LedgerContext::of(selling_club)),
+            ),
+            buyer_ceiling_fee: priced.as_ref().map(|p| p.envelope.ceiling(p.stretch)),
+            approved_fee: priced.as_ref().map(|p| p.envelope.walk_away),
+            mandate: priced.as_ref().map(|p| p.mandate),
             brief_tier: Some(tier),
             is_rival,
             seller_asking: actual_asking.clone(),
@@ -794,8 +882,15 @@ pub(in crate::transfers) struct NegotiationAction {
     /// The buyer's own ceiling for this deal and the tier of the request it
     /// answers — staged so the fee resolver's escalation has something to
     /// escalate TOWARD other than the seller's asking price. See
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation::foreign_seller_floor`].
+    seller_book_floor: f64,
     /// [`crate::transfers::deal::negotiation::TransferNegotiation::buyer_ceiling_fee`].
     buyer_ceiling_fee: Option<f64>,
+    /// The fee the board signed off before any escalation — see
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation::approved_fee`].
+    approved_fee: Option<f64>,
+    /// What the board approved the signing FOR.
+    mandate: Option<SigningMandate>,
     brief_tier: Option<BriefTier>,
     is_rival: bool,
     /// The SELLER's own asking price for this player (seller-context

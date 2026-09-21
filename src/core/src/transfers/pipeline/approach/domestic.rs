@@ -631,6 +631,8 @@ impl DomesticApproachPass {
                     negotiation.selling_league_reputation = action.selling_league_reputation;
                     negotiation.player_stage_inclination = action.player_stage_inclination;
                     negotiation.buyer_ceiling_fee = action.buyer_ceiling_fee;
+                    negotiation.approved_fee = action.approved_fee;
+                    negotiation.mandate = action.mandate;
                     negotiation.brief_tier = action.brief_tier;
                     negotiation.reason.rival = action.is_rival;
                 }

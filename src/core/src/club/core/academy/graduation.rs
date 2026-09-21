@@ -95,7 +95,8 @@ impl Club {
                     // Graduation day is the club writing down what it
                     // means to do with him — every contracted player has
                     // a pathway, and his starts here.
-                    player.assign_pathway(club_id, PlayerPlan::from_graduation(date), date);
+                    let group = player.position().position_group();
+                    player.assign_pathway(club_id, PlayerPlan::from_graduation(group, date), date);
                     // Assign native languages based on player's nationality
                     if player.languages.is_empty() {
                         player.languages = Language::from_country_code(country_code)

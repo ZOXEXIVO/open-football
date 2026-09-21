@@ -239,7 +239,11 @@ impl GoalkeepingDepartment {
 
         // ── The heir, and the clock behind him ──
         let heir = number_one.and_then(|one| Self::find_heir(room, one));
-        let succession = Self::succession_clock(number_one, heir.is_some());
+        let succession = Self::succession_clock(
+            number_one,
+            heir.and_then(|id| room.iter().find(|k| k.player_id == id)),
+            today,
+        );
 
         // ── The pathway ──
         let ready_band =
@@ -384,6 +388,17 @@ impl GoalkeepingDepartment {
     /// almost nobody — the observable ceiling is deliberately conservative,
     /// and a twenty-two-year-old is credited with very little growth room.
     fn find_heir(room: &KeeperRoom, number_one: &RoomKeeper) -> Option<u32> {
+        // A keeper the board bought to take THIS man's gloves is the heir,
+        // whatever the inference below would have said. The club already
+        // answered this question and paid for the answer; inferring a
+        // successor from age gaps and ceilings is what it does when nobody
+        // has.
+        if let Some(named) = room
+            .iter()
+            .find(|k| k.named_heir_to == Some(number_one.player_id))
+        {
+            return Some(named.player_id);
+        }
         let bar = number_one.level as f32 * Self::HEIR_REACH;
         room.iter()
             .filter(|k| k.player_id != number_one.player_id)
@@ -402,10 +417,25 @@ impl GoalkeepingDepartment {
 
     /// How pressing the succession is. Age against the keeper curve, one
     /// step worse when there is nobody in the building to take over.
-    fn succession_clock(number_one: Option<&RoomKeeper>, has_heir: bool) -> KeeperSuccession {
+    fn succession_clock(
+        number_one: Option<&RoomKeeper>,
+        heir: Option<&RoomKeeper>,
+        today: NaiveDate,
+    ) -> KeeperSuccession {
         let Some(one) = number_one else {
             return KeeperSuccession::Critical;
         };
+        // A club that bought an heir named the season it means the gloves
+        // to change hands. Once that season is here the clock is the
+        // handover, not the incumbent's birthday — which is how a
+        // twenty-five-year-old the board paid a fee for ends up on the
+        // handover path instead of on the bench for two years.
+        if let Some(handover) = heir.and_then(|h| h.handover) {
+            if today >= handover {
+                return KeeperSuccession::Pressing;
+            }
+        }
+        let has_heir = heir.is_some();
         let base = if one.age >= KeeperAgeCurve::LATE_CAREER {
             KeeperSuccession::Critical
         } else if one.age > KeeperAgeCurve::PEAK_UNTIL {

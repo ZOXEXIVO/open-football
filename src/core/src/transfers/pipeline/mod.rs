@@ -18,6 +18,7 @@ pub mod shortlist;
 mod tests;
 pub mod trace;
 
+use crate::club::board::mandate::MandateIncumbent;
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::loan::interest::LoanApproachMemory;
@@ -658,6 +659,11 @@ pub struct TransferRequest {
     /// personal-terms model: a starter offered rotation says no unless the
     /// stage or the money makes up for it.
     pub promised_status: PlayerSquadStatus,
+    /// The man whose shirt this search is about, when the club named one.
+    /// A succession search names him, which is what turns the signing into
+    /// an heir rather than a generic upgrade — see
+    /// [`crate::club::board::mandate::MandatePurpose::from_request`].
+    pub incumbent: Option<MandateIncumbent>,
 }
 
 impl TransferRequest {
@@ -728,7 +734,14 @@ impl TransferRequest {
             tier: BriefTier::B,
             min_gain: 0,
             promised_status: PlayerSquadStatus::FirstTeamSquadRotation,
+            incumbent: None,
         }
+    }
+
+    /// Name the man whose shirt the club is shopping for.
+    pub fn about(mut self, incumbent: MandateIncumbent) -> Self {
+        self.incumbent = Some(incumbent);
+        self
     }
 
     /// Stamp the brief's terms onto a request. Called by the planner right
@@ -740,6 +753,7 @@ impl TransferRequest {
         self.promised_status = slot.promised_status.clone();
         self.preferred_age_min = slot.age_band.0;
         self.preferred_age_max = slot.age_band.1;
+        self.incumbent = slot.incumbent;
         self
     }
 

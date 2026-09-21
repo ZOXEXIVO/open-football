@@ -334,6 +334,25 @@ impl MindGoal {
         self.set_strength(self.strength() * (1.0 - amount.clamp(0.0, 1.0)));
     }
 
+    /// He took this want to a new club.
+    ///
+    /// The want travels; nothing it earned at the last place does. The
+    /// progress was somebody else's doing and the new club has given him
+    /// none of it, and the date he gave himself was a date he gave that
+    /// club — left standing it turns him `Frustrated` about a promise he
+    /// made about somewhere he no longer plays. Strength eases rather
+    /// than resets, because he has not stopped wanting it: a fresh start
+    /// simply takes some heat out.
+    ///
+    /// Urgency is deliberately untouched. It is the calendar — a career
+    /// running down, years spent homesick — and moving clubs does not
+    /// give a man his twenties back.
+    pub fn carry_over(&mut self, relief: f32) {
+        self.yield_to_competition(relief);
+        self.set_progress(0.0);
+        self.deadline = 0;
+    }
+
     /// Days he has held it.
     #[inline]
     pub fn age_days(&self, today: EpochDay) -> u16 {

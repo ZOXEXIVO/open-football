@@ -791,6 +791,8 @@ mod rebalance_patience_tests {
     //! exists to stop.
 
     use super::*;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+    use crate::PlayerFieldPositionGroup;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::Location;
@@ -957,9 +959,15 @@ mod rebalance_patience_tests {
         // is active, so he is neither demoted nor loan-listed — the squad
         // simply runs deep until the club has actually evaluated him.
         let mut signing = Fx::player(1, PlayerPositionType::MidfielderCenter, 100, 27);
-        signing.plan = Some(PlayerPlan::from_signing(
-            27,
-            2_000_000.0,
+        signing.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Starter,
+                PlayerFieldPositionGroup::Midfielder,
+                27,
+                Fx::date() - Duration::days(21),
+                MandateAuthor::Manager,
+            )
+            .with_money(2_000_000.0, 0.0),
             Fx::date() - Duration::days(21),
         ));
         let mut club = Fx::club(signing);
@@ -1213,7 +1221,7 @@ mod promotion_guard_tests {
         PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
         TeamReputation, TrainingSchedule,
     };
-    use crate::{PathwayStage, PlayerPlan, PlayerPlanRole};
+    use crate::{PathwayStage, PlayerFieldPositionGroup, PlayerPlan, PlayerPlanRole};
     use chrono::{Datelike, NaiveTime};
 
     struct Fx;
@@ -1387,6 +1395,8 @@ mod promotion_guard_tests {
         candidate.plan = Some(PlayerPlan::from_existing(
             PlayerPlanRole::Development,
             PathwayStage::LoanOut,
+            PlayerFieldPositionGroup::Midfielder,
+            19,
             Fx::date(),
         ));
         let mut club = Fx::club(candidate);

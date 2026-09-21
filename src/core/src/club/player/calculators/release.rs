@@ -362,6 +362,8 @@ impl AutomaticReleaseEligibility {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+    use crate::PlayerFieldPositionGroup;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -614,7 +616,17 @@ mod tests {
         // Bought six days ago for a small fee — an "experienced signing"
         // plan: 10 games or six months before the club may judge him.
         let signed = Fixture::date() - Duration::days(6);
-        player.plan = Some(PlayerPlan::from_signing(36, 120_000.0, signed));
+        player.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Midfielder,
+                36,
+                signed,
+                MandateAuthor::Manager,
+            )
+            .with_money(120_000.0, 0.0),
+            signed,
+        ));
 
         let mut ctx = Fixture::ctx(20_000.0);
         ctx.early_season = false;
@@ -626,10 +638,17 @@ mod tests {
 
         // Once that window has run its course the ordinary gates decide
         // again — the protection is a commitment, not an amnesty.
-        player.plan = Some(PlayerPlan::from_signing(
-            36,
-            120_000.0,
-            Fixture::date() - Duration::days(400),
+        let long_ago = Fixture::date() - Duration::days(400);
+        player.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Midfielder,
+                36,
+                long_ago,
+                MandateAuthor::Manager,
+            )
+            .with_money(120_000.0, 0.0),
+            long_ago,
         ));
         assert_eq!(AutomaticReleaseEligibility::assess(&player, &ctx), None);
     }

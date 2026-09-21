@@ -56,6 +56,12 @@ pub struct RoomKeeper {
     pub contract_days_left: Option<i64>,
     /// Manager-pinned for the senior XI.
     pub is_pinned: bool,
+    /// The shirt the club BOUGHT him for, when it named one, and the date
+    /// it means the handover to happen. A keeper the board paid a fee to
+    /// inherit the gloves is not a candidate the department has to infer
+    /// from birth years — he is a decision the club already took.
+    pub named_heir_to: Option<u32>,
+    pub handover: Option<NaiveDate>,
 }
 
 impl RoomKeeper {
@@ -86,6 +92,8 @@ impl RoomKeeper {
                 .as_ref()
                 .map(|c| (c.expiration - today).num_days()),
             is_pinned: player.is_force_match_selection,
+            named_heir_to: player.mandate().and_then(|m| m.incumbent_id()),
+            handover: player.mandate().and_then(|m| m.handover()),
         }
     }
 

@@ -67,6 +67,14 @@ pub enum ClubAffair {
     /// Bricks and mortar behind the scenes — training pitches, the
     /// academy building, the scouting network.
     FacilityUpgrade { facility: BoardFacility },
+    /// A fee the club never got back. The man it was paid for has gone
+    /// and the difference between what he cost and what came back is a
+    /// number on the accounts.
+    MandateWrittenOff { player_id: u32, loss: i64 },
+    /// The board was asked again, mid-negotiation, and raised the fee it
+    /// had signed off. The one boardroom decision a supporter learns about
+    /// while the deal is still live.
+    TransferExceptionApproved { player_id: u32, fee: i64 },
     /// Money put on the table for the manager to spend.
     WarChest { amount: i64 },
     /// Money taken back off it.

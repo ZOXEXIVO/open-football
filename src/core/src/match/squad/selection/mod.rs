@@ -18,7 +18,7 @@ use crate::club::staff::{
 };
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{MatchTacticType, Player, Tactics, Team, TeamType};
+use crate::{MatchTacticType, Person, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
@@ -308,8 +308,17 @@ impl SquadSelector {
             }
         }
 
+        // Registration, not selection: a side in an age-limited competition
+        // cannot name a senior in it, however short of bodies it is and
+        // whichever squad he was borrowed from. The cap applies to the
+        // borrowed pool only — a squad's own roster is the club's own
+        // registration decision, kept by the passes that build it.
+        let registration_cap = team.team_type.registration_age_cap();
         for &rp in reserve_players {
             if !is_main_team && rp.is_force_match_selection {
+                continue;
+            }
+            if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
                 continue;
             }
             if PlayerAvailability::is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id)
@@ -595,6 +604,8 @@ impl SquadSelector {
         // seniors, but a guest is here precisely because his own squad has
         // no fixtures; withholding him until the roster runs short would
         // make the visit pointless at any well-stocked academy.
+        // Registration, not selection — see the competitive selector.
+        let registration_cap = team.team_type.registration_age_cap();
         let mut guest_ids: Vec<u32> = Vec::with_capacity(ctx.development_guest_ids.len());
         if !ctx.development_guest_ids.is_empty() {
             for &rp in reserve_players.iter() {
@@ -602,6 +613,9 @@ impl SquadSelector {
                     continue;
                 }
                 if !is_main_team && rp.is_force_match_selection {
+                    continue;
+                }
+                if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
                     continue;
                 }
                 if PlayerAvailability::is_available(rp, ctx.is_friendly)
@@ -619,6 +633,9 @@ impl SquadSelector {
                 .iter()
                 .filter(|&&rp| {
                     if !is_main_team && rp.is_force_match_selection {
+                        return false;
+                    }
+                    if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
                         return false;
                     }
                     PlayerAvailability::is_available(rp, ctx.is_friendly)

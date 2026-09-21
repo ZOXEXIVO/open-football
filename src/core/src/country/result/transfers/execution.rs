@@ -1,6 +1,7 @@
 use super::types::DeferredTransfer;
 use crate::club::Person;
 use crate::club::SquadDepartures;
+use crate::club::board::mandate::{MandateExit, SigningMandate};
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
 use crate::club::player::calculators::WageCalculator;
@@ -32,11 +33,6 @@ use crate::{
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-
-/// Default contract length used to amortize a transfer fee on the buying
-/// club's P&L when a more specific length isn't available at execution
-/// time. Matches the IFRS football-finance norm.
-const DEFAULT_AMORTIZATION_YEARS: u8 = 4;
 
 /// Stateless helpers for the transfer execution path — roster placement
 /// and fee-structure math. Grouped on a unit struct (rather than free
@@ -885,7 +881,15 @@ impl TransferExecutor {
         }
 
         // Only credit income when player was actually found and taken
-        if player.is_some() {
+        if let Some(sold) = player.as_ref() {
+            // What the club's own money bought, closed at the moment it
+            // stops owning him. A loan is not that moment: the club still
+            // owns him, the mandate runs on and the book with it, so
+            // closing one here would book the whole fee as a loss on a man
+            // who is coming back.
+            if !is_loan {
+                selling_club.on_mandate_ended(sold, MandateExit::Sold(fee), today);
+            }
             if is_loan {
                 selling_club.finance.receive_loan_fee(fee);
             } else {
@@ -1059,6 +1063,7 @@ impl TransferExecutor {
             selling_league_reputation,
             record_sell_on: transfer.sell_on_percentage,
             personal_terms: transfer.personal_terms.clone(),
+            mandate: transfer.mandate,
             source_is_rival,
             record_decision: true,
             loan_buyout: false,
@@ -1226,6 +1231,14 @@ impl TransferExecutor {
             date,
         );
 
+        Self::record_parent_placement(
+            data,
+            selling_country_id,
+            selling_club_id,
+            buying_country_id,
+            date,
+        );
+
         debug!(
             "Loan completed: player {} from country {} to country {} (fee: {})",
             player_id, selling_country_id, buying_country_id, loan_fee
@@ -1344,9 +1357,16 @@ impl TransferExecutor {
             // Only the upfront portion leaves now; deferred installment tranches
             // are paid over time by the settlement walk. Affordability was
             // pre-checked above, so this debit always succeeds.
-            buying_club
-                .finance
-                .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
+            // Over the years the MANDATE says, so the club's books and the
+            // book value under its own asking price are the same number
+            // read from two places.
+            buying_club.finance.register_transfer_purchase(
+                upfront,
+                transfer
+                    .mandate
+                    .map(|m| m.amortisation_years)
+                    .unwrap_or(SigningMandate::DEFAULT_AMORTISATION_YEARS),
+            );
             buying_club.transfer_plan.spent += upfront;
             // Agent fee — a pure cash movement (not sale income), so it must not
             // perturb the transfer budget.
@@ -1544,6 +1564,28 @@ impl TransferExecutor {
             borrowing_club_id: buying_club_id,
             parent_league_reputation,
         });
+    }
+
+    /// The parent has placed a loanee in another country. Recorded on the
+    /// lending club, where [`MarketLedgerUpdate::on_signing`] records the
+    /// borrower's side of the same deal — a club that has men somewhere
+    /// knows the place, and will send the next one.
+    fn record_parent_placement<W: MarketWorld>(
+        data: &mut W,
+        selling_country_id: u32,
+        selling_club_id: u32,
+        buying_country_id: u32,
+        date: NaiveDate,
+    ) {
+        if selling_country_id == buying_country_id {
+            return;
+        }
+        if let Some(parent) = data
+            .country_mut(selling_country_id)
+            .and_then(|country| country.clubs.iter_mut().find(|c| c.id == selling_club_id))
+        {
+            parent.on_loanee_placed(buying_country_id, date);
+        }
     }
 
     /// Put the loanee in the borrower's squad. Indexed, not re-searched — the
@@ -2385,6 +2427,7 @@ mod country_pair_execution_tests {
                 loan_future_fee: None,
                 personal_terms: None as Option<PersonalTermsOffer>,
                 offer_clauses: Vec::new(),
+                mandate: None,
             };
             (data, transfer)
         }
@@ -2595,6 +2638,10 @@ mod development_pathway_tests {
         fn player(id: u32, birth_year: i32, level: u8) -> Player {
             let mut attrs = PlayerAttributes::default();
             attrs.current_ability = level;
+            // A prospect is a player somebody can see something in. Without
+            // a ceiling the club is buying a body, and the pathway it lands
+            // on says so.
+            attrs.potential_ability = level.saturating_add(40);
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Dev".to_string(), format!("P{id}")))
@@ -2761,6 +2808,7 @@ mod development_pathway_tests {
                 loan_future_fee: None,
                 personal_terms: None,
                 offer_clauses: Vec::new(),
+                mandate: None,
             };
             (data, transfer)
         }
@@ -2910,6 +2958,7 @@ mod development_pathway_tests {
                 loan_future_fee: None,
                 personal_terms,
                 offer_clauses: Vec::new(),
+                mandate: None,
             };
             (data, transfer)
         }
@@ -3303,6 +3352,7 @@ mod development_pathway_tests {
             loan_future_fee: None,
             personal_terms: None,
             offer_clauses: Vec::new(),
+            mandate: None,
         };
         assert!(TransferExecutor::one(&mut data, &loan, date));
 
@@ -3675,6 +3725,7 @@ mod loan_history_source_tests {
                 loan_future_fee: None,
                 personal_terms: None as Option<PersonalTermsOffer>,
                 offer_clauses: Vec::new(),
+                mandate: None,
             };
             (data, transfer)
         }

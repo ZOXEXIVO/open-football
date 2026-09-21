@@ -7,8 +7,8 @@
 //! cooldown and escalation rule, so adding a forty-second want meant
 //! touching all three layers. Here a want is one [`GoalSpec`] row: how
 //! fast it fades, what strength it takes before he says it out loud,
-//! what it takes before he demands, what it competes with, and which way
-//! it points if he acts on it.
+//! what it takes before he demands, what it competes with, which way it
+//! points if he acts on it, and what it is about.
 //!
 //! Adding a goal is a variant, a row, an i18n key and a test. That is
 //! the extensibility contract, made structural.
@@ -173,6 +173,90 @@ pub enum GoalDirection {
     Neutral,
 }
 
+/// What a want is *about*.
+///
+/// The one signal that decides what a change of club does to it, and
+/// deliberately not [`GoalDirection`]: pointing out of a club and being
+/// *about* a club are different facts, and reading the first as the
+/// second is what left a man's page saying he wanted the manager's trust
+/// six months after he last saw that manager.
+///
+/// A want survives a spell change exactly when the thing it is about
+/// survives it. Everything else resolves, and the next weekly think
+/// re-forms whatever the new place still justifies — which is the
+/// continuity: he does not have to rediscover wanting first-team
+/// football, he re-notices it the following Monday if he is still not
+/// getting any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalSubject {
+    /// Him. Money, trophies, the national side, home, the end of it. It
+    /// travels through every move, because he does.
+    Himself,
+    /// The club he plays for. Meaningless the moment he plays for
+    /// another one — including the club that borrowed him.
+    ThisClub,
+    /// The man who picks the team.
+    ThisManager,
+    /// The standard he plays at. Survives a move inside the same league.
+    ThisLeague,
+    /// The club that owns him. Unchanged by a loan in either direction,
+    /// which is the whole reason a loanee can want to prove himself back
+    /// home while he is away.
+    OwningClub,
+}
+
+impl GoalSubject {
+    #[inline]
+    const fn bit(self) -> u8 {
+        self as u8
+    }
+
+    pub const ALL: &'static [GoalSubject] = &[
+        GoalSubject::Himself,
+        GoalSubject::ThisClub,
+        GoalSubject::ThisManager,
+        GoalSubject::ThisLeague,
+        GoalSubject::OwningClub,
+    ];
+}
+
+/// The subjects a spell change replaced — what the man's wants were
+/// about that is no longer the thing they were about.
+///
+/// Stated by whoever owns the move, as facts rather than flags: a loan
+/// out changes his club, his manager and usually his league, and leaves
+/// the club that owns him exactly where it was.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SubjectMask(u8);
+
+impl SubjectMask {
+    pub const EMPTY: SubjectMask = SubjectMask(0);
+
+    pub const fn of(subjects: &[GoalSubject]) -> Self {
+        let mut bits: u8 = 0;
+        let mut index = 0;
+        while index < subjects.len() {
+            bits |= 1 << subjects[index].bit();
+            index += 1;
+        }
+        SubjectMask(bits)
+    }
+
+    pub const fn with(self, subject: GoalSubject) -> Self {
+        SubjectMask(self.0 | (1 << subject.bit()))
+    }
+
+    #[inline]
+    pub fn contains(self, subject: GoalSubject) -> bool {
+        self.0 & (1 << subject.bit()) != 0
+    }
+
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
 /// Bit index of a [`GoalKind`] in a [`GoalMask`]. `None` is not
 /// representable — masks describe real goals only.
 type GoalBit = u64;
@@ -216,6 +300,11 @@ pub struct GoalSpec {
     pub domain: GoalDomain,
     /// Which way it points.
     pub direction: GoalDirection,
+    /// What it is about — what has to still be true for him to go on
+    /// holding it after a move. Defaults to the club he is at, because
+    /// most of what a player wants is about where he is; the wants that
+    /// travel say so.
+    pub subject: GoalSubject,
     /// Fraction of remaining strength shed per month with no
     /// reinforcement. A want nobody feeds fades; how fast is the
     /// difference between a mood and a conviction.
@@ -244,6 +333,7 @@ impl GoalSpec {
         GoalSpec {
             domain,
             direction,
+            subject: GoalSubject::ThisClub,
             decay_per_month: 0.10,
             voice_at: 0.55,
             press_at: 0.80,
@@ -288,6 +378,11 @@ impl GoalSpec {
             competes_with,
             ..self
         }
+    }
+
+    /// What this want is about, when it is not about the club he is at.
+    pub const fn about(self, subject: GoalSubject) -> Self {
+        GoalSpec { subject, ..self }
     }
 
     pub const fn abandoned_after(self, months: u16) -> Self {
@@ -375,9 +470,9 @@ impl GoalKind {
             GoalKind::StepUpToABiggerClub => {
                 S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
             }
-            GoalKind::PlayInAStrongerLeague => {
-                S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
+            GoalKind::PlayInAStrongerLeague => S::ordinary(D::Career, Dir::Leave)
+                .competing(WANTS_TO_STAY)
+                .about(GoalSubject::ThisLeague),
             GoalKind::PlayContinentalFootball => {
                 S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
             }
@@ -393,9 +488,9 @@ impl GoalKind {
             GoalKind::FindANewChallenge => S::private(D::Career, Dir::Leave)
                 .competing(WANTS_TO_STAY)
                 .abandoned_after(36),
-            GoalKind::KeepPlayingAtThisLevel => {
-                S::grievance(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
+            GoalKind::KeepPlayingAtThisLevel => S::grievance(D::Career, Dir::Leave)
+                .competing(WANTS_TO_STAY)
+                .about(GoalSubject::ThisLeague),
             // The terminus of unresolved unhappiness. Slowest to fade of
             // anything in the catalog: a man who has decided he wants out
             // does not quietly stop wanting it.
@@ -403,20 +498,29 @@ impl GoalKind {
                 decay_per_month: 0.04,
                 ..S::grievance(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
             },
+            // The one club-shaped want that is not about the club he is
+            // at. Reading it off `direction` marked it achieved the day
+            // he was sold anywhere at all.
             GoalKind::PlayForMyBoyhoodClub => GoalSpec {
                 decay_per_month: 0.02,
-                ..S::private(D::Social, Dir::Leave)
+                ..S::private(D::Social, Dir::Leave).about(GoalSubject::Himself)
             },
 
             // Playing
-            GoalKind::PlayFirstTeamFootball => {
-                S::grievance(D::Competitive, Dir::Leave).competing(WANTS_TO_STAY)
-            }
+            // A man who moved to get first-team football still wants
+            // first-team football.
+            GoalKind::PlayFirstTeamFootball => S::grievance(D::Competitive, Dir::Leave)
+                .competing(WANTS_TO_STAY)
+                .about(GoalSubject::Himself),
             GoalKind::WinBackMyPlace => S::ordinary(D::Competitive, Dir::Stay).competing(WANTS_OUT),
-            GoalKind::PlayInMyBestRole => S::grievance(D::Professional, Dir::Neutral),
-            GoalKind::ProveMyselfAtMyParentClub => S::ordinary(D::Career, Dir::Neutral),
+            GoalKind::PlayInMyBestRole => {
+                S::grievance(D::Professional, Dir::Neutral).about(GoalSubject::ThisManager)
+            }
+            GoalKind::ProveMyselfAtMyParentClub => {
+                S::ordinary(D::Career, Dir::Neutral).about(GoalSubject::OwningClub)
+            }
             GoalKind::StayAtThisLoanClub => S::ordinary(D::Career, Dir::Neutral),
-            GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave),
+            GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave).about(GoalSubject::Himself),
             // Defending a shirt is quieter than chasing one. He does not
             // announce it and he never demands anything over it — he
             // just trains harder and plays like a man who can hear
@@ -433,7 +537,9 @@ impl GoalKind {
             // gets to answer before a player starts looking at the door.
             GoalKind::KeepImproving => GoalSpec {
                 decay_per_month: 0.08,
-                ..S::private(D::Career, Dir::Neutral).competing(WANTS_A_BETTER_COACH)
+                ..S::private(D::Career, Dir::Neutral)
+                    .competing(WANTS_A_BETTER_COACH)
+                    .about(GoalSubject::Himself)
             },
             GoalKind::WorkWithABetterCoach => GoalSpec {
                 decay_per_month: 0.06,
@@ -441,9 +547,9 @@ impl GoalKind {
             },
 
             // The manager, and standing
-            GoalKind::WinTheManagersTrust => {
-                S::ordinary(D::Professional, Dir::Stay).competing(WANTS_OUT)
-            }
+            GoalKind::WinTheManagersTrust => S::ordinary(D::Professional, Dir::Stay)
+                .competing(WANTS_OUT)
+                .about(GoalSubject::ThisManager),
             GoalKind::BeCaptain => S::private(D::Professional, Dir::Stay),
             GoalKind::BeAllowedToLeave => S::ordinary(D::Professional, Dir::Leave),
             // The loyalist's anchor. Never fades on its own.
@@ -464,8 +570,12 @@ impl GoalKind {
             },
 
             // Money
-            GoalKind::BePaidWhatImWorth => S::grievance(D::Financial, Dir::Neutral),
-            GoalKind::SecureMyFuture => S::private(D::Financial, Dir::Neutral),
+            GoalKind::BePaidWhatImWorth => {
+                S::grievance(D::Financial, Dir::Neutral).about(GoalSubject::Himself)
+            }
+            GoalKind::SecureMyFuture => {
+                S::private(D::Financial, Dir::Neutral).about(GoalSubject::Himself)
+            }
             GoalKind::GetAReleaseClause => S::fleeting(D::Financial, Dir::Neutral),
             // A decision, not a grievance: it hardly fades, it is never
             // said out loud until it is a fact, and it is answered only
@@ -482,21 +592,35 @@ impl GoalKind {
             // Life
             GoalKind::GoHome => GoalSpec {
                 decay_per_month: 0.06,
-                ..S::private(D::Social, Dir::Leave).competing(WANTS_TO_STAY)
+                ..S::private(D::Social, Dir::Leave)
+                    .competing(WANTS_TO_STAY)
+                    .about(GoalSubject::Himself)
             },
-            GoalKind::SettleMyFamily => S::ordinary(D::Social, Dir::Neutral),
-            GoalKind::LearnTheLanguage => S::fleeting(D::Social, Dir::Stay),
+            GoalKind::SettleMyFamily => {
+                S::ordinary(D::Social, Dir::Neutral).about(GoalSubject::Himself)
+            }
+            GoalKind::LearnTheLanguage => {
+                S::fleeting(D::Social, Dir::Stay).about(GoalSubject::Himself)
+            }
             GoalKind::FindAMentor => S::fleeting(D::Social, Dir::Stay),
             GoalKind::EscapeThePressure => {
                 S::private(D::Social, Dir::Leave).competing(WANTS_TO_STAY)
             }
 
             // Achievement, and the end of it
-            GoalKind::WinATrophy => S::private(D::Competitive, Dir::Neutral),
-            GoalKind::GetIntoTheNationalSquad => S::private(D::Competitive, Dir::Neutral),
+            GoalKind::WinATrophy => {
+                S::private(D::Competitive, Dir::Neutral).about(GoalSubject::Himself)
+            }
+            GoalKind::GetIntoTheNationalSquad => {
+                S::private(D::Competitive, Dir::Neutral).about(GoalSubject::Himself)
+            }
             GoalKind::EndTheDrought => S::fleeting(D::Competitive, Dir::Stay),
-            GoalKind::RetireOnMyTerms => S::private(D::Career, Dir::Neutral),
-            GoalKind::MoveIntoCoaching => S::private(D::Career, Dir::Neutral),
+            GoalKind::RetireOnMyTerms => {
+                S::private(D::Career, Dir::Neutral).about(GoalSubject::Himself)
+            }
+            GoalKind::MoveIntoCoaching => {
+                S::private(D::Career, Dir::Neutral).about(GoalSubject::Himself)
+            }
 
             // This job. A manager keeps almost all of this to himself —
             // `private` is the default here rather than the exception,
@@ -522,13 +646,17 @@ impl GoalKind {
             },
             GoalKind::TakeANationalJob => GoalSpec {
                 decay_per_month: 0.04,
-                ..S::private(D::Management, Dir::Leave).competing(MANAGER_WANTS_TO_STAY)
+                ..S::private(D::Management, Dir::Leave)
+                    .competing(MANAGER_WANTS_TO_STAY)
+                    .about(GoalSubject::Himself)
             },
             // Slowest fade in the manager rows. Being sacked is not
             // something a man quietly stops minding.
+            // Pointed at the club that sacked him, which is never the
+            // club he is at — it has to survive taking the next job.
             GoalKind::ProveThemWrong => GoalSpec {
                 decay_per_month: 0.03,
-                ..S::grievance(D::Management, Dir::Neutral)
+                ..S::grievance(D::Management, Dir::Neutral).about(GoalSubject::Himself)
             },
 
             // The people above him
@@ -550,7 +678,7 @@ impl GoalKind {
             // Himself
             GoalKind::RetireFromTheGame => GoalSpec {
                 decay_per_month: 0.03,
-                ..S::private(D::Welfare, Dir::Neutral)
+                ..S::private(D::Welfare, Dir::Neutral).about(GoalSubject::Himself)
             },
         }
     }
@@ -558,6 +686,11 @@ impl GoalKind {
     #[inline]
     pub fn direction(self) -> GoalDirection {
         self.spec().direction
+    }
+
+    #[inline]
+    pub fn subject(self) -> GoalSubject {
+        self.spec().subject
     }
 
     #[inline]
@@ -732,6 +865,61 @@ mod tests {
             assert!((0.0..=1.0).contains(&spec.press_at));
             assert!(spec.decay_per_month > 0.0 && spec.decay_per_month < 1.0);
         }
+    }
+
+    #[test]
+    fn every_subject_fits_the_mask() {
+        for subject in GoalSubject::ALL {
+            assert!(
+                SubjectMask::EMPTY.with(*subject).contains(*subject),
+                "{subject:?} does not fit a SubjectMask"
+            );
+        }
+    }
+
+    /// The wants that must survive a move, named one by one.
+    ///
+    /// A new want defaults to being about the club he is at, which is
+    /// the safe way round — it clears rather than lingers. This is the
+    /// other half: the ones that would be a lie if the move answered
+    /// them. Every one of them points somewhere a transfer cannot take
+    /// him, and reading `direction` alone marked all of them achieved
+    /// the day he was sold anywhere at all.
+    #[test]
+    fn what_a_man_carries_between_clubs() {
+        for kind in [
+            GoalKind::GoHome,
+            GoalKind::PlayForMyBoyhoodClub,
+            GoalKind::PlayFirstTeamFootball,
+            GoalKind::BePaidWhatImWorth,
+            GoalKind::SecureMyFuture,
+            GoalKind::SettleMyFamily,
+            GoalKind::LearnTheLanguage,
+            GoalKind::WinATrophy,
+            GoalKind::GetIntoTheNationalSquad,
+            GoalKind::KeepImproving,
+            GoalKind::RetireOnMyTerms,
+            GoalKind::MoveIntoCoaching,
+            GoalKind::ProveThemWrong,
+            GoalKind::RetireFromTheGame,
+        ] {
+            assert_eq!(
+                kind.subject(),
+                GoalSubject::Himself,
+                "{kind:?} is about him, not about where he happens to be"
+            );
+        }
+    }
+
+    /// The loanee's two wants point at two different clubs, and that is
+    /// the whole reason the subject exists as a separate column.
+    #[test]
+    fn a_loanee_wants_two_things_in_two_places() {
+        assert_eq!(
+            GoalKind::ProveMyselfAtMyParentClub.subject(),
+            GoalSubject::OwningClub
+        );
+        assert_eq!(GoalKind::StayAtThisLoanClub.subject(), GoalSubject::ThisClub);
     }
 
     #[test]

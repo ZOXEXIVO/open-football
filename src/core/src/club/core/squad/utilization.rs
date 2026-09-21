@@ -223,14 +223,6 @@ impl Club {
                 {
                     continue;
                 }
-                // The signing plan outlasts the flat grace window: while the
-                // club is still inside the evaluation commitment it made at
-                // the signing (time + appearances), idle days are the club's
-                // own failure to integrate the player, not a listing signal.
-                if player.signing_protection_active(date) {
-                    continue;
-                }
-
                 let days_idle = player.player_attributes.days_since_last_match;
                 let total_games = player.statistics.total_games();
 
@@ -243,9 +235,36 @@ impl Club {
                     && StuckCareerScan::of_in_squad(player, date, team.team_type)
                         .is_some_and(|scan| scan.stuck_years >= dead_wage_seasons);
 
-                // Reputation-scaled underutilization threshold
-                if !dead_wage && (days_idle < idle_threshold || total_games >= games_threshold) {
-                    continue;
+                // A man the club PAID for is judged against what it told
+                // him he would play, not against a table of idle days. The
+                // table was never about him: it asks what a club of this
+                // standing is patient with, and the answer for a signing is
+                // whatever the board promised when it signed the cheque.
+                //
+                // Everyone else — the squad a world starts with, an academy
+                // graduate, a free arrival — keeps the reputation table and
+                // the evaluation window that always governed them.
+                let purchased = player.mandate().is_some_and(|m| m.is_purchase());
+                if purchased {
+                    // Inside the first season he is settling, not surplus.
+                    if player
+                        .plan
+                        .as_ref()
+                        .is_some_and(|p| p.season_index(date) == 0)
+                    {
+                        continue;
+                    }
+                    if player.mandate_on_schedule(date) {
+                        continue;
+                    }
+                } else {
+                    if player.signing_protection_active(date) {
+                        continue;
+                    }
+                    if !dead_wage && (days_idle < idle_threshold || total_games >= games_threshold)
+                    {
+                        continue;
+                    }
                 }
 
                 let age = player.age(date);
@@ -582,8 +601,10 @@ impl Club {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerFieldPositionGroup;
     use crate::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::player::plan::PlayerPlan;
     use crate::shared::Location;
@@ -918,7 +939,17 @@ mod tests {
         // The same man, signed three weeks ago: left alone.
         let mut signing = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
         signing.last_transfer_date = Some(signed_on);
-        signing.plan = Some(PlayerPlan::from_signing(34, 0.0, signed_on));
+        signing.plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Midfielder,
+                34,
+                signed_on,
+                MandateAuthor::Manager,
+            )
+            .with_money(0.0, 0.0),
+            signed_on,
+        ));
         let mut club = Fx::club(vec![signing]);
         club.board.season_targets = Some(over_the_ceiling());
         club.audit_squad_utilization(Fx::date());

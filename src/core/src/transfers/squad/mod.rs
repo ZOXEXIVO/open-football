@@ -32,6 +32,7 @@ use log::debug;
 use std::collections::{HashMap, HashSet};
 
 use crate::club::board::ChairmanAmbition;
+use crate::club::board::mandate::MandateIncumbent;
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate, StalemateLevel};
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
@@ -125,7 +126,7 @@ impl GroupNeedScan {
     /// triple-count that distorted budget allocation in the old layout.
     pub(in crate::transfers) fn needs(
         squad: &[SquadPlayerInfo],
-        position_coverage: &[(PlayerPositionType, Option<u32>, u8)],
+        position_coverage: &[(PlayerPositionType, Option<MandateIncumbent>, u8)],
         formation_positions: &[PlayerPositionType; 11],
         rep_score: f32,
         quality_tolerance: i16,
@@ -155,7 +156,7 @@ impl GroupNeedScan {
             // it never narrows who can fill it.
             let gap_pos = position_coverage
                 .iter()
-                .find(|(p, pid, _)| p.position_group() == group && pid.is_none())
+                .find(|(p, incumbent, _)| p.position_group() == group && incumbent.is_none())
                 .map(|(p, _, _)| *p);
             if let Some(gap_pos) = gap_pos {
                 needs.push(GroupNeed {
@@ -368,14 +369,8 @@ impl InvestmentWatch {
     pub(in crate::transfers) fn build(
         club: &Club,
         squad: &[SquadPlayerInfo],
-        rep_score: f32,
         date: NaiveDate,
     ) -> Self {
-        // The same top-`k` ladder the discovery side files against: a giant
-        // wants a top-2 man, a smaller club is improved by a wider band.
-        let top_k = (2.0 + (1.0 - rep_score.clamp(0.0, 1.0)) * 5.0)
-            .round()
-            .max(1.0) as usize;
         let plan = &club.transfer_plan;
 
         let mut targets: Vec<InvestmentTarget> = Vec::new();
@@ -398,10 +393,16 @@ impl InvestmentWatch {
             if !(20..=27).contains(&memory.age) {
                 continue;
             }
-            // Would he be one of our best `k` in this group? Measured
-            // against what the club knows about its own players and what
-            // its scouts believe about him — never against hidden ability
-            // on either side.
+            // Would he beat somebody who actually PLAYS in this group?
+            // The bar is the shirt count, not a reputation ladder: a club
+            // buying to own rather than to patch is buying a man for the
+            // side, and a ladder that widened with a smaller club's
+            // standing let an asset buy clear the seventh-best defender
+            // and then promised him a starter's wage. Measured against
+            // what the club knows about its own players and what its
+            // scouts believe about him — never against hidden ability on
+            // either side.
+            let top_k = memory.position_group.typical_starters();
             let mut group_abilities: Vec<u8> = squad
                 .iter()
                 .filter(|p| p.primary_position.position_group() == memory.position_group)
@@ -439,6 +440,46 @@ impl InvestmentWatch {
 
     pub(in crate::transfers) fn targets(&self) -> &[InvestmentTarget] {
         &self.targets
+    }
+}
+
+impl LedgerContext {
+    /// One club's own books, as it prices its squad against them.
+    pub fn of(club: &Club) -> Self {
+        LedgerContext {
+            philosophy: club.philosophy.clone(),
+            annual_wages: club
+                .teams
+                .iter()
+                .map(|t| t.get_annual_salary() as f64)
+                .sum(),
+            wage_budget: club
+                .finance
+                .wage_budget
+                .as_ref()
+                .map(|w| w.amount)
+                .unwrap_or(0.0),
+            brief_envelope: club
+                .transfer_plan
+                .brief
+                .as_ref()
+                .map(|b| b.slots.iter().map(|s| s.envelope).sum())
+                .unwrap_or(0.0),
+            available_budget: club
+                .finance
+                .transfer_budget
+                .as_ref()
+                .map(|b| b.amount)
+                .unwrap_or(0.0),
+            squad_size: club.teams.iter().map(|t| t.players.len()).sum(),
+            max_squad_size: club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.max_squad_size as usize)
+                .unwrap_or(0),
+            in_debt: club.finance.balance.balance < 0,
+        }
     }
 }
 
@@ -1114,11 +1155,13 @@ impl SquadReviewPass {
                     unsellable: info.is_injured && info.recovery_days > 60,
                     stage: player.pathway_stage(),
                     verdict_multiple: player.plan.as_ref().and_then(|p| p.asking_multiple),
+                    loans_used: player.plan.as_ref().map(|p| p.loans_used).unwrap_or(0),
+                    book_value: player.book_value(date),
                 })
             })
             .collect();
 
-        AssetLedger::build(&rows, &ctx, date)
+        AssetLedger::build(&rows, &ctx, &club.board, date)
     }
 
     /// Position-glut detector. Independent of age, deficit, or
@@ -1366,13 +1409,10 @@ impl SquadReviewPass {
             }
             // Club signing plan still under evaluation pins the player —
             // except a development plan, where loaning IS the plan.
-            if let Some(ref plan) = player.plan {
-                if !plan.is_evaluated(date, info.official_appearances)
-                    && !plan.is_expired(date)
-                    && plan.role != PlayerPlanRole::Development
-                {
-                    continue;
-                }
+            if player.signing_protection_active(date)
+                && player.plan.as_ref().map(|p| p.role) != Some(PlayerPlanRole::Development)
+            {
+                continue;
             }
 
             // ── Position-group depth / blocking picture ──────────────
@@ -2459,6 +2499,8 @@ mod stalled_prospect_tests {
         players[0].plan = Some(PlayerPlan::from_existing(
             PlayerPlanRole::Development,
             PathwayStage::Prospect,
+            PlayerFieldPositionGroup::Forward,
+            21,
             date,
         ));
         if let Some(plan) = players[0].plan.as_mut() {

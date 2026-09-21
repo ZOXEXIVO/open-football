@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use chrono::{Datelike, NaiveDate};
 use core::club::player::calculators::WageCalculator;
+use core::club::player::mind::SpellChange;
 use core::club::player::transfer::ReleaseContext;
 use core::shared::{Currency, CurrencyValue};
 use core::transfers::deal::reason::TransferReason;
@@ -245,6 +246,7 @@ pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> b
     // sweep and transfer completion paths run: transient transfer
     // statuses (Lst / Loa / Frt / Req / Unh / ...) plus happiness.
     player.reset_on_club_change();
+    player.on_spell_change(SpellChange::release(from_club_id), 0, date);
 
     let completed = CompletedTransfer::new(
         player_id,
@@ -671,6 +673,19 @@ pub async fn transfer_action(
             player.on_free_agent_signing(&dest.info, date);
         }
 
+        // What the move does to what he wants — the same owner-side
+        // reckoning the AI completion paths run. A free-agent capture
+        // leaves nothing behind and has no old league to hold the new
+        // one against.
+        let spell = match source_info.as_ref() {
+            Some((_, _, source)) => SpellChange::transfer(
+                source.club_id,
+                source.info.league_slug == dest.info.league_slug,
+            ),
+            None => SpellChange::transfer(0, false),
+        };
+        player.on_spell_change(spell, dest.club_id, date);
+
         // Stage the pending signing BEFORE clearing happiness so the
         // desire-carry snapshot can read recent `WantsReturnHome` /
         // `WantsEuropeanCompetition` / `WantsCopaLibertadores` moods and
@@ -944,6 +959,13 @@ pub async fn loan_action(
         .min(255) as u8;
 
         player.on_manual_loan(&source_history, &parent.info, &dest.info, date);
+        // The club that owns him does not move, so his plan and what he
+        // wants back there survive the spell away.
+        player.on_spell_change(
+            SpellChange::loan_out(parent.info.league_slug == dest.info.league_slug),
+            dest.club_id,
+            date,
+        );
 
         // Stage the loan pending-signing BEFORE the club-change reset so the
         // desire-carry snapshot captures recent home/EU/Libertadores moods.

@@ -77,9 +77,12 @@ struct ResolvedNeg {
     /// importance-driven seller reservation as a domestic one,
     /// instead of a flat mid-range constant.
     foreign_seller_importance: f32,
+    foreign_seller_floor: f64,
     /// The buyer's own ceiling for this deal and the tier of the
     /// request it answers — see the domestic action.
     buyer_ceiling_fee: Option<f64>,
+    approved_fee: Option<f64>,
+    mandate: Option<SigningMandate>,
     brief_tier: Option<BriefTier>,
     /// Selling club's `(annual income, wage bill, wage budget)` — see
     /// the staged field on the negotiation.
@@ -736,7 +739,10 @@ impl ForeignApproachPass {
             buying_league_reputation,
             selling_league_reputation,
             player_stage_inclination: player.big_stage_inclination,
+            foreign_seller_floor: action.seller_book_floor,
             buyer_ceiling_fee: action.buyer_ceiling_fee,
+            approved_fee: action.approved_fee,
+            mandate: action.mandate,
             brief_tier: action.brief_tier,
             is_unsolicited,
             foreign_seller_importance,
@@ -903,10 +909,13 @@ impl ForeignApproachPass {
                     negotiation.selling_league_reputation = action.selling_league_reputation;
                     negotiation.player_stage_inclination = action.player_stage_inclination;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
+                    negotiation.foreign_seller_floor = Some(action.foreign_seller_floor);
                     negotiation.foreign_seller_finances = Some(action.foreign_seller_finances);
                     negotiation.staged_stance = Some(action.staged_stance);
                     negotiation.staged_sporting_drop = Some(action.staged_sporting_drop);
                     negotiation.buyer_ceiling_fee = action.buyer_ceiling_fee;
+                    negotiation.approved_fee = action.approved_fee;
+                    negotiation.mandate = action.mandate;
                     negotiation.brief_tier = action.brief_tier;
                 }
 

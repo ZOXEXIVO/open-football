@@ -2713,6 +2713,11 @@ pub struct Gait {
     /// them was being drawn toppling sideways with both arms over his head
     /// like a keeper going full length.
     pub jump: f32,
+    /// Keeper's flight progress (launch 0, apex 0.5, landing 1) and drive leg.
+    pub jump_phase: f32,
+    pub jump_foot: f32,
+    /// Give through the chest and elbows just after a standing save.
+    pub save_recoil: f32,
     /// 0..1: he is heading the ball rather than kicking it, read together
     /// with `swing` exactly as `power` is.
     ///
@@ -3028,6 +3033,9 @@ impl Gait {
             reach: 0.0,
             set: 0.0,
             jump: 0.0,
+            jump_phase: 0.0,
+            jump_foot: 1.0,
+            save_recoil: 0.0,
             swing: 0.0,
             power: 0.0,
             foot: 0.0,
@@ -4452,6 +4460,7 @@ impl Joint {
                     * Quat::from_rotation_x(
                         Self::SAVE_ARCH * gait.save * gait.save_aim.y.max(0.0),
                     )
+                    * Quat::from_rotation_x(-0.12 * gait.save_recoil)
                     // The chest coils further than the hips going back and
                     // arrives after them coming through — the separation
                     // between the two is where a kick's whip comes from — and
@@ -4899,7 +4908,8 @@ impl Joint {
                     Quat::from_rotation_x(
                         Self::SAVE_ELBOW
                             * (1.0 - 0.8 * gait.parry)
-                            * (1.0 - 0.7 * gait.save_aim.y.max(0.0)),
+                            * (1.0 - 0.7 * gait.save_aim.y.max(0.0))
+                            + 0.45 * gait.save_recoil,
                     ),
                     gait.save,
                 );
@@ -5175,7 +5185,7 @@ impl Joint {
                     Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
                     gait.hop,
                 );
-                let leaping = Self::held(hopping, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
+                let leaping = Self::held(hopping, Quat::from_rotation_x(Self::jump_leg(gait, self.side).x), gait.jump);
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
                 // swinging up over it.
@@ -5284,7 +5294,7 @@ impl Joint {
                     gait.hop,
                 );
                 let leaping =
-                    Self::held(hopping, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
+                    Self::held(hopping, Quat::from_rotation_x(Self::jump_leg(gait, self.side).y), gait.jump);
                 let diving = Self::held(
                     leaping,
                     Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
@@ -5395,7 +5405,8 @@ impl Joint {
                 // toes fall into a point.
                 let flying = Self::held(
                     hopping,
-                    Quat::from_rotation_x(Self::DIVE_ANKLE),
+                    Quat::from_rotation_x(Self::DIVE_ANKLE
+                        * (1.0 - gait.keeper * gait.jump * Actors::ease((gait.jump_phase - 0.5) * 2.0))),
                     gait.dive.max(gait.jump),
                 );
                 // …and the standing leg locks under a kick while the
@@ -6540,6 +6551,17 @@ impl Joint {
     /// stays behind is his ARMS, which is [`Joint::armed`]: a keeper
     /// shuffling across his line has his gloves up and his legs working, and
     /// those are two different claims about him.
+    fn jump_leg(gait: Gait, side: f32) -> Vec2 {
+        let drive = (side * gait.jump_foot + 1.0) * 0.5;
+        let gather = Actors::ease(gait.jump_phase * 2.0);
+        let extend = Actors::ease((gait.jump_phase - 0.5) * 2.0);
+        let launch = Vec2::new(0.08 - 0.50 * drive, 0.25 + 0.50 * drive);
+        let apex = Vec2::new(-0.12 - 0.72 * drive, 0.60 + 0.70 * drive);
+        let landing = Vec2::new(-0.12, 0.24);
+        Vec2::new(Self::JUMP_HIP, Self::JUMP_KNEE)
+            .lerp(launch.lerp(apex, gather).lerp(landing, extend), gait.keeper)
+    }
+
     fn crouched(gait: Gait) -> f32 {
         gait.set * (1.0 - Self::afoot(gait))
     }

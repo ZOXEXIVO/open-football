@@ -774,6 +774,76 @@ fn cup_team(players: Vec<Player>) -> Team {
     team
 }
 
+/// Registration, not selection.
+///
+/// An age-limited competition refuses a senior however short the side is
+/// and whichever squad he was borrowed from — which is how a 27-year-old
+/// goalkeeper came to be named in a Serie A U18 fixture. The cap is the
+/// oldest age-limited band there is, so the overage rules that already
+/// lend a twenty-three-year-old to an academy side are untouched.
+#[test]
+fn an_age_limited_side_refuses_a_borrowed_senior() {
+    let date = Utc::now().date_naive();
+    let staff = generate_test_staff();
+    // A side too thin to fill a bench from its own roster, so the borrowed
+    // pool is genuinely the only place a second keeper can come from.
+    let mut thin: Vec<Player> = paired_cup_roster();
+    thin.retain(|p| !p.positions.is_goalkeeper() || p.id == 1);
+    thin.truncate(12);
+    let mut youth = cup_team(thin);
+    youth.team_type = TeamType::U18;
+
+    let senior = make_cup_player(
+        900,
+        PlayerPositionType::Goalkeeper,
+        18,
+        PlayerSquadStatus::KeyPlayer,
+        27,
+        30,
+        0,
+        0.0,
+    );
+    let overage = make_cup_player(
+        901,
+        PlayerPositionType::Goalkeeper,
+        18,
+        PlayerSquadStatus::KeyPlayer,
+        22,
+        30,
+        0,
+        0.0,
+    );
+    let reserves: Vec<&Player> = vec![&senior, &overage];
+    let ctx = SelectionContext {
+        date,
+        match_importance: 0.9,
+        ..SelectionContext::default()
+    };
+
+    let result = SquadSelector::select_with_context(&youth, &staff, &reserves, &ctx);
+    let named = |id: u32| {
+        result.main_squad.iter().any(|p| p.id == id)
+            || result.substitutes.iter().any(|p| p.id == id)
+    };
+    assert!(
+        !named(900),
+        "a 27-year-old may not be registered in an U18 side"
+    );
+    assert!(
+        named(901),
+        "and the overage keeper the competition does allow still is"
+    );
+
+    // …while a senior side borrowing the same man is untouched.
+    let mut senior_side = cup_team(paired_cup_roster());
+    senior_side.team_type = TeamType::Main;
+    let result = SquadSelector::select_with_context(&senior_side, &staff, &reserves, &ctx);
+    assert!(
+        result.main_squad.len() + result.substitutes.len() > 11,
+        "the senior side still assembles a full matchday squad"
+    );
+}
+
 fn domestic_cup_ctx(round: u8, total: u8, own: u16, opp: u16, importance: f32) -> SelectionContext {
     SelectionContext {
         match_importance: importance,

@@ -1,15 +1,20 @@
 //! The transfer hearing: what the board does when the recruitment team
 //! puts a name in front of it.
 //!
-//! Everything the boardroom weighs on an incoming signing lives here — the
-//! proposal it is shown, the money and the profile behind it, the verdict
-//! it returns, and the tolerance arithmetic that produces that verdict. The
-//! manager can ask and the scouts can argue; ownership still decides.
+//! One question about money and a short list of things money cannot buy.
+//! The money question is [`ClubBoard::hear`]: is the fee inside the
+//! envelope this board priced for this PURPOSE, plus the rope its
+//! temperament and its recent record earn it? Everything else here is a
+//! veto about something other than price — a sporting case nobody believes,
+//! a signing that contradicts the club's own plan, a dossier the scouts
+//! cannot agree on. The manager can ask and the scouts can argue;
+//! ownership still decides.
 
 use crate::club::board::ClubBoard;
 use crate::club::board::chairman::ChairmanAmbition;
+use crate::club::board::mandate::{FeeEnvelope, SigningMandate};
 use crate::club::board::ownership::OwnershipType;
-use crate::club::board::strategy::{ManagerAutonomy, SquadProfile};
+use crate::club::board::strategy::SquadProfile;
 use crate::club::board::vision::{FinancialStance, VisionYouthFocus};
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 
@@ -82,21 +87,22 @@ pub struct BoardTransferProposal {
     pub remaining_transfer_budget: f64,
     pub priority: TransferNeedPriority,
     pub reason: TransferNeedReason,
+    /// What the club says it is buying him for, and the minutes that
+    /// implies. The hearing is about THIS, not about the player's age.
+    pub mandate: SigningMandate,
+    /// What the board's own doctrine says that purpose is worth.
+    pub envelope: FeeEnvelope,
     pub player_age: Option<u8>,
     pub player_ability: Option<u8>,
     pub squad_avg_ability: u8,
     pub shortlist_score: f32,
     /// Optional recruitment-meeting dossier built from scout monitoring
-    /// state. When present, the board uses it to relax or tighten its
-    /// tolerance — strong consensus + chief scout backing earn extra
-    /// rope; thin discussion or risk-heavy dossiers get less.
-    /// When `None` the board falls back to the legacy decision path
-    /// (preserves behaviour for non-pipeline call sites and tests).
+    /// state. The confidence in it has already moved the envelope — what
+    /// it still does here is veto a name the scouts openly disagree about.
     pub dossier: Option<BoardDossierSummary>,
     /// Optional financial/profile dossier on the deal. When present the
     /// board applies ownership-archetype governance (wage impact, resale,
-    /// risk, manager priority). `None` keeps the legacy path for tests and
-    /// call sites that don't build it yet.
+    /// risk, manager priority).
     pub economics: Option<BoardTransferEconomics>,
 }
 
@@ -143,155 +149,26 @@ pub struct BoardDossierSummary {
     pub matches_watched: u16,
 }
 
-impl BoardTransferProposal {
-    /// Whether the need behind this proposal is one the board treats as
-    /// pressing enough to stretch for — a hole in the shape, an injury to
-    /// cover, a squad too thin to field. Earns a tolerance bump at the
-    /// hearing.
-    pub fn has_urgent_reason(&self) -> bool {
-        matches!(
-            self.reason,
-            TransferNeedReason::FormationGap
-                | TransferNeedReason::QualityUpgrade
-                | TransferNeedReason::DepthCover
-                | TransferNeedReason::LoanToFillSquad
-                | TransferNeedReason::SquadPadding
-                | TransferNeedReason::InjuryCoverLoan
-                | TransferNeedReason::OpportunisticLoanUpgrade
-        )
-    }
-}
-
 impl ClubBoard {
-    /// Board/chairman review of a proposed incoming transfer. This is the
-    /// football committee layer: the head coach can ask, the recruitment team
-    /// can shortlist, but ownership still weighs budget, urgency, squad level,
-    /// chairman temperament, and club vision before negotiations start.
-    pub fn review_transfer_proposal(
-        &self,
-        proposal: &BoardTransferProposal,
-    ) -> BoardTransferDecision {
-        let allocated_budget = proposal.allocated_budget.max(1.0);
-        let over_allocated = proposal.fee / allocated_budget;
+    /// Board/chairman review of a proposed incoming transfer.
+    ///
+    /// The football committee layer: the head coach can ask, the
+    /// recruitment team can shortlist, but ownership still weighs the fee
+    /// against its own number for this purpose, and then against the
+    /// things money cannot settle.
+    pub fn hear(&self, proposal: &BoardTransferProposal) -> BoardTransferDecision {
         let remaining_budget = proposal.remaining_transfer_budget.max(0.0);
-
         if remaining_budget > 0.0 && proposal.fee > remaining_budget * 1.05 {
             return BoardTransferDecision::Vetoed(BoardTransferConcern::ExceedsTransferBudget);
         }
 
-        let mut tolerance: f64 = match self.vision.financial_stance {
-            FinancialStance::Austerity => 0.90,
-            FinancialStance::Conservative => 1.25,
-            FinancialStance::Balanced => 1.75,
-            FinancialStance::Ambitious => 2.35,
-        };
-
-        tolerance += match self.chairman.ambition {
-            ChairmanAmbition::Reckless => 0.45,
-            ChairmanAmbition::Ambitious => 0.20,
-            ChairmanAmbition::Balanced => 0.0,
-            ChairmanAmbition::Conservative => -0.15,
-        };
-
-        // Ownership archetype risk appetite. Neutral owners (risk 50,
-        // LocalBusiness) contribute exactly 0 so legacy call sites and
-        // tests are unaffected.
-        tolerance += (self.ownership.risk_tolerance as f64 - 50.0) / 100.0 * 0.5;
-        tolerance += match self.ownership.ownership_type {
-            OwnershipType::StateBacked => 0.20,
-            OwnershipType::MemberOwned => -0.10,
-            OwnershipType::PrivateEquity => -0.05,
-            _ => 0.0,
-        };
-
-        // Member-owned boards prize local identity: a homegrown target earns
-        // extra rope, an import is viewed more coolly. Reads the economics
-        // dossier's homegrown flag when one is present.
-        if matches!(self.ownership.ownership_type, OwnershipType::MemberOwned) {
-            if let Some(e) = proposal.economics {
-                tolerance += if e.homegrown_fit { 0.20 } else { -0.10 };
-            }
-        }
-
-        tolerance += match proposal.priority {
-            TransferNeedPriority::Critical => 0.35,
-            TransferNeedPriority::Important => 0.15,
-            TransferNeedPriority::Optional => 0.0,
-        };
-
-        if self.confidence.level >= 75 {
-            tolerance += 0.15;
-        } else if self.confidence.level < 35 {
-            tolerance -= 0.25;
-        }
-
-        // Low-autonomy boards under sliding confidence let the director of
-        // football intervene and tighten tolerance on the manager's asks.
-        if matches!(self.vision.manager_autonomy, ManagerAutonomy::Low)
-            && self.confidence.level < self.vision.manager_autonomy.dof_override_threshold()
-        {
-            tolerance -= 0.20;
-        }
-
-        if proposal.has_urgent_reason() {
-            tolerance += 0.20;
-        }
-
-        if proposal.shortlist_score >= 1.15 {
-            tolerance += 0.10;
-        } else if proposal.shortlist_score < 0.75 {
-            tolerance -= 0.15;
-        }
-
-        // Dossier-driven tolerance shift. Strong consensus + chief
-        // scout backing + plenty of confidence earn extra board rope;
-        // thin or risk-heavy dossiers tighten tolerance. Done before
-        // the over-allocation gate so a well-supported target can
-        // survive a slightly higher fee, and a poorly-supported one
-        // can fall short even if the fee is close to budget.
-        if let Some(d) = proposal.dossier {
-            if d.consensus_score >= 2.5 && d.chief_scout_support {
-                tolerance += 0.20;
-            } else if d.consensus_score >= 1.5 {
-                tolerance += 0.10;
-            } else if d.consensus_score <= 0.5 && d.scout_votes >= 2 {
-                tolerance -= 0.15;
-            }
-            if d.avg_confidence >= 0.8 {
-                tolerance += 0.05;
-            } else if d.avg_confidence < 0.5 {
-                tolerance -= 0.10;
-            }
-            if d.risk_flag_count >= 3 {
-                tolerance -= 0.15;
-            }
-            if d.data_support {
-                tolerance += 0.05;
-            }
-            if d.avg_role_fit < 0.85 {
-                tolerance -= 0.10;
-            }
-        }
-
-        // Asset term: the same fee is a different proposition depending on
-        // what the club still owns at the end of the contract.
-        //
-        // A board weighing a big fee does not only ask "can we afford it?"
-        // — it asks "what is left when we are done?". A 22-year-old is a
-        // resaleable asset the club can recover most of its money from; a
-        // 30-year-old at the same price is consumption. Without this the
-        // model priced both identically, so the deals real boards find
-        // easiest to sign off — a young standout at a transformative fee —
-        // faced exactly the same discipline gate as a veteran punt.
-        //
-        // Continuous in age, so there is no cliff at which a player stops
-        // being an asset, and centred on `ASSET_NEUTRAL_AGE` so an
-        // ordinary prime-age signing is unaffected.
-        if let Some(age) = proposal.player_age {
-            tolerance += Self::asset_tolerance(age);
-        }
-
-        if over_allocated > tolerance.max(0.50) {
+        // The one money question. `walk_away` is what the minutes this
+        // mandate promises are worth at this club; `stretch` is how far
+        // past its own number this board goes before it says no.
+        let ceiling = proposal
+            .envelope
+            .ceiling(self.stretch(&proposal.priority).value() + self.identity_stretch(proposal));
+        if proposal.fee > ceiling {
             return BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline);
         }
 
@@ -303,48 +180,49 @@ impl ClubBoard {
             return BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision);
         }
 
-        // Dossier-driven veto: if the dossier shows a serious red flag
-        // (split votes / no role fit / multiple risks) the board sends
-        // it back to the recruitment team rather than approving.
+        // "Two scouts watching, consensus near zero" = open disagreement.
+        // The board doesn't sign on a flip-coin.
         if let Some(d) = proposal.dossier {
-            // "Two scouts watching, consensus near zero" = open
-            // disagreement. The board doesn't sign on a flip-coin.
             if d.scout_votes >= 2 && d.consensus_score.abs() < 0.4 && d.risk_flag_count >= 2 {
                 return BoardTransferDecision::Vetoed(BoardTransferConcern::WeakSportingCase);
             }
         }
 
         // Ownership-archetype governance: squad-profile fit + deal
-        // economics (wage impact, resale, off-pitch risk). No-op for a
-        // Balanced profile with no economics dossier.
+        // economics (wage impact, resale, off-pitch risk).
         if let Some(decision) = self.review_governance(proposal) {
             return decision;
         }
 
-        if over_allocated > 1.0 || remaining_budget <= allocated_budget * 0.25 {
+        if proposal.fee > proposal.allocated_budget.max(1.0)
+            || remaining_budget <= proposal.allocated_budget.max(1.0) * 0.25
+        {
             return BoardTransferDecision::Conditional(BoardTransferConcern::FinancialDiscipline);
         }
 
         BoardTransferDecision::Approved
     }
 
+    /// What the shirt's identity does to the rope.
+    ///
+    /// A member-owned board answers to people who watch the same players
+    /// grow up: a local name earns the deal extra room and an import is
+    /// looked at more coolly. No other ownership notices.
+    fn identity_stretch(&self, proposal: &BoardTransferProposal) -> f64 {
+        if !matches!(self.ownership.ownership_type, OwnershipType::MemberOwned) {
+            return 0.0;
+        }
+        match proposal.economics {
+            Some(e) if e.homegrown_fit => 0.20,
+            Some(_) => -0.10,
+            None => 0.0,
+        }
+    }
+
     /// Ownership-archetype governance layered on the base review:
     /// squad-profile fit plus deal economics (wage impact, resale, risk).
     /// Returns `Some` to override the base decision; `None` to defer to it.
     /// A `Balanced` profile with no economics dossier always returns `None`.
-    fn asset_tolerance(age: u8) -> f64 {
-        /// Age at which a signing is neither an asset nor consumption — the
-        /// tolerance shift crosses zero here.
-        const ASSET_NEUTRAL_AGE: f64 = 26.0;
-        /// Tolerance the board grants per year of resale life below
-        /// `ASSET_NEUTRAL_AGE`, and takes back per year above it.
-        const PER_YEAR: f64 = 0.06;
-        /// Bound on the whole term, so age can shade a decision but never
-        /// decide it on its own.
-        const CAP: f64 = 0.30;
-        ((ASSET_NEUTRAL_AGE - age as f64) * PER_YEAR).clamp(-CAP, CAP)
-    }
-
     fn review_governance(&self, proposal: &BoardTransferProposal) -> Option<BoardTransferDecision> {
         use BoardTransferConcern::*;
 
@@ -474,19 +352,33 @@ impl ClubBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerFieldPositionGroup;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose};
+    use chrono::NaiveDate;
 
     fn transfer_proposal(
         fee: f64,
-        allocated_budget: f64,
+        walk_away: f64,
         priority: TransferNeedPriority,
         reason: TransferNeedReason,
     ) -> BoardTransferProposal {
         BoardTransferProposal {
             fee,
-            allocated_budget,
+            allocated_budget: 1_000_000.0,
             remaining_transfer_budget: 10_000_000.0,
             priority,
             reason,
+            mandate: SigningMandate::new(
+                MandatePurpose::Starter,
+                PlayerFieldPositionGroup::Midfielder,
+                25,
+                NaiveDate::from_ymd_opt(2028, 7, 1).unwrap(),
+                MandateAuthor::Manager,
+            ),
+            envelope: FeeEnvelope {
+                open: walk_away * 0.7,
+                walk_away,
+            },
             player_age: Some(25),
             player_ability: Some(65),
             squad_avg_ability: 60,
@@ -497,7 +389,10 @@ mod tests {
     }
 
     #[test]
-    fn conservative_board_vetoes_excessive_transfer_overrun() {
+    fn a_fee_past_the_board_s_own_number_is_refused() {
+        // Re-pinned from `conservative_board_vetoes_excessive_transfer_overrun`:
+        // the same refusal, decided against the doctrine's walk-away rather
+        // than against a stack of fifteen tolerance constants.
         let mut board = ClubBoard::new();
         board.vision.financial_stance = FinancialStance::Conservative;
         board.chairman.ambition = ChairmanAmbition::Conservative;
@@ -510,13 +405,13 @@ mod tests {
         );
 
         assert!(matches!(
-            board.review_transfer_proposal(&proposal),
+            board.hear(&proposal),
             BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
         ));
     }
 
     #[test]
-    fn ambitious_board_backs_critical_squad_gap_within_cash_limit() {
+    fn ambitious_board_backs_critical_squad_gap_within_its_envelope() {
         let mut board = ClubBoard::new();
         board.vision.financial_stance = FinancialStance::Ambitious;
         board.chairman.ambition = ChairmanAmbition::Ambitious;
@@ -524,53 +419,71 @@ mod tests {
 
         let proposal = transfer_proposal(
             2_250_000.0,
-            1_000_000.0,
+            2_000_000.0,
             TransferNeedPriority::Critical,
             TransferNeedReason::FormationGap,
         );
 
-        assert!(board.review_transfer_proposal(&proposal).is_approved());
+        assert!(board.hear(&proposal).is_approved());
     }
 
     #[test]
-    fn strong_dossier_relaxes_board_tolerance() {
-        // A proposal that's borderline on budget normally gets flagged
-        // financial-discipline. With a strong dossier (consensus + chief
-        // scout backing + high confidence) the board approves anyway.
-        let mut board = ClubBoard::new();
-        board.vision.financial_stance = FinancialStance::Balanced;
-        let mut proposal = transfer_proposal(
-            1_700_000.0,
+    fn a_reckless_owner_stretches_further_than_a_prudent_one() {
+        let mut bold = ClubBoard::new();
+        bold.chairman.ambition = ChairmanAmbition::Reckless;
+        bold.ownership.risk_tolerance = 90;
+        let mut prudent = ClubBoard::new();
+        prudent.chairman.ambition = ChairmanAmbition::Conservative;
+        prudent.ownership.risk_tolerance = 20;
+
+        let proposal = transfer_proposal(
+            1_450_000.0,
             1_000_000.0,
             TransferNeedPriority::Important,
             TransferNeedReason::QualityUpgrade,
         );
-        // Without dossier — borderline.
-        let baseline = board.review_transfer_proposal(&proposal);
-        // With strong dossier — should approve.
-        proposal.dossier = Some(BoardDossierSummary {
-            scout_votes: 3,
-            chief_scout_support: true,
-            avg_confidence: 0.85,
-            avg_role_fit: 1.10,
-            risk_flag_count: 0,
-            consensus_score: 3.0,
-            data_support: true,
-            matches_watched: 4,
-        });
-        let with_dossier = board.review_transfer_proposal(&proposal);
-        // Dossier-backed should be at least as approved as the baseline.
-        // Specifically: a strong dossier should never downgrade an
-        // Approved into a Vetoed.
-        if matches!(baseline, BoardTransferDecision::Vetoed(_)) {
-            assert!(
-                with_dossier.is_approved(),
-                "strong dossier should rescue a borderline veto, got {:?}",
-                with_dossier
-            );
-        } else {
-            assert!(with_dossier.is_approved());
-        }
+        assert!(bold.hear(&proposal).is_approved());
+        assert!(matches!(
+            prudent.hear(&proposal),
+            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
+        ));
+    }
+
+    #[test]
+    fn a_written_off_window_narrows_the_next_hearing() {
+        use crate::club::board::mandate::{MandateExit, MandateOutcome};
+
+        let approved = transfer_proposal(
+            1_450_000.0,
+            1_000_000.0,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+        );
+        let mut bold = ClubBoard::new();
+        bold.chairman.ambition = ChairmanAmbition::Reckless;
+        bold.ownership.risk_tolerance = 90;
+        assert!(bold.hear(&approved).is_approved());
+
+        // The same board, after writing off most of what it last spent.
+        let wasted = SigningMandate::new(
+            MandatePurpose::Starter,
+            PlayerFieldPositionGroup::Midfielder,
+            26,
+            NaiveDate::from_ymd_opt(2028, 7, 1).unwrap(),
+            MandateAuthor::Manager,
+        )
+        .with_money(40_000_000.0, 4_000_000.0);
+        bold.mandate_ledger.push(MandateOutcome::close(
+            9,
+            &wasted,
+            0.0,
+            MandateExit::Released,
+            NaiveDate::from_ymd_opt(2029, 7, 1).unwrap(),
+        ));
+        assert!(matches!(
+            bold.hear(&approved),
+            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
+        ));
     }
 
     #[test]
@@ -594,32 +507,12 @@ mod tests {
             data_support: false,
             matches_watched: 1,
         });
-        let decision = board.review_transfer_proposal(&proposal);
+        let decision = board.hear(&proposal);
         assert!(
             matches!(decision, BoardTransferDecision::Vetoed(_)),
             "split-vote risk-heavy dossier must veto, got {:?}",
             decision
         );
-    }
-
-    #[test]
-    fn dossier_is_optional_legacy_path_unchanged() {
-        // Ensure the no-dossier path produces exactly the same result
-        // as the pre-recruitment-meeting baseline. The whole point of
-        // the optional field is backwards compatibility.
-        let mut board = ClubBoard::new();
-        board.vision.financial_stance = FinancialStance::Conservative;
-        let proposal = transfer_proposal(
-            2_000_000.0,
-            1_000_000.0,
-            TransferNeedPriority::Important,
-            TransferNeedReason::QualityUpgrade,
-        );
-        let decision = board.review_transfer_proposal(&proposal);
-        assert!(matches!(
-            decision,
-            BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline)
-        ));
     }
 
     #[test]
@@ -636,29 +529,8 @@ mod tests {
         proposal.player_age = Some(31);
 
         assert!(matches!(
-            board.review_transfer_proposal(&proposal),
+            board.hear(&proposal),
             BoardTransferDecision::Conditional(BoardTransferConcern::ConflictsWithVision)
         ));
-    }
-
-    #[test]
-    fn a_young_signing_earns_rope_and_an_old_one_loses_it() {
-        // The same fee, three ages. A board weighing a big number asks what
-        // is left at the end of the contract, and the model had no way to
-        // express that at all.
-        let young = ClubBoard::asset_tolerance(21);
-        let neutral = ClubBoard::asset_tolerance(26);
-        let veteran = ClubBoard::asset_tolerance(31);
-        assert!(young > 0.0, "{young}");
-        assert_eq!(neutral, 0.0);
-        assert!(veteran < 0.0, "{veteran}");
-        assert!(young > veteran);
-    }
-
-    #[test]
-    fn the_term_stays_bounded_at_both_ends() {
-        // Age shades a decision; it must never decide one.
-        assert!(ClubBoard::asset_tolerance(16) <= 0.30);
-        assert!(ClubBoard::asset_tolerance(40) >= -0.30);
     }
 }

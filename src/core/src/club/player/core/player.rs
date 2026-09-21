@@ -869,11 +869,8 @@ impl Player {
         }
 
         // Club has a signing plan — don't poach until the plan concludes
-        if let Some(ref plan) = self.plan {
-            let total_apps = self.statistics.played + self.statistics.played_subs;
-            if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date) {
-                return true;
-            }
+        if self.signing_protection_active(date) {
+            return true;
         }
 
         false

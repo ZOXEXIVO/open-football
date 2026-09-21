@@ -18,6 +18,7 @@ use crate::transfers::squad::bands::TierBands;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
+use crate::club::board::mandate::{MandateIncumbent, MandatePurpose, MinutesCurve};
 use crate::club::staff::Staff;
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
 use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetContext};
@@ -75,7 +76,7 @@ pub(in crate::transfers::squad) struct SquadReview<'a> {
     squad: Vec<SquadPlayerInfo>,
     formation_positions: &'static [PlayerPositionType; 11],
     /// One entry per formation slot: (position, who covers it, how well).
-    position_coverage: Vec<(PlayerPositionType, Option<u32>, u8)>,
+    position_coverage: Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)>,
 }
 
 /// The review in progress. Every step reads what the steps before it put here:
@@ -361,11 +362,12 @@ impl<'a> SquadReview<'a> {
     fn map_formation(
         squad: &[SquadPlayerInfo],
         formation_positions: &'static [PlayerPositionType; 11],
-    ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
+    ) -> Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)> {
         // For each formation position, find the best available player
         // A position has "coverage" if at least one player can play there adequately
         let mut used_player_ids: Vec<u32> = Vec::new();
-        let mut position_coverage: Vec<(PlayerPositionType, Option<u32>, u8)> = Vec::new(); // (pos, player_id, quality)
+        let mut position_coverage: Vec<(PlayerPositionType, Option<MandateIncumbent>, u8)> =
+            Vec::new();
 
         for &formation_pos in formation_positions {
             // Find best available player for this position (not already assigned)
@@ -404,7 +406,14 @@ impl<'a> SquadReview<'a> {
                         return None;
                     }
                     let effective = RoleFamiliarity::effective_ability(p.current_ability, in_group);
-                    Some((p.player_id, exact, effective))
+                    Some((
+                        MandateIncumbent {
+                            player_id: p.player_id,
+                            age: p.age,
+                        },
+                        exact,
+                        effective,
+                    ))
                 })
                 // Effective ability carries the selection; familiarity at the
                 // exact shirt only breaks ties, so a natural gets it ahead of
@@ -412,9 +421,9 @@ impl<'a> SquadReview<'a> {
                 .max_by_key(|&(_, exact, effective)| (effective, exact));
 
             match best {
-                Some((pid, _level, quality)) => {
-                    used_player_ids.push(pid);
-                    position_coverage.push((formation_pos, Some(pid), quality));
+                Some((incumbent, _level, quality)) => {
+                    used_player_ids.push(incumbent.player_id);
+                    position_coverage.push((formation_pos, Some(incumbent), quality));
                 }
                 None => {
                     position_coverage.push((formation_pos, None, 0));
@@ -640,7 +649,7 @@ impl<'a> SquadReview<'a> {
             }
         }
         if appetite.is_active() && budget_used < available_budget {
-            let watch = InvestmentWatch::build(club, &squad, rep_score, date);
+            let watch = InvestmentWatch::build(club, &squad, date);
             for target in watch.targets() {
                 if budget_used >= available_budget {
                     break;
@@ -667,7 +676,13 @@ impl<'a> SquadReview<'a> {
                 if alloc <= 0.0 {
                     continue;
                 }
-                requests.push(TransferRequest::new(
+                // An asset is bought to own, and the minutes it is bought
+                // for are the depth chart's own: where one man wears the
+                // shirt the buy IS the shirt, where six do he is one of
+                // six. The wage the club offers follows the same reading,
+                // so a squad investment can no longer promise a first-team
+                // wage for a rotation place.
+                let mut request = TransferRequest::new(
                     next_id,
                     target.representative_pos,
                     TransferNeedPriority::Optional,
@@ -675,7 +690,12 @@ impl<'a> SquadReview<'a> {
                     target.min_ability,
                     target.min_ability.saturating_add(10),
                     alloc,
-                ));
+                );
+                let age = (request.preferred_age_min + request.preferred_age_max) / 2;
+                request.promised_status =
+                    MinutesCurve::for_purpose(MandatePurpose::Asset, target.group, date, age)
+                        .promised_status();
+                requests.push(request);
                 next_id += 1;
                 budget_used += alloc;
             }
@@ -778,15 +798,26 @@ impl<'a> SquadReview<'a> {
                     .iter()
                     .any(|r| r.position == player_info.primary_position)
                 {
-                    requests.push(TransferRequest::new(
-                        next_id,
-                        player_info.primary_position,
-                        priority,
-                        TransferNeedReason::SuccessionPlanning,
-                        min_ability,
-                        incumbent_level,
-                        alloc,
-                    ));
+                    requests.push(
+                        TransferRequest::new(
+                            next_id,
+                            player_info.primary_position,
+                            priority,
+                            TransferNeedReason::SuccessionPlanning,
+                            min_ability,
+                            incumbent_level,
+                            alloc,
+                        )
+                        // The shirt has a name on it. That is what turns
+                        // this into an heir's mandate rather than a
+                        // generic upgrade, and it is what the goalkeeping
+                        // department later reads off the plan instead of
+                        // inferring a successor from birth years.
+                        .about(MandateIncumbent {
+                            player_id: player_info.player_id,
+                            age: player_info.age,
+                        }),
+                    );
                     next_id += 1;
                     budget_used += alloc;
                 }

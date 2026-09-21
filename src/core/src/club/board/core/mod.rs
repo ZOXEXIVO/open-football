@@ -26,6 +26,7 @@ use crate::club::board::chairman::ChairmanProfile;
 use crate::club::board::context::BoardContext;
 use crate::club::board::decision::{BoardDecision, DecisionReason};
 use crate::club::board::manager::ManagerCandidate;
+use crate::club::board::mandate::MandateLedger;
 use crate::club::board::ownership::{ClubBenefactor, OwnershipModel};
 use crate::club::board::pressure::BoardPressure;
 use crate::club::board::promise::PromiseLedger;
@@ -127,6 +128,10 @@ pub struct ClubBoard {
     /// every tick that carries a [`BoardContext`]; read by nothing in the
     /// model. See [`BoardIncomeRead`].
     pub last_income_read: BoardIncomeRead,
+    /// Closed signing mandates — what the club's own money bought, and
+    /// what came back of it. Read by the transfer hearing's stretch, the
+    /// board-manager relationship and the financial gauge.
+    pub mandate_ledger: MandateLedger,
 }
 
 /// A sale the board has demanded and is waiting on.
@@ -323,6 +328,7 @@ impl ClubBoard {
             sale_mandate: None,
             budget_moves: BudgetMoves::default(),
             last_income_read: BoardIncomeRead::default(),
+            mandate_ledger: MandateLedger::default(),
         }
     }
 

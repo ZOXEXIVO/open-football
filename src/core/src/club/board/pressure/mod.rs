@@ -97,8 +97,18 @@ impl BoardPressure {
     /// Set the hard-number gauges from finance / regulatory inputs.
     /// `wage_usage` is wage spend / budget; `ffp_breach`/`ffp_watch`
     /// flag regulatory standing; `debt_ratio` is debt / annual revenue.
-    pub fn set_financial(&mut self, wage_usage: f32, debt_ratio: f32, profit_loss_12m: i64) {
+    /// `written_off` is the share of its recent transfer spending the club
+    /// has already booked as a loss — the one financial fact a balance
+    /// sheet never shows and a boardroom argues about for two seasons.
+    pub fn set_financial(
+        &mut self,
+        wage_usage: f32,
+        debt_ratio: f32,
+        profit_loss_12m: i64,
+        written_off: f32,
+    ) {
         let mut fin = 0i16;
+        fin += (written_off.clamp(0.0, 1.0) * 30.0) as i16;
         if wage_usage > 1.1 {
             fin += 40;
         } else if wage_usage > 1.0 {
