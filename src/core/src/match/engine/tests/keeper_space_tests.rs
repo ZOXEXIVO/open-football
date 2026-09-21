@@ -7,7 +7,7 @@ use crate::r#match::engine::result::Score;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PassOriginRestart,
-    PlayerSide, StateProcessingContext, StateProcessingHandler, StateProcessor,
+    PlayerSide, StateProcessingContext, StateProcessingHandler, StateProcessor, TransitionSource,
 };
 use nalgebra::Vector3;
 
@@ -187,7 +187,11 @@ fn keeper_space_reaches_idle_states_but_does_not_move_injured_players() {
     let result = StateProcessor::new(0, player, &context, &tick).process_inner(Idle);
     assert!(result.velocity.is_some_and(|v| v.norm() > 0.0));
     assert!(result.effort_floor >= 0.4);
-    player.state = PlayerState::Injured;
+    // The same call `roll_in_match_injuries` makes. A raw `.state =` is
+    // what `no_raw_player_state_assignment_outside_transition_api` exists
+    // to forbid, and a fixture is not exempt from it: a state reached in a
+    // test by a route production cannot take is not the state under test.
+    player.transition_to(PlayerState::Injured, TransitionSource::EventHandler);
     let result = StateProcessor::new(0, player, &context, &tick).process_inner(Idle);
     assert!(result.velocity.is_none());
 }
