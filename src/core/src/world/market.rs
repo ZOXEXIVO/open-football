@@ -1,5 +1,6 @@
 use super::SimulatorData;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::market::knowledge::{PlacementReach, PlacementReachIndex};
 use crate::transfers::market::map::{
     CountryTransferProfile, MarketCountryFacts, MarketMap, RegionPrestigeTable,
 };
@@ -81,6 +82,70 @@ impl SimulatorData {
                     }
                 }
             });
+    }
+
+    /// Seed every club's placement ledger from the loanees it already has
+    /// out in the world.
+    ///
+    /// The shipped world carries every current loan, so a boy sitting at a
+    /// club in another country IS a placement his owner made before the
+    /// save began — the same evidence [`Self::bootstrap_market_ledgers`]
+    /// reads from the other end of the deal. Collected first and written
+    /// after, because the parent is routinely in a different country from
+    /// the club the player is standing in.
+    pub fn bootstrap_loan_placements(&mut self) {
+        let today = self.date.date();
+        let mut club_country: HashMap<u32, u32> = HashMap::new();
+        let mut counts: HashMap<(u32, u32), u16> = HashMap::new();
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    club_country.insert(club.id, country.id);
+                    for team in &club.teams.teams {
+                        for player in &team.players.players {
+                            if let Some(parent) = player
+                                .contract_loan
+                                .as_ref()
+                                .and_then(|loan| loan.loan_from_club_id)
+                            {
+                                *counts.entry((parent, country.id)).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for ((parent_club_id, borrower_country_id), placements) in counts {
+            if club_country.get(&parent_club_id) == Some(&borrower_country_id) {
+                continue;
+            }
+            if let Some(parent) = self.club_mut(parent_club_id) {
+                parent
+                    .loan_placements
+                    .bootstrap(borrower_country_id, placements, today);
+            }
+        }
+    }
+
+    /// Stage every club's placement map for the parallel pass.
+    ///
+    /// A borrowing country's borrow cannot reach the club that owns the
+    /// player, so the lender's half of the geography travels beside the
+    /// world pool exactly as the player summaries do.
+    pub fn collect_placement_reach(&self) -> PlacementReachIndex {
+        PlacementReachIndex::from_clubs(
+            self.continents
+                .par_iter()
+                .flat_map(|continent| continent.countries.par_iter())
+                .flat_map_iter(|country| {
+                    country
+                        .clubs
+                        .iter()
+                        .map(|club| (club.id, PlacementReach::of(club, country.id)))
+                })
+                .collect::<Vec<(u32, PlacementReach)>>(),
+        )
     }
 
     /// Median annual salary in each country's strongest division. The money

@@ -7,7 +7,7 @@ use crate::club::news::{ClubAffair, ClubAffairLog};
 use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, Player};
 use crate::shared::Location;
-use crate::transfers::market::knowledge::ClubMarketLedger;
+use crate::transfers::market::knowledge::{ClubMarketLedger, LoanPlacementLedger};
 use crate::transfers::pipeline::ClubTransferPlan;
 use chrono::NaiveDate;
 
@@ -115,6 +115,12 @@ pub struct Club {
     /// own foreign nationalities, so the shipped world is its own evidence.
     pub market_ledger: ClubMarketLedger,
 
+    /// Where this club has SENT its loanees, and how each destination
+    /// served them. The lending half of the same relationship — see
+    /// [`LoanPlacementKnowledge`]. Bootstrapped at world load from the
+    /// men it already has out on loan abroad.
+    pub loan_placements: LoanPlacementLedger,
+
     /// The club's own diary: dated boardroom and dugout happenings the
     /// press cannot recompute from state. Written where each thing
     /// actually occurs — see [`ClubAffairLog`].
@@ -159,6 +165,7 @@ impl Club {
             facilities,
             rivals: Vec::new(),
             market_ledger: ClubMarketLedger::default(),
+            loan_placements: LoanPlacementLedger::default(),
             affairs: ClubAffairLog::new(),
         }
     }
@@ -172,6 +179,26 @@ impl Club {
     /// press never has to guess when something occurred.
     pub fn record_affair(&mut self, affair: ClubAffair, date: NaiveDate) {
         self.affairs.record(affair, date);
+    }
+
+    /// A loanee is home. The country that had him is a placement this
+    /// club made, and how much football he got there is what it learned
+    /// about sending the next one — a destination that plays them
+    /// strengthens, one that benches them weakens, and neither closes.
+    ///
+    /// A domestic spell has no row and nudges nothing: a club does not
+    /// learn its own country from lending inside it.
+    pub fn on_loanee_returned_from(&mut self, borrower_country_id: u32, start_share: f32) {
+        self.loan_placements
+            .record_outcome(borrower_country_id, start_share);
+    }
+
+    /// The club has placed a loanee abroad. Recorded on the parent, where
+    /// [`Club::market_ledger`] records the borrower's side of the same
+    /// deal.
+    pub fn on_loanee_placed(&mut self, borrower_country_id: u32, date: NaiveDate) {
+        self.loan_placements
+            .record_placement(borrower_country_id, date);
     }
 
     /// Every force-selected player across the club, regardless of the

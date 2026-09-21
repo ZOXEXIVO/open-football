@@ -282,7 +282,7 @@ impl MarketAffinity {
     /// something against the prior's structural guess — the floor is there to
     /// stop the card reading as a denial, not to make it say nothing at all.
     /// See [`Self::CORRIDOR_PRIOR_FLOOR_SHARE`].
-    fn blend_corridor(reading: &CorridorReading) -> f32 {
+    pub(in crate::transfers) fn blend_corridor(reading: &CorridorReading) -> f32 {
         let prior = (reading.derived.import * reading.derived.export).sqrt();
         let data = match (reading.data_import, reading.data_export) {
             (Some(import), Some(export)) => (import * export).sqrt(),

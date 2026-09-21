@@ -881,6 +881,7 @@ impl Country {
             world.world_pool,
             world.global_free_agents,
             world.market_map,
+            world.placement_reach,
         );
         drop(stage);
 

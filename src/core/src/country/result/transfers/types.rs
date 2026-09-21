@@ -3,6 +3,7 @@ use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::deal::negotiation::NegotiationPhase;
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause};
 use crate::transfers::gate::appraisal::PlayerStance;
+use crate::transfers::loan::guard::LoanGuardVerdict;
 use crate::transfers::market::TransferListingOrigin;
 use crate::{Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage};
 
@@ -135,6 +136,10 @@ pub(crate) struct NegotiationData {
     pub(crate) staged_stance: Option<PlayerStance>,
     /// Sporting distance of the move, staged with the stance.
     pub(crate) staged_sporting_drop: Option<f32>,
+    /// The parent's own answer about this destination, staged at the
+    /// approach — see the twin field on
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`].
+    pub(crate) staged_loan_verdict: Option<LoanGuardVerdict>,
     /// What the board approved the signing FOR. Stamped on the player's
     /// pathway when the deal completes.
     pub(crate) mandate: Option<SigningMandate>,

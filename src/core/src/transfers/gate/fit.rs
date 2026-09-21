@@ -40,6 +40,7 @@ impl SquadRegistrationLimits {
                     .unwrap_or(0);
                 limit as i32 - foreigners as i32
             }),
+            limit: self.foreign_player_limit,
             club_country_id: self.club_country_id,
         }
     }
@@ -56,6 +57,9 @@ pub(crate) struct ForeignSlotCount {
     /// Registered-foreigner slots still free in the main squad, or `None`
     /// where the country runs no quota.
     free: Option<i32>,
+    /// What the league allows in total — the denominator the continuous
+    /// read needs.
+    limit: Option<u8>,
     club_country_id: u32,
 }
 
@@ -75,6 +79,48 @@ impl ForeignSlotCount {
             return false;
         }
         matches!(self.free, Some(free) if free <= 0)
+    }
+
+    /// What a club at or over its quota still gives a foreign passport.
+    ///
+    /// Not zero, and the census is why. The shipped squads breach these
+    /// limits routinely — a third of every loan into a quota league lands
+    /// at a club already over it — so a term that reads zero there reads
+    /// zero for the life of the save, and the leagues with the tightest
+    /// quotas stop borrowing at all rather than borrowing rarely. Every
+    /// other term in the agreement ramps to a floor; this one is no
+    /// different, and a full quota is a reason to look elsewhere rather
+    /// than a registration the club cannot file.
+    const OVER_QUOTA: f32 = 0.1;
+
+    /// How much registration room this passport has here, 0..1.
+    ///
+    /// The same fact [`Self::would_block`] answers yes or no to, read
+    /// continuously: a club with one slot of eight left may spend it, and
+    /// it spends it on the man it most wants rather than on whoever asks
+    /// first. 1.0 for a domestic passport and for a league that runs no
+    /// quota.
+    pub fn room_for(&self, candidate_country_id: u32) -> f32 {
+        if candidate_country_id == 0 || candidate_country_id == self.club_country_id {
+            return 1.0;
+        }
+        match (self.free, self.limit) {
+            (Some(free), Some(limit)) if limit > 0 => {
+                (free as f32 / limit as f32).clamp(Self::OVER_QUOTA, 1.0)
+            }
+            _ => 1.0,
+        }
+    }
+
+    /// The same read with in-flight approaches already spending slots —
+    /// a club three deep in loan talks has not got four slots free.
+    pub fn room_after(&self, candidate_country_id: u32, pending_foreign: u32) -> f32 {
+        ForeignSlotCount {
+            free: self.free.map(|free| free - pending_foreign as i32),
+            limit: self.limit,
+            club_country_id: self.club_country_id,
+        }
+        .room_for(candidate_country_id)
     }
 }
 
@@ -390,11 +436,49 @@ mod tests {
     fn a_full_foreigner_quota_blocks_only_foreigners() {
         let full = ForeignSlotCount {
             free: Some(0),
+            limit: Some(8),
             club_country_id: 7,
         };
         assert!(full.would_block(9), "a foreigner needs a slot");
         assert!(!full.would_block(7), "a domestic signing is always free");
         assert!(!full.would_block(0), "an unknown passport never blocks");
+        assert_eq!(
+            full.room_for(9),
+            ForeignSlotCount::OVER_QUOTA,
+            "a full quota is a reason to look elsewhere, not a closed league"
+        );
+        assert_eq!(full.room_for(7), 1.0, "his own league is always room");
+    }
+
+    /// The same fact, read continuously: the quota is a scarce thing
+    /// before it is a full one.
+    #[test]
+    fn slots_narrow_as_the_quota_fills() {
+        let half = ForeignSlotCount {
+            free: Some(4),
+            limit: Some(8),
+            club_country_id: 7,
+        };
+        assert!((half.room_for(9) - 0.5).abs() < 1e-6);
+        assert!(
+            half.room_after(9, 3) < half.room_for(9),
+            "approaches in flight are slots already spent"
+        );
+        let over = ForeignSlotCount {
+            free: Some(-6),
+            limit: Some(8),
+            club_country_id: 7,
+        };
+        assert_eq!(
+            over.room_for(9),
+            ForeignSlotCount::OVER_QUOTA,
+            "a squad shipped over its own limit still borrows, rarely"
+        );
+        assert_eq!(
+            ForeignSlotCount::default().room_for(9),
+            1.0,
+            "a league with no quota never counts passports"
+        );
     }
 
     #[test]
@@ -403,11 +487,13 @@ mod tests {
         assert!(!unlimited.would_block(9));
         let one_left = ForeignSlotCount {
             free: Some(1),
+            limit: Some(8),
             club_country_id: 7,
         };
         assert!(!one_left.would_block(9), "a club with a slot may use it");
         let over = ForeignSlotCount {
             free: Some(-2),
+            limit: Some(8),
             club_country_id: 7,
         };
         assert!(over.would_block(9), "and one already over may not");

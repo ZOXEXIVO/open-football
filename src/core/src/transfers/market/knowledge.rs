@@ -23,10 +23,18 @@
 //! On day one every club's knowledge is exactly this: its country's card,
 //! its own squad's nationalities, and its scouts' seeded countries. That is
 //! what makes the 2026 world look like 2026 without anything being routed.
+//!
+//! A loan runs the same relationship the other way, so the LENDING side
+//! lives here too: [`LoanPlacementLedger`] is where a club has sent its
+//! own, [`LoanPlacementKnowledge`] what that is worth against a
+//! destination, and [`PlacementReach`] the shape a borrowing country can
+//! read it in.
 
 use chrono::NaiveDate;
+use rustc_hash::FxHashMap;
 
 use crate::Club;
+use crate::transfers::market::affinity::MarketAffinity;
 use crate::transfers::market::map::MarketMap;
 
 /// One country a club has done business in.
@@ -140,6 +148,197 @@ impl ClubMarketLedger {
         // market, which is the thing being measured.
         let quality = 0.7 + 0.6 * entry.outcomes.clamp(0.0, 1.0);
         (volume * decay * quality).clamp(0.0, 1.0)
+    }
+}
+
+/// Where a club has SENT its loanees, and how each destination served
+/// them.
+///
+/// A loan is the other half of the same relationship [`ClubMarketLedger`]
+/// records, read from the lending end: Chelsea knows the Eredivisie
+/// because Chelsea has had men there, and a season that delivered minutes
+/// is a reason to go back. Entries are per COUNTRY for the same reason
+/// imports are — placing a boy in Belgium is not knowing Portugal — and
+/// the volume, decay and outcome arithmetic is the same memory, so it is
+/// the same type underneath.
+#[derive(Debug, Clone, Default)]
+pub struct LoanPlacementLedger {
+    countries: ClubMarketLedger,
+}
+
+impl LoanPlacementLedger {
+    /// Record a completed placement into `country_id`.
+    pub fn record_placement(&mut self, country_id: u32, date: NaiveDate) {
+        self.countries.record_signing(country_id, date);
+    }
+
+    /// Seed from the shipped world — a loanee sitting at a club abroad
+    /// today is a placement this club made before the save began.
+    pub fn bootstrap(&mut self, country_id: u32, placements: u16, date: NaiveDate) {
+        self.countries.bootstrap(country_id, placements, date);
+    }
+
+    /// Nudge a destination's standing by how much football he got there.
+    pub fn record_outcome(&mut self, country_id: u32, start_share: f32) {
+        self.countries.record_outcome(country_id, start_share);
+    }
+
+    pub fn knowledge(&self, country_id: u32, today: NaiveDate) -> f32 {
+        self.countries.knowledge(country_id, today)
+    }
+
+    pub fn entries(&self) -> &[MarketLedgerEntry] {
+        self.countries.entries()
+    }
+}
+
+/// How well a LENDING club knows a destination country, 0..1.
+///
+/// The mirror of [`ClubMarketKnowledge`], read from the other end of the
+/// deal. Two things differ. The prior is the parent country's EXPORT card
+/// — where this country's players go, not where its clubs buy — and a
+/// pair no card names falls to the corridor rather than to nothing, so a
+/// save can open a placement route the shipped world never had.
+pub struct LoanPlacementKnowledge;
+
+impl LoanPlacementKnowledge {
+    /// A country's own export prior counts for this much of its clubs'
+    /// placement knowledge — half, exactly as the import prior does.
+    const COUNTRY_PRIOR_SHARE: f32 = 0.5;
+
+    pub fn of(
+        map: &MarketMap,
+        parent_country_id: u32,
+        ledger: &LoanPlacementLedger,
+        best_scout_level: u8,
+        borrower_country_id: u32,
+        today: NaiveDate,
+    ) -> f32 {
+        if borrower_country_id == 0 || borrower_country_id == parent_country_id {
+            return 1.0;
+        }
+        let scouted = best_scout_level as f32 / 100.0;
+        let ledger_term = ledger.knowledge(borrower_country_id, today);
+        let card = map
+            .profile(parent_country_id)
+            .export_weight(borrower_country_id)
+            .unwrap_or_else(|| {
+                MarketAffinity::blend_corridor(
+                    &map.corridor(parent_country_id, borrower_country_id),
+                )
+            });
+        scouted
+            .max(ledger_term)
+            .max(Self::COUNTRY_PRIOR_SHARE * card)
+            .clamp(0.0, 1.0)
+    }
+}
+
+/// One lending club's placement map, in the shape a BORROWING country can
+/// read it.
+///
+/// A borrower's per-country borrow cannot reach the club that owns the
+/// player, so the three things the placement read needs — the parent's
+/// country, its ledger and its scouts' coverage — are staged per CLUB
+/// beside the world pool. Per club and not per player: one club's ledger
+/// is a dozen rows and a hundred summaries share it.
+#[derive(Debug, Clone, Default)]
+pub struct PlacementReach {
+    country_id: u32,
+    ledger: LoanPlacementLedger,
+    /// Countries the club's scouts cover, and how well.
+    scouts: Vec<(u32, u8)>,
+}
+
+impl PlacementReach {
+    pub fn of(club: &Club, country_id: u32) -> Self {
+        let mut scouts: Vec<(u32, u8)> = Vec::new();
+        for staff in club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|team| team.staffs.staffs.iter())
+        {
+            for known in &staff.staff_attributes.knowledge.known_countries {
+                match scouts.iter_mut().find(|(id, _)| *id == known.country_id) {
+                    Some(entry) => entry.1 = entry.1.max(known.level),
+                    None => scouts.push((known.country_id, known.level)),
+                }
+            }
+        }
+        PlacementReach {
+            country_id,
+            ledger: club.loan_placements.clone(),
+            scouts,
+        }
+    }
+
+    /// True when this club has nothing the country-level prior does not
+    /// already say. Staging it would be a pair of allocations carrying no
+    /// information.
+    pub fn is_silent(&self) -> bool {
+        self.ledger.entries().is_empty() && self.scouts.is_empty()
+    }
+
+    pub fn trust(&self, map: &MarketMap, borrower_country_id: u32, today: NaiveDate) -> f32 {
+        let scout_level = self
+            .scouts
+            .iter()
+            .find(|(id, _)| *id == borrower_country_id)
+            .map(|(_, level)| *level)
+            .unwrap_or(0);
+        LoanPlacementKnowledge::of(
+            map,
+            self.country_id,
+            &self.ledger,
+            scout_level,
+            borrower_country_id,
+            today,
+        )
+    }
+}
+
+/// Every lending club's placement map, keyed by club id.
+///
+/// Clubs with nothing to say are absent and read from their country's
+/// export card alone, which is what the whole world said about them
+/// anyway.
+#[derive(Debug, Clone, Default)]
+pub struct PlacementReachIndex {
+    by_club: FxHashMap<u32, PlacementReach>,
+}
+
+impl PlacementReachIndex {
+    pub fn from_clubs(clubs: impl IntoIterator<Item = (u32, PlacementReach)>) -> Self {
+        PlacementReachIndex {
+            by_club: clubs
+                .into_iter()
+                .filter(|(_, reach)| !reach.is_silent())
+                .collect(),
+        }
+    }
+
+    /// How far this parent's own network reaches into the borrower's
+    /// country, 0..1.
+    pub fn trust(
+        &self,
+        map: &MarketMap,
+        parent_club_id: u32,
+        parent_country_id: u32,
+        borrower_country_id: u32,
+        today: NaiveDate,
+    ) -> f32 {
+        match self.by_club.get(&parent_club_id) {
+            Some(reach) => reach.trust(map, borrower_country_id, today),
+            None => LoanPlacementKnowledge::of(
+                map,
+                parent_country_id,
+                &LoanPlacementLedger::default(),
+                0,
+                borrower_country_id,
+                today,
+            ),
+        }
     }
 }
 

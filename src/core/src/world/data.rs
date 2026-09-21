@@ -190,6 +190,7 @@ impl SimulatorData {
         data.seed_player_nationality_continents();
         data.rebuild_market_map();
         data.bootstrap_market_ledgers();
+        data.bootstrap_loan_placements();
 
         data
     }

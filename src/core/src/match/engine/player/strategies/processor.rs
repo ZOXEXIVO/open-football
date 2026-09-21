@@ -15,7 +15,7 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::strategies::common::states::{
-    CornerHold, KeeperReleaseSpace, RestartCarry, ThrowInDelivery,
+    CornerHold, KeeperReleaseSpace, KickoffDelivery, RestartCarry, ThrowInDelivery,
 };
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
@@ -743,6 +743,19 @@ impl<'p> StateProcessor<'p> {
             result.velocity = Some(Vector3::zeros());
             if let Some(throw) = ThrowInDelivery::deliver(&processing_ctx) {
                 result.events.add(throw);
+            }
+            return result;
+        }
+
+        // **He is taking a kick-off.** Same reasoning, same restart
+        // shape: the ball is dead on the centre mark and the only thing
+        // he may do is play it, so his state machine — which would send a
+        // lone striker off up the pitch with it — does not get the tick.
+        // See [`KickoffDelivery`].
+        if KickoffDelivery::taking(&processing_ctx) {
+            result.velocity = Some(Vector3::zeros());
+            if let Some(kick) = KickoffDelivery::deliver(&processing_ctx) {
+                result.events.add(kick);
             }
             return result;
         }

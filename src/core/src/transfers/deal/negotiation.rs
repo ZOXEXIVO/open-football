@@ -3,6 +3,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::{PlayerStance, TermsRefusalCause};
+use crate::transfers::loan::guard::LoanGuardVerdict;
 use crate::transfers::squad::plan::BriefTier;
 use crate::utils::IntegerUtils;
 use chrono::Duration;
@@ -199,6 +200,17 @@ pub struct TransferNegotiation {
     /// Sporting distance of the move, staged alongside the stance — it
     /// needs both clubs, and only creation has both.
     pub staged_sporting_drop: Option<f32>,
+    /// A cross-border loan target's passport, staged for the same reason
+    /// `loan_target_profile` is: the borrower's foreigner quota has to
+    /// count him while the approach is in flight, and the in-country walk
+    /// cannot find him.
+    pub loan_target_country: Option<u32>,
+    /// What the parent said about this destination, priced at the approach
+    /// where both clubs were readable. The seller of a cross-border loan
+    /// is in another country's borrow by the time the room opens, so
+    /// without this the engagement roll ran on the base rate alone while a
+    /// domestic loan fed it the parent's willingness.
+    pub staged_loan_verdict: Option<LoanGuardVerdict>,
     /// Which axis the player refused on, once he has. Written by the
     /// personal-terms resolver for the story, the census and the trace.
     pub terms_refusal_cause: Option<TermsRefusalCause>,
@@ -281,6 +293,8 @@ impl TransferNegotiation {
             brief_tier: None,
             staged_stance: None,
             staged_sporting_drop: None,
+            loan_target_country: None,
+            staged_loan_verdict: None,
             terms_refusal_cause: None,
             terms_reservation_wage: None,
         }

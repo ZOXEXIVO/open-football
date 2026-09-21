@@ -32,6 +32,7 @@ use crate::league::League;
 use crate::league::LeagueCollection;
 use crate::shared::indexes::SimulatorDataIndexes;
 use crate::transfers::MarketMap;
+use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::TransferListing;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -744,6 +745,10 @@ pub struct WorldSnapshot<'a> {
     /// per-country market pass and never written, so it rides the same
     /// shared-borrow channel as the player pool.
     pub market_map: &'a MarketMap,
+    /// The LENDING side of that geography: every club's placement map,
+    /// staged for the same reason the player pool is — a borrowing
+    /// country's borrow cannot reach the club that owns the player.
+    pub placement_reach: &'a PlacementReachIndex,
 }
 
 /// Cross-country / global mutations that the parallel Phase-A pass

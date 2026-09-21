@@ -24,6 +24,7 @@ use crate::r#match::engine::ball::ball::net::GoalNet;
 use crate::r#match::engine::goal::{
     advance_goal_celebration, finish_goal_celebration, handle_goal_reset,
 };
+use crate::r#match::engine::kickoff_shape::KickoffShape;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::rng::MatchRng;
 use crate::r#match::squad::squad::MatchSquad;
@@ -262,10 +263,17 @@ fn the_restart_lands_at_the_end_of_the_dead_ball_window_not_the_start() {
         "the side that conceded restarts"
     );
     let kicker_id = kicker.id;
+    let partner_id = field.ball.kickoff_partner;
+    let spot = field.ball.position;
     for player in field.players.iter() {
-        // Everybody bar the man taking the kickoff, whom `assign_kickoff`
-        // deliberately stands on the centre spot.
-        if player.id != kicker_id {
+        // Everybody bar the men the kick-off set-up deliberately stands
+        // somewhere else: the taker on the centre spot, the team-mate who
+        // walks up to receive it, and any opponent who has to step out of
+        // the centre circle to make room. See `KickoffShape`.
+        let placed = player.id == kicker_id
+            || Some(player.id) == partner_id
+            || ((player.position - spot).norm() - KickoffShape::CIRCLE).abs() < 0.5;
+        if !placed {
             assert!(
                 (player.position - player.start_position).norm() < 0.01,
                 "every player is back on his formation spot for the restart"

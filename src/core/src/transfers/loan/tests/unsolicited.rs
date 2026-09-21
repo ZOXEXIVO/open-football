@@ -288,6 +288,7 @@ impl LevelFx {
             standing_ratio,
             league_ratio,
             need: 0.6,
+            slot_room: 1.0,
         }
     }
 }

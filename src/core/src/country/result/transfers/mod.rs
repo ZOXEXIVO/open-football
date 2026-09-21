@@ -17,6 +17,7 @@ use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::pipeline::MarketCirculation;
+use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -137,6 +138,7 @@ impl TransferTick {
         world_pool: &[PlayerSummary],
         global_free_agents: &[GlobalFreeAgentSummary],
         market_map: &MarketMap,
+        placement_reach: &PlacementReachIndex,
     ) -> DeferredTransferOps {
         let country_id = country.id;
         let mut summary = TransferActivitySummary::new();
@@ -205,6 +207,7 @@ impl TransferTick {
                 current_date,
                 &foreign_players,
                 market_map,
+                placement_reach,
                 &mut summary,
             );
         }
@@ -631,6 +634,7 @@ impl TransferTick {
         current_date: NaiveDate,
         foreign_players: &[&PlayerSummary],
         market_map: &MarketMap,
+        placement_reach: &PlacementReachIndex,
         mut summary: &mut TransferActivitySummary,
     ) {
         let country_name = country.name.clone();
@@ -711,6 +715,7 @@ impl TransferTick {
                     &foreign_players,
                     current_date,
                     market_map,
+                    placement_reach,
                 )
             },
         );

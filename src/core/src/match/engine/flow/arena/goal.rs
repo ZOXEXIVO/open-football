@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::engine::flow::field::ResetReason;
+use crate::r#match::engine::kickoff_shape::KickoffShape;
 use crate::r#match::field::MatchField;
 use crate::r#match::flow::celebration::GoalCelebration;
 use crate::r#match::{MatchContext, MatchFieldSize, PlayerSide, TransitionSource};
@@ -125,6 +126,15 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide, preferred: Optio
         });
 
     if let Some(player_id) = kickoff_player_id {
+        // The rest of the set-up, before anybody is moved: the team-mate
+        // who stands over the ball with him, and the opponents who have
+        // to be outside the centre circle while he plays it. Without it
+        // the taker's nearest team-mate is 7.5 m behind him and an
+        // opposing forward is 1.9 m in front — which is not a kick-off,
+        // and it is why he used to set off up the pitch with it alone.
+        // See [`KickoffShape`].
+        let plan = KickoffShape::plan(&field.players, side, player_id, ball_pos);
+
         if let Some(kicker) = field.players.iter_mut().find(|p| p.id == player_id) {
             #[cfg(feature = "match-logs")]
             {
@@ -140,13 +150,37 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide, preferred: Optio
             // keep that to stay calibration-neutral.
             kicker.in_state_time = 0;
         }
+
+        #[cfg(feature = "match-logs")]
+        if !plan.stations.is_empty() {
+            use crate::r#match::engine::ball::ball::teleport as tc;
+            tc::PlayerTeleportCensus::note_firing(tc::PSITE_KICKOFF_SHAPE);
+        }
+        for station in &plan.stations {
+            if let Some(player) = field.players.iter_mut().find(|p| p.id == station.player_id) {
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::engine::ball::ball::teleport as tc;
+                    tc::PlayerTeleportCensus::note(
+                        tc::PSITE_KICKOFF_SHAPE,
+                        player.position,
+                        station.position,
+                    );
+                }
+                player.position = station.position;
+                player.velocity = Vector3::zeros();
+            }
+        }
+
         field.ball.current_owner = Some(player_id);
+        field.ball.kickoff_taker = Some(player_id);
+        field.ball.kickoff_partner = plan.partner;
         // Short ping-pong guard only — the kicker needs to take the
         // ball forward, not hold on to it for 1.2 s while the whole
         // pack watches. A 30-tick cooldown is enough to stop the
         // ownership logic from immediately ripping the ball back out
-        // of their feet and falls away by the time the state machine
-        // decides to pass.
+        // of their feet, and it falls away before `KickoffDelivery`
+        // plays it.
         field.ball.claim_cooldown = 30;
         field.ball.flags.in_flight_state = 0;
         field.ball.contested_claim_count = 0;

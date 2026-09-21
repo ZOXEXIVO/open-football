@@ -462,6 +462,21 @@ pub struct Ball {
     /// Cleared by [`Self::record_touch`] the moment somebody else is on
     /// the ball, which is precisely when the law lifts.
     pub throw_in_taker: Option<u32>,
+    /// **The man standing over the ball at a kick-off**, from the moment
+    /// the restart is set until he plays it.
+    ///
+    /// A kick-off is a pass, and nothing in the engine said so: the taker
+    /// was an ordinary carrier under his ordinary state machine, so what
+    /// became of the ball was whatever a forward alone on the halfway
+    /// line does with one at his feet — he ran off with it. See
+    /// [`KickoffDelivery`] for the measurement, and [`KickoffShape`] for
+    /// the team-mate it puts beside him.
+    ///
+    /// [`KickoffDelivery`]: crate::r#match::common_states::KickoffDelivery
+    /// [`KickoffShape`]: crate::r#match::engine::kickoff_shape::KickoffShape
+    pub kickoff_taker: Option<u32>,
+    /// …and that team-mate, who is who the kick-off is played to.
+    pub kickoff_partner: Option<u32>,
     /// Where and when the throw-in in progress was taken from, so the
     /// census can say how far it travelled and how long he held it.
     #[cfg(feature = "match-logs")]
@@ -922,6 +937,8 @@ impl Ball {
             current_tick_cached: 0,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             throw_in_taker: None,
+            kickoff_taker: None,
+            kickoff_partner: None,
             #[cfg(feature = "match-logs")]
             throw_in_spot: Vector3::new(x, y, 0.0),
             #[cfg(feature = "match-logs")]
@@ -987,6 +1004,12 @@ impl Ball {
         self.intercept_rolled = 0;
         self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
+        // …and the kick-off is over the instant the taker lets go of it:
+        // the restart IS that one touch.
+        if self.kickoff_taker == Some(player_id) {
+            self.kickoff_taker = None;
+            self.kickoff_partner = None;
+        }
     }
 
     /// A field player has deliberately played the ball with their feet.
@@ -1348,6 +1371,15 @@ impl Ball {
         // touch this classifies — so asked afterwards, every delivered
         // throw reads as one its thrower never let go of.
         self.settle_throw_in(player_id, Some(team_id), tick);
+        // …and the kick-off, on the same condition Law 8 states it: the
+        // restart is over once the ball has been played, by him or by
+        // anybody else. Without the second half of that the marker
+        // outlives a kick-off he lost before he could take it, and he
+        // would play the restart again whenever the ball came back.
+        if self.kickoff_taker.is_some_and(|taker| taker != player_id) {
+            self.kickoff_taker = None;
+            self.kickoff_partner = None;
+        }
         // Somebody else has been on the ball — whatever the last releaser
         // did is history, and their re-collect bar lifts.
         if self
@@ -1433,6 +1465,8 @@ impl Ball {
         // thrower into the NEXT restart, and Law 15 would be enforced
         // against a ball he has nothing to do with.
         self.throw_in_taker = None;
+        self.kickoff_taker = None;
+        self.kickoff_partner = None;
         self.last_touch_was_deliberate_kick = false;
         // …and the goal-kick ceremony, whichever leg it was on. A new dead
         // ball starts it from scratch.
@@ -1710,6 +1744,8 @@ impl Ball {
         self.last_touch_was_controlled = false;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         self.throw_in_taker = None;
+        self.kickoff_taker = None;
+        self.kickoff_partner = None;
         self.offside_snapshot = None;
         self.last_completed_pass_passer_id = None;
         self.last_completed_pass_receiver_id = None;

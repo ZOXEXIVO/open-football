@@ -32,7 +32,7 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
-use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::gate::fit::{ForeignSlotCount, SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::loan::interest::{DestinationAppeal, InterestDraw, LoanApproachMemory};
 use crate::transfers::market::{TransferListingOrigin, TransferListingStatus, TransferListingType};
 use crate::transfers::pipeline::{
@@ -45,6 +45,7 @@ use crate::{
     HappinessEventSeverity, HappinessEventType, PathwayStage, Person, PlayerFieldPositionGroup,
     ReputationLevel, RoleFamiliarity,
 };
+use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -62,6 +63,26 @@ struct LoanPushMarket<'a> {
     mid_season_window: bool,
     domestic_region: ScoutingRegion,
     pending_loans: &'a HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+    /// Each club's position under its league's foreigner quota, and the
+    /// slots its in-flight approaches have already spent. Counted once per
+    /// club rather than once per (broadcast, club): the quota is a squad
+    /// fact and the squad does not change between two broadcasts.
+    slots: &'a FxHashMap<u32, ForeignSlotCount>,
+    pending_foreign: &'a FxHashMap<u32, u32>,
+}
+
+impl LoanPushMarket<'_> {
+    fn slot_room(&self, club_id: u32, candidate_country_id: u32) -> f32 {
+        self.slots
+            .get(&club_id)
+            .map(|slots| {
+                slots.room_after(
+                    candidate_country_id,
+                    self.pending_foreign.get(&club_id).copied().unwrap_or(0),
+                )
+            })
+            .unwrap_or(1.0)
+    }
 }
 
 /// The seller-side broadcast pass.
@@ -394,6 +415,13 @@ impl ListingBroadcast {
     ) -> Vec<LoanPushAction> {
         let mid_season_window = MarketCadence::is_mid_season_window_for(&country.code, date);
         let domestic_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+        let pending_foreign = LoanPipeline::pending_foreign_registrations_by_club(country);
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
+        let slots: FxHashMap<u32, ForeignSlotCount> = country
+            .clubs
+            .iter()
+            .map(|club| (club.id, registration.count(club)))
+            .collect();
         let mut actions: Vec<LoanPushAction> = Vec::new();
         // One borrower must not be handed two same-group loans in a single
         // broadcast tick: per-player `has_active_negotiation_for` and the
@@ -477,6 +505,8 @@ impl ListingBroadcast {
                     mid_season_window,
                     domestic_region,
                     pending_loans,
+                    slots: &slots,
+                    pending_foreign: &pending_foreign,
                 },
                 &LoanPushParent {
                     offered_tier,
@@ -633,6 +663,7 @@ impl ListingBroadcast {
                 best_here: borrower_best_here,
                 clearly_better_ahead: depth.clearly_better_ahead(b.group, b.ability),
                 need: Self::borrower_need(club, &depth, b).score(),
+                slot_room: market.slot_room(club.id, b.nationality_country_id),
                 mid_season_window,
                 candidate: b.ability,
                 is_development: b.is_development,
@@ -647,6 +678,10 @@ impl ListingBroadcast {
                     .map(|g| g.listing_resignation())
                     .unwrap_or(0.0),
                 going_home: false,
+                // A push inside one country: the parent knows where it is
+                // sending him, and he already plays here.
+                placement_trust: 1.0,
+                familiarity: 1.0,
                 weight: verdict.map(|v| v.weight).unwrap_or(0.0),
                 carry: verdict.map(|v| v.carry).unwrap_or(0.0),
                 asking: 0.0,

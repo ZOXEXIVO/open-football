@@ -629,7 +629,7 @@ pub const EVENT_LABELS: [&str; EVENTS] = [
 ///
 /// Top speed is about 0.6 u/tick, so [`TOLERANCE`] is generous here rather
 /// than tight: anything a census books is already several times a stride.
-pub const PLAYER_SITES: [&str; 12] = [
+pub const PLAYER_SITES: [&str; 13] = [
     "restart_reset:whole formation",
     "period:2nd-half/ET shape (SEEN)",
     "period:1st-half end (never sampled)",
@@ -642,6 +642,7 @@ pub const PLAYER_SITES: [&str; 12] = [
     "boundary_clamp",
     "emergency keeper into goal",
     "NaN salvage (must be 0)",
+    "kickoff:shape (partner + retreat)",
 ];
 
 pub const PSITE_GOAL_RESET: usize = 0;
@@ -656,6 +657,7 @@ pub const PSITE_MOVE_PLAYER: usize = 8;
 pub const PSITE_BOUNDARY: usize = 9;
 pub const PSITE_EMERGENCY_KEEPER: usize = 10;
 pub const PSITE_NAN_SALVAGE: usize = 11;
+pub const PSITE_KICKOFF_SHAPE: usize = 12;
 
 /// The sites that legitimately re-form the teams rather than being a bug:
 /// a substitute coming on, a sent-off player leaving the field of play,

@@ -177,6 +177,11 @@ impl TransferTrace {
 /// * `OF_OWNER_MONEY_OFF` — [`crate::club::board::ownership::ClubBenefactor::subsidy_per_year`]
 ///   returns 0, which zeroes the wage subsidy, the tier envelopes and the
 ///   owner's fee headroom together.
+/// * `OF_LOAN_SLOTS_OFF` / `OF_LOAN_REACH_OFF` / `OF_LOAN_PLACEMENT_OFF` /
+///   `OF_LOAN_FAMILIARITY_OFF` — the four terms a loan's geography is made
+///   of: the borrower's registration quota, the borrower's reach into the
+///   lending market, the lender's own placement network, and what the
+///   player knows of the place.
 /// * `OF_GEOGRAPHY_OFF` — every consumer of the country cards behaves as it
 ///   did before the transfer geography existed. This is the baseline arm the
 ///   geography campaign is measured against: comparing the geography build
@@ -288,6 +293,40 @@ impl MarketSwitches {
     pub fn loan_agreement_off() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_LOAN_AGREEMENT_OFF"))
+    }
+
+    /// The borrower's REGISTRATION arm: disarmed, a league's foreigner
+    /// quota says nothing about how badly a club wants a loanee, which is
+    /// HEAD — the quota was read by the free-agent matcher, the domestic
+    /// broadcast and the buy-side scan, and by no loan appetite anywhere.
+    pub fn loan_slots_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_SLOTS_OFF"))
+    }
+
+    /// The borrower's REACH arm on a loan: disarmed, the cross-border loan
+    /// scan hands the staged plausibility model no market reach and
+    /// `thresholds::MARKET_REACH_FLOOR` is dead on that path, which is
+    /// HEAD.
+    pub fn loan_reach_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_REACH_OFF"))
+    }
+
+    /// The lender's PLACEMENT arm: disarmed, the parent's willingness is
+    /// destination-blind, which is HEAD — nothing in the model remembered
+    /// where a club had placed loanees before.
+    pub fn loan_placement_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_PLACEMENT_OFF"))
+    }
+
+    /// The player's FAMILIARITY arm: disarmed, a man asked to spend a year
+    /// in a country whose language he does not speak, with no compatriots
+    /// and no corridor, scores it exactly as he scores the one next door.
+    pub fn loan_familiarity_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_FAMILIARITY_OFF"))
     }
 
     /// The career-ARC arm: disarmed, no player carries a plan, so every

@@ -60,6 +60,7 @@ impl MatchdayPhase {
             .flat_map_iter(|country| ScoutingPass::collect_player_pool(country, today))
             .collect();
         let free_agents = GlobalFreeAgentPool::snapshot(data, today);
+        let placement_reach = data.collect_placement_reach();
         // At the window boundaries the wage world has moved enough that
         // the money axis of `import_capacity` is stale — the Gulf got
         // richer, a league collapsed. The corridor cards are shipped data
@@ -83,6 +84,7 @@ impl MatchdayPhase {
             world_pool: &world_pool,
             global_free_agents: &free_agents,
             market_map: &data.market_map,
+            placement_reach: &placement_reach,
         };
 
         let phase = PerformanceProfiler::phase_scope("A1_build", 0);

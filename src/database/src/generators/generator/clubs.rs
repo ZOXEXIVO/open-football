@@ -7,7 +7,7 @@ use core::club::academy::ClubAcademy;
 use core::club::board::vision::VisionYouthFocus;
 use core::context::NaiveTime;
 use core::shared::Location;
-use core::transfers::market::knowledge::ClubMarketLedger;
+use core::transfers::market::knowledge::{ClubMarketLedger, LoanPlacementLedger};
 use core::transfers::pipeline::{ClubTransferPlan, TransferTrace};
 use core::{
     Club, ClubAffairLog, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubLevelAnchor,
@@ -267,6 +267,9 @@ impl DatabaseGenerator {
                     // nationalities once the world is assembled — see
                     // `SimulatorData::bootstrap_market_ledgers`.
                     market_ledger: ClubMarketLedger::default(),
+                    // …and the lending half of the same memory, from the
+                    // loanees the shipped world already has out.
+                    loan_placements: LoanPlacementLedger::default(),
                     // A new world has no history behind it; the diary
                     // starts on the first thing that happens to the club.
                     affairs: ClubAffairLog::new(),

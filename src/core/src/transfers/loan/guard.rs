@@ -173,18 +173,6 @@ impl LoanAssetGuard {
     /// Extra share of the base step-down band a boy of sixteen is granted
     /// on top of it. Renown widens with youth; it never vanishes.
     const RENOWN_YOUTH_WIDENING: f32 = 0.8;
-    /// Seller engagement a parent that will not lend him costs, at total
-    /// reluctance. Measured against [`ParentWillingness::ENTERTAINS`],
-    /// which is already the point at which a club will have the
-    /// conversation: above the bar the destination owns the refusal,
-    /// below it the parent does, and the cost ramps to the whole of this
-    /// at nought.
-    const REFUSAL_UNWILLING: f32 = -60.0;
-    /// … and what a destination that cannot carry him costs, at total
-    /// unaffordability. Both are ramps in their own term: the room and
-    /// the draw price the same two readings or they price two deals.
-    const REFUSAL_UNAFFORDABLE: f32 = -25.0;
-
     /// Assemble the parent side.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -591,9 +579,7 @@ impl LoanAssetGuard {
             standing: self.standing(),
             willingness,
             affordability: money.affordability,
-            refusal_delta: Self::REFUSAL_UNWILLING
-                * (1.0 - willingness / ParentWillingness::ENTERTAINS).clamp(0.0, 1.0)
-                + Self::REFUSAL_UNAFFORDABLE * (1.0 - money.affordability),
+            refusal_delta: LoanGuardVerdict::refusal_delta(willingness, money.affordability),
             renown_band: self.renown_band(),
             renown_gap: (self.player_effective_rep - borrower.reach) as f32,
         }
@@ -686,6 +672,37 @@ impl LoanGuardVerdict {
     /// Affordability below which the borrower is not really a
     /// destination at all.
     const AFFORDABLE: f32 = 0.2;
+    /// Seller engagement a parent that will not lend him costs, at total
+    /// reluctance. Measured against [`ParentWillingness::ENTERTAINS`],
+    /// which is already the point at which a club will have the
+    /// conversation: above the bar the destination owns the refusal,
+    /// below it the parent does, and the cost ramps to the whole of this
+    /// at nought.
+    const REFUSAL_UNWILLING: f32 = -60.0;
+    /// … and what a destination that cannot carry him costs, at total
+    /// unaffordability. Both are ramps in their own term: the room and
+    /// the draw price the same two readings or they price two deals.
+    const REFUSAL_UNAFFORDABLE: f32 = -25.0;
+
+    /// What the two readings take off the seller's engagement roll.
+    fn refusal_delta(willingness: f32, affordability: f32) -> f32 {
+        Self::REFUSAL_UNWILLING
+            * (1.0 - willingness / ParentWillingness::ENTERTAINS).clamp(0.0, 1.0)
+            + Self::REFUSAL_UNAFFORDABLE * (1.0 - affordability)
+    }
+
+    /// The same verdict, re-answered about ONE destination.
+    ///
+    /// The parent's willingness is staged before any borrower exists, so a
+    /// cross-border approach re-states it against the place the boy would
+    /// actually go — and the refusal it implies moves with it, or the room
+    /// reads a club refusing a destination it was never asked about.
+    pub fn about(mut self, willingness: f32, affordability: f32) -> Self {
+        self.willingness = willingness.clamp(0.0, 1.0);
+        self.affordability = affordability.clamp(0.0, 1.0);
+        self.refusal_delta = Self::refusal_delta(self.willingness, self.affordability);
+        self
+    }
 
     /// The parent would entertain it and the borrower could carry it.
     /// Not a veto — what it decides is whether an approach starts from

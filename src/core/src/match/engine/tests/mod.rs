@@ -18,6 +18,7 @@ mod keeper_punt_tests;
 mod keeper_save_contact_tests;
 mod keeper_space_tests;
 mod keeper_tip_over_tests;
+mod kickoff_tests;
 mod loose_ball_chase_tests;
 mod marker_read_tests;
 mod match_realism_tests;

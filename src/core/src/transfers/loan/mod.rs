@@ -35,6 +35,7 @@ use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::{EffectivePlayerReputation, TransferPlausibilityEvaluator};
 use crate::transfers::loan::legacy::LegacyLoanGuard;
+use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::MarketSwitches;
@@ -46,6 +47,7 @@ use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, RoleFamiliarity,
     Team,
 };
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 #[cfg(test)]
@@ -125,6 +127,39 @@ impl LoanPipeline {
                     player.position().position_group(),
                     player.player_attributes.current_ability,
                 ));
+            }
+        }
+        map
+    }
+
+    /// Incoming loan approaches in flight that would each take one of the
+    /// borrower's foreign registration slots, per borrowing club.
+    ///
+    /// The quota is a SQUAD fact and the squad does not change until the
+    /// deal executes, so without this a club with one slot free opens four
+    /// approaches on the same slot in one window. Same shape as
+    /// [`Self::pending_incoming_loans_by_club`], which does the identical
+    /// job for position depth.
+    fn pending_foreign_registrations_by_club(country: &Country) -> FxHashMap<u32, u32> {
+        let mut map: FxHashMap<u32, u32> = FxHashMap::default();
+        for negotiation in country.transfer_market.negotiations.values() {
+            if !negotiation.is_loan {
+                continue;
+            }
+            if !matches!(
+                negotiation.status,
+                NegotiationStatus::Pending | NegotiationStatus::Countered
+            ) {
+                continue;
+            }
+            // Stamped first for the same reason the depth count stamps: a
+            // cross-border target cannot be resolved by the in-country walk.
+            let passport = negotiation.loan_target_country.or_else(|| {
+                PlayerView::find_player_in_country(country, negotiation.player_id)
+                    .map(|player| player.country_id)
+            });
+            if matches!(passport, Some(id) if id != 0 && id != country.id) {
+                *map.entry(negotiation.buying_club_id).or_insert(0) += 1;
             }
         }
         map
@@ -325,8 +360,9 @@ impl LoanPipeline {
         foreign_players: &[&PlayerSummary],
         date: NaiveDate,
         market_map: &MarketMap,
+        placement_reach: &PlacementReachIndex,
     ) {
-        ForeignLoanScan::run(country, foreign_players, date, market_map);
+        ForeignLoanScan::run(country, foreign_players, date, market_map, placement_reach);
     }
 
     /// Fraction of a player's market value an option to buy is struck at.

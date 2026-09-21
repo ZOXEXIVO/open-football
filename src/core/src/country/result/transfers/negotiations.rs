@@ -310,6 +310,7 @@ impl NegotiationPass {
                         foreign_seller_finances: n.foreign_seller_finances,
                         staged_stance: n.staged_stance,
                         staged_sporting_drop: n.staged_sporting_drop,
+                        staged_loan_verdict: n.staged_loan_verdict,
                         mandate: n.mandate,
                     }
                 }
@@ -796,8 +797,15 @@ impl NegotiationPass {
         neg_data: &NegotiationData,
         date: NaiveDate,
     ) -> Option<LoanGuardVerdict> {
-        if !neg_data.is_loan || neg_data.selling_country_id.is_some() {
+        if !neg_data.is_loan {
             return None;
+        }
+        // A parent abroad answers in the same voice, from the verdict
+        // stamped when the approach was made: the alternative is the base
+        // engagement rate, which is the club saying nothing at all about
+        // a boy it owns.
+        if neg_data.selling_country_id.is_some() {
+            return neg_data.staged_loan_verdict;
         }
         let selling_club = country
             .clubs
@@ -4043,6 +4051,7 @@ mod development_pathway_protection_tests {
                 staged_reservation_wage: None,
                 staged_stance: None,
                 staged_sporting_drop: None,
+                staged_loan_verdict: None,
                 buying_league_reputation: 5000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,
@@ -4309,6 +4318,7 @@ mod seller_fee_floor_tests {
                 staged_reservation_wage: None,
                 staged_stance: None,
                 staged_sporting_drop: None,
+                staged_loan_verdict: None,
                 buying_league_reputation: 6000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,
@@ -4907,6 +4917,7 @@ mod saga_visibility_tests {
                 staged_reservation_wage: None,
                 staged_stance: None,
                 staged_sporting_drop: None,
+                staged_loan_verdict: None,
                 buying_league_reputation: 6000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,

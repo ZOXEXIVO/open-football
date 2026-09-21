@@ -1377,6 +1377,12 @@ impl CountryResult {
 
         // Take player from wherever they are
         let player_pos = data.find_player_position(event.player_id);
+        // Where he actually spent the spell, read before he is moved: the
+        // parent's placement ledger is keyed on the country, and once he
+        // is home the only club anybody can see is the one he came back to.
+        let borrower_country_id = player_pos
+            .map(|(ci, coi, _, _)| data.continents[ci].countries[coi].id)
+            .unwrap_or(0);
         // The borrowing manager's spell with him ends here. The parent
         // club's does not — his was suspended, not closed, and it resumes
         // when the player walks back through the door.
@@ -1597,6 +1603,13 @@ impl CountryResult {
             loan_band,
             date,
         );
+        // …and what the destination itself was worth. A country that gave
+        // him a season of football is one the club goes back to; one that
+        // sat him on a bench is one it thinks twice about.
+        if borrower_country_id != data.continents[pci].countries[pcoi].id {
+            data.continents[pci].countries[pcoi].clubs[pcli]
+                .on_loanee_returned_from(borrower_country_id, spell.start_share());
+        }
 
         // And his own manager picks the relationship back up. The spell was
         // suspended rather than closed when he went out, so nothing has to

@@ -922,6 +922,15 @@ pub struct BallMetadata {
     /// run, he is standing over the line with the ball in his hands.
     /// See `Ball::throw_in_taker`.
     pub throw_taker: Option<u32>,
+    /// **The man taking a kick-off right now**, and the team-mate the
+    /// set-up put beside him to receive it.
+    ///
+    /// Read by [`KickoffDelivery`](crate::r#match::common_states::KickoffDelivery),
+    /// the only thing that may move him while they are set: he is not
+    /// dribbling, pressing or making a run, he is standing over a dead
+    /// ball on the centre mark. See `Ball::kickoff_taker`.
+    pub kickoff_taker: Option<u32>,
+    pub kickoff_partner: Option<u32>,
     /// `(player, team)` of the team-mate whose deliberate kick or throw-in
     /// was the last touch, if the last touch was one. Feeds the back-pass
     /// half of `BallOperationsImpl::handling_verdict`.
@@ -1023,6 +1032,8 @@ impl BallMetadata {
         self.delivered_by = field.ball.own_delivery_player();
         self.held_in_hands = field.ball.held_in_hands;
         self.throw_taker = field.ball.throw_in_taker;
+        self.kickoff_taker = field.ball.kickoff_taker;
+        self.kickoff_partner = field.ball.kickoff_partner;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
         self.restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
         self.restart_carrier = field
@@ -1072,6 +1083,8 @@ impl From<&MatchField> for BallMetadata {
             delivered_by: None,
             held_in_hands: false,
             throw_taker: None,
+            kickoff_taker: None,
+            kickoff_partner: None,
             deliberate_kick_by: None,
             hands_released_by: None,
             aerial_contest_winner: None,

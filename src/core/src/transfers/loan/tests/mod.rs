@@ -2,6 +2,7 @@
 
 mod borrower;
 mod broadcast;
+mod geography;
 mod level;
 mod push;
 mod scan;

@@ -27,6 +27,7 @@ use crate::club::team::squad::SquadAssetContext;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
+use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::loan::interest::{
     BorrowerTaste, GroupPressure, InterestDraw, LoanCandidateProfile,
 };
@@ -43,6 +44,7 @@ use crate::{
     Club, Country, PathwayStage, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
     ReputationLevel, TeamType,
 };
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 use super::*;
@@ -53,6 +55,8 @@ use crate::transfers::loan::legacy::{LegacyDomesticGate, LoanDestinationLevel};
 struct LoanListing {
     player_id: u32,
     club_id: u32,
+    /// His passport — what the borrower's registration quota counts.
+    nationality_country_id: u32,
     asking_price: f64,
     ability: u8,
     age: u8,
@@ -210,6 +214,7 @@ impl LoanBoard {
                 loan_listings.push(LoanListing {
                     player_id: listing.player_id,
                     club_id: listing.club_id,
+                    nationality_country_id: player.country_id,
                     asking_price: listing.asking_price.amount,
                     ability: AbilityEstimator::observable_level(player),
                     age: player.age(date),
@@ -391,6 +396,7 @@ impl LoanBoard {
                         unsolicited_targets.push(LoanListing {
                             player_id: player.id,
                             club_id: club.id,
+                            nationality_country_id: player.country_id,
                             asking_price,
                             ability: AbilityEstimator::observable_level(player),
                             age,
@@ -446,6 +452,10 @@ struct BorrowerScan<'a> {
     borrower_league_rep: u16,
     borrower_profile: Option<LoanBorrowerProfile>,
     taste: BorrowerTaste,
+    /// The club's position under its league's foreigner quota, and the
+    /// slots its in-flight loan approaches have already spent.
+    foreign_slots: ForeignSlotCount,
+    pending_foreign: u32,
     /// What the club has actually asked for — the band, not just the
     /// shirt, so a request for a first-team defender does not read as an
     /// invitation for anybody who plays there.
@@ -460,6 +470,7 @@ impl<'a> BorrowerScan<'a> {
         club_idx: usize,
         tick: LoanScanTick,
         pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+        pending_foreign: &FxHashMap<u32, u32>,
     ) -> Option<Self> {
         let date = tick.date;
         let mid_season_window = tick.mid_season_window;
@@ -559,8 +570,9 @@ impl<'a> BorrowerScan<'a> {
             })
             .cloned()
             .collect();
-        // Scarcity pressure per group, so a club a man short at the back
-        // wants a defender more than it wants the best name on the list.
+        let foreign_slots =
+            SquadRegistrationLimits::new(country.id, &country.regulations).count(club);
+        let pending_foreign = pending_foreign.get(&club.id).copied().unwrap_or(0);
 
         Some(BorrowerScan {
             country,
@@ -577,6 +589,8 @@ impl<'a> BorrowerScan<'a> {
             borrower_league_rep,
             borrower_profile,
             taste,
+            foreign_slots,
+            pending_foreign,
             open_requests,
         })
     }
@@ -639,6 +653,9 @@ impl<'a> BorrowerScan<'a> {
             best_here: self.borrower_depth.best_in_group(group),
             clearly_better_ahead: self.borrower_depth.clearly_better_ahead(group, l.ability),
             need: self.need_for(l).score(),
+            slot_room: self
+                .foreign_slots
+                .room_after(l.nationality_country_id, self.pending_foreign),
             mid_season_window: self.mid_season_window,
             candidate: l.ability,
             is_development: l.is_development,
@@ -653,6 +670,11 @@ impl<'a> BorrowerScan<'a> {
                 .map(|g| g.listing_resignation())
                 .unwrap_or(0.0),
             going_home: false,
+            // Both sides of this deal are in one country: the parent is
+            // placing him where it already lives, and he is not moving
+            // anywhere he does not already play.
+            placement_trust: 1.0,
+            familiarity: 1.0,
             weight: verdict.map(|v| v.weight).unwrap_or(0.0),
             carry: verdict.map(|v| v.carry).unwrap_or(0.0),
             asking: l.asking_price,
@@ -1338,13 +1360,16 @@ impl LoanMarketScan {
 
         let mut actions: Vec<LoanScanAction> = Vec::new();
         let pending_loans = LoanPipeline::pending_incoming_loans_by_club(country);
+        let pending_foreign = LoanPipeline::pending_foreign_registrations_by_club(country);
 
         // Rotate who looks first. The per-pass dedup below is "has anybody
         // claimed him yet", so registration order was first refusal on the
         // whole market — the lowest-id club took the pick of every listing,
         // every tick, forever.
         for club_idx in InterestDraw::visit_order(country.clubs.len()) {
-            if let Some(scan) = BorrowerScan::open(country, club_idx, tick, &pending_loans) {
+            if let Some(scan) =
+                BorrowerScan::open(country, club_idx, tick, &pending_loans, &pending_foreign)
+            {
                 scan.run(&board, &mut actions);
             }
         }

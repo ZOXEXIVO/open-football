@@ -21,6 +21,10 @@
 //!   the ball in his hands. Without it there is no throw-in at all: the
 //!   taker was an ordinary carrier, and 99.7% of throw-ins were carried
 //!   into play rather than thrown.
+//! * [`kickoff`] — [`KickoffDelivery`]: the man on the centre mark.
+//!   Same defect, same restart shape: the taker was an ordinary carrier,
+//!   so a lone striker set off up the pitch with the kick-off rather
+//!   than playing it.
 //!
 //! The first three are applied at the single point every state's
 //! movement converges on (`StateProcessor::process_inner`), and the
@@ -30,12 +34,14 @@
 
 pub mod corner_hold;
 pub mod keeper_space;
+pub mod kickoff;
 pub mod loose_ball;
 pub mod restart_carry;
 pub mod throw_in;
 
 pub use corner_hold::*;
 pub use keeper_space::*;
+pub use kickoff::*;
 pub use loose_ball::*;
 pub use restart_carry::*;
 pub use throw_in::*;

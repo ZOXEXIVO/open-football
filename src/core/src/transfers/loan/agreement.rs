@@ -24,6 +24,7 @@ use crate::club::Club;
 use crate::club::player::mind::{CareerPlanView, MindClock};
 use crate::club::player::player::Player;
 use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::market::knowledge::ClubMarketKnowledge;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::squad::LevelBand;
@@ -95,6 +96,10 @@ pub struct ParentWillingness {
     pub starter_hold: f32,
     pub minutes: f32,
     pub depth_room: f32,
+    /// What the DESTINATION did to the score — 1.0 until the pair is
+    /// priced, because willingness is staged once per player and a
+    /// destination does not exist yet when it is.
+    pub placement_trust: f32,
 }
 
 impl ParentWillingness {
@@ -132,6 +137,7 @@ impl ParentWillingness {
             starter_hold: 1.0,
             minutes: 1.0,
             depth_room: 1.0,
+            placement_trust: 1.0,
         }
     }
 
@@ -182,6 +188,7 @@ impl ParentWillingness {
             starter_hold,
             minutes,
             depth_room,
+            placement_trust: 1.0,
         }
     }
 
@@ -220,6 +227,34 @@ impl ParentWillingness {
             score
         } else {
             score.min(Self::STARTER_HOLD)
+        }
+    }
+
+    /// Placement knowledge at or above which the parent is doing
+    /// business it already does.
+    const PLACEMENT_WORKING: f32 = ClubMarketKnowledge::WORKING_KNOWLEDGE;
+    /// Share of that bar the ramp runs over.
+    const PLACEMENT_RAMP: f32 = 0.5;
+    /// …and what a destination it knows nothing about costs. Not all of
+    /// it: a club will send a boy somewhere it has never sent one, rarely.
+    const PLACEMENT_COST: f32 = 0.8;
+
+    /// The same willingness, answered about ONE destination.
+    ///
+    /// Staged willingness is a fact about the club and the man and knows
+    /// nothing about where he would go; this is the half that needs a
+    /// borrower, applied where every other pair term is applied. A ramp
+    /// to a floor rather than a gate — [`BorrowerAppetite::floor_term`]
+    /// is the same shape on the other side of the deal.
+    pub fn placed_into(self, trust: f32) -> Self {
+        let below = ((Self::PLACEMENT_WORKING - trust.clamp(0.0, 1.0))
+            / (Self::PLACEMENT_RAMP * Self::PLACEMENT_WORKING))
+            .clamp(0.0, 1.0);
+        let term = 1.0 - Self::PLACEMENT_COST * below;
+        ParentWillingness {
+            score: (self.score * term).clamp(0.0, 1.0),
+            placement_trust: term,
+            ..self
         }
     }
 
@@ -267,6 +302,10 @@ pub struct BorrowerReading {
     /// How badly this club wants a body in that shirt, 0..1 —
     /// [`BorrowerNeed`].
     pub need: f32,
+    /// Registration room this candidate's passport has here, 0..1 —
+    /// [`crate::transfers::gate::fit::ForeignSlotCount::room_for`]. 1.0
+    /// for a domestic passport and for a league that runs no quota.
+    pub slot_room: f32,
 }
 
 /// How badly the borrowing club wants somebody in that shirt, 0..1.
@@ -327,6 +366,10 @@ impl BorrowerNeed {
 pub struct BorrowerAppetite {
     pub score: f32,
     pub room: f32,
+    /// The registration quota's own term, for the trace: a full appetite
+    /// killed by a full quota is a different story from one killed by a
+    /// full position group.
+    pub slot_room: f32,
     pub minutes_here: f32,
     pub fit_band: f32,
     pub level_floor: f32,
@@ -399,6 +442,7 @@ impl BorrowerAppetite {
             * reading.season_phase
             * shortage
             * room
+            * reading.slot_room.clamp(0.0, 1.0)
             * minutes_here
             * fit_band
             * level_floor
@@ -407,6 +451,7 @@ impl BorrowerAppetite {
         BorrowerAppetite {
             score,
             room,
+            slot_room: reading.slot_room.clamp(0.0, 1.0),
             minutes_here,
             fit_band,
             level_floor,
@@ -476,6 +521,14 @@ pub struct ConsentReading {
     pub going_home: bool,
     /// How far he has lowered his sights, 0..1.
     pub resignation: f32,
+    /// How familiar the destination is to HIM — his country's export
+    /// corridor, his diaspora, his language, whichever speaks loudest
+    /// ([`MarketAffinity::player_affinity`]). 1.0 for a domestic pair and
+    /// for a man going home.
+    ///
+    /// [`MarketAffinity::player_affinity`]:
+    ///     crate::transfers::MarketAffinity::player_affinity
+    pub familiarity: f32,
 }
 
 /// Whether he would go, 0..1.
@@ -483,6 +536,8 @@ pub struct ConsentReading {
 pub struct PlayerConsent {
     pub score: f32,
     pub plan_fit: f32,
+    /// What the place cost him, for the trace.
+    pub familiarity_cost: f32,
 }
 
 impl PlayerConsent {
@@ -499,6 +554,13 @@ impl PlayerConsent {
     const RENOWN_COST: f32 = 0.45;
     /// …and how much of that months on the market take back.
     const RESIGNATION_RELIEF: f32 = 0.6;
+    /// Reading of the place at or above which it is simply somewhere he
+    /// could live — his compatriots go there, or he speaks it.
+    const FAMILIAR: f32 = 0.35;
+    /// What a year somewhere he knows nothing about costs him. Below the
+    /// renown cost on purpose: a strange country is a reason to say no,
+    /// and a smaller one than dropping two divisions.
+    const FAMILIARITY_COST: f32 = 0.30;
 
     pub fn of(reading: &ConsentReading) -> Self {
         let plan_fit = reading.plan.fit_for(reading.band_here, reading.going_home);
@@ -509,12 +571,25 @@ impl PlayerConsent {
         };
         let renown_cost =
             Self::RENOWN_COST * renown * (1.0 - Self::RESIGNATION_RELIEF * reading.resignation);
+        // The same shape the renown cost uses, and relieved by the same
+        // two things: a man who has lowered his sights, and a man whose
+        // own arc is pushing him out of where he is, will go where the
+        // football is. A strange place is a cost, never a wall.
+        let strangeness = ((Self::FAMILIAR - reading.familiarity) / Self::FAMILIAR).clamp(0.0, 1.0);
+        let relief = (Self::RESIGNATION_RELIEF * reading.resignation).max(plan_fit.max(0.0));
+        let familiarity_cost =
+            Self::FAMILIARITY_COST * strangeness * (1.0 - relief.clamp(0.0, 1.0));
         let score = (Self::BASE
             + Self::PLAN_WEIGHT * plan_fit
             + Self::HOME * f32::from(reading.going_home)
-            - renown_cost)
+            - renown_cost
+            - familiarity_cost)
             .clamp(0.0, 1.0);
-        PlayerConsent { score, plan_fit }
+        PlayerConsent {
+            score,
+            plan_fit,
+            familiarity_cost,
+        }
     }
 }
 
@@ -638,21 +713,25 @@ impl LoanAgreement {
         money: &LoanMoney,
     ) -> String {
         format!(
-            "agreement={:.3} willingness={:.2} (hold={:.2} minutes={:.2} depth={:.2}) \
-             appetite={:.2} (room={:.2} minutes={:.2} band={:.2} floor={:.2}) \
-             consent={:.2} (plan={:+.2}) affordability={:.2}",
+            "agreement={:.3} willingness={:.2} (hold={:.2} minutes={:.2} depth={:.2} \
+             placement={:.2}) \
+             appetite={:.2} (room={:.2} slots={:.2} minutes={:.2} band={:.2} floor={:.2}) \
+             consent={:.2} (plan={:+.2} strange={:.2}) affordability={:.2}",
             Self::score(parent, borrower, player, money),
             parent.score,
             parent.starter_hold,
             parent.minutes,
             parent.depth_room,
+            parent.placement_trust,
             borrower.score,
             borrower.room,
+            borrower.slot_room,
             borrower.minutes_here,
             borrower.fit_band,
             borrower.level_floor,
             player.score,
             player.plan_fit,
+            player.familiarity_cost,
             money.affordability,
         )
     }
@@ -673,6 +752,13 @@ pub struct AgreementInputs {
     pub parent_best_in_group: u8,
     /// What the parent will keep paying of his wage, 0..1.
     pub parent_subsidy: f32,
+    /// How far the parent's own placement network reaches into the
+    /// borrower's country, 0..1 — [`LoanPlacementKnowledge`]. 1.0 for a
+    /// domestic pair.
+    ///
+    /// [`LoanPlacementKnowledge`]:
+    ///     crate::transfers::market::knowledge::LoanPlacementKnowledge
+    pub placement_trust: f32,
 
     // ── the borrower ────────────────────────────────────────────
     pub borrower_tier: ReputationLevel,
@@ -684,6 +770,9 @@ pub struct AgreementInputs {
     pub clearly_better_ahead: usize,
     /// 1.0 an open request at the group, 0.6 a vacancy, 0.35 neither.
     pub need: f32,
+    /// Registration room this passport has at the borrower, 0..1 —
+    /// [`crate::transfers::gate::fit::ForeignSlotCount::room_for`].
+    pub slot_room: f32,
     /// The mid-season window is open where the borrower plays.
     pub mid_season_window: bool,
 
@@ -703,6 +792,8 @@ pub struct AgreementInputs {
     pub renown_band: f32,
     pub resignation: f32,
     pub going_home: bool,
+    /// How familiar the borrower's country is to him, 0..1.
+    pub familiarity: f32,
 
     // ── the money ───────────────────────────────────────────────
     /// Value ÷ the borrower's year, and the share of his wage the
@@ -765,7 +856,7 @@ impl LoanAgreement {
         PlayerConsent,
         LoanMoney,
     ) {
-        let parent = inputs.parent;
+        let parent = inputs.parent.placed_into(inputs.placement_trust);
         let band_here = inputs.band_here();
         let readiness = LevelBand::readiness_of(inputs.candidate, inputs.parent_best_in_group);
         let appetite = BorrowerAppetite::of(&BorrowerReading {
@@ -788,6 +879,7 @@ impl LoanAgreement {
             standing_ratio: Self::ratio(inputs.borrower_rep, inputs.parent_rep),
             league_ratio: Self::ratio(inputs.borrower_league_rep, inputs.parent_league_rep),
             need: inputs.need,
+            slot_room: inputs.slot_room,
         });
         let consent = PlayerConsent::of(&ConsentReading {
             plan: inputs.plan,
@@ -796,6 +888,7 @@ impl LoanAgreement {
             renown_band: inputs.renown_band,
             going_home: inputs.going_home,
             resignation: inputs.resignation,
+            familiarity: inputs.familiarity,
         });
         let money = LoanMoney::of(&MoneyReading {
             weight: inputs.weight,
@@ -877,6 +970,7 @@ mod tests {
                 standing_ratio: 0.5,
                 league_ratio: 0.7,
                 need: 0.6,
+                slot_room: 1.0,
             }
         }
 
@@ -888,6 +982,7 @@ mod tests {
                 renown_band: 2000.0,
                 going_home: false,
                 resignation: 0.0,
+                familiarity: 1.0,
             }
         }
 
