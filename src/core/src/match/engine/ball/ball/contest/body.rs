@@ -515,6 +515,81 @@ impl KeeperBody {
     }
 }
 
+/// **How much of his goal a keeper fills before he leaves his feet.**
+///
+/// [`KeeperBody`] above is the certainty — a ball arriving where he
+/// already is comes off him. This is the same man entering the save
+/// model's *probability*: the width he brings to a shot with no dive in
+/// it at all, which [`SaveModel`](super::save::SaveModel) prices him
+/// against before any of his reach has been bought with flight time.
+///
+/// It is also what makes narrowing the angle worth anything. For a
+/// keeper on the goal→ball line the ball's lateral spread at his plane
+/// is proportional to the gap between them, and so is a reach bought
+/// with the flight across that gap — the two divide out, and the ratio
+/// the save curve is scored on comes out the same at every depth he
+/// might advance to. A width he simply HAS does not divide out.
+pub struct KeeperSpread;
+
+impl KeeperSpread {
+    /// Half the goal he covers spread, in metres — no dive, no time,
+    /// legs and arms out.
+    ///
+    /// [`KeeperBody::HIP_STANDING`] is hip to sole, and how far a keeper
+    /// throws a leg from his midline is how long the leg is, so the
+    /// K-block's half-width is that same figure. Derived rather than
+    /// chosen, and it moves with the man the viewer draws.
+    ///
+    /// ⚠ It is nonetheless the term that carries the CLOSE-RANGE
+    /// population save rate. A shot struck from inside 11 m is airborne
+    /// ~14 ticks, so `ready` sits near zero and every one of those shots
+    /// is priced at very nearly this number alone. Its defensible
+    /// physical band is 0.8-1.1 m; re-derive from the `< 11 m` row of
+    /// `KEEPER BY SHOT RANGE` (`arrived` / `beyond`), and put any
+    /// POPULATION-wide drift on `SaveModel::SKILL_FLOOR` instead — see
+    /// the note there for why the two must not be confused.
+    const SPREAD: f32 = KeeperBody::HIP_STANDING;
+
+    /// The fraction of his reach the flight used to floor at, restored by
+    /// [`Self::disabled`]. Not live; the control arm's only constant.
+    const PRIOR_FLOOR: f32 = 0.38;
+
+    /// A/B control: `OF_KEEPER_SPREAD=off` prices a save as a dive and
+    /// nothing else, exactly as it was before this existed.
+    ///
+    /// It moves both the close-range save rate and the value of coming
+    /// out, and `SaveModel::SKILL_FLOOR` moves with it, so "what did this
+    /// cost?" cannot be read off the diff or off an older revision. Same
+    /// pattern and purpose as [`KeeperBody::disabled`]; read once per
+    /// process. Debug infrastructure — do not remove.
+    pub fn disabled() -> bool {
+        static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OFF.get_or_init(|| {
+            std::env::var("OF_KEEPER_SPREAD")
+                .map(|v| v == "off" || v == "0")
+                .unwrap_or(false)
+        })
+    }
+
+    /// What he covers laterally, in game units, with `ready` of his dive
+    /// available — 0 for a strike he has no time for, 1 for a flight long
+    /// enough to reach full stretch.
+    ///
+    /// A ramp between the two postures, and it reads the same way from
+    /// either end: how much of the dive the flight has paid for, or how
+    /// much stance width he has traded for extension. Exact at both, so
+    /// a shot from range is scored against `base_reach` itself and every
+    /// calibration taken at full stretch is untouched by construction.
+    pub fn reach(base_reach: f32, ready: f32) -> f32 {
+        let ready = ready.clamp(0.0, 1.0);
+        if Self::disabled() {
+            return base_reach * ready.max(Self::PRIOR_FLOOR);
+        }
+        let spread = Self::SPREAD * KeeperBody::U_PER_M;
+        spread + (base_reach - spread) * ready
+    }
+}
+
 impl Ball {
     /// Bounce the ball off a goalkeeper's body, if it has just travelled
     /// through him.

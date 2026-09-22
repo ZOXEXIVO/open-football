@@ -582,6 +582,14 @@ pub struct Ball {
     pub census_shot_dist: f32,
     #[cfg(feature = "match-logs")]
     pub census_shot_side: Option<PlayerSide>,
+    /// Distance the ball was last STRUCK from, in game units, alongside
+    /// [`Self::last_shot_struck_tick`] and cleared with it — so it
+    /// survives a parry, a block and a deflection, which
+    /// [`Self::census_shot_dist`] deliberately does not. Half of every
+    /// goal arrives after one of those, and attributing them to where the
+    /// strike came from is the whole of "goals from outside the box".
+    #[cfg(feature = "match-logs")]
+    pub last_shot_struck_dist: f32,
 
     /// Tick of the most recent live rebound — a dangerous GK parry or
     /// a loose shot-block deflection that left the ball contestable in
@@ -965,6 +973,8 @@ impl Ball {
             census_shot_dist: 0.0,
             #[cfg(feature = "match-logs")]
             census_shot_side: None,
+            #[cfg(feature = "match-logs")]
+            last_shot_struck_dist: 0.0,
             last_rebound_tick: 0,
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
@@ -1452,6 +1462,10 @@ impl Ball {
         // A dead ball ends the shot: without this a stale strike would
         // let the next pass that rolls over the line stand as a goal.
         self.last_shot_struck_tick = 0;
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_shot_struck_dist = 0.0;
+        }
         // A restart is a fresh delivery — the taker may legally be the
         // player who last released the ball in open play, and no dead ball
         // is ever in a keeper's gloves.
@@ -1751,6 +1765,10 @@ impl Ball {
         self.last_completed_pass_receiver_id = None;
         self.last_completed_pass_tick = 0;
         self.last_shot_struck_tick = 0;
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_shot_struck_dist = 0.0;
+        }
         self.last_release_player_id = None;
         self.last_release_from_hands = false;
         self.held_in_hands = false;

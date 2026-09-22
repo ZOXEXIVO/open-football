@@ -235,6 +235,18 @@ impl Ball {
 
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));
 
+                // …and against the distance mix, which counts the shots
+                // but cannot say which of them went in. Read off the
+                // BALL's own strike distance so a goal that arrives via a
+                // parry or a deflection still lands in the band it was
+                // hit from. See `GOALS_BY_DIST`.
+                #[cfg(feature = "match-logs")]
+                if !final_is_auto_goal && self.last_shot_struck_dist > 0.0 {
+                    let band = crate::time_band_diag::band_for_distance(self.last_shot_struck_dist);
+                    crate::time_band_diag::GOALS_BY_DIST[band]
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+
                 // Hand the ball to the netting rather than teleporting it to
                 // the centre spot. It keeps the pace it crossed the line
                 // with, stretches the mesh, and settles in the goal — see

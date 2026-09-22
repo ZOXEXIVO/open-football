@@ -5114,6 +5114,14 @@ pub mod time_band_diag {
         out
     }
     pub static XG_X1000_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    /// On-target shots and GOALS by the same band. The mix above says
+    /// where the engine shoots from; only these say what those shots are
+    /// WORTH, and the pair is the one view that separates "too many long
+    /// shots" from "long shots score too easily" — real football saves
+    /// ~85-90% of what arrives on target from 22 m+ and ~40% from inside
+    /// six yards.
+    pub static ON_TARGET_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
+    pub static GOALS_BY_DIST: [AtomicU64; BANDS] = [ZERO; BANDS];
     /// Willingness rolls that REACHED the RNG, by distance band. Read
     /// against SHOTS_BY_DIST this separates "the ball is never out
     /// there in a shooting posture" (rolls concentrated close) from
@@ -5350,8 +5358,9 @@ pub mod time_band_diag {
         }
     }
 
-    /// [shots, xg, rolls, calls, possession, approved, queued_lost] per band.
-    pub fn distance_snapshot() -> [[u64; BANDS]; 7] {
+    /// [shots, xg, rolls, calls, possession, approved, queued_lost,
+    /// on_target, goals] per band.
+    pub fn distance_snapshot() -> [[u64; BANDS]; 9] {
         let load = |arr: &[AtomicU64; BANDS]| {
             let mut out = [0u64; BANDS];
             for (o, a) in out.iter_mut().zip(arr.iter()) {
@@ -5367,6 +5376,8 @@ pub mod time_band_diag {
             load(&POSSESSION_TICKS_BY_DIST),
             load(&APPROVED_BY_DIST),
             load(&QUEUED_SHOT_LOST),
+            load(&ON_TARGET_BY_DIST),
+            load(&GOALS_BY_DIST),
         ]
     }
     /// Condition samples per band per position group (0=GK 1=DEF 2=MID
@@ -5418,6 +5429,8 @@ pub mod time_band_diag {
             &CALLS_BY_DIST,
             &APPROVED_BY_DIST,
             &QUEUED_SHOT_LOST,
+            &ON_TARGET_BY_DIST,
+            &GOALS_BY_DIST,
             &POSSESSION_TICKS_BY_DIST,
         ] {
             for a in arr.iter() {

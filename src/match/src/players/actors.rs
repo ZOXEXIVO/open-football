@@ -2276,12 +2276,17 @@ impl Actors {
         // has it at his feet at all. See [`BallState::led_by`].
         let mut led: Option<(u32, Vec3, f32, bool)> = None;
         for (mut actor, mut transform, mut visibility, undressed) in &mut players {
-            actor.coil = if actor.is_goalkeeper {
-                tracks.players.get_mut(&actor.id)
-                    .map_or(0.0, |track| Self::keeper_coil(track, now))
-            } else {
-                0.0
-            };
+            actor.coil =
+                if actor.is_goalkeeper && actor.height > Self::AIRBORNE_FEET && !playback.seeked {
+                    actor.coil
+                } else if actor.is_goalkeeper {
+                    tracks
+                        .players
+                        .get_mut(&actor.id)
+                        .map_or(0.0, |track| Self::keeper_coil(track, now))
+                } else {
+                    0.0
+                };
             let position = tracks
                 .players
                 .get_mut(&actor.id)
@@ -3385,7 +3390,6 @@ impl Actors {
             // is a property of the body rather than of the viewer: a trunk
             // settles in match time, so it settles eight times as fast on
             // screen at 8x, which is what a replay at 8x is.
-            let match_delta = delta * playback.speed.max(0.1);
             // …and the same step as the LEGS are told it: the ground gained
             // past the leash, as a velocity. See [`PlayerActor::gain_ground`]
             // and [`PlayerActor::tread`]. Across a seek or a teleport the
@@ -3539,13 +3543,6 @@ impl Actors {
                     actor.flight = Vec3::ZERO;
                 }
                 actor.flight += Vec3::new(step.x, 0.0, step.z);
-                let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
-                let right = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
-                actor.tip = match actor.flight.try_normalize() {
-                    Some(going) => Vec2::new(going.dot(right), going.dot(forward)) * actor.flat,
-                    // Straight up, so far: nothing to go over on.
-                    None => Vec2::ZERO,
-                };
             }
 
             let facing = Self::facing(&actor, &ball, position, step, gathering || heedless);
@@ -3571,6 +3568,9 @@ impl Actors {
                         + (Self::PIVOT_RATE.1 - Self::PIVOT_RATE.0) * eased)
                         * match_delta;
                     applied = applied.clamp(-ceiling, ceiling);
+                    // Once committed, the trunk follows its launch rather
+                    // than swivelling after the ball as it passes the gloves.
+                    applied *= 1.0 - actor.extended();
                 }
                 actor.heading += applied;
                 yawed = applied;
@@ -3598,6 +3598,11 @@ impl Actors {
             // in is the one the pose is built in.
             let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
             let sideways = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
+            if airborne && !actor.bounce {
+                actor.tip = actor.flight.try_normalize().map_or(Vec2::ZERO, |going| {
+                    Vec2::new(going.dot(sideways), going.dot(forward)) * actor.flat
+                });
+            }
             let going = Vec3::new(actor.travel.x, 0.0, actor.travel.z);
             let wanted_course = match going.try_normalize() {
                 // Below a shuffle there is no course to speak of and the
@@ -3653,7 +3658,8 @@ impl Actors {
             // rounding error and the pitch of it is a man staring at his own
             // boots. He looks where he is facing, which is up the pitch he is
             // about to throw it to.
-            let wanted_look = Self::looking(&actor, &ball, position, gathering || heedless);
+            let wanted_look = Self::looking(&actor, &ball, position, gathering || heedless)
+                + actor.keeper_head_shake();
 
             // And how far up or down. A cross comes in above head height and a
             // shot along the floor arrives below the knee; a player who tracks
@@ -4839,6 +4845,9 @@ impl PlayerActor {
                 advance += owed.clamp(-cap, cap) * settling;
             }
         }
+        if self.is_goalkeeper && self.air > 0.0 {
+            advance = 0.0;
+        }
         self.phase = (self.phase + advance).rem_euclid(TAU);
         if (self.phase / PI) as u32 != was {
             self.steps = self.steps.wrapping_add(1);
@@ -4918,6 +4927,14 @@ impl PlayerActor {
             // A leap uses dive as its flight envelope too. Only a body
             // actually falling onto its side bypasses the standing landing.
             self.brace_rate += Actors::LANDING_KICK * self.apex * (1.0 - self.committed());
+            if self.is_goalkeeper && !self.bounce {
+                // Even when landing at a run, the first contact has to take
+                // his weight. Keep this brief crouch separate from braking,
+                // which movement is allowed to release immediately.
+                self.land = self
+                    .land
+                    .max((self.apex / 0.8).clamp(0.0, 0.65) * (1.0 - self.committed()));
+            }
             self.apex = 0.0;
         }
         Actors::BRACE_SPRING.settle(&mut self.brace, &mut self.brace_rate, 0.0, match_delta);
@@ -5083,7 +5100,8 @@ impl PlayerActor {
             self.flat = Self::flatness(0.0, self.declared);
             self.tip = Vec2::ZERO;
             self.flight = Vec3::ZERO;
-            self.bounce = airborne && self.height <= Actors::HOP_CEILING
+            self.bounce = airborne
+                && self.height <= Actors::HOP_CEILING
                 && self.declared == KeeperFlight::Unknown;
             self.hop = f32::from(self.bounce);
             self.land = 0.0;
@@ -5171,7 +5189,7 @@ impl PlayerActor {
             self.climb = 0.0;
             self.bounce = false;
             self.hop = 0.0;
-            self.land = 0.0;
+            self.land -= self.land * (1.0 - (-match_delta / Actors::LAND_RELEASE).exp());
             // He lies there for a beat and then gets up — unless the
             // recording already has him moving, in which case standing him up
             // early is the lesser of the two lies. Measured: half of all
@@ -5188,7 +5206,8 @@ impl PlayerActor {
             let hurry = (ground / Actors::SPRAWL_URGENCY).clamp(0.0, 1.0);
             // …and a beaten keeper stays down, for a length of time that is
             // his own. See [`Actors::BEATEN_HOLD`].
-            let beaten = self.despair * self.keeper_grief()
+            let beaten = self.despair
+                * self.keeper_grief()
                 * (1.0 + Actors::BEATEN_SPREAD * Complexion::carriage(self.id))
                 * (Actors::BEATEN_HOLD - 1.0);
             let hold = Actors::SPRAWL_HOLD * (1.0 - hurry) * (1.0 + beaten);
@@ -5532,7 +5551,7 @@ impl PlayerActor {
     /// the ground-out: a keeper who takes a cross at the top of a leap and
     /// lands on his feet brings it in to his chest like anybody else.
     fn extended(&self) -> f32 {
-        self.dive * (1.0 - self.settling())
+        self.dive * self.flight_blend()
     }
 
     /// He has the ball in both hands for a throw-in: from the moment the
@@ -5704,7 +5723,7 @@ impl PlayerActor {
         // his boots 7 cm above the turf. Same bookkeeping as `SET_DROP`, and
         // the same trap `DOUBLED_DROP` documents.
         let jump = if self.is_goalkeeper {
-            self.dive * (1.0 - self.flat) * (1.0 - self.settling())
+            self.extended() * (1.0 - self.flat)
         } else {
             (self.height / Actors::JUMP_HEIGHT).clamp(0.0, 1.0)
         };
@@ -5791,7 +5810,7 @@ impl PlayerActor {
             // the turf. What replaces it is the ground-out below, and for a
             // landing that was not a fall, nothing — which is right, because
             // a man who got his feet under him is just standing there.
-            stretch: self.stretch * (1.0 - self.settling()),
+            stretch: self.stretch * self.flight_blend(),
             grounded,
             lead: self.lead(),
             // Both hands to the ball: he has it, and he is still up there.
@@ -5853,7 +5872,7 @@ impl PlayerActor {
                 self.dive
                     .max((self.height / Actors::REACH_HEIGHT).clamp(0.0, 1.0))
                     * (1.0 - self.carry * (1.0 - extended))
-                    * (1.0 - self.settling())
+                    * self.flight_blend()
                     // ⚠ Not on the split-step. The height term above is a
                     // claim that a man off the ground is reaching for
                     // something, and a keeper on his hop is a few
@@ -5883,7 +5902,8 @@ impl PlayerActor {
             // goal, and what a man does standing about. They cannot both be
             // on — `gesturing` is gated on nothing having happened — so the
             // two channels simply add. Bent over his knees likewise.
-            hands_on_hips: (taking * on_hips * reaction_gesture + idle.hands_on_hips).clamp(0.0, 1.0),
+            hands_on_hips: (taking * on_hips * reaction_gesture + idle.hands_on_hips)
+                .clamp(0.0, 1.0),
             doubled_over: (taking * doubled * reaction_gesture + idle.doubled_over).clamp(0.0, 1.0),
             urging: idle.urging,
             pointing: idle.pointing,
@@ -5955,12 +5975,14 @@ impl PlayerActor {
             // slerps the stride away at whatever weight it has, and a man
             // who stopped for half a second and set off again would
             // otherwise take his first two strides on bent knees.
-            land: self.coil * afoot * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation))
-                + self.land.max(
-                self.brace.max(0.0)
-                    * afoot
-                    * (1.0 - Actors::ease((self.tread - Actors::STEPPING) / Actors::BRACE_LETGO)),
-            ),
+            land: (self.coil * afoot * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation)))
+                .max(self.land)
+                .max(
+                    self.brace.max(0.0)
+                        * afoot
+                        * (1.0
+                            - Actors::ease((self.tread - Actors::STEPPING) / Actors::BRACE_LETGO)),
+                ),
             keeper: f32::from(self.is_goalkeeper),
             jitter: self.jitter,
         }

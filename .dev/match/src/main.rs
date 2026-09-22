@@ -6140,7 +6140,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         // sitters: xG/shot inflates, forwards post huge ratings off
         // tap-ins, and shot VOLUME has to be suppressed artificially to
         // keep the scoreline sane.
-        let [dshots, dxg, drolls, dcalls, dposs, dappr, dlost] =
+        let [dshots, dxg, drolls, dcalls, dposs, dappr, dlost, dot, dgoals] =
             core::time_band_diag::distance_snapshot();
         let rolltotal: u64 = drolls.iter().sum();
         let calltotal: u64 = dcalls.iter().sum();
@@ -6174,6 +6174,36 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 real,
             );
         }
+        // …and what those shots are WORTH. The mix above cannot tell "too
+        // many long shots" from "long shots score too easily"; this can,
+        // and the real column is the one every keeper argument turns on.
+        println!();
+        println!(
+            "  conversion by distance:  {:>8} {:>8} {:>8} {:>8} {:>9}   {}",
+            "on tgt", "on tgt%", "goals", "goal/sh", "saved", "real saved"
+        );
+        let dreal = ["~40%", "~55%", "~70%", "~82%", "~88%", "~92%"];
+        for (i, (label, _)) in dlabels.iter().enumerate() {
+            if dshots[i] == 0 {
+                continue;
+            }
+            let ot = dot[i].max(1) as f64;
+            println!(
+                "  {}          {:>8} {:>7.1}% {:>8} {:>7.1}% {:>8.1}%   {}",
+                label,
+                dot[i],
+                dot[i] as f64 / dshots[i] as f64 * 100.0,
+                dgoals[i],
+                dgoals[i] as f64 / dshots[i] as f64 * 100.0,
+                (1.0 - dgoals[i] as f64 / ot) * 100.0,
+                dreal[i],
+            );
+        }
+        let dgtotal: u64 = dgoals.iter().sum();
+        println!(
+            "  goals with a live strike behind them: {dgtotal}              (any shortfall against the scoreline is deflections and scrambles)"
+        );
+
         let pd = core::time_band_diag::pos_dist_snapshot();
         println!();
         println!("  shot distance mix BY POSITION (row = share of that line's shots):");

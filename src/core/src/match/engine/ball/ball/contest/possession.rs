@@ -274,6 +274,10 @@ impl Ball {
         // A dead ball ends the shot: without this a stale strike would
         // let the next pass that rolls over the line stand as a goal.
         self.last_shot_struck_tick = 0;
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_shot_struck_dist = 0.0;
+        }
     }
 
     /// Stamp the giveaway tracker for the player who just lost the ball

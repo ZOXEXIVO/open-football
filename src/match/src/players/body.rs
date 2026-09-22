@@ -4391,10 +4391,11 @@ impl Joint {
                         Self::SET_LEAN * Self::crouched(gait) * (1.0 - gait.save * gait.save_aim.y.max(0.0)),
                     )
                     * Quat::from_rotation_x(
-                        Self::DIVE_ARCH * gait.stretch * (1.0 - gait.grounded),
+                        Self::DIVE_ARCH * gait.stretch * (1.0 - gait.grounded) * (1.0 - gait.jump),
                     )
                     * Quat::from_rotation_y(
-                        Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
+                        Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded)
+                            * (1.0 - gait.jump),
                     )
                     * Quat::from_rotation_x(
                         Self::DOWN_CURL * gait.grounded
@@ -5185,7 +5186,11 @@ impl Joint {
                     Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
                     gait.hop,
                 );
-                let leaping = Self::held(hopping, Quat::from_rotation_x(Self::jump_leg(gait, self.side).x), gait.jump);
+                let leaping = Self::held(
+                    hopping,
+                    Quat::from_rotation_x(Self::jump_leg(gait, self.side).x),
+                    gait.jump,
+                );
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
                 // swinging up over it.
@@ -5293,8 +5298,11 @@ impl Joint {
                     Quat::from_rotation_x(Self::SET_KNEE + Self::HOP_KNEE),
                     gait.hop,
                 );
-                let leaping =
-                    Self::held(hopping, Quat::from_rotation_x(Self::jump_leg(gait, self.side).y), gait.jump);
+                let leaping = Self::held(
+                    hopping,
+                    Quat::from_rotation_x(Self::jump_leg(gait, self.side).y),
+                    gait.jump,
+                );
                 let diving = Self::held(
                     leaping,
                     Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
@@ -5405,8 +5413,13 @@ impl Joint {
                 // toes fall into a point.
                 let flying = Self::held(
                     hopping,
-                    Quat::from_rotation_x(Self::DIVE_ANKLE
-                        * (1.0 - gait.keeper * gait.jump * Actors::ease((gait.jump_phase - 0.5) * 2.0))),
+                    Quat::from_rotation_x(
+                        Self::DIVE_ANKLE
+                            * (1.0
+                                - gait.keeper
+                                    * gait.jump
+                                    * Actors::ease((gait.jump_phase - 0.5) * 2.0)),
+                    ),
                     gait.dive.max(gait.jump),
                 );
                 // …and the standing leg locks under a kick while the
@@ -6530,6 +6543,18 @@ impl Joint {
     }
     const SIDLE_READY: f32 = 0.60;
 
+    /// Drive one knee during ascent; both feet come under the hips to land.
+    fn jump_leg(gait: Gait, side: f32) -> Vec2 {
+        let drive = (side * gait.jump_foot + 1.0) * 0.5;
+        let gather = Actors::ease(gait.jump_phase * 2.0);
+        let extend = Actors::ease((gait.jump_phase - 0.5) * 2.0);
+        let launch = Vec2::new(0.08 - 0.50 * drive, 0.25 + 0.50 * drive);
+        let apex = Vec2::new(-0.12 - 0.72 * drive, 0.60 + 0.70 * drive);
+        let landing = Vec2::new(-0.12, 0.24);
+        Vec2::new(Self::JUMP_HIP, Self::JUMP_KNEE)
+            .lerp(launch.lerp(apex, gather).lerp(landing, extend), gait.keeper)
+    }
+
     /// **The set STANCE**, as against [`Gait::set`], which is the claim that
     /// the ball is near his goal.
     ///
@@ -6551,17 +6576,6 @@ impl Joint {
     /// stays behind is his ARMS, which is [`Joint::armed`]: a keeper
     /// shuffling across his line has his gloves up and his legs working, and
     /// those are two different claims about him.
-    fn jump_leg(gait: Gait, side: f32) -> Vec2 {
-        let drive = (side * gait.jump_foot + 1.0) * 0.5;
-        let gather = Actors::ease(gait.jump_phase * 2.0);
-        let extend = Actors::ease((gait.jump_phase - 0.5) * 2.0);
-        let launch = Vec2::new(0.08 - 0.50 * drive, 0.25 + 0.50 * drive);
-        let apex = Vec2::new(-0.12 - 0.72 * drive, 0.60 + 0.70 * drive);
-        let landing = Vec2::new(-0.12, 0.24);
-        Vec2::new(Self::JUMP_HIP, Self::JUMP_KNEE)
-            .lerp(launch.lerp(apex, gather).lerp(landing, extend), gait.keeper)
-    }
-
     fn crouched(gait: Gait) -> f32 {
         gait.set * (1.0 - Self::afoot(gait))
     }
@@ -9185,6 +9199,7 @@ mod tests {
     #[test]
     fn a_header_is_not_a_dive() {
         let mut gait = still();
+        gait.keeper = 0.0;
         gait.jump = 1.0;
         assert!(
             boot(1.0, gait).y > boot(1.0, still()).y + 0.15,

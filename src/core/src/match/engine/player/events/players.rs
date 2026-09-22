@@ -5252,6 +5252,9 @@ impl PlayerEventDispatcher {
                 .fetch_add((xg * 1000.0) as u64, Ordering::Relaxed);
             let dband = time_band_diag::band_for_distance(horizontal_distance);
             time_band_diag::SHOTS_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+            if on_target {
+                time_band_diag::ON_TARGET_BY_DIST[dband].fetch_add(1, Ordering::Relaxed);
+            }
             if let Some(sh) = field.get_player(shoot_event_model.from_player_id) {
                 let g = match sh.tactical_position.current_position.position_group() {
                     crate::PlayerFieldPositionGroup::Goalkeeper => 0,
@@ -5338,6 +5341,10 @@ impl PlayerEventDispatcher {
         // know yet.
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
         field.ball.last_shot_struck_tick = context.current_tick();
+        #[cfg(feature = "match-logs")]
+        {
+            field.ball.last_shot_struck_dist = horizontal_distance;
+        }
         // Cleared here so a shot whose target cannot be projected (the
         // `else` arm below) can never leave the previous shot's value on
         // the ball for the next keeper credit to pick up.
@@ -5622,6 +5629,7 @@ impl PlayerEventDispatcher {
                     true_goal_line_y - field.size.height as f32 * 0.5,
                     final_velocity.norm(),
                     goal_line_z,
+                    horizontal_distance,
                 );
                 // Positional-defending credit. Every other defensive
                 // counter in the model is an EVENT — a tackle, an
