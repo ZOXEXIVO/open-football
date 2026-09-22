@@ -18,7 +18,8 @@ pub use league::*;
 pub use names::*;
 pub use national::*;
 pub use players::{
-    OdbContract, OdbHistoryItem, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb,
+    OdbAttrs, OdbContract, OdbHistoryItem, OdbLoan, OdbPlayer, OdbPlayerAttrs, OdbPosition,
+    OdbReputation, PlayersOdb,
 };
 
 /// id -> display name for clubs that only appear in player career history.

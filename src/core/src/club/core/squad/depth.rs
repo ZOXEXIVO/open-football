@@ -22,6 +22,9 @@ impl SquadSize {
     pub(in crate::club::core) const MIN_YOUTH: usize = 11;
     /// Minimum players the main team should keep before allowing demotions.
     pub(in crate::club::core) const MIN_MAIN: usize = 22;
+    /// A youth side that plays in a league names eleven and a seven-man
+    /// bench; below this it is short of a matchday squad.
+    pub(in crate::club::core) const YOUTH_MATCHDAY: usize = 18;
     /// Observable level ABOVE the first team's promotion floor at which a
     /// promotion stops being a judgement call and becomes an obvious one —
     /// the boy is not "ready soon", he is already better than the last man
@@ -88,9 +91,17 @@ impl MainSquadDepth {
 /// Snapshotted once per pass: the thresholds used to be closures re-walking
 /// the whole main squad for every player in every other squad.
 pub(in crate::club::core) struct PromotionBar {
-    /// Per group: the floor, whether the first team is a body short, and
-    /// whether it is already at its depth cap.
-    groups: [(PlayerFieldPositionGroup, u8, bool, bool); PlayerFieldPositionGroup::COUNT],
+    groups: [GroupBar; PlayerFieldPositionGroup::COUNT],
+}
+
+#[derive(Clone, Copy)]
+struct GroupBar {
+    group: PlayerFieldPositionGroup,
+    count: usize,
+    /// Level of the weakest man in the group; `u8::MAX` for an empty one.
+    worst: u8,
+    floor: u8,
+    short: bool,
 }
 
 impl PromotionBar {
@@ -115,40 +126,68 @@ impl PromotionBar {
                 } else {
                     worst.saturating_add(1)
                 };
-                let full = count >= group.main_depth_cap();
-                (group, floor, short, full)
+                GroupBar {
+                    group,
+                    count,
+                    worst,
+                    floor,
+                    short,
+                }
             }),
         }
     }
 
+    fn of(&self, group: PlayerFieldPositionGroup) -> Option<&GroupBar> {
+        self.groups.iter().find(|g| g.group == group)
+    }
+
     pub(in crate::club::core) fn floor(&self, group: PlayerFieldPositionGroup) -> u8 {
-        self.groups
-            .iter()
-            .find(|(g, _, _, _)| *g == group)
-            .map(|(_, floor, _, _)| *floor)
-            .unwrap_or(u8::MAX)
+        self.of(group).map_or(u8::MAX, |g| g.floor)
     }
 
     /// Is the group already at the depth the surplus pass trims to? A
     /// promotion into it displaces somebody, so it has to be clearly
     /// earned — otherwise the two men swap places every week.
     pub(in crate::club::core) fn full(&self, group: PlayerFieldPositionGroup) -> bool {
-        self.groups
-            .iter()
-            .find(|(g, _, _, _)| *g == group)
-            .map(|(_, _, _, full)| *full)
-            .unwrap_or(false)
+        self.of(group)
+            .is_some_and(|g| g.count >= group.main_depth_cap())
     }
 
     /// Is the first team a body short in this group? A promotion into a hole
     /// is never held up by the squad it comes out of — the youth side can be
     /// topped up, a matchday XI cannot.
     pub(in crate::club::core) fn main_short(&self, group: PlayerFieldPositionGroup) -> bool {
-        self.groups
-            .iter()
-            .find(|(g, _, _, _)| *g == group)
-            .map(|(_, _, short, _)| *short)
-            .unwrap_or(false)
+        self.of(group).is_some_and(|g| g.short)
+    }
+
+    /// Places one pass may fill without displacing anybody. A short group
+    /// opens only its hole — the gap floor is a stopgap bar, and everyone
+    /// above it walking in at once is a squad the surplus pass then halves
+    /// the following week.
+    pub(in crate::club::core) fn room(&self, group: PlayerFieldPositionGroup) -> usize {
+        self.of(group).map_or(0, |g| {
+            let depth = if g.short {
+                MainSquadDepth::min_for(group)
+            } else {
+                group.main_depth_cap()
+            };
+            depth.saturating_sub(g.count)
+        })
+    }
+
+    /// Clearly better than the weakest man in the group — a promotion that
+    /// displaces him rather than queueing behind him.
+    pub(in crate::club::core) fn displaces_worst(
+        &self,
+        group: PlayerFieldPositionGroup,
+        level: u8,
+    ) -> bool {
+        self.of(group).is_some_and(|g| {
+            g.count > 0
+                && level
+                    >= g.worst
+                        .saturating_add(1 + SquadSize::PROMOTION_CLEAR_MARGIN)
+        })
     }
 }
 

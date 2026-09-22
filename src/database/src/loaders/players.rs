@@ -96,6 +96,176 @@ pub struct OdbPlayer {
     /// Empty/missing means "use age-based placement".
     #[serde(default)]
     pub team_type_hint: Option<String>,
+
+    /// Recorded attributes, usually partial; missing slots are generated.
+    #[serde(default)]
+    pub attrs: Option<OdbAttrs>,
+}
+
+/// 1-20 scale. Short keys because they repeat per player across ~60k files.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbAttrs {
+    #[serde(default)]
+    pub person: OdbPersonAttrs,
+    #[serde(default)]
+    pub player: OdbPlayerAttrs,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbPersonAttrs {
+    #[serde(default, rename = "ada")]
+    pub adaptability: Option<u8>,
+    #[serde(default, rename = "amb")]
+    pub ambition: Option<u8>,
+    #[serde(default, rename = "con")]
+    pub controversy: Option<u8>,
+    #[serde(default, rename = "loy")]
+    pub loyalty: Option<u8>,
+    #[serde(default, rename = "pre")]
+    pub pressure: Option<u8>,
+    #[serde(default, rename = "pro")]
+    pub professionalism: Option<u8>,
+    #[serde(default, rename = "spo")]
+    pub sportsmanship: Option<u8>,
+    #[serde(default, rename = "tem")]
+    pub temperament: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbPlayerAttrs {
+    #[serde(default)]
+    pub technical: OdbTechnicalAttrs,
+    #[serde(default)]
+    pub mental: OdbMentalAttrs,
+    #[serde(default)]
+    pub physical: OdbPhysicalAttrs,
+    #[serde(default)]
+    pub goalkeeping: OdbGoalkeepingAttrs,
+    #[serde(default)]
+    pub hidden: OdbHiddenAttrs,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbTechnicalAttrs {
+    #[serde(default, rename = "cor")]
+    pub corners: Option<u8>,
+    #[serde(default, rename = "cro")]
+    pub crossing: Option<u8>,
+    #[serde(default, rename = "dri")]
+    pub dribbling: Option<u8>,
+    #[serde(default, rename = "fin")]
+    pub finishing: Option<u8>,
+    #[serde(default, rename = "fir")]
+    pub first_touch: Option<u8>,
+    #[serde(default, rename = "fre")]
+    pub free_kicks: Option<u8>,
+    #[serde(default, rename = "hea")]
+    pub heading: Option<u8>,
+    #[serde(default, rename = "lon")]
+    pub long_shots: Option<u8>,
+    #[serde(default, rename = "lth")]
+    pub long_throws: Option<u8>,
+    #[serde(default, rename = "mar")]
+    pub marking: Option<u8>,
+    #[serde(default, rename = "pas")]
+    pub passing: Option<u8>,
+    #[serde(default, rename = "pen")]
+    pub penalty_taking: Option<u8>,
+    #[serde(default, rename = "tck")]
+    pub tackling: Option<u8>,
+    #[serde(default, rename = "tec")]
+    pub technique: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbMentalAttrs {
+    #[serde(default, rename = "agg")]
+    pub aggression: Option<u8>,
+    #[serde(default, rename = "ant")]
+    pub anticipation: Option<u8>,
+    #[serde(default, rename = "bra")]
+    pub bravery: Option<u8>,
+    #[serde(default, rename = "cmp")]
+    pub composure: Option<u8>,
+    #[serde(default, rename = "cnt")]
+    pub concentration: Option<u8>,
+    #[serde(default, rename = "dec")]
+    pub decisions: Option<u8>,
+    #[serde(default, rename = "det")]
+    pub determination: Option<u8>,
+    #[serde(default, rename = "fla")]
+    pub flair: Option<u8>,
+    #[serde(default, rename = "ldr")]
+    pub leadership: Option<u8>,
+    #[serde(default, rename = "otb")]
+    pub off_the_ball: Option<u8>,
+    #[serde(default, rename = "pos")]
+    pub positioning: Option<u8>,
+    #[serde(default, rename = "tea")]
+    pub teamwork: Option<u8>,
+    #[serde(default, rename = "vis")]
+    pub vision: Option<u8>,
+    #[serde(default, rename = "wor")]
+    pub work_rate: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbPhysicalAttrs {
+    #[serde(default, rename = "acc")]
+    pub acceleration: Option<u8>,
+    #[serde(default, rename = "agi")]
+    pub agility: Option<u8>,
+    #[serde(default, rename = "bal")]
+    pub balance: Option<u8>,
+    #[serde(default, rename = "jum")]
+    pub jumping: Option<u8>,
+    #[serde(default, rename = "nat")]
+    pub natural_fitness: Option<u8>,
+    #[serde(default, rename = "pac")]
+    pub pace: Option<u8>,
+    #[serde(default, rename = "sta")]
+    pub stamina: Option<u8>,
+    #[serde(default, rename = "str")]
+    pub strength: Option<u8>,
+}
+
+/// No first touch / passing here: the technical ones stand in for the keeper's.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbGoalkeepingAttrs {
+    #[serde(default, rename = "aer")]
+    pub aerial_reach: Option<u8>,
+    #[serde(default, rename = "cmd")]
+    pub command_of_area: Option<u8>,
+    #[serde(default, rename = "com")]
+    pub communication: Option<u8>,
+    #[serde(default, rename = "ecc")]
+    pub eccentricity: Option<u8>,
+    #[serde(default, rename = "han")]
+    pub handling: Option<u8>,
+    #[serde(default, rename = "kic")]
+    pub kicking: Option<u8>,
+    #[serde(default, rename = "one")]
+    pub one_on_ones: Option<u8>,
+    #[serde(default, rename = "pun")]
+    pub punching: Option<u8>,
+    #[serde(default, rename = "ref")]
+    pub reflexes: Option<u8>,
+    #[serde(default, rename = "rus")]
+    pub rushing_out: Option<u8>,
+    #[serde(default, rename = "thr")]
+    pub throwing: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OdbHiddenAttrs {
+    #[serde(default, rename = "cns")]
+    pub consistency: Option<u8>,
+    #[serde(default, rename = "dir")]
+    pub dirtiness: Option<u8>,
+    #[serde(default, rename = "imp")]
+    pub important_matches: Option<u8>,
+    #[serde(default, rename = "inj")]
+    pub injury_proneness: Option<u8>,
 }
 
 /// Per-foot ownership levels on a 0-100 scale.
@@ -365,6 +535,7 @@ mod tests {
             }),
             history: Vec::new(),
             team_type_hint: None,
+            attrs: None,
         }
     }
 

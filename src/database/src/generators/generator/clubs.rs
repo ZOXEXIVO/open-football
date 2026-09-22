@@ -590,6 +590,7 @@ mod placement_tests {
                 loan: None,
                 history: Vec::new(),
                 team_type_hint: None,
+                attrs: None,
             }
         }
 

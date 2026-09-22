@@ -50,23 +50,22 @@ impl Club {
             .map(|t| t.name.clone())
             .unwrap_or_else(|| self.name.clone());
 
-        // Largest hole first. The old order was "lowest bracket first",
-        // which is the right instinct about WHERE academy boys belong and
-        // the wrong rule for a rescue: a club whose U18 is one man short
-        // and whose U20 has four spent the whole budget on the U18 and
-        // left the U20 unable to field a side — and a squad that never
-        // reaches eleven is the squad the promotion guard then refuses to
-        // let anybody out of. The deficit is the severity ladder; ties keep
-        // the old lowest-bracket preference.
-        let mut brackets: Vec<(TeamType, usize, usize)> = TeamType::YOUTH_PROGRESSION
+        // Lowest bracket first: an academy boy belongs in the youngest
+        // squad he is eligible for, and older brackets are fed by the boys
+        // who outgrow it. Only a squad with fixtures is in an emergency —
+        // ranking by the size of the hole sent fourteen-year-olds into a
+        // league-less U21 that never plays while the U19 next to it
+        // forfeited.
+        let brackets: Vec<(TeamType, usize, usize)> = TeamType::YOUTH_PROGRESSION
             .iter()
             .filter_map(|team_type| {
                 let idx = self.teams.index_of_type(*team_type)?;
-                let squad = self.teams.teams[idx].players.len();
-                (squad < ClubAcademy::EMERGENCY_YOUTH_SIZE).then_some((*team_type, idx, squad))
+                let team = &self.teams.teams[idx];
+                let squad = team.players.len();
+                (team.league_id.is_some() && squad < ClubAcademy::EMERGENCY_YOUTH_SIZE)
+                    .then_some((*team_type, idx, squad))
             })
             .collect();
-        brackets.sort_by_key(|(_, _, squad)| *squad);
 
         for (team_type, idx, squad) in brackets {
             if budget == 0 {
@@ -301,6 +300,23 @@ mod tests {
             ClubAcademy::EMERGENCY_YOUTH_TARGET,
             "the U20 gets the rest of the month's budget"
         );
+    }
+
+    /// A squad with no fixtures is not in an emergency: academy boys go to
+    /// the side that plays, not to a league-less older bracket.
+    #[test]
+    fn a_squad_without_fixtures_is_not_fed_from_the_academy() {
+        let date = Fixture::date();
+        let mut club = Fixture::club(0, 0, &[15; 60]);
+        club.teams.teams[2].league_id = None;
+
+        club.process_youth_emergency_callups(date, "en");
+
+        assert_eq!(
+            Fixture::squad(&club, TeamType::U18),
+            ClubAcademy::EMERGENCY_YOUTH_TARGET
+        );
+        assert_eq!(Fixture::squad(&club, TeamType::U20), 0);
     }
 
     #[test]

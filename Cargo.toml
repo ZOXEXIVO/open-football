@@ -19,6 +19,7 @@ exclude = [
     ".dev/match",
     ".dev/mind",
     ".dev/simulate",
+    ".dev/squads",
     ".dev/transfers",
     "src/match",
 ]

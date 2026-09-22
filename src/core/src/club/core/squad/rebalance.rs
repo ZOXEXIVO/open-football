@@ -6,14 +6,16 @@
 //! execution applies both, honouring the squad-size guards; and the backfill
 //! tops the first team back up if it is still short.
 
+use std::collections::HashSet;
+
 use chrono::NaiveDate;
 use log::debug;
 
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile};
 use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
-use crate::{Club, Person, PlayerFieldPositionGroup, PlayerPlan, PlayerStatusType, TeamType};
+use crate::{Club, Person, PlayerFieldPositionGroup, PlayerPlan, PlayerStatusType, Team, TeamType};
 
-use super::depth::{PromotionBar, SquadSize};
+use super::depth::{PromotionBar, SquadSize, YouthSquadDepth};
 use super::promotion::{ProfessionalContractPromotion, PromotionEvidence};
 
 /// Why the rebalance wants a player moved. The execution phase reads the
@@ -27,13 +29,19 @@ enum MoveReason {
     Overage,
     /// Beyond the first team's depth cap at his position.
     SurplusAtPosition,
+    /// Registered above the youngest squad he is eligible for while that
+    /// squad cannot name a matchday side.
+    AgeGroup,
 }
 
 impl MoveReason {
     /// Overage players and depth-cap surplus leave regardless of what it does
     /// to the source squad's size — the backfill restores it from youth.
     fn ignores_squad_minimum(self) -> bool {
-        matches!(self, MoveReason::Overage | MoveReason::SurplusAtPosition)
+        matches!(
+            self,
+            MoveReason::Overage | MoveReason::SurplusAtPosition | MoveReason::AgeGroup
+        )
     }
 
     fn label(self) -> &'static str {
@@ -41,6 +49,7 @@ impl MoveReason {
             MoveReason::PromotionReady => "skill level ready for first team",
             MoveReason::Overage => "overage for current team",
             MoveReason::SurplusAtPosition => "surplus at position",
+            MoveReason::AgeGroup => "back to his age group",
         }
     }
 }
@@ -57,6 +66,15 @@ struct PendingMove {
     /// He was carrying a loan intent when the promotion fired, so the intent
     /// is withdrawn as part of the move.
     withdraws_loan: bool,
+}
+
+/// A player who clears the first team's bar, waiting on a place in his group.
+struct PromotionCandidate {
+    group: PlayerFieldPositionGroup,
+    level: u8,
+    promote: PendingMove,
+    /// Where he goes if the first team has no place for him this week.
+    fallback: Option<PendingMove>,
 }
 
 impl Club {
@@ -78,6 +96,7 @@ impl Club {
 
         let mut moves = self.collect_progression_moves(date, main_idx);
         self.collect_surplus_demotions(date, main_idx, &mut moves);
+        self.collect_age_group_moves(date, main_idx, &mut moves);
         let taken = self.execute_moves(date, main_idx, moves);
         self.backfill_main_squad(date, main_idx, &taken);
     }
@@ -96,6 +115,7 @@ impl Club {
         let club_discount = PromotionEvidence::club_discount(&head_coach_profile, &self.philosophy);
 
         let mut moves: Vec<PendingMove> = Vec::new();
+        let mut promotions: Vec<PromotionCandidate> = Vec::new();
 
         for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx || team.team_type == TeamType::Main {
@@ -155,56 +175,105 @@ impl Club {
                 // the surplus pass sends one of them straight back down and
                 // the two keep swapping places week after week.
                 let displaces = !bar.full(group) || clears_by_margin;
+                let overage_move = if overage {
+                    self.overage_move(
+                        ti,
+                        team.team_type,
+                        p.id,
+                        age,
+                        listed || loan_intent,
+                        main_idx,
+                    )
+                } else {
+                    None
+                };
                 if level >= floor && !listed && (!loan_intent || clears_by_margin) && displaces {
-                    moves.push(PendingMove {
-                        from: ti,
-                        to: main_idx,
-                        player_id: p.id,
-                        reason: MoveReason::PromotionReady,
-                        clears_by_margin,
-                        withdraws_loan: loan_intent,
+                    promotions.push(PromotionCandidate {
+                        group,
+                        level,
+                        promote: PendingMove {
+                            from: ti,
+                            to: main_idx,
+                            player_id: p.id,
+                            reason: MoveReason::PromotionReady,
+                            clears_by_margin,
+                            withdraws_loan: loan_intent,
+                        },
+                        fallback: overage_move,
                     });
                     continue;
                 }
-
-                // Overage → move to next team in progression (or main)
-                if overage {
-                    let next = self.find_next_youth_team(team.team_type, age);
-                    // Listed players: never parked on the main bench, but a
-                    // senior reserve (Reserve / B / Second) is fine — they
-                    // keep playing while the market works. Clubs whose only
-                    // non-main squads are league-less youth teams (no U21+,
-                    // no reserve) leave the player where he is; his exit is
-                    // the market listing itself, which the country listing
-                    // pass keeps live from any squad.
-                    let dest = if listed || loan_intent {
-                        match next.or_else(|| self.find_demotion_target(age)) {
-                            Some(idx) => idx,
-                            None => continue, // no youth/reserve team available
-                        }
-                    } else {
-                        // Too old for any youth tier → a senior reserve
-                        // (Reserve / B / Second) so he keeps playing
-                        // competitive football and the reserve-ambition audit
-                        // can act on his case; only when the club has no
-                        // reserve at all does he land on the main bench, where
-                        // the positional-surplus pass then loans or lists him.
-                        next.or_else(|| self.find_demotion_target(age))
-                            .unwrap_or(main_idx)
-                    };
-                    moves.push(PendingMove {
-                        from: ti,
-                        to: dest,
-                        player_id: p.id,
-                        reason: MoveReason::Overage,
-                        clears_by_margin: false,
-                        withdraws_loan: false,
-                    });
-                }
+                moves.extend(overage_move);
             }
         }
 
+        Self::admit_promotions(&bar, promotions, &mut moves);
         moves
+    }
+
+    /// Overage → the next youth tier he still fits, else a senior reserve.
+    fn overage_move(
+        &self,
+        from: usize,
+        team_type: TeamType,
+        player_id: u32,
+        age: u8,
+        leaving: bool,
+        main_idx: usize,
+    ) -> Option<PendingMove> {
+        let next = self
+            .find_next_youth_team(team_type, age)
+            .or_else(|| self.find_demotion_target(age));
+        // Listed / loan-bound players are never parked on the main bench,
+        // but a senior reserve is fine — they keep playing while the market
+        // works. Clubs whose only non-main squads are league-less youth
+        // teams leave such a player where he is; his exit is the market
+        // listing itself. Anyone else too old for every youth tier lands on
+        // the main bench only when the club has no reserve at all, where the
+        // positional-surplus pass then loans or lists him.
+        let to = if leaving {
+            next?
+        } else {
+            next.unwrap_or(main_idx)
+        };
+        Some(PendingMove {
+            from,
+            to,
+            player_id,
+            reason: MoveReason::Overage,
+            clears_by_margin: false,
+            withdraws_loan: false,
+        })
+    }
+
+    /// Promotions into a group are bounded by its places: the best
+    /// candidates fill the room it has, and beyond that only a man who
+    /// clearly out-levels its weakest member goes up. Uncapped, one hole
+    /// let every youth above the gap floor in at once, and the surplus
+    /// pass sent most of them straight back down the following week.
+    fn admit_promotions(
+        bar: &PromotionBar,
+        mut promotions: Vec<PromotionCandidate>,
+        moves: &mut Vec<PendingMove>,
+    ) {
+        promotions.sort_by(|a, b| b.level.cmp(&a.level));
+        let mut admitted = [0usize; PlayerFieldPositionGroup::COUNT];
+        for c in promotions {
+            let slot = &mut admitted[c.group.index()];
+            if *slot < bar.room(c.group) || bar.displaces_worst(c.group, c.level) {
+                *slot += 1;
+                moves.push(c.promote);
+            } else {
+                if TransferTrace::is(c.promote.player_id) {
+                    TransferTrace::line(
+                        c.promote.player_id,
+                        "squad",
+                        format!("promotion=deferred no_room group={:?}", c.group),
+                    );
+                }
+                moves.extend(c.fallback);
+            }
+        }
     }
 
     /// Phase 1b: positional-surplus demotion from the first team.
@@ -326,6 +395,109 @@ impl Club {
         // borrower, and the pathway has to know he is on his way out.
         for player_id in loan_out_intents {
             self.on_pathway_loan_staged(player_id, LoanOutReason::Surplus, date);
+        }
+    }
+
+    /// Phase 1c: a youth squad that plays in a league but cannot name a
+    /// matchday side takes back the boys of its age the club has registered
+    /// in older squads below the first team.
+    ///
+    /// A player's squad is the youngest one he is eligible for; an older
+    /// reserve is where he goes when he outgrows it or the first team sends
+    /// him down, not where he waits while his own age group forfeits. The
+    /// first team is never raided — a boy there earned it. League-less
+    /// squads give first (nobody plays there), then the least-used, weakest
+    /// boys, so a reserve keeps the ones it actually plays.
+    fn collect_age_group_moves(
+        &self,
+        date: NaiveDate,
+        main_idx: usize,
+        moves: &mut Vec<PendingMove>,
+    ) {
+        let teams = &self.teams.teams;
+        let mut size: Vec<usize> = teams.iter().map(|t| t.players.len()).collect();
+        for m in moves.iter() {
+            size[m.from] = size[m.from].saturating_sub(1);
+            size[m.to] += 1;
+        }
+        let mut moving: HashSet<u32> = moves.iter().map(|m| m.player_id).collect();
+
+        for (home_idx, home) in teams.iter().enumerate() {
+            if !home.team_type.is_youth() || home.league_id.is_none() {
+                continue;
+            }
+            let need = SquadSize::YOUTH_MATCHDAY.saturating_sub(size[home_idx]);
+            if need == 0 {
+                continue;
+            }
+            let mut lines = [0usize; PlayerFieldPositionGroup::COUNT];
+            for p in home.players.iter() {
+                lines[p.position().position_group().index()] += 1;
+            }
+
+            // (source plays in a league, appearances, level, source, id, group)
+            let mut candidates: Vec<(bool, u16, u8, usize, u32, PlayerFieldPositionGroup)> =
+                Vec::new();
+            for (ti, team) in teams.iter().enumerate() {
+                if ti == home_idx || ti == main_idx || team.team_type == TeamType::Main {
+                    continue;
+                }
+                for p in team.players.iter() {
+                    if moving.contains(&p.id)
+                        || p.is_on_loan()
+                        || p.is_force_match_selection
+                        || self.find_youth_team_for_age(p.age(date)) != Some(home_idx)
+                    {
+                        continue;
+                    }
+                    candidates.push((
+                        team.league_id.is_some(),
+                        p.statistics.played + p.statistics.played_subs,
+                        AbilityEstimator::observable_level(p),
+                        ti,
+                        p.id,
+                        p.position().position_group(),
+                    ));
+                }
+            }
+            candidates.sort_by_key(|c| (c.0, c.1, c.2, c.3, c.4));
+
+            let mut taken = 0;
+            for (_, _, _, from, player_id, group) in candidates {
+                if taken == need {
+                    break;
+                }
+                if lines[group.index()] >= YouthSquadDepth::keep_for(group)
+                    || size[from] <= Self::age_group_source_floor(&teams[from])
+                {
+                    continue;
+                }
+                moves.push(PendingMove {
+                    from,
+                    to: home_idx,
+                    player_id,
+                    reason: MoveReason::AgeGroup,
+                    clears_by_margin: false,
+                    withdraws_loan: false,
+                });
+                moving.insert(player_id);
+                lines[group.index()] += 1;
+                size[from] -= 1;
+                size[home_idx] += 1;
+                taken += 1;
+            }
+        }
+    }
+
+    /// Size a squad keeps while handing boys back to their age group: its
+    /// own matchday needs when it plays, nothing when it does not.
+    fn age_group_source_floor(team: &Team) -> usize {
+        if team.league_id.is_none() {
+            0
+        } else if team.team_type.is_own_team() {
+            SquadSize::MIN_MAIN
+        } else {
+            SquadSize::YOUTH_MATCHDAY
         }
     }
 
@@ -570,7 +742,7 @@ impl Club {
 
     /// Find the best-fitting youth team for a player of the given age.
     /// Returns the youngest team the player is eligible for.
-    fn find_youth_team_for_age(&self, player_age: u8) -> Option<usize> {
+    pub(in crate::club::core) fn find_youth_team_for_age(&self, player_age: u8) -> Option<usize> {
         let targets: [(TeamType, u8); 5] = [
             (TeamType::U18, 18),
             (TeamType::U19, 19),
@@ -791,9 +963,9 @@ mod rebalance_patience_tests {
     //! exists to stop.
 
     use super::*;
-    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::PlayerFieldPositionGroup;
     use crate::academy::ClubAcademy;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
@@ -1453,5 +1625,216 @@ mod promotion_guard_tests {
 
         assert!(!Fx::on_main(&club, 1));
         assert!(club.transfer_plan.loan_withdrawals.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod squad_balance_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
+            let date = Self::date();
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            attrs.condition = 10_000;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        fn many(
+            first_id: u32,
+            position: PlayerPositionType,
+            n: u32,
+            ability: u8,
+            age: u8,
+        ) -> Vec<Player> {
+            (first_id..first_id + n)
+                .map(|id| Self::player(id, position, ability, age))
+                .collect()
+        }
+
+        /// Seniors at 120: two keepers, eight defenders, `mids` central
+        /// midfielders and six strikers — 22 with six midfielders.
+        fn main_roster(mids: u32) -> Vec<Player> {
+            let mut players = Self::many(100, PlayerPositionType::Goalkeeper, 2, 120, 27);
+            players.extend(Self::many(
+                110,
+                PlayerPositionType::DefenderCenter,
+                8,
+                120,
+                27,
+            ));
+            players.extend(Self::many(
+                130,
+                PlayerPositionType::MidfielderCenter,
+                mids,
+                120,
+                27,
+            ));
+            players.extend(Self::many(150, PlayerPositionType::Striker, 6, 120, 27));
+            players
+        }
+
+        fn team(id: u32, tt: TeamType, league: bool, players: Vec<Player>) -> crate::Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(league.then_some(id))
+                .club_id(100)
+                .name(format!("{tt:?}"))
+                .slug(format!("{tt:?}").to_lowercase())
+                .team_type(tt)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(400, 400, 400))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(teams: Vec<crate::Team>) -> Club {
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn size(club: &Club, tt: TeamType) -> usize {
+            club.teams
+                .teams
+                .iter()
+                .find(|t| t.team_type == tt)
+                .map_or(0, |t| t.players.len())
+        }
+    }
+
+    /// Spartak's day-one shape: the second team holds forty boys of U19 age
+    /// while the U19 cannot name a side. The U19 takes its own age group back.
+    #[test]
+    fn a_short_youth_side_takes_its_age_group_back_from_the_second_team() {
+        let mut second = Fx::many(500, PlayerPositionType::DefenderCenter, 16, 55, 18);
+        second.extend(Fx::many(
+            520,
+            PlayerPositionType::MidfielderCenter,
+            16,
+            55,
+            18,
+        ));
+        second.extend(Fx::many(540, PlayerPositionType::Striker, 8, 55, 18));
+        let mut u19 = Fx::many(300, PlayerPositionType::Goalkeeper, 2, 55, 17);
+        u19.extend(Fx::many(
+            310,
+            PlayerPositionType::MidfielderCenter,
+            4,
+            55,
+            17,
+        ));
+        let mut club = Fx::club(vec![
+            Fx::team(10, TeamType::Main, true, Fx::main_roster(6)),
+            Fx::team(80, TeamType::Second, true, second),
+            Fx::team(19, TeamType::U19, true, u19),
+        ]);
+
+        club.rebalance_squads(Fx::date());
+
+        assert_eq!(Fx::size(&club, TeamType::U19), SquadSize::YOUTH_MATCHDAY);
+        assert_eq!(Fx::size(&club, TeamType::Second), 40 - 12);
+    }
+
+    /// A second team that is itself down to a matchday squad keeps it.
+    #[test]
+    fn the_second_team_never_drops_below_its_own_matchday_squad() {
+        let second = Fx::many(500, PlayerPositionType::DefenderCenter, 23, 55, 18);
+        let u19 = Fx::many(300, PlayerPositionType::MidfielderCenter, 6, 55, 17);
+        let mut club = Fx::club(vec![
+            Fx::team(10, TeamType::Main, true, Fx::main_roster(6)),
+            Fx::team(80, TeamType::Second, true, second),
+            Fx::team(19, TeamType::U19, true, u19),
+        ]);
+
+        club.rebalance_squads(Fx::date());
+
+        assert_eq!(Fx::size(&club, TeamType::Second), SquadSize::MIN_MAIN);
+        assert_eq!(Fx::size(&club, TeamType::U19), 7);
+    }
+
+    /// A U21 that plays no fixtures has nothing to fill, and its boys are
+    /// the first handed back to a U19 that does.
+    #[test]
+    fn a_league_less_squad_gives_its_boys_to_the_one_that_plays() {
+        let u21 = Fx::many(700, PlayerPositionType::MidfielderCenter, 5, 50, 15);
+        let u19 = Fx::many(300, PlayerPositionType::DefenderCenter, 6, 55, 17);
+        let mut club = Fx::club(vec![
+            Fx::team(10, TeamType::Main, true, Fx::main_roster(6)),
+            Fx::team(21, TeamType::U21, false, u21),
+            Fx::team(19, TeamType::U19, true, u19),
+        ]);
+
+        club.rebalance_squads(Fx::date());
+
+        assert_eq!(Fx::size(&club, TeamType::U21), 0);
+        assert_eq!(Fx::size(&club, TeamType::U19), 11);
+    }
+
+    /// A first team one midfielder short opens one place, not a door: the
+    /// best candidate fills it and the rest stay where they play.
+    #[test]
+    fn a_hole_in_the_first_team_takes_one_man_not_every_youth_above_the_gap_floor() {
+        let second = Fx::many(500, PlayerPositionType::MidfielderCenter, 22, 70, 22);
+        let mut club = Fx::club(vec![
+            Fx::team(10, TeamType::Main, true, Fx::main_roster(5)),
+            Fx::team(80, TeamType::Second, true, second),
+        ]);
+        let main_before = Fx::size(&club, TeamType::Main);
+
+        club.rebalance_squads(Fx::date());
+
+        assert_eq!(Fx::size(&club, TeamType::Main), main_before + 1);
     }
 }

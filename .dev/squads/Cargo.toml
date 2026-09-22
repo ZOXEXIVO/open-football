@@ -1,0 +1,29 @@
+[package]
+name = "dev_squads"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Squad-balance harness: ticks the whole world and watches how each club
+# spreads its players across Main / Second / B / Reserve / U23..U18 —
+# every intra-club move as it happens, periodic roster tables per squad,
+# and a world census of short youth squads and idle overstaffed ones.
+#
+# Defaults to `match-stub` (0-0 results, but the FieldSquads are real, so
+# selection and appearances still count): squad placement is decided by
+# the club passes around the engine, not by the scorelines. Drop it with
+# `--no-default-features` to watch the same thing against real matches.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = ["match-stub"]
+match-stub = ["core/match-stub"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
