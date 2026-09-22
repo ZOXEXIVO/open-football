@@ -274,7 +274,9 @@ impl StateProcessingHandler for DefenderPressingState {
             // block rate lives in the marking geometry (see
             // `DefensiveLine::hold_shape_on_man`), not here.
             let own_goal = ctx.ball().direction_to_own_goal();
-            let to_own_goal = (own_goal - predicted).normalize();
+            let to_own_goal = (own_goal - predicted)
+                .try_normalize(0.01)
+                .unwrap_or_default();
             let carrier_to_goal = (own_goal - predicted).magnitude();
             let shot_zone_bias = if carrier_to_goal < 80.0 {
                 // In shot zone: step 8-12u goal-side so we're actually
@@ -297,7 +299,10 @@ impl StateProcessingHandler for DefenderPressingState {
             // a multiplier on the achievable result.
             let pressing_velocity = SteeringBehavior::Pursuit {
                 target: intercept_target,
-                target_velocity: opp_velocity,
+                // Better readers anticipate more of the run; weaker ones
+                // chase nearer the carrier's current position. Physical
+                // pace still limits whether either defender can get there.
+                target_velocity: opp_velocity * (0.5 + 0.5 * def_profile.defensive_reading),
             }
             .calculate(ctx.player)
             .velocity

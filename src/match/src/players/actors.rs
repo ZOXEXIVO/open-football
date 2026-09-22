@@ -264,6 +264,9 @@ pub struct PlayerActor {
     /// …and whether it is a catch or a parry, smoothed so the hands are not
     /// deciding on the frame of contact.
     parry: f32,
+    /// Only the recorded Punching action closes a fist; a parry uses a palm.
+    punching: bool,
+    punch: f32,
     /// **He is standing in the pre-match line, turned this way**, in radians
     /// about the world Y axis — see [`crate::broadcast::lineup`].
     ///
@@ -2315,6 +2318,7 @@ impl Actors {
                     actor.attitude = Attitude::of(named);
                     if actor.is_goalkeeper {
                         actor.declared = Self::declared(named, world.y, actor.declared);
+                        actor.punching = named == Some("Punching");
                     }
                     // A man with no body yet stays off the pitch, whatever the
                     // recording says about where he is standing. Everything
@@ -3738,6 +3742,14 @@ impl Actors {
             // the hands arrive with the ball at 1x, at 8x and wherever the
             // playhead is dropped, exactly as a kick's backswing does.
             let arriving = actor.arrival.filter(|_| !heedless);
+            let punch = f32::from(actor.punching && !heedless);
+            let response = if punch > actor.punch { 0.045 } else { 0.16 };
+            actor.punch += (punch - actor.punch)
+                * if playback.seeked {
+                    1.0
+                } else {
+                    1.0 - (-match_delta / response).exp()
+                };
             if playback.seeked || heedless {
                 actor.save_time = None;
             }
@@ -4576,6 +4588,8 @@ impl PlayerActor {
             reaction: 0.0,
             aim: Vec2::ZERO,
             parry: 0.0,
+            punching: false,
+            punch: 0.0,
             at_attention: None,
             clock: 0.0,
             jitter: Vec2::ZERO,
@@ -5961,6 +5975,7 @@ impl PlayerActor {
                 * (1.0 - self.despair.max(self.elation)),
             save_aim: self.aim,
             parry: self.parry,
+            punch: self.punch * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation)),
             // The split-step, both halves. Deliberately NOT gating `set`:
             // it is the set position that hops, gloves up throughout, and
             // the landing is a deeper version of the same stance.

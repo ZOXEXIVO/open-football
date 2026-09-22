@@ -412,12 +412,13 @@ impl DefenderSkillProfile {
         let communication_proxy = (leadership01 + teamwork01) * 0.5;
         let defensive_reading = (pow_curve(positioning01, 1.45) * 0.24
             + pow_curve(anticipation01, 1.45) * 0.22
-            + pow_curve(concentration01, 1.35) * 0.16
-            + pow_curve(decisions01, 1.35) * 0.14
+            + pow_curve(concentration01, 1.35) * 0.14
+            + pow_curve(decisions01, 1.35) * 0.12
+            + pow_curve(vision01, 1.35) * 0.08
             + pow_curve(teamwork01, 1.25) * 0.08
             + pow_curve(composure01, 1.25) * 0.08
-            + pow_curve(leadership01, 1.15) * 0.04
-            + communication_proxy * 0.04)
+            + pow_curve(leadership01, 1.15) * 0.02
+            + communication_proxy * 0.02)
             .clamp(0.0, 1.0);
 
         let reaction_delay_ticks =

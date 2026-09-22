@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, StationKeeping,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
@@ -13,7 +13,7 @@ use crate::r#match::player::strategies::common::team::KeeperVoice;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    ConditionContext, DefensiveDuty, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -89,6 +89,39 @@ impl StateProcessingHandler for DefenderMarkingState {
             ));
         }
 
+        // Read the ball before the assigned runner. The plan can change a
+        // marker into the presser while he is still in this state.
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+            if carrier.distance(ctx) < TackleEngagement::DISENGAGE
+                && TackleEngagement::may_engage_carrier(ctx)
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+        }
+        if let Some(state) = BoxEmergency::response(ctx) {
+            return Some(StateChangeResult::with_defender_state(state));
+        }
+        match ctx.team().my_duty() {
+            DefensiveDuty::Press => {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+            DefensiveDuty::Cover => {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Covering,
+                ));
+            }
+            _ => {}
+        }
+
         // The shirt pull. A marker who is being pulled away from grabs,
         // leans or blocks — the commonest foul in football and one this
         // engine could not produce, because tackling was its only foul
@@ -112,14 +145,6 @@ impl StateProcessingHandler for DefenderMarkingState {
                     )),
                 ));
             }
-        }
-
-        // BOX EMERGENCY — stop marking an off-ball runner if the
-        // carrier is INSIDE our penalty area and we're one of the two
-        // closest defenders. A shot is imminent; engage the carrier
-        // regardless of marking duties.
-        if let Some(state) = BoxEmergency::response(ctx) {
-            return Some(StateChangeResult::with_defender_state(state));
         }
 
         // Take ball only if best positioned — prevents swarming
@@ -333,11 +358,15 @@ impl StateProcessingHandler for DefenderMarkingState {
             let mark_dist = def_profile.ideal_marking_distance;
             let goal_side_w = def_profile.goal_side_weight;
 
-            let to_goal = (own_goal - opponent_future_position).normalize();
+            let to_goal = (own_goal - opponent_future_position)
+                .try_normalize(0.01)
+                .unwrap_or_default();
             let goal_side_offset = to_goal * mark_dist * goal_side_w;
 
             let ball_position = ctx.tick_context.positions.ball.position;
-            let to_ball = (ball_position - opponent_future_position).normalize();
+            let to_ball = (ball_position - opponent_future_position)
+                .try_normalize(0.01)
+                .unwrap_or_default();
             let ball_side_offset = to_ball * mark_dist * (1.0 - goal_side_w);
 
             // **"GET IN FRONT OF HIM!"**
@@ -419,7 +448,7 @@ impl StateProcessingHandler for DefenderMarkingState {
             let distance = to_desired.magnitude();
 
             if distance < 1.0 {
-                return Some(to_desired * 0.5);
+                return Some(StationKeeping::hold(opponent_velocity, to_desired));
             }
 
             // Urgency relative to the profile-driven mark distance.

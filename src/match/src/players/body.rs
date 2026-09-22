@@ -14,6 +14,8 @@ use crate::players::actors::Actors;
 use crate::players::kit::{Outfit, Swatch};
 
 mod garment;
+#[cfg(test)]
+mod hand_review;
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
 /// body) and `z` (front to back) at height `y`, in the part's own space, and
@@ -1182,6 +1184,7 @@ pub struct BodyParts {
     finger: Handle<Mesh>,
     fingertip: Handle<Mesh>,
     thumb: Handle<Mesh>,
+    thumbtip: Handle<Mesh>,
     /// The bare thigh visible below the shorts.
     thigh: Handle<Mesh>,
     /// The socked shin with the turnover at the top of it.
@@ -1248,6 +1251,7 @@ pub(crate) struct Cuts {
     finger: Handle<Mesh>,
     fingertip: Handle<Mesh>,
     thumb: Handle<Mesh>,
+    thumbtip: Handle<Mesh>,
     /// The keeper's lower sleeve bends separately at the elbow.
     sleeve_forearm: Handle<Mesh>,
     /// …and the trim band at the wrist end of it, which on a long sleeve is
@@ -1613,6 +1617,7 @@ impl BodyParts {
             finger: cuts.finger,
             fingertip: cuts.fingertip,
             thumb: cuts.thumb,
+            thumbtip: cuts.thumbtip,
             boot: cuts.boot,
             number: cuts.number,
             name: cuts.name,
@@ -1722,6 +1727,7 @@ impl BodyParts {
             &self.finger,
             &self.fingertip,
             &self.thumb,
+            &self.thumbtip,
             &self.thigh,
             &self.shin,
             &self.boot,
@@ -1867,13 +1873,13 @@ impl BodyParts {
             glove: meshes.add(Sculptor::part(
                 grain,
                 &[
-                    Ring::oval(0.062, 0.034, 0.030),
-                    Ring::oval(0.038, 0.045, 0.036),
-                    Ring::oval(0.014, 0.052, 0.038),
-                    Ring::oval(-0.020, 0.060, 0.038),
-                    Ring::oval(-0.058, 0.063, 0.036),
-                    Ring::oval(-0.082, 0.062, 0.033),
-                    Ring::oval(-0.092, 0.058, 0.029),
+                    Ring::oval(0.044, 0.030, 0.025),
+                    Ring::oval(0.028, 0.035, 0.027),
+                    Ring::oval(0.008, 0.034, 0.024),
+                    Ring::squared(-0.020, 0.047, 0.025, 0.0, 2.4),
+                    Ring::squared(-0.054, 0.057, 0.026, 0.0, 2.5),
+                    Ring::squared(-0.080, 0.057, 0.023, 0.0, 2.4),
+                    Ring::squared(-0.090, 0.054, 0.020, 0.0, 2.2),
                 ],
             )),
             // One finger, in two segments: the proximal phalanx off the
@@ -1887,21 +1893,21 @@ impl BodyParts {
             finger: meshes.add(Sculptor::part_at(
                 grain,
                 &[
-                    Ring::oval(0.008, 0.0155, 0.0135),
-                    Ring::oval(-0.012, 0.0165, 0.0145),
-                    Ring::oval(-0.034, 0.0155, 0.0135),
-                    Ring::oval(-0.050, 0.0138, 0.0118),
+                    Ring::oval(0.009, 0.0130, 0.0120),
+                    Ring::oval(-0.012, 0.0135, 0.0125),
+                    Ring::oval(-0.036, 0.0125, 0.0115),
+                    Ring::oval(-0.052, 0.0118, 0.0108),
                 ],
                 grain.blob_sides,
             )),
             fingertip: meshes.add(Sculptor::part_at(
                 grain,
                 &[
-                    Ring::oval(0.010, 0.0145, 0.0125),
-                    Ring::oval(-0.008, 0.0150, 0.0130),
-                    Ring::oval(-0.026, 0.0132, 0.0112),
-                    Ring::oval(-0.036, 0.0100, 0.0085),
-                    Ring::oval(-0.042, 0.0055, 0.0050),
+                    Ring::oval(0.010, 0.0125, 0.0115),
+                    Ring::oval(-0.008, 0.0130, 0.0120),
+                    Ring::oval(-0.028, 0.0115, 0.0105),
+                    Ring::oval(-0.040, 0.0080, 0.0075),
+                    Ring::oval(-0.047, 0.0035, 0.0030),
                 ],
                 grain.blob_sides,
             )),
@@ -1910,10 +1916,20 @@ impl BodyParts {
             thumb: meshes.add(Sculptor::part_at(
                 grain,
                 &[
-                    Ring::oval(0.010, 0.018, 0.016),
-                    Ring::oval(-0.014, 0.019, 0.017),
-                    Ring::oval(-0.040, 0.016, 0.014),
-                    Ring::oval(-0.052, 0.011, 0.010),
+                    Ring::oval(0.010, 0.016, 0.014),
+                    Ring::oval(-0.010, 0.017, 0.015),
+                    Ring::oval(-0.034, 0.014, 0.012),
+                    Ring::oval(-0.041, 0.012, 0.010),
+                ],
+                grain.blob_sides,
+            )),
+            thumbtip: meshes.add(Sculptor::part_at(
+                grain,
+                &[
+                    Ring::oval(0.008, 0.0135, 0.0115),
+                    Ring::oval(-0.010, 0.0135, 0.0120),
+                    Ring::oval(-0.023, 0.0100, 0.0090),
+                    Ring::oval(-0.031, 0.0040, 0.0040),
                 ],
                 grain.blob_sides,
             )),
@@ -1937,6 +1953,11 @@ impl BodyParts {
                     Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
                     Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
                     Ring::squared(-0.270, 0.0268, 0.0254, 0.002, 2.00),
+                    // Rounded support under the wrist hinge keeps it joined
+                    // to the sleeve when the palm bends back for a save.
+                    Ring::oval(-0.290, 0.026, 0.025),
+                    Ring::oval(-0.309, 0.014, 0.014),
+                    Ring::oval(-0.315, 0.002, 0.002),
                 ],
             )),
             // Quadriceps high on the thigh, narrowing into the knee — and the
@@ -2359,7 +2380,7 @@ impl BodyParts {
             knuckle(3),
             (
                 Limb::Thumb,
-                Transform::from_translation(Vec3::new(-side * 0.046, -0.026, 0.016)),
+                Transform::from_translation(Vec3::new(-side * 0.045, -0.030, -0.010)),
             ),
         ]
     }
@@ -2370,7 +2391,8 @@ impl BodyParts {
     /// See [`Limb::Finger`] for why there are two of them at all. The offset
     /// is where the proximal segment ends, so the joint is a knuckle and not
     /// a gap.
-    pub const KNUCKLE_JOINT: Vec3 = Vec3::new(0.0, -0.044, 0.0);
+    pub const KNUCKLE_JOINT: Vec3 = Vec3::new(0.0, -0.047, 0.0);
+    pub const THUMB_JOINT: Vec3 = Vec3::new(0.0, -0.035, 0.0);
 
     /// The knuckle line, in the wrist's own space — where the glove ends and
     /// the fingers start — and how far a finger splays per metre it sits off
@@ -2448,6 +2470,7 @@ pub enum Limb {
     /// *mitten*: it comes off the side, it opposes the other four, and it is
     /// the one that closes last.
     Thumb,
+    ThumbTip,
     Hip,
     Knee,
     /// The foot.
@@ -2936,9 +2959,11 @@ pub struct Gait {
     /// keeper's hands go to the ball, and the ball is somewhere different
     /// every time.
     pub save_aim: Vec2,
-    /// 0..1: he did not catch it. Fists rather than gloves, and the arms
+    /// 0..1: he did not catch it. Open palms deflect it, and the arms
     /// snap through the ball instead of closing on it.
     pub parry: f32,
+    /// 0..1: a recorded punch, kept separate from an open-handed parry.
+    pub punch: f32,
     /// 0..1: he is on his SPLIT-STEP — off both feet by a few centimetres
     /// as the shot is struck, knees loading, gloves still up.
     ///
@@ -3070,6 +3095,7 @@ impl Gait {
             save: 0.0,
             save_aim: Vec2::ZERO,
             parry: 0.0,
+            punch: 0.0,
             hop: 0.0,
             land: 0.0,
             keeper: 0.0,
@@ -3938,11 +3964,11 @@ impl Joint {
     /// the hand closes.
     const THUMB_OUT: f32 = 0.95;
     const THUMB_FAN: f32 = 0.30;
-    const THUMB_IN: f32 = 0.66;
+    const THUMB_IN: f32 = 1.10;
     /// …and its own fold, which is shallower than a finger's — a thumb
     /// closes across a fist rather than into it.
-    const THUMB_REST: f32 = -0.30;
-    const THUMB_CURL: f32 = 1.05;
+    const THUMB_REST: f32 = 0.08;
+    const THUMB_CURL: f32 = 0.72;
     /// **How closed a hand is with nothing else going on**, and how much
     /// more it closes at a run.
     ///
@@ -3957,10 +3983,8 @@ impl Joint {
     /// Behind a ball he is catching — nearly as open, because the point is
     /// still to be big — and closed round one he has.
     const HAND_SAVING: f32 = 0.12;
-    const HAND_HOLDING: f32 = 0.58;
-    /// And the fist. A parry is a punch: there is no version of it with the
-    /// fingers out, and a splayed hand meeting a ball at thirty metres a
-    /// second is how a keeper breaks them.
+    const HAND_HOLDING: f32 = 0.44;
+    /// Reserved for a recorded punch. Ordinary parries keep a broad palm.
     const HAND_FIST: f32 = 0.97;
     /// A hand taking a man's weight on the turf is not flat either — it is
     /// on the heel of the palm with the fingers loose.
@@ -4982,7 +5006,7 @@ impl Joint {
                 let ready = Self::held(
                     slumped,
                     Quat::from_rotation_z(self.side * 0.28)
-                        * Quat::from_rotation_x(Self::SET_WRIST),
+                        * Quat::from_rotation_x(Self::SET_WRIST + 0.5 * follow),
                     Self::armed(gait),
                 );
                 // Behind the ball: the gloves break back off the forearms so
@@ -4990,7 +5014,12 @@ impl Joint {
                 // whole point is a surface rather than a pair of hands.
                 let saving = Self::held(
                     ready,
-                    Quat::from_rotation_x(Self::SAVE_WRIST + Self::PARRY_WRIST * gait.parry),
+                    Quat::from_rotation_y(-self.side * 0.18 * (1.0 - gait.parry))
+                        * Quat::from_rotation_z(-0.16 * gait.save_aim.x)
+                        * Quat::from_rotation_x(
+                            Self::SAVE_WRIST + Self::PARRY_WRIST * gait.parry
+                                - 0.18 * gait.save_recoil,
+                        ),
                     gait.save,
                 );
                 let holding = Self::held(
@@ -5008,6 +5037,9 @@ impl Joint {
                     ) * Quat::from_rotation_x(Self::REACH_WRIST),
                     gait.reach,
                 );
+                // A fist is supported straight behind the knuckles; an open
+                // parry instead keeps the wrist extended behind its palm.
+                let out = Self::held(out, Quat::from_rotation_x(0.06), gait.punch);
                 let down = Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing);
                 // Palm flat on the turf, taking his weight.
                 Self::held(
@@ -5031,21 +5063,38 @@ impl Joint {
                 // do different things.** The index goes straight and the
                 // other three shut, which is the whole of what pointing is —
                 // an open hand held out is a man showing you his palm.
-                let grip = if index == 0 {
+                let mut grip = if index == 0 {
                     Self::grip(gait) * (1.0 - pointing)
                 } else {
                     Self::grip(gait).max(Self::HAND_POINTING * pointing)
                 };
+                // Small, staggered flexion while relaxed. Receiving and
+                // gripping a ball take over completely, without finger jitter.
+                let free = (1.0 - Self::armed(gait))
+                    * (1.0 - gait.save)
+                    * (1.0 - gait.reach)
+                    * (1.0 - gait.carry.max(gait.claimed))
+                    * (1.0 - gait.punch)
+                    * (1.0 - pointing);
+                grip += 0.025
+                    * free
+                    * (gait.idle * 1.3
+                        + index as f32 * 0.8
+                        + self.side * 0.6
+                        + gait.phase * gait.run)
+                        .sin();
+                grip = grip.clamp(0.0, 1.0);
                 let fan = Self::fan(gait) * (1.0 - pointing);
                 // Not every finger does the same thing, and that is most of
                 // what separates a hand from a comb. A relaxed little finger
                 // curls further than an index; a spread one goes wider.
                 let bias = Self::FINGER_CURL[usize::from(index).min(3)];
+                // The first joint closes first; the tips follow into the
+                // palm. A ball grip stays cupped instead of becoming a fist.
                 let curl = match self.limb {
-                    Limb::Knuckle(_) => Self::GRIP_KNUCKLE,
-                    _ => Self::GRIP_FINGER,
-                } * grip
-                    * bias;
+                    Limb::Knuckle(_) => Self::GRIP_KNUCKLE * grip.powf(1.2),
+                    _ => Self::GRIP_FINGER * grip,
+                } * bias;
                 // The second segment carries no splay of its own: a finger
                 // fans at the knuckle it grows out of and bends in a plane
                 // after that, which is what makes a closing hand converge
@@ -5068,7 +5117,12 @@ impl Joint {
                 let fan = Self::fan(gait) * (1.0 - pointing);
                 Quat::from_rotation_z(
                     -self.side * (Self::THUMB_OUT + Self::THUMB_FAN * fan - Self::THUMB_IN * grip),
-                ) * Quat::from_rotation_x(Self::THUMB_REST + Self::THUMB_CURL * grip)
+                ) * Quat::from_rotation_y(-self.side * 0.85 * grip)
+                    * Quat::from_rotation_x(Self::THUMB_REST + Self::THUMB_CURL * grip)
+            }
+            Limb::ThumbTip => {
+                let grip = Self::grip(gait).max(Self::HAND_POINTING * pointing);
+                Quat::from_rotation_x(0.10 + 0.95 * Actors::ease((grip - 0.12) / 0.88))
             }
             Limb::Hip => {
                 // **The stride carries the ground he covers.** The amplitude
@@ -6606,10 +6660,11 @@ impl Joint {
         let slumped = onto(slumped, Self::HAND_FLAT, gait.doubled_over);
         let slumped = onto(slumped, Self::HAND_READY, gait.urging);
         let ready = onto(slumped, Self::HAND_READY, Self::armed(gait));
-        // Behind the ball, or balled up behind a punch.
+        // A catch cups slightly on impact; a parry remains open. Whether the
+        // ball rebounds is not evidence that the goalkeeper punched it.
         let saving = onto(
             ready,
-            Self::HAND_SAVING + (Self::HAND_FIST - Self::HAND_SAVING) * gait.parry,
+            Self::HAND_SAVING + 0.10 * gait.save_recoil * (1.0 - gait.parry),
             gait.save,
         );
         // Thrown out at full stretch — as open as they go, since the whole
@@ -6618,7 +6673,8 @@ impl Joint {
         // …and shut on a ball he has actually got, which beats both. This is
         // the layer the cradle is: [`Physique::CRADLE`] puts the ball in the
         // fork of his wrists and nothing until now closed a finger on it.
-        let holding = onto(out, Self::HAND_HOLDING, gait.carry.max(gait.claimed));
+        let punched = onto(out, Self::HAND_FIST, gait.punch);
+        let holding = onto(punched, Self::HAND_HOLDING, gait.carry.max(gait.claimed));
         onto(
             holding,
             Self::HAND_GRASSED,
@@ -6637,9 +6693,10 @@ impl Joint {
     /// the widest of them is the one his hands are in.
     fn fan(gait: Gait) -> f32 {
         Self::armed(gait)
-            .max(gait.save * (1.0 - gait.parry))
+            .max(gait.save)
             .max(gait.reach * (1.0 - gait.claimed))
             .clamp(0.0, 1.0)
+            * (1.0 - gait.punch)
     }
 
     /// **How far apart his gloves are through a clap**, 1 wide and 0
@@ -7068,6 +7125,17 @@ impl Footballer {
                                             at,
                                         ));
                                         let Limb::Finger(index) = limb else {
+                                            digit.with_child((
+                                                Joint::new(
+                                                    root,
+                                                    Limb::ThumbTip,
+                                                    side,
+                                                    BodyParts::THUMB_JOINT,
+                                                ),
+                                                Mesh3d(parts.thumbtip.clone()),
+                                                MeshMaterial3d(outfit.hands.clone()),
+                                                Transform::from_translation(BodyParts::THUMB_JOINT),
+                                            ));
                                             continue;
                                         };
                                         digit.with_child((
@@ -7201,6 +7269,13 @@ pub(crate) mod skeleton {
         gait
     }
 
+    pub fn punching(aim: Vec2) -> Gait {
+        Gait {
+            punch: 1.0,
+            ..saving(aim, 1.0)
+        }
+    }
+
     /// A man who has just conceded: `hands_to_head` 1 puts them on his
     /// head, 0 leaves his arms hanging.
     pub fn slumped(hands_to_head: f32) -> Gait {
@@ -7311,8 +7386,8 @@ pub(crate) mod skeleton {
     /// fingertip in the wrong place.
     pub fn fingertip(side: f32, digit: usize, gait: Gait) -> Vec3 {
         /// The last ring of each mesh: where it actually ends.
-        const TIP: Vec3 = Vec3::new(0.0, -0.042, 0.0);
-        const THUMB: Vec3 = Vec3::new(0.0, -0.052, 0.0);
+        const TIP: Vec3 = Vec3::new(0.0, -0.047, 0.0);
+        const THUMB: Vec3 = Vec3::new(0.0, -0.031, 0.0);
         let (limb, at) = BodyParts::digits(side)[digit];
         let hung = Physique::hand(side, gait)
             * step(limb, side, at.translation, gait).with_scale(at.scale);
@@ -7320,7 +7395,8 @@ pub(crate) mod skeleton {
             Limb::Finger(index) => (hung
                 * step(Limb::Knuckle(index), side, BodyParts::KNUCKLE_JOINT, gait))
             .transform_point(TIP),
-            _ => hung.transform_point(THUMB),
+            _ => (hung * step(Limb::ThumbTip, side, BodyParts::THUMB_JOINT, gait))
+                .transform_point(THUMB),
         }
     }
 
@@ -7760,6 +7836,17 @@ pub(crate) mod preview {
                         * skeleton::step(limb, side, at.translation, gait).with_scale(at.scale);
                     let Limb::Finger(index) = limb else {
                         draw(&parts.thumb, digit, TRIM);
+                        draw(
+                            &parts.thumbtip,
+                            digit
+                                * skeleton::step(
+                                    Limb::ThumbTip,
+                                    side,
+                                    BodyParts::THUMB_JOINT,
+                                    gait,
+                                ),
+                            TRIM,
+                        );
                         continue;
                     };
                     draw(&parts.finger, digit, TRIM);
@@ -8780,7 +8867,12 @@ mod tests {
         let mut holding = still();
         holding.carry = 1.0;
         let open = reach(set);
-        let fist = reach(saving(Vec2::new(0.3, 0.2), 1.0));
+        let fist = reach(punching(Vec2::new(0.3, 0.2)));
+        let parry = reach(saving(Vec2::new(0.3, 0.2), 1.0));
+        assert!(
+            parry < -0.16,
+            "an ordinary parry has collapsed into a fist: {parry:.3}"
+        );
         let cradle = reach(holding);
         assert!(
             open < -0.165,
@@ -8825,13 +8917,92 @@ mod tests {
         // A fist has no span at all — the fingers converge as they close,
         // which is the term that keeps a punch from being a spread paddle
         // folded over.
-        let punch = saving(Vec2::new(0.3, 0.2), 1.0);
+        let punch = punching(Vec2::new(0.3, 0.2));
         assert!(
             span(punch) < span(set) * 0.75,
             "his fist is still fanned: {:.3} m against {:.3} m",
             span(punch),
             span(set)
         );
+    }
+
+    #[test]
+    fn thumbs_oppose_the_fingers_and_mirror_between_hands() {
+        let mut open = still();
+        open.set = 1.0;
+        let fist = punching(Vec2::ZERO);
+        let local_tip = |side, digit, gait| {
+            Physique::hand(side, gait)
+                .to_matrix()
+                .inverse()
+                .transform_point3(fingertip(side, digit, gait))
+        };
+        let open_thumb = local_tip(1.0, 4, open);
+        let closed_thumb = local_tip(1.0, 4, fist);
+        assert!(
+            closed_thumb.x > open_thumb.x + 0.035,
+            "thumb stays beside the hand instead of opposing it"
+        );
+        for gait in [
+            open,
+            fist,
+            Gait {
+                carry: 1.0,
+                ..still()
+            },
+        ] {
+            for digit in 0..5 {
+                let left = local_tip(-1.0, digit, gait);
+                let right = local_tip(1.0, digit, gait);
+                assert!(
+                    left.distance(Vec3::new(-right.x, right.y, right.z)) < 0.001,
+                    "digit {digit} is not mirrored"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parrying_hand_keeps_distinct_extended_fingers_through_contact() {
+        let mut gait = saving(Vec2::new(0.7, 0.4), 1.0);
+        for recoil in [0.0, 0.3, 0.7, 1.0] {
+            gait.save_recoil = recoil;
+            for side in [-1.0, 1.0] {
+                for digit in 0..3 {
+                    let gap =
+                        fingertip(side, digit, gait).distance(fingertip(side, digit + 1, gait));
+                    assert!(gap > 0.028, "parry fingers merge: {gap:.3}");
+                }
+                let middle = Physique::hand(side, gait)
+                    .to_matrix()
+                    .inverse()
+                    .transform_point3(fingertip(side, 1, gait));
+                assert!(middle.y < -0.17, "a parry folds away its fingers");
+            }
+        }
+    }
+
+    #[test]
+    fn closing_the_hand_has_no_fingertip_or_thumb_pops() {
+        for side in [-1.0, 1.0] {
+            let mut previous = [Vec3::ZERO; 5];
+            for step in 0..=120 {
+                let gait = Gait {
+                    punch: step as f32 / 120.0,
+                    ..saving(Vec2::ZERO, 1.0)
+                };
+                for digit in 0..5 {
+                    let tip = fingertip(side, digit, gait);
+                    if step > 0 {
+                        assert!(
+                            tip.distance(previous[digit]) < 0.008,
+                            "digit {digit} pops while closing"
+                        );
+                    }
+                    previous[digit] = tip;
+                }
+            }
+        }
     }
 
     /// **Hands on the hips is a pose this rig could not reach**, and the

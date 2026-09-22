@@ -3,6 +3,7 @@
 //! between modules so future refactors don't drift combined behavior.
 
 mod corner_setup_tests;
+mod defender_behavior_tests;
 mod effort_appetite_tests;
 mod engagement_contract_tests;
 mod fatigue_calibration_tests;

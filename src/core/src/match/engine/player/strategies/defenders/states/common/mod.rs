@@ -322,7 +322,8 @@ impl DefensiveRecovery {
         // ball. For a man who is going to win it, "three metres past it
         // toward my own goal" is not a cover point, it is the wrong side
         // of the ball.
-        if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
+        if (ctx.ball().is_owned() && TackleEngagement::may_engage_carrier(ctx))
+            || matches!(ctx.team().my_duty(), DefensiveDuty::Press)
             || matches!(
                 ctx.player().defensive().defensive_role_for_ball_carrier(),
                 DefensiveRole::Primary

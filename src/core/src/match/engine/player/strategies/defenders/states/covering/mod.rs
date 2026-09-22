@@ -6,7 +6,7 @@ use crate::r#match::player::strategies::common::players::ops::defender_skill::De
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    ConditionContext, DefensiveDuty, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -41,7 +41,7 @@ impl StateProcessingHandler for DefenderCoveringState {
         // the state). `Running` is where a defender's on-ball decisions
         // live, and this is the hand-off `DefenderStandingState` has
         // always made.
-        if ctx.player.has_ball(ctx) {
+        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
@@ -65,6 +65,26 @@ impl StateProcessingHandler for DefenderCoveringState {
         // closest defenders, stop covering and engage immediately.
         if let Some(state) = BoxEmergency::response(ctx) {
             return Some(StateChangeResult::with_defender_state(state));
+        }
+
+        // A live challenge or a new pressing duty cannot wait for the
+        // minimum dwell time. Otherwise keep the cover the team assigned;
+        // local distance ranks must not send us back to marking a runner.
+        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+            match ctx.team().my_duty() {
+                DefensiveDuty::Press => {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+                DefensiveDuty::Cover => return None,
+                _ => {}
+            }
         }
 
         // Adaptive reaction time based on threat detection

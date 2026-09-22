@@ -236,6 +236,30 @@ mod tests {
     }
 
     #[test]
+    fn only_a_recorded_punch_closes_the_gloves_and_it_releases_smoothly() {
+        let (mut world, entity) = world(1.0, 1.0 / 60.0);
+        {
+            let mut actor = world.get_mut::<PlayerActor>(entity).unwrap();
+            actor.parry = 1.0;
+            actor.reaction = 1.0;
+        }
+        world.run_system_once(Actors::animate).unwrap();
+        assert_eq!(world.get::<PlayerActor>(entity).unwrap().pose.punch, 0.0);
+        world.get_mut::<PlayerActor>(entity).unwrap().punching = true;
+        for _ in 0..12 {
+            world.run_system_once(Actors::animate).unwrap();
+        }
+        assert!(world.get::<PlayerActor>(entity).unwrap().pose.punch > 0.98);
+        world.get_mut::<PlayerActor>(entity).unwrap().punching = false;
+        world.run_system_once(Actors::animate).unwrap();
+        assert!(world.get::<PlayerActor>(entity).unwrap().pose.punch > 0.8);
+        for _ in 0..60 {
+            world.run_system_once(Actors::animate).unwrap();
+        }
+        assert!(world.get::<PlayerActor>(entity).unwrap().pose.punch < 0.01);
+    }
+
+    #[test]
     fn goal_reaction_develops_then_releases_a_stationary_keeper() {
         let mut actor = PlayerActor::new(100, true, true);
         actor.despair = 1.0;

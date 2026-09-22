@@ -111,6 +111,9 @@ impl TackleEngagement {
     /// ~0.8**, with defenders on 1.37 against ~1.6. The plan nominates
     /// nobody for a ball at rest by design, which is exactly the case the
     /// election is left to answer.
+    /// A nearest defender already within challenge range can also take
+    /// over when the nominated presser is outside the release distance.
+    /// This handles a carrier beating the press between plan refreshes.
     ///
     /// ⚠ The second man is the one the BOX ELECTION picked, not the
     /// plan's `Cover`. The five states that send a second body into the
@@ -124,8 +127,36 @@ impl TackleEngagement {
     pub fn may_engage_carrier(ctx: &StateProcessingContext) -> bool {
         Self::is_nominated_presser(ctx)
             || ctx.player().defensive().is_box_emergency_for_me()
+            || Self::is_local_defender_challenge(ctx)
             || (ctx.team().defensive_plan().presser().is_none()
                 && ctx.team().is_best_player_to_chase_ball())
+    }
+
+    /// A carrier running into a defender cannot be protected by a distant
+    /// pressing assignment. Only the nearest outfielder may take over, and
+    /// an existing presser within engagement range keeps the duel.
+    fn is_local_defender_challenge(ctx: &StateProcessingContext) -> bool {
+        if !ctx.player.tactical_position.current_position.is_defender() {
+            return false;
+        }
+        let Some(carrier) = ctx.players().opponents().with_ball().next() else {
+            return false;
+        };
+        let distance = carrier.distance(ctx);
+        // Keep permission through the same release band as Tackling.
+        if distance >= Self::DISENGAGE {
+            return false;
+        }
+        let presser = ctx.team().defensive_plan().presser();
+        !ctx.players().teammates().all().any(|mate| {
+            if mate.tactical_positions.is_goalkeeper() {
+                return false;
+            }
+            let gap = (mate.position - carrier.position).magnitude();
+            (Some(mate.id) == presser && gap < Self::DISENGAGE)
+                || gap < distance
+                || (gap == distance && mate.id < ctx.player.id)
+        })
     }
 
     /// True when the team plan has made this player the engager.
