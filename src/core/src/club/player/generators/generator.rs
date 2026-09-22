@@ -1,5 +1,6 @@
 use crate::Goalkeeping;
 use crate::club::player::interaction::ManagerInteractionLog;
+use crate::club::player::language::{Language, PlayerLanguage};
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::mind::PlayerMind;
@@ -895,7 +896,17 @@ impl PlayerGenerator {
     ) -> Player {
         let mut ctx = AcademyGenerationContext::average();
         ctx.academy_level = level;
-        Self::generate_with_context(country_id, now, position, people_names, &ctx, 14, 14, None)
+        Self::generate_with_context(
+            country_id,
+            "",
+            now,
+            position,
+            people_names,
+            &ctx,
+            14,
+            14,
+            None,
+        )
     }
 
     /// Reputation-aware academy intake. The single entry point for both the
@@ -905,6 +916,7 @@ impl PlayerGenerator {
     /// one-off generation.
     pub fn generate_with_context(
         country_id: u32,
+        country_code: &str,
         now: NaiveDate,
         position: PlayerPositionType,
         people_names: &PeopleNameGeneratorData,
@@ -1164,7 +1176,10 @@ impl PlayerGenerator {
             decision_history: PlayerDecisionHistory::new(),
             mind: PlayerMind::new(),
             individual_training: None,
-            languages: Vec::new(), // Academy youth — languages set at graduation
+            languages: Language::from_country_code(country_code)
+                .into_iter()
+                .map(PlayerLanguage::native)
+                .collect(),
             last_transfer_date: None,
             plan: None,
             favorite_clubs: Vec::new(),
@@ -1647,6 +1662,7 @@ mod academy_realism_tests {
             .map(|_| {
                 let p = PlayerGenerator::generate_with_context(
                     1,
+                    "",
                     now(),
                     PlayerPositionType::MidfielderCenter,
                     &names,
@@ -1856,6 +1872,7 @@ mod academy_realism_tests {
         for _ in 0..400 {
             let p = PlayerGenerator::generate_with_context(
                 1,
+                "",
                 today,
                 PlayerPositionType::MidfielderCenter,
                 &names,

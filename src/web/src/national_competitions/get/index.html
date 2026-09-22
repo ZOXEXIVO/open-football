@@ -10,7 +10,7 @@
 <div class="fm-page">
     {% if competitions.is_empty() %}
     <section class="fm-panel">
-        <div class="fm-empty">No active national team competitions</div>
+        <div class="fm-empty">{{ i18n.t("no_national_competitions") }}</div>
     </section>
     {% endif %}
 
@@ -64,7 +64,7 @@
         {% endfor %}
     </div>
     <div class="fm-legend mt-2">
-        <span><i class="legend-dot ucl"></i> Qualified</span>
+        <span><i class="legend-dot ucl"></i> {{ i18n.t("qualified") }}</span>
     </div>
     {% endif %}
 
@@ -92,7 +92,7 @@
                         <div class="fx-away"><a href="/{{ lang }}/countries/{{ fix.away_slug }}/squad">{{ fix.away_name }}</a></div>
                     </div>
                     {% if let Some(winner) = fix.winner_name %}
-                    <div class="fm-matchday-hd">Winner: {{ winner }}</div>
+                    <div class="fm-matchday-hd">{{ i18n.t("winner") }}: {{ winner }}</div>
                     {% endif %}
                     {% endfor %}
                 </div>

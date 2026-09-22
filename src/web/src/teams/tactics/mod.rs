@@ -114,7 +114,7 @@ pub async fn team_tactics_get_action(
     let formation_name = lineup.formation_name;
     let formation_players = lineup.players;
 
-    let recent_used_shapes = RecentShapesView::build(team, simulator_data);
+    let recent_used_shapes = RecentShapesView::build(team, simulator_data, &i18n);
 
     let neighborhood = TeamNeighborhood::for_club(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighborhood
@@ -325,7 +325,7 @@ impl RecentShapesView {
     /// the rival is still resolvable on the current sim snapshot,
     /// labels the opponent. Drops items the engine never tagged with
     /// a tactic (e.g. friendlies in some pipelines).
-    fn build(team: &Team, data: &SimulatorData) -> Vec<RecentUsedShape> {
+    fn build(team: &Team, data: &SimulatorData, i18n: &I18n) -> Vec<RecentUsedShape> {
         team.match_history
             .items()
             .iter()
@@ -335,17 +335,17 @@ impl RecentShapesView {
                 let is_shift = m.shape_changed();
                 let opponent_label = data
                     .team(m.rival_team_id)
-                    .map(|t| format!("vs {}", t.name))
+                    .map(|t| format!("{} {}", i18n.t("vs_short"), t.name))
                     .unwrap_or_default();
                 let change_minute_label = if is_shift {
                     m.tactic_change_minute
-                        .map(|min| format!("min {}", min))
+                        .map(|min| format!("{}'", min))
                         .unwrap_or_default()
                 } else {
                     String::new()
                 };
                 Some(RecentUsedShape {
-                    date_label: m.date.format("%d %b").to_string(),
+                    date_label: i18n.format_day_month(m.date.date()),
                     formation_name: final_tac.display_name().to_string(),
                     opponent_label,
                     is_shift,

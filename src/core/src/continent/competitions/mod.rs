@@ -2,6 +2,7 @@ mod champions_league;
 mod conference_league;
 mod copa_libertadores;
 mod europa_league;
+mod qualification;
 mod super_cup;
 mod types;
 
@@ -9,6 +10,7 @@ pub use champions_league::*;
 pub use conference_league::*;
 pub use copa_libertadores::*;
 pub use europa_league::*;
+pub use qualification::*;
 pub use super_cup::*;
 pub use types::*;
 

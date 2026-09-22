@@ -15,6 +15,19 @@ pub enum CompetitionPhase {
     Completed,
 }
 
+impl CompetitionPhase {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            CompetitionPhase::NotStarted => "stage_not_started",
+            CompetitionPhase::Qualifying => "stage_qualifying",
+            CompetitionPhase::QualifyingPlayoff => "stage_qualifying_playoff",
+            CompetitionPhase::GroupStage => "stage_group_stage",
+            CompetitionPhase::Knockout => "knockout_stage",
+            CompetitionPhase::Completed => "stage_completed",
+        }
+    }
+}
+
 /// A qualifying group for World Cup or European Championship qualifying
 #[derive(Debug, Clone)]
 pub struct QualifyingGroup {
@@ -201,6 +214,18 @@ pub enum KnockoutRound {
     SemiFinals,
     ThirdPlace,
     Final,
+}
+
+impl KnockoutRound {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            KnockoutRound::RoundOf16 => "round_of_16",
+            KnockoutRound::QuarterFinals => "quarter_finals",
+            KnockoutRound::SemiFinals => "semi_finals",
+            KnockoutRound::ThirdPlace => "third_place",
+            KnockoutRound::Final => "final",
+        }
+    }
 }
 
 /// A single knockout fixture

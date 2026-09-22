@@ -1578,6 +1578,18 @@ a.fm-yearstep-arrow:hover {
     border-left-color: #3498db;
 }
 
+.fm-standings tbody tr.zone-uecl {
+    border-left-color: #1abc9c;
+}
+
+.fm-standings tbody tr.zone-copa {
+    border-left-color: #f1c40f;
+}
+
+.fm-standings tbody tr.zone-pro {
+    border-left-color: #2ecc71;
+}
+
 .fm-standings tbody tr.zone-rel {
     border-left-color: #e74c3c;
 }
@@ -1658,6 +1670,18 @@ a.fm-yearstep-arrow:hover {
 
 .legend-dot.uel {
     background: #3498db;
+}
+
+.legend-dot.uecl {
+    background: #1abc9c;
+}
+
+.legend-dot.copa {
+    background: #f1c40f;
+}
+
+.legend-dot.pro {
+    background: #2ecc71;
 }
 
 .legend-dot.rel {

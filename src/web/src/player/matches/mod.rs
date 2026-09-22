@@ -124,7 +124,7 @@ pub async fn player_matches_action(
     // see `collector` for why the schedule alone loses youth football,
     // everything played before a move, and the whole table for a player who
     // is between clubs.
-    let mut items = PlayerMatchCollector::collect(simulator_data, player, team_opt);
+    let mut items = PlayerMatchCollector::collect(simulator_data, &i18n, player, team_opt);
     let years = YearStep::resolve(
         items.iter().map(|item| item.year),
         query.year,

@@ -21,7 +21,7 @@
             <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
             <div class="fm-sb-goals{% if home_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
                 {% for goal in home_goal_events %}
-                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} ({{ i18n.t("own_goal_short") }}){% endif %}</a>
                 {% endfor %}
             </div>
             {% if home_goal_events.len() > 5 %}
@@ -37,7 +37,7 @@
             <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
             <div class="fm-sb-goals{% if away_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
                 {% for goal in away_goal_events %}
-                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} ({{ i18n.t("own_goal_short") }}){% endif %}</a>
                 {% endfor %}
             </div>
             {% if away_goal_events.len() > 5 %}

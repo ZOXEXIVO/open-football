@@ -415,8 +415,8 @@ pub async fn match_get_action(
     let (home_team_name, home_team_slug, home_club_id) = if is_international {
         let name = simulator_data
             .country(match_result.home_team_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "Home".to_string());
+            .map(|c| i18n.country(&c.code).to_string())
+            .unwrap_or_else(|| i18n.t("home_team").to_string());
         let slug = simulator_data
             .country(match_result.home_team_id)
             .map(|c| c.slug.clone())
@@ -432,8 +432,8 @@ pub async fn match_get_action(
     let (away_team_name, away_team_slug, away_club_id) = if is_international {
         let name = simulator_data
             .country(match_result.away_team_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| "Away".to_string());
+            .map(|c| i18n.country(&c.code).to_string())
+            .unwrap_or_else(|| i18n.t("away_team").to_string());
         let slug = simulator_data
             .country(match_result.away_team_id)
             .map(|c| c.slug.clone())
@@ -555,7 +555,7 @@ pub async fn match_get_action(
                         p.full_name.display_last_name()
                     )
                 })
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| i18n.t("unknown").to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
             } else {
@@ -599,7 +599,7 @@ pub async fn match_get_action(
                         p.full_name.display_last_name()
                     )
                 })
-                .unwrap_or_else(|| "Unknown".to_string());
+                .unwrap_or_else(|| i18n.t("unknown").to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
             } else {
@@ -644,18 +644,20 @@ pub async fn match_get_action(
         )
     } else {
         let name = match match_result.league_slug.as_str() {
-            "champions-league" => "Champions League",
-            "europa-league" => "Europa League",
-            "conference-league" => "Conference League",
-            _ => "International",
+            "champions-league" => "champions_league",
+            "europa-league" => "europa_league",
+            "conference-league" => "conference_league",
+            "copa-libertadores" => "copa_libertadores",
+            _ => "international",
         };
         let link = match match_result.league_slug.as_str() {
             "champions-league" => format!("/{}/champions-league", &route_params.lang),
             "europa-league" => format!("/{}/europa-league", &route_params.lang),
             "conference-league" => format!("/{}/conference-league", &route_params.lang),
+            "copa-libertadores" => format!("/{}/copa-libertadores", &route_params.lang),
             _ => String::new(),
         };
-        (name.to_string(), link)
+        (i18n.t(name).to_string(), link)
     };
 
     let viewer_config = ViewerConfigJson {

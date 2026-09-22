@@ -1715,14 +1715,6 @@ impl Player {
         self.positions.primary().expect("no position found")
     }
 
-    pub fn preferred_foot_str(&self) -> &'static str {
-        match self.preferred_foot {
-            PlayerPreferredFoot::Left => "Left",
-            PlayerPreferredFoot::Right => "Right",
-            PlayerPreferredFoot::Both => "Both",
-        }
-    }
-
     pub fn is_on_loan(&self) -> bool {
         self.contract_loan.is_some()
     }
@@ -1950,6 +1942,16 @@ pub enum PlayerPreferredFoot {
     Left,
     Right,
     Both,
+}
+
+impl PlayerPreferredFoot {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            PlayerPreferredFoot::Left => "foot_left",
+            PlayerPreferredFoot::Right => "foot_right",
+            PlayerPreferredFoot::Both => "foot_both",
+        }
+    }
 }
 
 /// Per-foot ownership on a 0-100 scale (100 = fully natural foot).

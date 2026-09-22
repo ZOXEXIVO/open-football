@@ -211,9 +211,17 @@ pub async fn league_transfers_action(
                 country_code,
                 country_name,
                 age,
-                from_team: t.from_team_name.clone(),
+                from_team: if t.from_club_id == 0 {
+                    i18n.t("free_agent").to_string()
+                } else {
+                    t.from_team_name.clone()
+                },
                 from_team_slug,
-                to_team: t.to_team_name.clone(),
+                to_team: if t.to_club_id == 0 {
+                    i18n.t("free_agent").to_string()
+                } else {
+                    t.to_team_name.clone()
+                },
                 to_team_slug,
                 fee: if t.fee.amount > 0.0 {
                     FormattingUtils::format_money(t.fee.amount)
@@ -260,7 +268,7 @@ pub async fn league_transfers_action(
             let player_name = simulator_data
                 .player(n.player_id)
                 .map(|p| p.full_name.to_string())
-                .unwrap_or_else(|| format!("Player #{}", n.player_id));
+                .unwrap_or_else(|| i18n.t("unknown").to_string());
 
             let selling_team_slug = selling_club
                 .teams
@@ -282,7 +290,7 @@ pub async fn league_transfers_action(
                 buying_team: buying_club.name.clone(),
                 buying_team_slug,
                 offer_amount: FormattingUtils::format_money(n.current_offer.base_fee.amount),
-                status: format!("{:?}", n.status),
+                status: i18n.t(n.status.as_i18n_key()).to_string(),
             })
         })
         .collect();
@@ -294,7 +302,7 @@ pub async fn league_transfers_action(
         computer_name: &COMPUTER_NAME,
         cpu_brand: &CPU_BRAND,
         cores_count: *CPU_CORES,
-        title: format!("{} - Transfers", league_title),
+        title: format!("{} - {}", league_title, i18n.t("transfers")),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),

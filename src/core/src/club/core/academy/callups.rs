@@ -1,7 +1,6 @@
 use crate::Club;
 use crate::TeamType;
 use crate::club::academy::ClubAcademy;
-use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::{CompletedTransfer, TransferType};
@@ -36,7 +35,6 @@ impl Club {
     pub(in crate::club::core) fn process_youth_emergency_callups(
         &mut self,
         date: NaiveDate,
-        country_code: &str,
     ) -> Vec<CompletedTransfer> {
         let mut budget = self.academy.emergency_allowance(date);
         if budget == 0 {
@@ -91,14 +89,7 @@ impl Club {
                 squad
             );
 
-            for mut player in called_up {
-                if player.languages.is_empty() {
-                    player.languages = Language::from_country_code(country_code)
-                        .into_iter()
-                        .map(PlayerLanguage::native)
-                        .collect();
-                }
-
+            for player in called_up {
                 transfers.push(
                     CompletedTransfer::new(
                         player.id,
@@ -251,7 +242,7 @@ mod tests {
         let date = Fixture::date();
         let mut club = Fixture::club(0, 12, &[15; 40]);
 
-        let transfers = club.process_youth_emergency_callups(date, "en");
+        let transfers = club.process_youth_emergency_callups(date);
 
         assert_eq!(
             Fixture::squad(&club, TeamType::U18),
@@ -278,7 +269,7 @@ mod tests {
         let mut club = Fixture::club(11, 14, &[15; 40]);
         let before = club.academy.players.players.len();
 
-        let transfers = club.process_youth_emergency_callups(date, "en");
+        let transfers = club.process_youth_emergency_callups(date);
 
         assert!(transfers.is_empty(), "eleven players can field a team");
         assert_eq!(club.academy.players.players.len(), before);
@@ -289,7 +280,7 @@ mod tests {
         let date = Fixture::date();
         let mut club = Fixture::club(0, 0, &[15; 60]);
 
-        club.process_youth_emergency_callups(date, "en");
+        club.process_youth_emergency_callups(date);
 
         assert_eq!(
             Fixture::squad(&club, TeamType::U18),
@@ -310,7 +301,7 @@ mod tests {
         let mut club = Fixture::club(0, 0, &[15; 60]);
         club.teams.teams[2].league_id = None;
 
-        club.process_youth_emergency_callups(date, "en");
+        club.process_youth_emergency_callups(date);
 
         assert_eq!(
             Fixture::squad(&club, TeamType::U18),
@@ -324,7 +315,7 @@ mod tests {
         let date = Fixture::date();
         let mut club = Fixture::club(0, 12, &[15; 40]);
 
-        assert!(!club.process_youth_emergency_callups(date, "en").is_empty());
+        assert!(!club.process_youth_emergency_callups(date).is_empty());
         let after_first = club.academy.players.players.len();
 
         // Next Monday, and the one after: even a squad pushed straight
@@ -336,7 +327,7 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 9, 21).unwrap(),
         ] {
             assert!(
-                club.process_youth_emergency_callups(next, "en").is_empty(),
+                club.process_youth_emergency_callups(next).is_empty(),
                 "the academy answers one emergency a month"
             );
             assert_eq!(club.academy.players.players.len(), after_first);
@@ -345,7 +336,7 @@ mod tests {
         let next_month = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
         assert!(
             !club
-                .process_youth_emergency_callups(next_month, "en")
+                .process_youth_emergency_callups(next_month)
                 .is_empty(),
             "the budget reopens the following month"
         );
@@ -359,7 +350,7 @@ mod tests {
         let mut club = Fixture::club(0, 0, &[15; 8]);
         let before = club.academy.players.players.len();
 
-        let transfers = club.process_youth_emergency_callups(date, "en");
+        let transfers = club.process_youth_emergency_callups(date);
 
         assert!(transfers.is_empty());
         assert_eq!(club.academy.players.players.len(), before);

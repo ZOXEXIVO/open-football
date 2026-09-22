@@ -205,25 +205,25 @@ pub async fn league_awards_action(
     let hero_player = league
         .player_of_week
         .latest()
-        .map(|a| build_player_card_from_pow(simulator_data, a));
+        .map(|a| build_player_card_from_pow(simulator_data, &i18n, a));
 
     let young_hero_player = league
         .awards
         .young_player_of_week
         .last()
-        .map(|a| build_player_card_from_pow(simulator_data, a));
+        .map(|a| build_player_card_from_pow(simulator_data, &i18n, a));
 
     let team_of_week = league
         .awards
         .team_of_week
         .last()
-        .map(|t| build_team_of_week(simulator_data, t));
+        .map(|t| build_team_of_week(simulator_data, &i18n, t));
 
     let young_team_of_week = league
         .awards
         .young_team_of_week
         .last()
-        .map(|t| build_team_of_week(simulator_data, t));
+        .map(|t| build_team_of_week(simulator_data, &i18n, t));
 
     let team_of_year = league
         .awards
@@ -239,17 +239,17 @@ pub async fn league_awards_action(
     let snapshot = league.awards.latest_monthly_snapshot();
 
     let monthly_label = snapshot
-        .map(|s| s.month_start_date.format("%B %Y").to_string())
+        .map(|s| i18n.format_month_year(s.month_start_date))
         .unwrap_or_default();
     let monthly_matches_count = snapshot.map(|s| s.matches_count).unwrap_or(0);
 
     let player_of_month = snapshot
         .and_then(|s| s.player_of_month.as_ref())
-        .map(|a| build_player_card_from_monthly(simulator_data, a));
+        .map(|a| build_player_card_from_monthly(simulator_data, &i18n, a));
 
     let young_player_of_month = snapshot
         .and_then(|s| s.young_player_of_month.as_ref())
-        .map(|a| build_player_card_from_monthly(simulator_data, a));
+        .map(|a| build_player_card_from_monthly(simulator_data, &i18n, a));
 
     let team_of_month = snapshot.and_then(|s| {
         build_team_view_from_slots(simulator_data, &s.team_of_month, monthly_label.clone())
@@ -295,7 +295,7 @@ pub async fn league_awards_action(
         .rev()
         .skip(1)
         .take(8)
-        .map(|a| build_recent_week_item(simulator_data, a))
+        .map(|a| build_recent_week_item(simulator_data, &i18n, a))
         .collect();
     recent_weeks.reserve(0);
 
@@ -306,7 +306,7 @@ pub async fn league_awards_action(
         .rev()
         .skip(1) // first is shown in the Monthly tab
         .take(8)
-        .map(|s| build_monthly_archive_item(simulator_data, s))
+        .map(|s| build_monthly_archive_item(simulator_data, &i18n, s))
         .collect();
 
     let season_highlights: Vec<SeasonHighlightItem> = league
@@ -399,6 +399,7 @@ fn is_player_generated(data: &SimulatorData, player_id: u32) -> bool {
 
 fn build_player_card_from_pow(
     data: &SimulatorData,
+    i18n: &I18n,
     award: &PlayerOfTheWeekAward,
 ) -> AwardPlayerCard {
     AwardPlayerCard {
@@ -408,7 +409,7 @@ fn build_player_card_from_pow(
         player_generated: is_player_generated(data, award.player_id),
         club_name: award.club_name.clone(),
         club_slug: award.club_slug.clone(),
-        date_label: award.week_end_date.format("%d %b %Y").to_string(),
+        date_label: i18n.format_date(award.week_end_date),
         matches_played: award.matches_played,
         goals: award.goals,
         assists: award.assists,
@@ -419,6 +420,7 @@ fn build_player_card_from_pow(
 
 fn build_player_card_from_monthly(
     data: &SimulatorData,
+    i18n: &I18n,
     award: &MonthlyPlayerAward,
 ) -> AwardPlayerCard {
     AwardPlayerCard {
@@ -428,7 +430,7 @@ fn build_player_card_from_monthly(
         player_generated: is_player_generated(data, award.player_id),
         club_name: award.club_name.clone(),
         club_slug: award.club_slug.clone(),
-        date_label: award.month_end_date.format("%B %Y").to_string(),
+        date_label: i18n.format_month_year(award.month_end_date),
         matches_played: award.matches_played,
         goals: award.goals,
         assists: award.assists,
@@ -437,7 +439,11 @@ fn build_player_card_from_monthly(
     }
 }
 
-fn build_recent_week_item(data: &SimulatorData, award: &PlayerOfTheWeekAward) -> RecentWeekItem {
+fn build_recent_week_item(
+    data: &SimulatorData,
+    i18n: &I18n,
+    award: &PlayerOfTheWeekAward,
+) -> RecentWeekItem {
     RecentWeekItem {
         player_id: award.player_id,
         player_slug: player_history_slug(data, award.player_id, &award.player_name),
@@ -445,7 +451,7 @@ fn build_recent_week_item(data: &SimulatorData, award: &PlayerOfTheWeekAward) ->
         player_generated: is_player_generated(data, award.player_id),
         club_name: award.club_name.clone(),
         club_slug: award.club_slug.clone(),
-        date_label: award.week_end_date.format("%d %b").to_string(),
+        date_label: i18n.format_day_month(award.week_end_date),
         goals: award.goals,
         assists: award.assists,
         average_rating: format!("{:.2}", award.average_rating),
@@ -481,10 +487,11 @@ fn build_monthly_named_award(
 
 fn build_monthly_archive_item(
     data: &SimulatorData,
+    i18n: &I18n,
     snapshot: &MonthlyAwardsSnapshot,
 ) -> MonthlyArchiveItem {
     MonthlyArchiveItem {
-        month_label: snapshot.month_start_date.format("%b %Y").to_string(),
+        month_label: i18n.format_month_year(snapshot.month_start_date),
         matches_count: snapshot.matches_count,
         player_of_month: snapshot
             .player_of_month
@@ -524,7 +531,11 @@ const FORMATION_442: &[(PlayerFieldPositionGroup, &[&str])] = &[
     (PlayerFieldPositionGroup::Forward, &["pos-stl", "pos-str"]),
 ];
 
-fn build_team_of_week(data: &SimulatorData, award: &TeamOfTheWeekAward) -> TeamOfWeekView {
+fn build_team_of_week(
+    data: &SimulatorData,
+    i18n: &I18n,
+    award: &TeamOfTheWeekAward,
+) -> TeamOfWeekView {
     let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<&TeamOfTheWeekSlot>> = HashMap::new();
     for s in &award.slots {
         by_group.entry(s.position_group).or_default().push(s);
@@ -541,7 +552,7 @@ fn build_team_of_week(data: &SimulatorData, award: &TeamOfTheWeekAward) -> TeamO
     }
 
     TeamOfWeekView {
-        date_label: award.week_end_date.format("%d %b %Y").to_string(),
+        date_label: i18n.format_date(award.week_end_date),
         all_slots,
     }
 }

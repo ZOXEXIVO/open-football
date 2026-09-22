@@ -38,20 +38,8 @@ pub struct CopaLibertadoresGetTemplate {
 }
 
 impl CopaLibertadoresGetTemplate {
-    fn stage_label(stage: &CompetitionStage) -> &'static str {
-        match stage {
-            CompetitionStage::NotStarted => "Not Started",
-            CompetitionStage::Qualifying => "Qualifying",
-            CompetitionStage::GroupStage => "Group Stage",
-            CompetitionStage::RoundOf32 => "Round of 32",
-            CompetitionStage::RoundOf16 => "Round of 16",
-            CompetitionStage::QuarterFinals => "Quarter-Finals",
-            CompetitionStage::SemiFinals => "Semi-Finals",
-            CompetitionStage::Final => "Final",
-        }
-    }
 
-    fn club_display(simulator_data: &core::SimulatorData, club_id: u32) -> (String, String) {
+    fn club_display(simulator_data: &core::SimulatorData, i18n: &I18n, club_id: u32) -> (String, String) {
         if let Some(club) = simulator_data.club(club_id) {
             let slug = club
                 .teams
@@ -61,7 +49,7 @@ impl CopaLibertadoresGetTemplate {
                 .unwrap_or_default();
             (club.name.clone(), slug)
         } else {
-            ("Unknown".to_string(), String::new())
+            (i18n.t("unknown").to_string(), String::new())
         }
     }
 }
@@ -113,10 +101,10 @@ pub async fn copa_libertadores_get_action(
 
     let mut groups = Vec::new();
     let mut knockout_ties = Vec::new();
-    let mut current_stage = "Not Started";
+    let mut current_stage = CompetitionStage::NotStarted.as_i18n_key();
 
     if let Some(copa) = copa {
-        current_stage = CopaLibertadoresGetTemplate::stage_label(&copa.current_stage);
+        current_stage = copa.current_stage.as_i18n_key();
 
         // Build group DTOs
         for (idx, group) in copa.groups.iter().enumerate() {
@@ -126,7 +114,7 @@ pub async fn copa_libertadores_get_action(
                 .iter()
                 .map(|row| {
                     let (name, slug) =
-                        CopaLibertadoresGetTemplate::club_display(simulator_data, row.team_id);
+                        CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, row.team_id);
                     CopaGroupRowDto {
                         club_name: name,
                         club_slug: slug,
@@ -142,7 +130,7 @@ pub async fn copa_libertadores_get_action(
                 .collect();
 
             groups.push(CopaGroupDto {
-                name: format!("Group {}", letter),
+                name: i18n.t("group_name").replace("{letter}", &letter.to_string()),
                 rows,
             });
         }
@@ -150,12 +138,12 @@ pub async fn copa_libertadores_get_action(
         // Build knockout DTOs
         for tie in &copa.knockout_round {
             let (home_name, home_slug) =
-                CopaLibertadoresGetTemplate::club_display(simulator_data, tie.home_team);
+                CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, tie.home_team);
             let (away_name, away_slug) =
-                CopaLibertadoresGetTemplate::club_display(simulator_data, tie.away_team);
+                CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, tie.away_team);
             let winner_name = tie
                 .winner
-                .map(|w| CopaLibertadoresGetTemplate::club_display(simulator_data, w).0);
+                .map(|w| CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, w).0);
 
             knockout_ties.push(KnockoutTieDto {
                 home_name,
@@ -186,8 +174,8 @@ pub async fn copa_libertadores_get_action(
         foreground_color: "#ffffff".to_string(),
         menu_sections: views::copa_libertadores_menu(&i18n, &route_params.lang, &current_path),
         lang: route_params.lang,
+        current_stage: i18n.t(current_stage).to_string(),
         i18n,
-        current_stage: current_stage.to_string(),
         groups,
         knockout_ties,
     })

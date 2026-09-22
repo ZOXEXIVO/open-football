@@ -228,7 +228,7 @@ pub async fn team_finances_get_action(
 
             let net_val = bal.income - bal.outcome;
             FinanceHistoryEntry {
-                month: format!("{}", date.format("%b %Y")),
+                month: i18n.format_month_year(*date),
                 balance: format_currency(bal.balance as i64),
                 balance_positive: bal.balance >= 0,
                 income: format_currency(bal.income as i64),

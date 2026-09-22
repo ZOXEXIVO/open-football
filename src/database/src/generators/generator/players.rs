@@ -188,6 +188,13 @@ impl DatabaseGenerator {
                     nicknames: Vec::new(),
                 });
 
+            let country_code = data
+                .countries
+                .iter()
+                .find(|c| c.id == country_id)
+                .map(|c| c.code.to_ascii_lowercase())
+                .unwrap_or_default();
+
             let now = Local::now().date_naive();
 
             let (min_age, max_age) = match team_type {
@@ -226,6 +233,7 @@ impl DatabaseGenerator {
                         state: &mut AcademyIntakeState| {
                 players.push(CorePlayerGenerator::generate_with_context(
                     country_id,
+                    &country_code,
                     now,
                     pos,
                     &people_names,

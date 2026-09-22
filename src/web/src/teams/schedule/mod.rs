@@ -159,7 +159,7 @@ pub async fn team_schedule_get_action(
     } else {
         Vec::new()
     };
-    for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in continental_matches
+    for (comp_key, home_club_id, away_club_id, date, match_id, match_result) in continental_matches
     {
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
@@ -172,7 +172,7 @@ pub async fn team_schedule_get_action(
                     .and_then(|tid| simulator_data.team(tid))
                     .map(|t| (t.name.clone(), t.slug.clone()))
             })
-            .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
+            .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
 
         let datetime = date.and_hms_opt(20, 0, 0).unwrap();
 
@@ -184,7 +184,7 @@ pub async fn team_schedule_get_action(
                 opponent_slug,
                 opponent_name,
                 is_home,
-                competition_name: comp_name.to_string(),
+                competition_name: i18n.t(comp_key).to_string(),
                 result: match_result.map(|(home_goals, away_goals)| TeamScheduleItemResult {
                     match_id: match_id.to_string(),
                     home_goals,

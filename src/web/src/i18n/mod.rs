@@ -173,6 +173,14 @@ impl I18n {
         }
     }
 
+    pub fn format_month_year(&self, date: NaiveDate) -> String {
+        format!("{} {}", self.t(MONTH_KEYS[date.month0() as usize]), date.year())
+    }
+
+    pub fn format_day_month(&self, date: NaiveDate) -> String {
+        format!("{} {}", date.day(), self.t(MONTH_KEYS[date.month0() as usize]))
+    }
+
     pub fn t<'a>(&'a self, key: &'a str) -> &'a str {
         self.translations.t(key)
     }

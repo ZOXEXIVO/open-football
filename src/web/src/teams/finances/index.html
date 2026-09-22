@@ -109,7 +109,7 @@
             <h3>{{ i18n.t("fin_balance_history") }}</h3>
         </div>
         <div class="fin-chart-container">
-            <canvas id="financeChart" height="220"></canvas>
+            <canvas id="financeChart" height="220" data-balance="{{ i18n.t("fin_balance") }}" data-income="{{ i18n.t("fin_income") }}" data-expenses="{{ i18n.t("fin_expenses") }}"></canvas>
             {% if history_entries.is_empty() %}
             <div class="fin-no-data">{{ i18n.t("fin_no_history") }}</div>
             {% endif %}
@@ -294,9 +294,9 @@
     // Legend
     var legendY = 14;
     var legendX = pad.left;
-    drawLegend(legendX, legendY, '#4a9d5b', 'Balance');
-    drawLegend(legendX + 80, legendY, '#3b82c4', 'Income');
-    drawLegend(legendX + 155, legendY, '#c44b4b', 'Expenses');
+    legendX += drawLegend(legendX, legendY, '#4a9d5b', canvas.dataset.balance);
+    legendX += drawLegend(legendX, legendY, '#3b82c4', canvas.dataset.income);
+    drawLegend(legendX, legendY, '#c44b4b', canvas.dataset.expenses);
 
     function drawLine(data, color, width) {
         if (data.length < 2) return;
@@ -328,6 +328,7 @@
         ctx.font = '10px Outfit, sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText(text, x + 16, y);
+        return 16 + ctx.measureText(text).width + 20;
     }
 
     function shortMoney(val) {

@@ -9,8 +9,10 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Duration;
+use core::continent::{CompetitionTier, ContinentalQualification, QualificationBand};
 use core::league::{
-    LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour, TieBreakPolicy,
+    LeagueLadder, LeagueTableRow as CoreTableRow, PlayoffStage, ScheduleItem, ScheduleTour,
+    TieBreakPolicy,
 };
 use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
@@ -54,7 +56,9 @@ pub struct LeagueGetTemplate {
     /// Annual aggregate across every zone of the competition, best-first;
     /// empty for regular leagues.
     pub annual_table_rows: Vec<LeagueTableRow>,
+    pub annual_legend: Vec<StandingsLegendItem>,
     pub table_rows: Vec<LeagueTableRow>,
+    pub legend: Vec<StandingsLegendItem>,
     pub current_tour_schedule: Vec<TourSchedule>,
     pub competition_reputation: Vec<CompetitionReputationItem>,
     pub top_scorers: Vec<LeaguePlayerStatItem>,
@@ -108,7 +112,94 @@ pub struct LeagueTableGoalscorer {
     pub auto_goal: bool,
 }
 
+pub struct StandingsLegendItem {
+    pub zone: &'static str,
+    pub label: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StandingsZone {
+    Continental(usize),
+    Promotion,
+    Relegation,
+}
+
+/// The coloured bands down the side of a standings table: continental
+/// places, promotion and relegation, each only where this league really
+/// has them.
+struct StandingsZones {
+    continental: Vec<QualificationBand>,
+    promoted: usize,
+    relegated: usize,
+}
+
+impl StandingsZones {
+    fn tier_class(tier: &CompetitionTier) -> &'static str {
+        match tier {
+            CompetitionTier::ChampionsLeague => "ucl",
+            CompetitionTier::EuropaLeague => "uel",
+            CompetitionTier::ConferenceLeague => "uecl",
+            CompetitionTier::CopaLibertadores => "copa",
+        }
+    }
+
+    fn tier_label_key(tier: &CompetitionTier) -> &'static str {
+        match tier {
+            CompetitionTier::ChampionsLeague => "champions_league",
+            CompetitionTier::EuropaLeague => "europa_league",
+            CompetitionTier::ConferenceLeague => "conference_league",
+            CompetitionTier::CopaLibertadores => "copa_libertadores",
+        }
+    }
+
+    fn zone(&self, index: usize, rows: usize) -> Option<StandingsZone> {
+        if index >= rows.saturating_sub(self.relegated) {
+            return Some(StandingsZone::Relegation);
+        }
+        if let Some(i) = self.continental.iter().position(|b| b.contains(index)) {
+            return Some(StandingsZone::Continental(i));
+        }
+        (index < self.promoted).then_some(StandingsZone::Promotion)
+    }
+
+    fn zone_class(&self, zone: StandingsZone) -> &'static str {
+        match zone {
+            StandingsZone::Continental(i) => Self::tier_class(&self.continental[i].tier),
+            StandingsZone::Promotion => "pro",
+            StandingsZone::Relegation => "rel",
+        }
+    }
+
+    /// Stamps each row's zone and returns the legend for the zones that
+    /// actually appear, in table order.
+    fn apply(&self, rows: &mut [LeagueTableRow], i18n: &I18n) -> Vec<StandingsLegendItem> {
+        let count = rows.len();
+        let mut seen: Vec<StandingsZone> = Vec::new();
+        for (index, row) in rows.iter_mut().enumerate() {
+            if let Some(zone) = self.zone(index, count) {
+                row.zone = self.zone_class(zone);
+                if !seen.contains(&zone) {
+                    seen.push(zone);
+                }
+            }
+        }
+        seen.into_iter()
+            .map(|zone| StandingsLegendItem {
+                zone: self.zone_class(zone),
+                label: match zone {
+                    StandingsZone::Continental(i) => {
+                        i18n.t(Self::tier_label_key(&self.continental[i].tier)).to_string()
+                    }
+                    StandingsZone::Promotion => i18n.t("promotion").to_string(),
+                    StandingsZone::Relegation => i18n.t("relegation").to_string(),
+                },
+            })
+            .collect()
+    }
+}
+
 pub struct LeagueTableRow {
+    pub zone: &'static str,
     pub team_name: String,
     pub team_slug: String,
     pub played: u8,
@@ -164,11 +255,18 @@ pub async fn league_get_action(
 
     let league_table = league.table.get();
 
-    let table_rows: Vec<LeagueTableRow> = league_table
+    let ladder = LeagueLadder::new(&country.leagues.leagues);
+    let continental = simulator_data
+        .continent(country.continent_id)
+        .map(|continent| ContinentalQualification::bands_for_league(continent, league))
+        .unwrap_or_default();
+
+    let mut table_rows: Vec<LeagueTableRow> = league_table
         .iter()
         .map(|t| {
             let team_data = simulator_data.team_data(t.team_id).unwrap();
             LeagueTableRow {
+                zone: "",
                 team_name: team_data.name.clone(),
                 team_slug: team_data.slug.clone(),
                 played: t.played,
@@ -187,7 +285,14 @@ pub async fn league_get_action(
     // annual aggregate across every zone of the competition — the same
     // aggregate the relegation pipeline reads.
     let split_season = league.settings.split_season;
-    let (tournament_label, annual_table_rows) = if split_season {
+    let legend = StandingsZones {
+        continental,
+        promoted: ladder.promoted_from_table(league),
+        relegated: ladder.relegated_from_table(league),
+    }
+    .apply(&mut table_rows, &i18n);
+
+    let (tournament_label, mut annual_table_rows) = if split_season {
         let second_stage = league.split_first_table.is_some();
         let stage = if second_stage {
             PlayoffStage::SecondStage
@@ -231,6 +336,7 @@ pub async fn league_get_action(
                 simulator_data
                     .team_data(t.team_id)
                     .map(|team_data| LeagueTableRow {
+                        zone: "",
                         team_name: team_data.name.clone(),
                         team_slug: team_data.slug.clone(),
                         played: t.played,
@@ -247,6 +353,13 @@ pub async fn league_get_action(
     } else {
         (String::new(), Vec::new())
     };
+
+    let annual_legend = StandingsZones {
+        continental: Vec::new(),
+        promoted: 0,
+        relegated: ladder.relegated_from_annual(league),
+    }
+    .apply(&mut annual_table_rows, &i18n);
 
     // Build a single fixture view-item for the current tour.
     let map_item = |item: &ScheduleItem| -> LeagueScheduleItem {
@@ -667,7 +780,9 @@ pub async fn league_get_action(
         split_season,
         tournament_label,
         annual_table_rows,
+        annual_legend,
         table_rows,
+        legend,
         current_tour_schedule,
         competition_reputation,
         top_scorers,

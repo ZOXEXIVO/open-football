@@ -58,6 +58,7 @@ impl ClubAcademy {
 
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
+        let country_code = country_ctx.map(|c| c.code.as_str()).unwrap_or("");
         let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
             Some(names) => names.as_ref(),
             None => return ProduceYouthPlayersResult::new(Vec::new()),
@@ -97,6 +98,7 @@ impl ClubAcademy {
             let age = IntakeAgeDistribution::Annual.sample();
             let player = PlayerGenerator::generate_with_context(
                 country_id,
+                country_code,
                 ctx.simulation.date.date(),
                 position,
                 people_names,
@@ -261,6 +263,7 @@ impl ClubAcademy {
         });
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
+        let country_code = country_ctx.map(|c| c.code.as_str()).unwrap_or("");
         let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
             Some(names) => names.as_ref(),
             None => return,
@@ -286,6 +289,7 @@ impl ClubAcademy {
             let age = IntakeAgeDistribution::Backfill.sample();
             let player = PlayerGenerator::generate_with_context(
                 country_id,
+                country_code,
                 date,
                 position,
                 people_names,

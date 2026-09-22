@@ -221,7 +221,11 @@ pub async fn team_transfers_action(
                                     &t.player_name,
                                 ),
                                 player_name: t.player_name.clone(),
-                                other_team: t.from_team_name.clone(),
+                                other_team: if t.from_club_id == 0 {
+                                    i18n.t("free_agent").to_string()
+                                } else {
+                                    t.from_team_name.clone()
+                                },
                                 other_team_slug: find_team_slug(simulator_data, t.from_club_id),
                                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
                                 end_date: end_date.clone(),
@@ -235,7 +239,11 @@ pub async fn team_transfers_action(
                                     &t.player_name,
                                 ),
                                 player_name: t.player_name.clone(),
-                                other_team: t.to_team_name.clone(),
+                                other_team: if t.to_club_id == 0 {
+                                    i18n.t("free_agent").to_string()
+                                } else {
+                                    t.to_team_name.clone()
+                                },
                                 other_team_slug: find_team_slug(simulator_data, t.to_club_id),
                                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
                                 end_date,
@@ -246,7 +254,7 @@ pub async fn team_transfers_action(
                         let fee = if t.fee.amount > 0.0 {
                             FormattingUtils::format_money(t.fee.amount)
                         } else {
-                            "Free".to_string()
+                            i18n.t("fee_free").to_string()
                         };
                         if is_incoming {
                             incoming_transfers.push(TransferHistoryItem {
@@ -256,7 +264,11 @@ pub async fn team_transfers_action(
                                     &t.player_name,
                                 ),
                                 player_name: t.player_name.clone(),
-                                other_team: t.from_team_name.clone(),
+                                other_team: if t.from_club_id == 0 {
+                                    i18n.t("free_agent").to_string()
+                                } else {
+                                    t.from_team_name.clone()
+                                },
                                 other_team_slug: find_team_slug(simulator_data, t.from_club_id),
                                 fee: fee.clone(),
                                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
@@ -270,7 +282,11 @@ pub async fn team_transfers_action(
                                     &t.player_name,
                                 ),
                                 player_name: t.player_name.clone(),
-                                other_team: t.to_team_name.clone(),
+                                other_team: if t.to_club_id == 0 {
+                                    i18n.t("free_agent").to_string()
+                                } else {
+                                    t.to_team_name.clone()
+                                },
                                 other_team_slug: find_team_slug(simulator_data, t.to_club_id),
                                 fee,
                                 date: t.transfer_date.format("%d.%m.%Y").to_string(),

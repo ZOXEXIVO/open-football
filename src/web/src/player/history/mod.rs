@@ -474,7 +474,7 @@ pub async fn player_history_action(
                 is_loan: item.is_loan,
                 transfer_fee: match item.transfer_fee {
                     Some(f) if f > 0.0 => FormattingUtils::format_money(f),
-                    Some(_) => "Free".to_string(),
+                    Some(_) => i18n.t("fee_free").to_string(),
                     None => String::new(),
                 },
                 stats: to_history_stats(&item.statistics),

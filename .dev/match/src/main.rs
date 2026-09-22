@@ -834,6 +834,7 @@ fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
     let now = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
     let mut player = PlayerGenerator::generate_with_context(
         1,
+        "",
         now,
         position,
         &empty_names,

@@ -1,5 +1,5 @@
 use super::{ContinentResult, ContinentalCompetitionResults};
-use crate::continent::{CompetitionTier, ContinentalMatchResult};
+use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalQualification};
 use crate::league::League;
 use crate::league::LeagueResult;
 use crate::world::SimulatorData;
@@ -37,33 +37,32 @@ impl ContinentResult {
             let is_europe = continent.is_europe();
             let is_south_america = continent.is_south_america();
 
-            let mut countries: Vec<&Country> = continent.countries.iter().collect();
-            countries.sort_by(|a, b| b.reputation.cmp(&a.reputation));
+            let countries = ContinentalQualification::ranked_countries(continent);
 
             match (date.month(), date.day()) {
                 (8, 15) if is_europe => {
-                    let cl = Self::collect_cl_qualified_clubs(&countries);
+                    let cl = Self::collect_qualified_clubs(&countries, &CompetitionTier::ChampionsLeague);
                     if cl.is_empty() {
                         return;
                     }
                     (cl, Vec::new(), Vec::new(), Vec::new(), 0u8)
                 }
                 (8, 16) if is_south_america => {
-                    let copa = Self::collect_copa_libertadores_qualified_clubs(&countries);
+                    let copa = Self::collect_qualified_clubs(&countries, &CompetitionTier::CopaLibertadores);
                     if copa.is_empty() {
                         return;
                     }
                     (Vec::new(), Vec::new(), Vec::new(), copa, 3u8)
                 }
                 (8, 20) if is_europe => {
-                    let el = Self::collect_el_qualified_clubs(&countries);
+                    let el = Self::collect_qualified_clubs(&countries, &CompetitionTier::EuropaLeague);
                     if el.is_empty() {
                         return;
                     }
                     (Vec::new(), el, Vec::new(), Vec::new(), 1u8)
                 }
                 (8, 25) if is_europe => {
-                    let conf = Self::collect_conference_qualified_clubs(&countries);
+                    let conf = Self::collect_qualified_clubs(&countries, &CompetitionTier::ConferenceLeague);
                     if conf.is_empty() {
                         return;
                     }
@@ -128,234 +127,44 @@ impl ContinentResult {
         }
     }
 
-    /// Champions League: top clubs from each country.
-    /// Top 4 countries get 4 spots, next 2 get 2 spots, rest get 1.
     /// Check if a country's top league actually played matches (not just an empty table).
     /// Countries with disabled leagues have clubs but no league activity.
     fn league_has_played(league: &League) -> bool {
         league.table.rows.iter().any(|r| r.played > 0)
     }
 
-    fn collect_cl_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
+    fn collect_qualified_clubs(countries: &[&Country], tier: &CompetitionTier) -> Vec<u32> {
+        let cap = ContinentalQualification::field_cap(tier).unwrap_or(usize::MAX);
         let mut qualified = Vec::new();
 
         for (rank, country) in countries.iter().enumerate() {
-            let top_league = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.settings.tier == 1 && !l.friendly);
-
-            let league = match top_league {
-                Some(l) => l,
-                None => continue,
+            let Some(league) = ContinentalQualification::qualifying_league(country) else {
+                continue;
             };
-
             if !Self::league_has_played(league) {
                 continue;
             }
-
-            let spots: usize = if rank < 4 {
-                4
-            } else if rank < 6 {
-                2
-            } else {
-                1
-            };
-
-            let table = &league.table;
-            for row in table.rows.iter().take(spots) {
-                if row.team_id > 0 {
-                    if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id))
-                    {
-                        qualified.push(club.id);
-                    }
-                }
-            }
-        }
-
-        debug!(
-            "Champions League qualification: {} clubs from {} countries",
-            qualified.len(),
-            countries.len()
-        );
-
-        qualified
-    }
-
-    /// Europa League: next tier of clubs after CL qualification.
-    /// Top 4 countries: positions 5-7 (3 spots), next 4: positions 3-4 (2 spots),
-    /// next 12: position 2 (1 spot).
-    fn collect_el_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
-        let mut qualified = Vec::new();
-
-        for (rank, country) in countries.iter().enumerate() {
-            let top_league = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.settings.tier == 1 && !l.friendly);
-
-            let league = match top_league {
-                Some(l) => l,
-                None => continue,
-            };
-
-            if !Self::league_has_played(league) {
-                continue;
-            }
-
-            // Determine which table positions to take (after CL spots)
-            let (skip, take) = if rank < 4 {
-                (4, 3usize) // positions 5-7
-            } else if rank < 8 {
-                (2, 2) // positions 3-4
-            } else if rank < 20 {
-                (1, 1) // position 2
-            } else {
+            let Some((skip, take)) = ContinentalQualification::band(tier, rank) else {
                 continue;
             };
 
-            let table = &league.table;
-            for row in table.rows.iter().skip(skip).take(take) {
-                if row.team_id > 0 {
-                    if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id))
-                    {
-                        qualified.push(club.id);
-                    }
-                }
-            }
-        }
-
-        debug!(
-            "Europa League qualification: {} clubs from {} countries",
-            qualified.len(),
-            countries.len()
-        );
-
-        qualified
-    }
-
-    /// Conference League: third tier of clubs after CL and EL.
-    /// Top 4 countries: position 8 (1 spot), next 4: positions 5-6 (2 spots),
-    /// next 12: position 3 (1 spot), rest: position 2 (1 spot).
-    fn collect_conference_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
-        let mut qualified = Vec::new();
-
-        for (rank, country) in countries.iter().enumerate() {
-            let top_league = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.settings.tier == 1 && !l.friendly);
-
-            let league = match top_league {
-                Some(l) => l,
-                None => continue,
-            };
-
-            if !Self::league_has_played(league) {
-                continue;
-            }
-
-            // Determine which table positions to take (after CL + EL spots)
-            let (skip, take) = if rank < 4 {
-                (7, 1usize) // position 8
-            } else if rank < 8 {
-                (4, 2) // positions 5-6
-            } else if rank < 20 {
-                (2, 1) // position 3
-            } else {
-                (1, 1) // position 2
-            };
-
-            let table = &league.table;
-            for row in table.rows.iter().skip(skip).take(take) {
-                if row.team_id > 0 {
-                    if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id))
-                    {
-                        qualified.push(club.id);
-                    }
-                }
-            }
-        }
-
-        debug!(
-            "Conference League qualification: {} clubs from {} countries",
-            qualified.len(),
-            countries.len()
-        );
-
-        qualified
-    }
-
-    /// Copa Libertadores spot allocation per (reputation-ranked) country.
-    /// The two strongest South-American nations send 5 clubs each, the next
-    /// two send 4, the following four send 3, and every remaining nation
-    /// sends 1 — filling toward the 32-club group stage.
-    fn copa_spots_for_rank(rank: usize) -> usize {
-        if rank <= 1 {
-            5
-        } else if rank <= 3 {
-            4
-        } else if rank <= 7 {
-            3
-        } else {
-            1
-        }
-    }
-
-    /// Copa Libertadores qualification: South-American clubs only.
-    /// Countries are expected pre-sorted by reputation (descending), same as
-    /// the UEFA collectors. Each tier-1 non-friendly league that has played
-    /// contributes its top table rows up to its rank's spot allocation, with
-    /// the final pool deduplicated and capped at 32 clubs.
-    fn collect_copa_libertadores_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
-        const MAX_GROUP_STAGE_CLUBS: usize = 32;
-        let mut qualified = Vec::new();
-
-        for (rank, country) in countries.iter().enumerate() {
-            if qualified.len() >= MAX_GROUP_STAGE_CLUBS {
-                break;
-            }
-
-            let top_league = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.settings.tier == 1 && !l.friendly);
-
-            let league = match top_league {
-                Some(l) => l,
-                None => continue,
-            };
-
-            if !Self::league_has_played(league) {
-                continue;
-            }
-
-            let spots = Self::copa_spots_for_rank(rank);
-
-            let table = &league.table;
-            for row in table.rows.iter().take(spots) {
+            for row in league.table.rows.iter().skip(skip).take(take) {
                 if row.team_id == 0 {
                     continue;
                 }
                 if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id)) {
                     if !qualified.contains(&club.id) {
                         qualified.push(club.id);
-                        if qualified.len() >= MAX_GROUP_STAGE_CLUBS {
-                            break;
-                        }
                     }
                 }
             }
         }
 
-        qualified.truncate(MAX_GROUP_STAGE_CLUBS);
+        qualified.truncate(cap);
 
         debug!(
-            "Copa Libertadores qualification: {} clubs from {} countries",
+            "{:?} qualification: {} clubs from {} countries",
+            tier,
             qualified.len(),
             countries.len()
         );
@@ -686,42 +495,5 @@ impl ContinentResult {
             .flat_map(|c| &c.clubs)
             .map(|club| (club.id, club))
             .collect()
-    }
-}
-
-#[cfg(test)]
-mod copa_libertadores_tests {
-    use super::ContinentResult;
-
-    #[test]
-    fn copa_spots_follow_canonical_5_5_4_4_3x4_then_1() {
-        // The two strongest nations send 5, the next two send 4, the
-        // following four send 3, everyone else sends 1.
-        let expected: Vec<usize> = vec![5, 5, 4, 4, 3, 3, 3, 3, 1, 1, 1];
-        let actual: Vec<usize> = (0..expected.len())
-            .map(ContinentResult::copa_spots_for_rank)
-            .collect();
-        assert_eq!(actual, expected);
-
-        // Tail ranks always contribute a single spot.
-        assert_eq!(ContinentResult::copa_spots_for_rank(50), 1);
-    }
-
-    #[test]
-    fn copa_spot_allocation_can_fill_the_32_team_group_stage() {
-        // Top-8 nations alone allocate 5+5+4+4+3+3+3+3 = 30 spots; the
-        // remaining two needed to reach 32 come from the 1-spot tail.
-        let top_eight: usize = (0..8).map(ContinentResult::copa_spots_for_rank).sum();
-        assert_eq!(top_eight, 30);
-
-        let mut total = top_eight;
-        let mut rank = 8;
-        while total < 32 {
-            total += ContinentResult::copa_spots_for_rank(rank);
-            rank += 1;
-        }
-        assert!(total >= 32);
-        // Exactly two 1-spot nations top it up to the 32-club field.
-        assert_eq!(rank, 10);
     }
 }

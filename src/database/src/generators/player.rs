@@ -927,7 +927,6 @@ impl PlayerGenerator {
             PlayerClubContract::new(salary, expiration)
         };
 
-        // Native languages based on player's nationality
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
                 .into_iter()
@@ -1745,7 +1744,7 @@ impl PlayerGenerator {
         }
 
         let native_languages: Vec<core::PlayerLanguage> =
-            core::Language::from_country_code(country_code)
+            core::Language::from_country_code(&CountryLoader::code_for_id(record.country_id))
                 .into_iter()
                 .map(core::PlayerLanguage::native)
                 .collect();

@@ -13,6 +13,7 @@ use crate::club::staff::SpellCloser;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
+use crate::league::LeagueLadder;
 use crate::transfers::squad::LevelBand;
 use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
 use crate::world::SimulatorData;
@@ -2067,72 +2068,6 @@ impl CountryResult {
         });
     }
 
-    /// Select the tier-(T+1) league that the tier-T league `tier1_id`
-    /// relegates into (returning `(lower_league_id, its promotion_spots)`).
-    ///
-    /// When the relegating tier and the tier below are BOTH split into
-    /// groups of the same competition (e.g. a two-zone top flight above a
-    /// two-group second division), zones are paired to groups by position —
-    /// zone 0 → group 0, zone 1 → group 1 — so each zone relegates into a
-    /// distinct group. The naive "first promotion-eligible league below"
-    /// would send every zone into the same first group, double-pairing it
-    /// and orphaning the others. Falls back to that first-match behaviour
-    /// whenever either side isn't grouped (the common single-league case).
-    fn paired_promotion_league(
-        leagues: &[crate::league::League],
-        tier1_id: u32,
-        tier1_tier: u8,
-    ) -> Option<(u32, u8)> {
-        let lower_tier = tier1_tier + 1;
-        let mut candidates: Vec<&crate::league::League> = leagues
-            .iter()
-            .filter(|l| {
-                l.id != tier1_id && l.settings.tier == lower_tier && l.settings.promotion_spots > 0
-            })
-            .collect();
-        if candidates.is_empty() {
-            return None;
-        }
-
-        if let Some(tier1_group) = leagues
-            .iter()
-            .find(|l| l.id == tier1_id)
-            .and_then(|l| l.settings.league_group.as_ref())
-        {
-            // Position of this zone among its competition's zones (by id).
-            let mut zones: Vec<u32> = leagues
-                .iter()
-                .filter(|l| {
-                    l.settings.tier == tier1_tier
-                        && l.settings
-                            .league_group
-                            .as_ref()
-                            .is_some_and(|g| g.competition == tier1_group.competition)
-                })
-                .map(|l| l.id)
-                .collect();
-            zones.sort_unstable();
-
-            // Grouped candidates below, ordered the same way, so index i on
-            // each side refers to the i-th group.
-            let mut grouped: Vec<&crate::league::League> = candidates
-                .iter()
-                .copied()
-                .filter(|l| l.settings.league_group.is_some())
-                .collect();
-            grouped.sort_unstable_by_key(|l| l.id);
-
-            if let Some(pos) = zones.iter().position(|&id| id == tier1_id) {
-                if let Some(l) = grouped.get(pos) {
-                    return Some((l.id, l.settings.promotion_spots));
-                }
-            }
-        }
-
-        let first = candidates.remove(0);
-        Some((first.id, first.settings.promotion_spots))
-    }
-
     /// Hand the league the points deduction owed by any club that has just
     /// entered administration.
     ///
@@ -2253,12 +2188,12 @@ impl CountryResult {
             // Find the paired lower league — group-aware, so a two-zone top
             // flight maps each zone to its own second-division group instead
             // of every zone piling into the first one.
-            let (tier2_id, promotion_spots) =
-                match Self::paired_promotion_league(&country.leagues.leagues, tier1_id, tier1_tier)
-                {
-                    Some(p) => p,
-                    None => continue,
-                };
+            let (tier2_id, promotion_spots) = match LeagueLadder::new(&country.leagues.leagues)
+                .lower_partner(tier1_id)
+            {
+                Some(l) => (l.id, l.settings.promotion_spots),
+                None => continue,
+            };
 
             let nominal_swap = relegation_spots.min(promotion_spots) as usize;
 
@@ -2395,10 +2330,11 @@ impl CountryResult {
 
             // Paired lower-division groups, one per zone (same mapping the
             // generic path uses).
-            let tier = zones[0].settings.tier;
+            let ladder = LeagueLadder::new(leagues);
             let groups: Vec<(u32, u8)> = zones
                 .iter()
-                .filter_map(|z| Self::paired_promotion_league(leagues, z.id, tier))
+                .filter_map(|z| ladder.lower_partner(z.id))
+                .map(|l| (l.id, l.settings.promotion_spots))
                 .collect();
             if groups.len() != zones.len() {
                 continue;
@@ -3059,11 +2995,11 @@ mod tests {
         ];
         // zone 0 → group 0, zone 1 → group 1 (ordered by id).
         assert_eq!(
-            CountryResult::paired_promotion_league(&leagues, 100, 1),
+            LeagueLadder::new(&leagues).lower_partner(100).map(|l| (l.id, l.settings.promotion_spots)),
             Some((200, 1))
         );
         assert_eq!(
-            CountryResult::paired_promotion_league(&leagues, 101, 1),
+            LeagueLadder::new(&leagues).lower_partner(101).map(|l| (l.id, l.settings.promotion_spots)),
             Some((201, 1))
         );
     }
@@ -3076,9 +3012,27 @@ mod tests {
             league_with_group(20, 2, 2, 0, None, ""),
         ];
         assert_eq!(
-            CountryResult::paired_promotion_league(&leagues, 10, 1),
+            LeagueLadder::new(&leagues).lower_partner(10).map(|l| (l.id, l.settings.promotion_spots)),
             Some((20, 2))
         );
+    }
+
+    #[test]
+    fn ladder_moves_only_what_both_sides_of_a_boundary_allow() {
+        let leagues = vec![
+            league_with_group(10, 1, 0, 3, None, ""),
+            league_with_group(20, 2, 2, 0, None, ""),
+        ];
+        let ladder = LeagueLadder::new(&leagues);
+        assert_eq!(ladder.relegated_from_table(&leagues[0]), 2);
+        assert_eq!(ladder.promoted_from_table(&leagues[1]), 2);
+        assert_eq!(ladder.promoted_from_table(&leagues[0]), 0);
+    }
+
+    #[test]
+    fn ladder_relegates_nobody_without_a_division_below() {
+        let leagues = vec![league_with_group(10, 1, 0, 3, None, "")];
+        assert_eq!(LeagueLadder::new(&leagues).relegated_from_table(&leagues[0]), 0);
     }
 
     fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {

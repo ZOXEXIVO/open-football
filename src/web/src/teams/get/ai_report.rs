@@ -38,10 +38,11 @@ pub async fn team_ai_report_action(
     State(state): State<GameAppData>,
     Json(body): Json<TeamReportRequest>,
 ) -> impl IntoResponse {
+    let i18n = state.i18n.for_lang(&body.lang);
     let Some(settings) = state.ai.get().await else {
         return Json(TeamReportStart {
             job_id: None,
-            error: Some("AI is not configured".to_string()),
+            error: Some(i18n.t("ai_error_not_configured").to_string()),
         });
     };
 
@@ -52,7 +53,7 @@ pub async fn team_ai_report_action(
             None => {
                 return Json(TeamReportStart {
                     job_id: None,
-                    error: Some("Simulator data not loaded".to_string()),
+                    error: Some(i18n.t("ai_error_no_data").to_string()),
                 });
             }
         }

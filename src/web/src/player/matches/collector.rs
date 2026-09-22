@@ -35,6 +35,7 @@ use super::{PlayerMatchItem, PlayerMatchResult};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use core::league::League;
 use core::r#match::{FieldSquad, MatchResult};
+use crate::I18n;
 use core::{Country, Player, SimulatorData, Team};
 use std::collections::{HashMap, HashSet};
 
@@ -65,6 +66,7 @@ impl PlayerMatchCollector {
     /// internationals, all ordered by kickoff.
     pub fn collect(
         data: &SimulatorData,
+        i18n: &I18n,
         player: &Player,
         team: Option<&Team>,
     ) -> Vec<PlayerMatchItem> {
@@ -94,7 +96,7 @@ impl PlayerMatchCollector {
         }
 
         for club_id in &footprint.clubs {
-            Self::collect_continental(data, player, *club_id, &mut dated, &mut seen);
+            Self::collect_continental(data, i18n, player, *club_id, &mut dated, &mut seen);
         }
 
         Self::collect_international(data, player, &footprint, &mut dated, &mut seen);
@@ -301,12 +303,13 @@ impl PlayerMatchCollector {
 
     fn collect_continental(
         data: &SimulatorData,
+        i18n: &I18n,
         player: &Player,
         club_id: u32,
         out: &mut Vec<DatedItem>,
         seen: &mut HashSet<String>,
     ) {
-        for (comp_name, home_club_id, away_club_id, date, match_id, result) in
+        for (comp_key, home_club_id, away_club_id, date, match_id, result) in
             data.continental_matches_for_club(club_id)
         {
             let Some((home_goals, away_goals)) = result else {
@@ -345,7 +348,7 @@ impl PlayerMatchCollector {
                         .and_then(|tid| data.team(tid))
                         .map(|t| (t.name.clone(), t.slug.clone()))
                 })
-                .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
+                .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
 
             let kickoff = date.and_hms_opt(20, 0, 0).unwrap_or_default();
 
@@ -359,7 +362,7 @@ impl PlayerMatchCollector {
                     opponent_slug,
                     opponent_name,
                     is_home,
-                    competition_name: comp_name.to_string(),
+                    competition_name: i18n.t(comp_key).to_string(),
                     result: Some(PlayerMatchResult {
                         match_id: match_id.to_string(),
                         home_goals,

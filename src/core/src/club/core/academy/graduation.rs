@@ -1,6 +1,5 @@
 use crate::club::academy::ClubAcademy;
 use crate::club::player::calculators::FreeAgentReleaseReason;
-use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::{CompletedTransfer, TransferType};
@@ -17,7 +16,6 @@ impl Club {
     pub(in crate::club::core) fn process_academy_graduations(
         &mut self,
         date: NaiveDate,
-        country_code: &str,
     ) -> (Vec<CompletedTransfer>, Vec<Player>) {
         let mut transfers = Vec::new();
         let mut released_players: Vec<Player> = Vec::new();
@@ -97,13 +95,6 @@ impl Club {
                     // a pathway, and his starts here.
                     let group = player.position().position_group();
                     player.assign_pathway(club_id, PlayerPlan::from_graduation(group, date), date);
-                    // Assign native languages based on player's nationality
-                    if player.languages.is_empty() {
-                        player.languages = Language::from_country_code(country_code)
-                            .into_iter()
-                            .map(|lang| PlayerLanguage::native(lang))
-                            .collect();
-                    }
 
                     transfers.push(
                         CompletedTransfer::new(

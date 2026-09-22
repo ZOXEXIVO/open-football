@@ -12,7 +12,6 @@ use axum::response::{IntoResponse, Response};
 use chrono::NaiveDate;
 use core::Person;
 use core::Player;
-use core::PlayerPreferredFoot;
 use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
@@ -477,11 +476,7 @@ impl PersonalityRadar {
 }
 
 fn get_player_info(player: &Player, today: NaiveDate, i18n: &I18n) -> PlayerInfoDto {
-    let preferred_foot = match player.preferred_foot {
-        PlayerPreferredFoot::Left => i18n.t("foot_left"),
-        PlayerPreferredFoot::Right => i18n.t("foot_right"),
-        PlayerPreferredFoot::Both => i18n.t("foot_both"),
-    };
+    let preferred_foot = i18n.t(player.preferred_foot.as_i18n_key());
 
     let mental = &player.skills.mental;
     let leadership = mental.leadership.round().clamp(1.0, 20.0) as u8;

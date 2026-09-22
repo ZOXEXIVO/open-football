@@ -207,10 +207,7 @@ impl Club {
             // turns over. Runs after the rebalance so it only counts a
             // hole the club's own promotions could not close, and is
             // bounded to one rescue a month inside the academy.
-            let emergency_callups = self.process_youth_emergency_callups(
-                date,
-                ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or(""),
-            );
+            let emergency_callups = self.process_youth_emergency_callups(date);
             if !emergency_callups.is_empty() {
                 result.academy_transfers.extend(emergency_callups);
             }
@@ -301,9 +298,7 @@ impl Club {
             self.board.budget_moves.on_new_season();
 
             self.reset_for_new_season();
-            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
-            let (academy_transfers, released_players) =
-                self.process_academy_graduations(date, country_code);
+            let (academy_transfers, released_players) = self.process_academy_graduations(date);
             // Graduation day as one morning rather than as a handful of
             // separate free arrivals. The market desk already reports
             // each boy individually; this is the piece about the year

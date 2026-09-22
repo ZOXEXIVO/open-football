@@ -49,6 +49,18 @@ pub enum NegotiationStatus {
     Expired,
 }
 
+impl NegotiationStatus {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            NegotiationStatus::Pending => "neg_status_pending",
+            NegotiationStatus::Accepted => "neg_status_accepted",
+            NegotiationStatus::Rejected => "neg_status_rejected",
+            NegotiationStatus::Countered => "neg_status_countered",
+            NegotiationStatus::Expired => "neg_status_expired",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransferNegotiation {
     pub id: u32,

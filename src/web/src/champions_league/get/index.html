@@ -14,7 +14,7 @@
 
     {% if groups.is_empty() && knockout_ties.is_empty() %}
     <section class="fm-panel">
-        <div class="fm-empty">Champions League has not started yet</div>
+        <div class="fm-empty">{{ i18n.t("competition_not_started") }}</div>
     </section>
     {% endif %}
 
@@ -63,7 +63,7 @@
         {% endfor %}
     </div>
     <div class="fm-legend mt-2">
-        <span><i class="legend-dot ucl"></i> Knockout stage</span>
+        <span><i class="legend-dot ucl"></i> {{ i18n.t("knockout_stage") }}</span>
     </div>
     {% endif %}
 
@@ -72,7 +72,7 @@
         <div class="col-12">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Knockout Stage</h3>
+                    <h3>{{ i18n.t("knockout_stage") }}</h3>
                 </div>
                 <div class="fm-fixtures">
                     {% for tie in knockout_ties %}
@@ -105,7 +105,7 @@
                     </div>
                     {% endif %}
                     {% if let Some(winner) = tie.winner_name %}
-                    <div class="fm-matchday-hd">Winner: {{ winner }}</div>
+                    <div class="fm-matchday-hd">{{ i18n.t("winner") }}: {{ winner }}</div>
                     {% endif %}
                     {% endfor %}
                 </div>

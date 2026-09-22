@@ -19,6 +19,21 @@ pub enum CompetitionStage {
     Final,
 }
 
+impl CompetitionStage {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            CompetitionStage::NotStarted => "stage_not_started",
+            CompetitionStage::Qualifying => "stage_qualifying",
+            CompetitionStage::GroupStage => "stage_group_stage",
+            CompetitionStage::RoundOf32 => "round_of_32",
+            CompetitionStage::RoundOf16 => "round_of_16",
+            CompetitionStage::QuarterFinals => "quarter_finals",
+            CompetitionStage::SemiFinals => "semi_finals",
+            CompetitionStage::Final => "final",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ContinentalMatch {
     pub home_team: u32,

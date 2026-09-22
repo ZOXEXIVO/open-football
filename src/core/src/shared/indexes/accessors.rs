@@ -461,7 +461,7 @@ impl SimulatorData {
 
     /// Get all continental competition matches (CL, EL, Conference, Copa
     /// Libertadores) for a club.
-    /// Returns (competition_name, home_club_id, away_club_id, date, match_id, result).
+    /// Returns (competition_i18n_key, home_club_id, away_club_id, date, match_id, result).
     pub fn continental_matches_for_club(
         &self,
         club_id: u32,
@@ -476,7 +476,7 @@ impl SimulatorData {
         for m in &cc.champions_league.matches {
             if m.home_team == club_id || m.away_team == club_id {
                 matches.push((
-                    "Champions League",
+                    "champions_league",
                     m.home_team,
                     m.away_team,
                     m.date,
@@ -488,7 +488,7 @@ impl SimulatorData {
         for m in &cc.europa_league.matches {
             if m.home_team == club_id || m.away_team == club_id {
                 matches.push((
-                    "Europa League",
+                    "europa_league",
                     m.home_team,
                     m.away_team,
                     m.date,
@@ -500,7 +500,7 @@ impl SimulatorData {
         for m in &cc.conference_league.matches {
             if m.home_team == club_id || m.away_team == club_id {
                 matches.push((
-                    "Conference League",
+                    "conference_league",
                     m.home_team,
                     m.away_team,
                     m.date,
@@ -512,7 +512,7 @@ impl SimulatorData {
         for m in &cc.copa_libertadores.matches {
             if m.home_team == club_id || m.away_team == club_id {
                 matches.push((
-                    "Copa Libertadores",
+                    "copa_libertadores",
                     m.home_team,
                     m.away_team,
                     m.date,

@@ -186,16 +186,6 @@ fn negotiation_phase_to_key(phase: &NegotiationPhase) -> &'static str {
     }
 }
 
-fn negotiation_status_to_key(status: &NegotiationStatus) -> &'static str {
-    match status {
-        NegotiationStatus::Pending => "neg_status_pending",
-        NegotiationStatus::Accepted => "neg_status_accepted",
-        NegotiationStatus::Rejected => "neg_status_rejected",
-        NegotiationStatus::Countered => "neg_status_countered",
-        NegotiationStatus::Expired => "neg_status_expired",
-    }
-}
-
 fn listing_type_to_key(listing_type: &TransferListingType) -> &'static str {
     match listing_type {
         TransferListingType::Transfer => "listing_type_transfer",
@@ -340,7 +330,7 @@ pub async fn player_transfers_action(
                             n.current_offer.base_fee.amount,
                         ),
                         phase_key: negotiation_phase_to_key(&n.phase).to_string(),
-                        status_key: negotiation_status_to_key(&n.status).to_string(),
+                        status_key: n.status.as_i18n_key().to_string(),
                         started_date: n.created_date.format("%d.%m.%Y").to_string(),
                         is_loan: n.is_loan,
                     }
@@ -413,9 +403,17 @@ pub async fn player_transfers_action(
                 (
                     t.transfer_date,
                     PlayerCompletedTransferDto {
-                        from_club_name: t.from_team_name.clone(),
+                        from_club_name: if t.from_club_id == 0 {
+                            i18n.t("free_agent").to_string()
+                        } else {
+                            t.from_team_name.clone()
+                        },
                         from_club_slug: from_slug,
-                        to_club_name: t.to_team_name.clone(),
+                        to_club_name: if t.to_club_id == 0 {
+                            i18n.t("free_agent").to_string()
+                        } else {
+                            t.to_team_name.clone()
+                        },
                         to_club_slug: to_slug,
                         fee: if t.fee.amount > 0.0 {
                             FormattingUtils::format_money(t.fee.amount)

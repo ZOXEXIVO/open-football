@@ -86,17 +86,6 @@ pub struct KnockoutFixtureDto {
     pub winner_name: Option<String>,
 }
 
-fn phase_label(phase: &CompetitionPhase) -> &'static str {
-    match phase {
-        CompetitionPhase::NotStarted => "Not Started",
-        CompetitionPhase::Qualifying => "Qualifying",
-        CompetitionPhase::QualifyingPlayoff => "Qualifying Playoff",
-        CompetitionPhase::GroupStage => "Group Stage",
-        CompetitionPhase::Knockout => "Knockout",
-        CompetitionPhase::Completed => "Completed",
-    }
-}
-
 /// Governing body for a competition: FIFA for global tournaments, otherwise
 /// the confederation that owns the continent it is contested in.
 fn confederation_label(scope: &CompetitionScope, continent_id: Option<u32>) -> &'static str {
@@ -116,7 +105,7 @@ fn confederation_label(scope: &CompetitionScope, continent_id: Option<u32>) -> &
 
 /// Distinct confederations present among the displayed competitions, in a
 /// stable display order, joined for the page subtitle (e.g. "FIFA · UEFA · CAF").
-fn confederations_subtitle(competitions: &[CompetitionDto]) -> String {
+fn confederations_subtitle(competitions: &[CompetitionDto], i18n: &I18n) -> String {
     const ORDER: [&str; 7] = ["FIFA", "UEFA", "CONMEBOL", "CAF", "CONCACAF", "AFC", "OFC"];
     let present: Vec<&str> = ORDER
         .iter()
@@ -124,7 +113,7 @@ fn confederations_subtitle(competitions: &[CompetitionDto]) -> String {
         .filter(|conf| competitions.iter().any(|c| c.confederation == *conf))
         .collect();
     if present.is_empty() {
-        "International".to_string()
+        i18n.t("international").to_string()
     } else {
         present.join(" · ")
     }
@@ -146,13 +135,17 @@ fn slugify(name: &str) -> String {
     slug
 }
 
-fn country_display(simulator_data: &core::SimulatorData, country_id: u32) -> (String, String) {
+fn country_display(
+    simulator_data: &core::SimulatorData,
+    i18n: &I18n,
+    country_id: u32,
+) -> (String, String) {
     for continent in &simulator_data.continents {
         if let Some(country) = continent.countries.iter().find(|c| c.id == country_id) {
-            return (country.name.clone(), country.slug.clone());
+            return (i18n.country(&country.code).to_string(), country.slug.clone());
         }
     }
-    ("Unknown".to_string(), String::new())
+    (i18n.t("unknown").to_string(), String::new())
 }
 
 /// Build the view model for one competition instance (qualifying or
@@ -161,6 +154,7 @@ fn country_display(simulator_data: &core::SimulatorData, country_id: u32) -> (St
 /// tournament groups (its qualifying lives per-continent), so prefer them.
 fn build_competition_dto(
     simulator_data: &core::SimulatorData,
+    i18n: &I18n,
     comp: &NationalTeamCompetition,
 ) -> CompetitionDto {
     let group_source = if comp.tournament_groups.is_empty() {
@@ -178,7 +172,7 @@ fn build_competition_dto(
                 .standings
                 .iter()
                 .map(|standing| {
-                    let (name, slug) = country_display(simulator_data, standing.country_id);
+                    let (name, slug) = country_display(simulator_data, i18n, standing.country_id);
                     GroupRowDto {
                         country_name: name,
                         country_slug: slug,
@@ -194,7 +188,7 @@ fn build_competition_dto(
                 .collect();
 
             GroupDto {
-                name: format!("Group {}", letter),
+                name: i18n.t("group_name").replace("{letter}", &letter.to_string()),
                 rows,
             }
         })
@@ -204,25 +198,19 @@ fn build_competition_dto(
         .knockout
         .iter()
         .map(|bracket| {
-            let round_name = match &bracket.round {
-                core::continent::national::KnockoutRound::RoundOf16 => "Round of 16",
-                core::continent::national::KnockoutRound::QuarterFinals => "Quarter-Finals",
-                core::continent::national::KnockoutRound::SemiFinals => "Semi-Finals",
-                core::continent::national::KnockoutRound::ThirdPlace => "Third Place",
-                core::continent::national::KnockoutRound::Final => "Final",
-            };
+            let round_name = i18n.t(bracket.round.as_i18n_key());
 
             let fixtures = bracket
                 .fixtures
                 .iter()
                 .map(|fix| {
                     let (home_name, home_slug) =
-                        country_display(simulator_data, fix.home_country_id);
+                        country_display(simulator_data, i18n, fix.home_country_id);
                     let (away_name, away_slug) =
-                        country_display(simulator_data, fix.away_country_id);
+                        country_display(simulator_data, i18n, fix.away_country_id);
                     let winner_name = fix.result.as_ref().map(|r| {
                         let winner_id = r.winner(fix.home_country_id, fix.away_country_id);
-                        country_display(simulator_data, winner_id).0
+                        country_display(simulator_data, i18n, winner_id).0
                     });
 
                     KnockoutFixtureDto {
@@ -247,7 +235,7 @@ fn build_competition_dto(
     CompetitionDto {
         name: format!("{} {}", comp.config.name, comp.cycle_year),
         confederation: confederation_label(&comp.config.scope, comp.config.continent_id),
-        phase: phase_label(&comp.phase).to_string(),
+        phase: i18n.t(comp.phase.as_i18n_key()).to_string(),
         level_key: comp.config.team_level.as_i18n_key(),
         groups,
         knockout,
@@ -322,13 +310,13 @@ async fn render(
     for continent in &simulator_data.continents {
         for comp in &continent.national_team_competitions.competitions {
             if include(comp) {
-                competitions.push(build_competition_dto(simulator_data, comp));
+                competitions.push(build_competition_dto(simulator_data, &i18n, comp));
             }
         }
     }
     for comp in &simulator_data.global_competitions.tournaments {
         if include(comp) {
-            competitions.push(build_competition_dto(simulator_data, comp));
+            competitions.push(build_competition_dto(simulator_data, &i18n, comp));
         }
     }
 
@@ -350,7 +338,7 @@ async fn render(
             i18n.t("national_competitions").to_string(),
         ),
     };
-    let sub_title = confederations_subtitle(&competitions);
+    let sub_title = confederations_subtitle(&competitions, &i18n);
     let menu_sections = views::national_competitions_menu(&i18n, &lang, &current_path, &menu_links);
 
     Ok(NationalCompetitionsGetTemplate {

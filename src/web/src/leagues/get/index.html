@@ -33,7 +33,7 @@
                     </thead>
                     <tbody>
                         {% for row in table_rows %}
-                        <tr class="{% if loop.index <= 4 %}zone-ucl{% else if loop.index <= 6 %}zone-uel{% else if loop.index > table_rows.len() - 3 %}zone-rel{% endif %}">
+                        <tr{% if !row.zone.is_empty() %} class="zone-{{ row.zone }}"{% endif %}>
                             <td class="st-pos">{{ loop.index }}</td>
                             <td class="st-club">
                                 <a href="/{{ lang }}/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
@@ -50,11 +50,13 @@
                         {% endfor %}
                     </tbody>
                 </table>
+                {% if !legend.is_empty() %}
                 <div class="fm-legend">
-                    <span><i class="legend-dot ucl"></i> {{ i18n.t("champions_league") }}</span>
-                    <span><i class="legend-dot uel"></i> {{ i18n.t("europa_league") }}</span>
-                    <span><i class="legend-dot rel"></i> {{ i18n.t("relegation") }}</span>
+                    {% for item in legend %}
+                    <span><i class="legend-dot {{ item.zone }}"></i> {{ item.label }}</span>
+                    {% endfor %}
                 </div>
+                {% endif %}
             </section>
             {% if split_season && !annual_table_rows.is_empty() %}
             <section class="fm-panel mt-3">
@@ -76,7 +78,7 @@
                     </thead>
                     <tbody>
                         {% for row in annual_table_rows %}
-                        <tr class="{% if annual_table_rows.len() > 2 && loop.index > annual_table_rows.len() - 2 %}zone-rel{% endif %}">
+                        <tr{% if !row.zone.is_empty() %} class="zone-{{ row.zone }}"{% endif %}>
                             <td class="st-pos">{{ loop.index }}</td>
                             <td class="st-club">
                                 <a href="/{{ lang }}/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
@@ -93,9 +95,13 @@
                         {% endfor %}
                     </tbody>
                 </table>
+                {% if !annual_legend.is_empty() %}
                 <div class="fm-legend">
-                    <span><i class="legend-dot rel"></i> {{ i18n.t("relegation") }}</span>
+                    {% for item in annual_legend %}
+                    <span><i class="legend-dot {{ item.zone }}"></i> {{ item.label }}</span>
+                    {% endfor %}
                 </div>
+                {% endif %}
             </section>
             {% endif %}
         </div>

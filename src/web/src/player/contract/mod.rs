@@ -245,7 +245,7 @@ fn build_contract_detail(
                 .unwrap_or_default();
             (club.name.clone(), slug)
         })
-        .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
+        .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
 
     let contract_type = match contract.contract_type {
         ContractType::FullTime => i18n.t("contract_type_full_time"),
