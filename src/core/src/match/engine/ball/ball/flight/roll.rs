@@ -65,12 +65,30 @@ impl BallRoll {
         if !(ticks > 0.0) || speed <= Self::STOPPED {
             return 0.0;
         }
+        Self::distance_decayed(speed, Self::decay(ticks))
+    }
+
+    /// `kᵗ` — the share of its speed a roll still has after `ticks`.
+    ///
+    /// An `exp` rather than `powf`: the base is fixed, so its log folds to
+    /// a constant and the chase solvers, which ask this on every sample of
+    /// every chaser every tick, pay for one transcendental instead of two.
+    #[inline]
+    pub fn decay(ticks: f32) -> f32 {
+        (ticks * Self::KEPT.ln()).exp()
+    }
+
+    /// [`distance`](Self::distance) for a roll that has decayed to
+    /// `decay` = `kᵗ` of its speed. Lets a solver stepping through time
+    /// carry the decay forward by multiplication instead of re-deriving it.
+    #[inline]
+    pub fn distance_decayed(speed: f32, decay: f32) -> f32 {
         // The physics decays the speed BEFORE it steps the position, so
         // the first tick already moves at `v·k` and the sum carries a
         // leading `k`. Dropping it over-predicts by 0.16% — half a unit
         // over a full-length roll, which is exactly the error the
         // agreement test caught.
-        let travelled = speed * Self::KEPT * (1.0 - Self::KEPT.powf(ticks)) / (1.0 - Self::KEPT);
+        let travelled = speed * Self::KEPT * (1.0 - decay) / (1.0 - Self::KEPT);
         travelled.min(Self::range(speed))
     }
 }

@@ -388,11 +388,12 @@ impl ChaseRow {
     }
 }
 
-/// Who gets to a loose ball first, per side, over the SAME entry set the
-/// dispatcher's loose-ball overrides used to scan per player
-/// (`positions.players.as_slice()`, substitutes included). Players
-/// committed to an un-abortable action (`chase_eligible == false`) keep
-/// a row but never hold a designation.
+/// Who gets to a loose ball first, per side, over the men on the pitch
+/// (`positions.players.on_pitch()`). The bench stands at the off-pitch
+/// sentinel and could never win a race, yet pricing it was the most
+/// expensive row there is — a runner who never reaches the path walks
+/// every sample of it. Players committed to an un-abortable action
+/// (`chase_eligible == false`) keep a row but never hold a designation.
 ///
 /// Priced in TIME along the ball's projected path rather than distance
 /// to where it is — see [`ChasePath`] for why. The two-smallest slots
@@ -481,7 +482,7 @@ impl LooseBallChase {
             let speed = ball_vel.x.hypot(ball_vel.y);
             (speed > 1e-3).then(|| (ball_vel.x / speed, ball_vel.y / speed))
         };
-        for meta in positions.players.as_slice() {
+        for meta in positions.players.on_pitch() {
             let read_wait = if Some(meta.side) == knowing_side {
                 0.0
             } else {

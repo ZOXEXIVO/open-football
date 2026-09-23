@@ -125,6 +125,9 @@ impl ChasePath {
     pub fn time_to_reach(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
         let position = Vector3::new(position.x, position.y, 0.0);
         let speed = speed.max(1e-3);
+        if self.aerial <= 0.0 {
+            return self.roll_time(position, speed, reach);
+        }
         let land = ((self.landing - position).norm() - reach).max(0.0) / speed;
         if self.aerial >= 1.0 {
             return land;
@@ -135,18 +138,30 @@ impl ChasePath {
 
     fn roll_time(&self, position: Vector3<f32>, speed: f32, reach: f32) -> f32 {
         // How far outside `reach` he still is at each sample, flat out.
-        let mut prev_t = 0.0;
-        let mut prev_short = (self.samples[0].0 - position).norm() - reach;
-        if prev_short <= 0.0 {
+        // Squared until the crossing: only the sample either side of it
+        // needs the real shortfall, for the interpolation.
+        let (start, _) = self.samples[0];
+        if (start - position).norm_squared() <= reach * reach {
             return 0.0;
         }
+        let mut prev = self.samples[0];
         for &(point, t) in &self.samples[1..] {
-            let short = (point - position).norm() - reach - speed * t;
-            if short <= 0.0 {
-                return prev_t + (t - prev_t) * prev_short / (prev_short - short);
+            let within = reach + speed * t;
+            let gap_sq = (point - position).norm_squared();
+            if gap_sq <= within * within {
+                let (prev_point, prev_t) = prev;
+                // Clamped to their signs: the squared test and the real
+                // one can disagree by a rounding at the boundary.
+                let prev_short = ((prev_point - position).norm() - reach - speed * prev_t).max(0.0);
+                let short = (gap_sq.sqrt() - within).min(0.0);
+                let span = prev_short - short;
+                return if span > 0.0 {
+                    prev_t + (t - prev_t) * prev_short / span
+                } else {
+                    prev_t
+                };
             }
-            prev_t = t;
-            prev_short = short;
+            prev = (point, t);
         }
         // Past the roll the ball is a fixed point.
         (((self.rest - position).norm() - reach).max(0.0) / speed).max(self.rest_ticks)
@@ -541,11 +556,13 @@ impl LooseBallChase {
         let dir = ball_vel / ball_speed;
         let speed = max_speed.max(1e-3);
 
-        // How far short of the ball he still is after `t` ticks — the
-        // ball on its decaying roll, him flat out on the straight line.
-        let shortfall = |t: f32| -> f32 {
-            let there = ball_pos + dir * BallRoll::distance(ball_speed, t);
-            (there - player_pos).norm() - speed * t
+        // Is he on the ball after `t` ticks — the ball on its decaying
+        // roll (`decay` = kᵗ), him flat out on the straight line? Squared,
+        // because only the sign of the shortfall is ever read.
+        let arrived = |t: f32, decay: f32| -> bool {
+            let there = ball_pos + dir * BallRoll::distance_decayed(ball_speed, decay);
+            let run = speed * t;
+            (there - player_pos).norm_squared() <= run * run
         };
 
         // The horizon that PROVES a meeting exists: from `rest_ticks` on
@@ -555,31 +572,45 @@ impl LooseBallChase {
         let rest = ball_pos + dir * BallRoll::range(ball_speed);
         let horizon = BallRoll::rest_ticks(ball_speed) + (rest - player_pos).norm() / speed;
 
+        // The decay is carried alongside the time — multiplied across the
+        // march, and the geometric mean of its ends across a halving (kᵗ
+        // at the midpoint of two times is exactly that) — so the whole
+        // solve costs one `exp` instead of one per probe.
         const STEPS: usize = 16;
         const HALVINGS: usize = 12;
         let step = horizon / STEPS as f32;
+        let step_decay = BallRoll::decay(step);
         let mut bracket = None;
+        let mut decay = 1.0;
         for i in 1..=STEPS {
             let t = step * i as f32;
-            if shortfall(t) <= 0.0 {
-                bracket = Some((t - step, t));
+            let prev_decay = decay;
+            decay *= step_decay;
+            if arrived(t, decay) {
+                bracket = Some(((t - step, prev_decay), (t, decay)));
                 break;
             }
         }
         // Float dust at the far end of the horizon; out there the ball
         // is at rest and the resting point IS the meeting.
-        let Some((mut lo, mut hi)) = bracket else {
+        let Some(((mut lo, mut lo_decay), (mut hi, mut hi_decay))) = bracket else {
             return (rest, horizon);
         };
         for _ in 0..HALVINGS {
             let mid = 0.5 * (lo + hi);
-            if shortfall(mid) <= 0.0 {
+            let mid_decay = (lo_decay * hi_decay).sqrt();
+            if arrived(mid, mid_decay) {
                 hi = mid;
+                hi_decay = mid_decay;
             } else {
                 lo = mid;
+                lo_decay = mid_decay;
             }
         }
-        (ball_pos + dir * BallRoll::distance(ball_speed, hi), hi)
+        (
+            ball_pos + dir * BallRoll::distance_decayed(ball_speed, hi_decay),
+            hi,
+        )
     }
 
     /// Remove the component of `separation` that points against the run to

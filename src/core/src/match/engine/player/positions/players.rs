@@ -1,7 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerSkills;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchField, PlayerSide};
+use crate::r#match::{MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
 const MAX_FIELD_PLAYERS: usize = 48; // players + substitutes
@@ -12,6 +12,9 @@ const SLOT_EMPTY: u8 = 0xFF;
 pub struct PlayerFieldData {
     items: [PlayerFieldMetadata; MAX_FIELD_PLAYERS],
     len: usize,
+    /// `items[..on_pitch]` are the men on the pitch, the rest the bench —
+    /// the store chains `field.players` before `field.substitutes`.
+    on_pitch: usize,
     // Open-addressing hash: id_slots[hash(id)] = (player_id, index into items)
     id_slots: [(u32, u8); SLOT_TABLE_SIZE],
 }
@@ -37,7 +40,14 @@ pub struct PlayerFieldMetadata {
     /// How well he reads a pass — the interception composite, which sets
     /// how long after a strike he can set off for the ball.
     pub read: f32,
+    /// What `read` was last priced on — see [`Self::refresh_read`].
+    read_key: ReadKey,
 }
+
+/// The only inputs of the interception composite that move during a match:
+/// condition, the minute, and a substitute's entry clock. Skills, crowd,
+/// settledness and form are stamped before kick-off.
+type ReadKey = (i16, u32, u64);
 
 impl Default for PlayerFieldMetadata {
     #[inline]
@@ -51,11 +61,34 @@ impl Default for PlayerFieldMetadata {
             chase_bias: 1.0,
             max_speed: 0.0,
             read: 0.5,
+            read_key: (i16::MIN, u32::MAX, u64::MAX),
         }
     }
 }
 
 impl PlayerFieldMetadata {
+    /// Re-price `read` only when one of its moving inputs has moved. The
+    /// composite was ~90% of this store's per-tick refresh, recomputed for
+    /// every man on every tick to reproduce last tick's number.
+    #[inline]
+    fn refresh_read(&mut self, player: &MatchPlayer, minute: u32) {
+        let key = (
+            player.player_attributes.condition,
+            minute,
+            player.entry_match_time_ms,
+        );
+        if key != self.read_key {
+            self.read_key = key;
+            self.read = sc::interception(player, minute);
+        }
+        debug_assert_eq!(
+            self.read.to_bits(),
+            sc::interception(player, minute).to_bits(),
+            "interception-read memo mismatch: player={}",
+            player.id
+        );
+    }
+
     /// Strikers gamble on loose balls and rebounds — it is a defining
     /// part of the role — so they read ~10% quicker to one than they
     /// are. Without it the election is pure geometry, and at youth level
@@ -197,12 +230,20 @@ impl PlayerFieldData {
     pub fn as_slice(&self) -> &[PlayerFieldMetadata] {
         &self.items[..self.len]
     }
+
+    /// The men on the pitch, sent-off players included — [`Self::as_slice`]
+    /// without the bench.
+    #[inline]
+    pub fn on_pitch(&self) -> &[PlayerFieldMetadata] {
+        &self.items[..self.on_pitch]
+    }
 }
 
 impl PlayerFieldData {
     pub fn update(&mut self, field: &MatchField) {
         let new_count = field.players.len() + field.substitutes.len();
         let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
+        self.on_pitch = field.players.len();
 
         // Full rebuild only when player count changes (substitution)
         if new_count != self.len {
@@ -211,7 +252,7 @@ impl PlayerFieldData {
 
             for p in field.players.iter().chain(field.substitutes.iter()) {
                 let idx = self.len;
-                self.items[idx] = PlayerFieldMetadata {
+                let mut meta = PlayerFieldMetadata {
                     player_id: p.id,
                     side: p
                         .side
@@ -223,8 +264,10 @@ impl PlayerFieldData {
                         p.tactical_position.current_position.position_group(),
                     ),
                     max_speed: p.max_speed_with_condition_cached(),
-                    read: sc::interception(p, minute),
+                    ..PlayerFieldMetadata::default()
                 };
+                meta.refresh_read(p, minute);
+                self.items[idx] = meta;
                 self.insert_slot(p.id, idx as u8);
                 self.len += 1;
             }
@@ -243,7 +286,7 @@ impl PlayerFieldData {
                 self.items[i].velocity = p.velocity;
                 self.items[i].chase_eligible = !p.state.is_committed_action();
                 self.items[i].max_speed = p.max_speed_with_condition_cached();
-                self.items[i].read = sc::interception(p, minute);
+                self.items[i].refresh_read(p, minute);
             }
         }
     }
@@ -255,6 +298,7 @@ impl From<&MatchField> for PlayerFieldData {
         let mut data = PlayerFieldData {
             items: [PlayerFieldMetadata::default(); MAX_FIELD_PLAYERS],
             len: 0,
+            on_pitch: 0,
             id_slots: [(0, SLOT_EMPTY); SLOT_TABLE_SIZE],
         };
         data.update(field);
