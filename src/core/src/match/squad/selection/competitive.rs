@@ -3,13 +3,12 @@ use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext, PlayerMatch
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
-use crate::{Player, PlayerSquadStatus, Tactics};
+use crate::{Player, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 
 use super::balance::{BalanceSwapPass, LineupBalanceScorer, ObjectiveResolver};
 use super::bench_scenarios::{BenchScenarioPlan, BenchScenarioScorer};
-use super::cup_rotation::CupRotation;
 use super::helpers;
 use super::model::{
     EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
@@ -595,7 +594,7 @@ impl SelectionScoringContext<'_> {
         // established / force / position checks the swap loop runs.
         let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
 
-        let is_non_established = |p: &Player| !CupRotation::is_established(p);
+        let is_non_established = |p: &Player| !self.engine.is_established(p);
         let count_non_established = |sq: &[MatchPlayer]| -> usize {
             sq.iter()
                 .filter(|mp| {
@@ -647,7 +646,7 @@ impl SelectionScoringContext<'_> {
                 let Some(starter) = player_by_id.get(&mp.id).copied() else {
                     continue;
                 };
-                if !CupRotation::is_established(starter) {
+                if !self.engine.is_established(starter) {
                     continue;
                 }
                 // Honor the manager pin: a force-selected player is never
@@ -925,17 +924,7 @@ impl SelectionScoringContext<'_> {
         subs: &[MatchPlayer],
         player_by_id: &HashMap<u32, &Player>,
     ) -> Option<usize> {
-        let is_key = |p: &Player| {
-            p.contract
-                .as_ref()
-                .map(|c| {
-                    matches!(
-                        c.squad_status,
-                        PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                    )
-                })
-                .unwrap_or(false)
-        };
+        let is_key = |p: &Player| self.engine.is_established(p);
 
         let pick = |allow_key: bool| -> Option<usize> {
             let mut best_idx: Option<usize> = None;
@@ -979,9 +968,8 @@ impl SelectionScoringContext<'_> {
         min_count: usize,
     ) {
         let player_by_id: HashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
-        let is_non_est_outfield = |p: &Player| -> bool {
-            !p.positions.is_goalkeeper() && !CupRotation::is_established(p)
-        };
+        let is_non_est_outfield =
+            |p: &Player| -> bool { !p.positions.is_goalkeeper() && !self.engine.is_established(p) };
 
         for _ in 0..subs.len() {
             let current = subs
@@ -1020,7 +1008,7 @@ impl SelectionScoringContext<'_> {
                 let Some(p) = player_by_id.get(&mp.id) else {
                     continue;
                 };
-                if !CupRotation::is_established(p) {
+                if !self.engine.is_established(p) {
                     continue;
                 }
                 if self.engine.honor_force_selection && p.is_force_match_selection {
@@ -1401,16 +1389,7 @@ impl SelectionScoringContext<'_> {
 
     fn policy_starting_adjustment(&self, player: &Player) -> f32 {
         let age = DateUtils::age(player.birth_date, self.date);
-        let is_key_player = player
-            .contract
-            .as_ref()
-            .map(|c| {
-                matches!(
-                    c.squad_status,
-                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                )
-            })
-            .unwrap_or(false);
+        let is_key_player = self.engine.is_established(player);
         let is_development_age = age <= 21;
         let idle = player.player_attributes.days_since_last_match as f32;
         // Use position-weighted physical_load so a 90-min wingback gets
@@ -1569,7 +1548,7 @@ impl SelectionScoringContext<'_> {
             CupStage::Quarter => 0.6,
             _ => return 0.0,
         };
-        if CupRotation::is_established(player) {
+        if self.engine.is_established(player) {
             return 0.0;
         }
         let cup_apps = player.cup_statistics.played + player.cup_statistics.played_subs;

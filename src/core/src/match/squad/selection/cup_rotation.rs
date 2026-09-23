@@ -175,22 +175,6 @@ impl CupRotation {
             .unwrap_or(false)
     }
 
-    /// Whether a player's squad status is KeyPlayer or FirstTeamRegular — the
-    /// "established XI" group that fitness protection and the GK adjustment
-    /// treat specially.
-    pub(crate) fn is_established(player: &Player) -> bool {
-        player
-            .contract
-            .as_ref()
-            .map(|c| {
-                matches!(
-                    c.squad_status,
-                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
-                )
-            })
-            .unwrap_or(false)
-    }
-
     /// Opponent-strength scaling for cup rotation. A heavy underdog cup tie
     /// is exactly the moment a manager goes deepest into rotation — a
     /// drawn-out final is the moment they don't.

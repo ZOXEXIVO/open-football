@@ -43,9 +43,10 @@ use crate::utils::FormattingUtils;
 use crate::{
     Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, PathwayStage, Person, PlayerFieldPositionGroup,
-    ReputationLevel, RoleFamiliarity,
+    ReputationLevel,
 };
-use rustc_hash::FxHashMap;
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 
 use super::*;
@@ -62,13 +63,13 @@ struct LoanPushParent<'a> {
 struct LoanPushMarket<'a> {
     mid_season_window: bool,
     domestic_region: ScoutingRegion,
-    pending_loans: &'a HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
     /// Each club's position under its league's foreigner quota, and the
     /// slots its in-flight approaches have already spent. Counted once per
     /// club rather than once per (broadcast, club): the quota is a squad
     /// fact and the squad does not change between two broadcasts.
     slots: &'a FxHashMap<u32, ForeignSlotCount>,
     pending_foreign: &'a FxHashMap<u32, u32>,
+    active_pairs: &'a FxHashSet<(u32, u32)>,
 }
 
 impl LoanPushMarket<'_> {
@@ -82,6 +83,63 @@ impl LoanPushMarket<'_> {
                 )
             })
             .unwrap_or(1.0)
+    }
+}
+
+/// One club as every broadcast in the pass reads it. Nothing here depends on
+/// who is being offered, so it is read once per club rather than once per
+/// (broadcast, club) pair.
+struct LoanPushBorrower<'a> {
+    club: &'a Club,
+    team: &'a Team,
+    max_loan_fee: f64,
+    league_rep: u16,
+    /// Best role-weighted observable level per group on the physical roster.
+    best_by_group: [u8; PlayerFieldPositionGroup::COUNT],
+    profile: Option<LoanBorrowerProfile>,
+    /// Roster depth with the club's in-flight incoming loans folded in.
+    depth: BorrowerPositionDepth,
+}
+
+impl<'a> LoanPushBorrower<'a> {
+    /// `None` when the club answers no push this pass: no squad, or a full
+    /// negotiation docket. No `initialized` requirement — accepting a pushed
+    /// loan is a passive response, not a planning action.
+    fn of(
+        country: &'a Country,
+        club: &'a Club,
+        date: NaiveDate,
+        active_counts: &FxHashMap<u32, u32>,
+        pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+    ) -> Option<Self> {
+        if active_counts.get(&club.id).copied().unwrap_or(0)
+            >= club.transfer_plan.max_concurrent_negotiations
+        {
+            return None;
+        }
+        let team = club.teams.main().or_else(|| club.teams.teams.first())?;
+        let balance = club.finance.balance.balance;
+        let max_loan_fee = if balance < 0 {
+            50_000.0
+        } else {
+            balance as f64 * 0.20
+        };
+        let league_rep = LoanPipeline::club_league_reputation(country, club);
+        let roster = BorrowerPositionDepth::snapshot(team);
+        let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
+        for group in PlayerFieldPositionGroup::ALL {
+            best_by_group[group.index()] = roster.best_in_group(group);
+        }
+        Some(LoanPushBorrower {
+            club,
+            team,
+            max_loan_fee,
+            league_rep,
+            best_by_group,
+            profile: LoanBorrowerProfile::of(club, date, league_rep),
+            depth: roster
+                .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice())),
+        })
     }
 }
 
@@ -406,6 +464,11 @@ impl ListingBroadcast {
     }
 
     /// Pass 3 (read) — pick a borrower at each broadcast's tier.
+    ///
+    /// Scoring a destination is a pure read of the country, so the slates are
+    /// built in parallel across broadcasts. Only the claim — one borrower is
+    /// never handed two same-group loans in one tick — and the draw depend on
+    /// what earlier broadcasts took, and those stay in broadcast order.
     fn loan_pick(
         country: &Country,
         date: NaiveDate,
@@ -422,98 +485,41 @@ impl ListingBroadcast {
             .iter()
             .map(|club| (club.id, registration.count(club)))
             .collect();
+        let active_counts = country.transfer_market.active_negotiation_counts();
+        let active_pairs = country.transfer_market.active_negotiation_pairs();
+        let borrowers: Vec<LoanPushBorrower<'_>> = country
+            .clubs
+            .par_iter()
+            .filter_map(|club| {
+                LoanPushBorrower::of(country, club, date, &active_counts, pending_loans)
+            })
+            .collect();
+        let market = LoanPushMarket {
+            mid_season_window,
+            domestic_region,
+            slots: &slots,
+            pending_foreign: &pending_foreign,
+            active_pairs: &active_pairs,
+        };
+
+        let slates: Vec<Option<Vec<(u32, f32)>>> = broadcastable
+            .par_iter()
+            .map(|b| Self::loan_slate(country, b, date, in_negotiation, &borrowers, &market))
+            .collect();
+
         let mut actions: Vec<LoanPushAction> = Vec::new();
-        // One borrower must not be handed two same-group loans in a single
-        // broadcast tick: per-player `has_active_negotiation_for` and the
-        // registered-loan snapshot both miss it, because broadcast actions
-        // aren't opened as negotiations until Pass 4.
+        // Broadcast actions aren't opened as negotiations until Pass 4, so
+        // neither `active_pairs` nor the registered-loan snapshot can see a
+        // loan handed out earlier in this same pass.
         let mut claimed_loans: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
-        for b in broadcastable {
-            if in_negotiation.contains(&b.player_id) {
-                continue;
-            }
-            // ── Home first ──────────────────────────────────────────
-            //
-            // A man the parent decided should go HOME is not offered
-            // around his current country for the first fortnight. It is
-            // one more stage at the top of the existing high → low
-            // cascade, and it is what makes the preference real: without
-            // it the domestic push placed him the same day the parent
-            // formed the wish, and the foreign home market — which scans
-            // on its own clock — never got a look.
-            //
-            // After the fortnight everything opens. The preference is a
-            // head start, never a veto.
-            let wants_home_elsewhere = b.preference == LoanDestinationPreference::HomeCountry
-                && b.nationality_country_id != 0
-                && b.nationality_country_id != country.id;
-            if wants_home_elsewhere {
-                // Against the FIRST posting, never against the current
-                // tier's stamp: Pass 2 re-stamps `since` on every widen,
-                // and the widen cadence IS this window, so the hold could
-                // never elapse.
-                let posted_for = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == b.parent_club_id)
-                    .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
-                    .map(|br| (date - br.posted_since).num_days())
-                    .unwrap_or(0);
-                if posted_for < LoanPipeline::HOME_FIRST_DAYS {
-                    continue;
-                }
-            }
-            // A development loanee is shopped to the WHOLE market at once: the
-            // parent evaluates every club that would actually play him and sends
-            // him to the best (highest-reputation) one — the strongest
-            // environment where he still STARTS — instead of cascading down to
-            // the first taker. The `would_get_loan_minutes` gate keeps him from
-            // being placed too high (a keeper must be the undisputed #1), so the
-            // "best passer" naturally falls to a lower club only when no higher
-            // one has room. Cover / surplus loans keep the staged high → low
-            // cascade and are placed at the current broadcast tier.
-            let Some(parent_club) = country.clubs.iter().find(|c| c.id == b.parent_club_id) else {
+        for (b, slate) in broadcastable.iter().zip(slates) {
+            let Some(slate) = slate else {
                 continue;
             };
-            // The cascade names the tier the parent is currently offering
-            // him at; it is a ranking term on the draw rather than a
-            // filter, because a club one rung outside it that would
-            // actually play him is a better home than a club inside it
-            // that would not.
-            let offered_tier = parent_club
-                .transfer_plan
-                .loan_broadcasts
-                .get(&b.player_id)
-                .map(|br| br.tier);
-            let parent_placements = &parent_club.transfer_plan.loan_placements;
-
-            // Score every club that would actually play him, then draw one.
-            //
-            // Not on reputation, which is the most static number in the
-            // model: the same club would win it every Monday, a failed
-            // bid would change nothing, and the parent would re-offer him
-            // to the club that had just said no. It is also not what a
-            // parent chooses on — a prospect is placed where he will play
-            // and be coached, and no borrower should become a farm team.
-            // [`DestinationAppeal`] weighs all of that.
-            let destinations = Self::loan_destinations(
-                country,
-                b,
-                date,
-                &claimed_loans,
-                &LoanPushMarket {
-                    mid_season_window,
-                    domestic_region,
-                    pending_loans,
-                    slots: &slots,
-                    pending_foreign: &pending_foreign,
-                },
-                &LoanPushParent {
-                    offered_tier,
-                    placements: parent_placements,
-                },
-            );
-
+            let destinations: Vec<(u32, f32)> = slate
+                .into_iter()
+                .filter(|(club_id, _)| !claimed_loans.contains(&(*club_id, b.group)))
+                .collect();
             if let Some(borrower_id) = InterestDraw::pick(&destinations) {
                 actions.push(LoanPushAction {
                     borrower_id,
@@ -529,6 +535,87 @@ impl ListingBroadcast {
         actions
     }
 
+    /// Every club that would take this broadcast, scored — before the pass's
+    /// own claims are taken out. `None` when the broadcast is not offered
+    /// around this pass at all.
+    fn loan_slate(
+        country: &Country,
+        b: &Broadcastable,
+        date: NaiveDate,
+        in_negotiation: &HashSet<u32>,
+        borrowers: &[LoanPushBorrower<'_>],
+        market: &LoanPushMarket<'_>,
+    ) -> Option<Vec<(u32, f32)>> {
+        if in_negotiation.contains(&b.player_id) {
+            return None;
+        }
+        let parent_club = country.clubs.iter().find(|c| c.id == b.parent_club_id)?;
+        let broadcast = parent_club.transfer_plan.loan_broadcasts.get(&b.player_id);
+        // ── Home first ──────────────────────────────────────────
+        //
+        // A man the parent decided should go HOME is not offered
+        // around his current country for the first fortnight. It is
+        // one more stage at the top of the existing high → low
+        // cascade, and it is what makes the preference real: without
+        // it the domestic push placed him the same day the parent
+        // formed the wish, and the foreign home market — which scans
+        // on its own clock — never got a look.
+        //
+        // After the fortnight everything opens. The preference is a
+        // head start, never a veto.
+        let wants_home_elsewhere = b.preference == LoanDestinationPreference::HomeCountry
+            && b.nationality_country_id != 0
+            && b.nationality_country_id != country.id;
+        if wants_home_elsewhere {
+            // Against the FIRST posting, never against the current
+            // tier's stamp: Pass 2 re-stamps `since` on every widen,
+            // and the widen cadence IS this window, so the hold could
+            // never elapse.
+            let posted_for = broadcast
+                .map(|br| (date - br.posted_since).num_days())
+                .unwrap_or(0);
+            if posted_for < LoanPipeline::HOME_FIRST_DAYS {
+                return None;
+            }
+        }
+        // A development loanee is shopped to the WHOLE market at once: the
+        // parent evaluates every club that would actually play him and sends
+        // him to the best (highest-reputation) one — the strongest
+        // environment where he still STARTS — instead of cascading down to
+        // the first taker. The `would_get_loan_minutes` gate keeps him from
+        // being placed too high (a keeper must be the undisputed #1), so the
+        // "best passer" naturally falls to a lower club only when no higher
+        // one has room. Cover / surplus loans keep the staged high → low
+        // cascade and are placed at the current broadcast tier.
+        //
+        // The cascade names the tier the parent is currently offering
+        // him at; it is a ranking term on the draw rather than a
+        // filter, because a club one rung outside it that would
+        // actually play him is a better home than a club inside it
+        // that would not.
+        //
+        // Score every club that would actually play him, then draw one.
+        //
+        // Not on reputation, which is the most static number in the
+        // model: the same club would win it every Monday, a failed
+        // bid would change nothing, and the parent would re-offer him
+        // to the club that had just said no. It is also not what a
+        // parent chooses on — a prospect is placed where he will play
+        // and be coached, and no borrower should become a farm team.
+        // [`DestinationAppeal`] weighs all of that.
+        Some(Self::loan_destinations(
+            country,
+            b,
+            date,
+            borrowers,
+            market,
+            &LoanPushParent {
+                offered_tier: broadcast.map(|br| br.tier),
+                placements: &parent_club.transfer_plan.loan_placements,
+            },
+        ))
+    }
+
     /// Who, at this broadcast's current tier, would take him. Weighed by
     /// [`DestinationAppeal`] rather than reputation alone: a prospect is placed
     /// where he will play and be coached, and no borrower should become a farm
@@ -537,7 +624,7 @@ impl ListingBroadcast {
         country: &Country,
         b: &Broadcastable,
         date: NaiveDate,
-        claimed_loans: &HashSet<(u32, PlayerFieldPositionGroup)>,
+        borrowers: &[LoanPushBorrower<'_>],
         market: &LoanPushMarket<'_>,
         parent: &LoanPushParent<'_>,
     ) -> Vec<(u32, f32)> {
@@ -545,74 +632,22 @@ impl ListingBroadcast {
         let parent_placements = parent.placements;
         let mid_season_window = market.mid_season_window;
         let domestic_region = market.domestic_region;
-        let pending_loans = market.pending_loans;
 
         let mut destinations: Vec<(u32, f32)> = Vec::new();
-        for club in &country.clubs {
+        for borrower in borrowers {
+            let club = borrower.club;
+            let team = borrower.team;
             if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
                 continue;
             }
             // The push must not commit a borrower its own scans would
-            // gate out: a full negotiation docket, or a loan fee the
-            // club can't fund (the scan's 20%-of-balance / 50k
-            // affordability bar) — a broke Regional club was being
-            // handed 300k+ fees here. No `initialized` requirement:
-            // accepting a pushed loan is a passive response, not a
-            // planning action.
-            if country
-                .transfer_market
-                .active_negotiation_count_for_club(club.id)
-                >= club.transfer_plan.max_concurrent_negotiations
-            {
+            // gate out: a loan fee the club can't fund (the scan's
+            // 20%-of-balance / 50k affordability bar) — a broke Regional
+            // club was being handed 300k+ fees here.
+            if b.asking * 0.8 > borrower.max_loan_fee {
                 continue;
             }
-            let borrower_balance = club.finance.balance.balance;
-            let max_loan_fee = if borrower_balance < 0 {
-                50_000.0
-            } else {
-                borrower_balance as f64 * 0.20
-            };
-            if b.asking * 0.8 > max_loan_fee {
-                continue;
-            }
-            let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
-                continue;
-            };
-
-            // …and the borrower has to actually want him. Reputation is
-            // what makes a club the most attractive name on the parent's
-            // list; it is not consent. Without this the push read a club
-            // whose forward line was thin as an invitation, which is
-            // precisely backwards at a side whose attack is carried by
-            // wide men filed elsewhere.
-            //
-            // The upgrade exception is the other half of that: a club
-            // that "only shops in January" does not turn down a genuine
-            // first-team-level loanee in August, and its refusal was
-            // exactly what walked the boy down to the tier below.
-            let borrower_league_rep = LoanPipeline::club_league_reputation(country, club);
-            let borrower_best_here = team
-                .players
-                .iter()
-                .filter_map(|p| {
-                    let effective = RoleFamiliarity::best_in_group(
-                        &p.positions,
-                        AbilityEstimator::observable_level(p),
-                        b.group,
-                    );
-                    (effective > 0).then_some(effective)
-                })
-                .max()
-                .unwrap_or(0);
-            let borrower_profile = LoanBorrowerProfile::of(club, date, borrower_league_rep)
-                .map(|p| p.with_best_in_group(borrower_best_here));
-            if country
-                .transfer_market
-                .has_active_negotiation_for(b.player_id, club.id)
-            {
-                continue;
-            }
-            if claimed_loans.contains(&(club.id, b.group)) {
+            if market.active_pairs.contains(&(b.player_id, club.id)) {
                 continue;
             }
             // A club that has already gone in for this player and got
@@ -627,9 +662,25 @@ impl ListingBroadcast {
             {
                 continue;
             }
+
+            // …and the borrower has to actually want him. Reputation is
+            // what makes a club the most attractive name on the parent's
+            // list; it is not consent. Without this the push read a club
+            // whose forward line was thin as an invitation, which is
+            // precisely backwards at a side whose attack is carried by
+            // wide men filed elsewhere.
+            //
+            // The upgrade exception is the other half of that: a club
+            // that "only shops in January" does not turn down a genuine
+            // first-team-level loanee in August, and its refusal was
+            // exactly what walked the boy down to the tier below.
+            let borrower_league_rep = borrower.league_rep;
+            let borrower_best_here = borrower.best_by_group[b.group.index()];
+            let borrower_profile = borrower
+                .profile
+                .map(|p| p.with_best_in_group(borrower_best_here));
             let borrower_rep = team.reputation.world;
-            let depth = BorrowerPositionDepth::snapshot(team)
-                .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
+            let depth = &borrower.depth;
             let level = LoanDestinationLevel {
                 ability: b.ability,
                 parent_best_in_group: b.parent_best_in_group,
@@ -662,7 +713,7 @@ impl ListingBroadcast {
                 count: depth.headcount(b.group),
                 best_here: borrower_best_here,
                 clearly_better_ahead: depth.clearly_better_ahead(b.group, b.ability),
-                need: Self::borrower_need(club, &depth, b).score(),
+                need: Self::borrower_need(club, depth, b).score(),
                 slot_room: market.slot_room(club.id, b.nationality_country_id),
                 mid_season_window,
                 candidate: b.ability,

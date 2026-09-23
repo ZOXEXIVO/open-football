@@ -245,6 +245,52 @@ impl Default for SelectionContext {
 }
 
 impl SquadSelector {
+    /// Travelling as emergency cover does not automatically qualify a player
+    /// to start. Protect the XI from development/status bonuses crossing a
+    /// large ability gap, while retaining enough cover to field eleven.
+    fn starting_pool<'a>(
+        team: &Team,
+        available: &[&'a Player],
+        ctx: &SelectionContext,
+        tactics: &Tactics,
+    ) -> Vec<&'a Player> {
+        if team.team_type != TeamType::Main || ctx.is_friendly {
+            return available.to_vec();
+        }
+        let roster = team.players.players();
+        let own_ids: HashSet<u32> = roster.iter().map(|p| p.id).collect();
+        let band = (25.0 - 15.0 * ctx.match_importance.clamp(0.0, 1.0)).round() as u8;
+        let mut starting = Vec::with_capacity(available.len());
+        let mut emergency = Vec::new();
+        for &player in available {
+            if own_ids.contains(&player.id)
+                || player.positions.is_goalkeeper()
+                || player.is_force_match_selection
+                || CallUpReadiness::meets_level(player, &roster, band)
+            {
+                starting.push(player);
+            } else {
+                emergency.push(player);
+            }
+        }
+        let outfield = starting
+            .iter()
+            .filter(|p| !p.positions.is_goalkeeper())
+            .count();
+        // Without a keeper an outfielder must cover goal as well.
+        let keeper_slots = usize::from(starting.iter().any(|p| p.positions.is_goalkeeper()));
+        let needed = (DEFAULT_SQUAD_SIZE - keeper_slots).saturating_sub(outfield);
+        emergency.sort_by(|a, b| {
+            let merit = |p: &Player| {
+                let slot = best_tactical_position(p, tactics);
+                CallUpReadiness::level(p) as f32 * position_fit_score(p, slot) / 20.0
+            };
+            merit(b).total_cmp(&merit(a)).then_with(|| a.id.cmp(&b.id))
+        });
+        starting.extend(emergency.into_iter().take(needed));
+        starting
+    }
+
     /// Competition restrictions apply before counting depth or borrowing
     /// reserves, and also to emergency keepers and manager-pinned players.
     fn eligible_under_rules(player: &Player, ctx: &SelectionContext) -> bool {
@@ -288,8 +334,9 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let is_main_team = team.team_type == TeamType::Main;
-        let engine =
+        let mut engine =
             ScoringEngine::from_staff_for_team(staff, ctx.philosophy.clone(), is_main_team);
+        engine.owning_roster = Some(team.players.iter().map(|p| p.id).collect());
         let policy = SelectionPolicy::from_context(ctx);
         // Domestic-cup opportunity bias, built once per side. `None` for
         // league / continental / friendly games — those keep the existing
@@ -456,7 +503,8 @@ impl SquadSelector {
             strength_ratio,
             squad_depth,
         });
-        let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy);
+        let coach_engine = CoachDecisionEngine::from_staff(staff, &coach_profile, coach_strategy)
+            .with_owning_roster(engine.owning_roster.as_ref().unwrap());
 
         // Succession heirs — young players deliberately developed
         // behind an aging incumbent in their position group. Feeds the
@@ -480,7 +528,8 @@ impl SquadSelector {
             keeper_brief: ctx.keeper_brief,
         };
 
-        let main_squad = scx.select_starting_eleven(team.id, &available);
+        let starting_pool = Self::starting_pool(team, &available, ctx, tactics);
+        let main_squad = scx.select_starting_eleven(team.id, &starting_pool);
 
         let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available

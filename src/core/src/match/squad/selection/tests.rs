@@ -15,6 +15,204 @@ use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
 
 #[test]
+fn squad_status_applies_only_in_the_owning_roster() {
+    let date = Utc::now().date_naive();
+    let mut player = make_cup_player(
+        900,
+        Contest::SLOT,
+        18,
+        PlayerSquadStatus::KeyPlayer,
+        18,
+        14,
+        0,
+        0.0,
+    );
+    let staff = TestCoach::good_youth();
+    let mut owner = ScoringEngine::from_staff(&staff);
+    owner.owning_roster = Some([player.id].into_iter().collect());
+    let mut visitor = ScoringEngine::from_staff(&staff);
+    visitor.owning_roster = Some([1, 2, 3].into_iter().collect());
+    let cup = DomesticCupContext {
+        round: 1,
+        total_rounds: 5,
+        opponent_ratio: 0.6,
+        date,
+    };
+    let baseline = (
+        visitor.domestic_cup_opportunity_bonus(&player, &cup, true),
+        visitor.player_development_credibility(&player, Contest::SLOT, date),
+    );
+    assert!(owner.squad_status_bonus(&player) > 0.0);
+    assert_eq!(visitor.squad_status_bonus(&player), 0.0);
+    assert!(!visitor.is_established(&player));
+    for status in [
+        PlayerSquadStatus::HotProspectForTheFuture,
+        PlayerSquadStatus::MainBackupPlayer,
+    ] {
+        player.contract.as_mut().unwrap().squad_status = status;
+        assert_eq!(visitor.squad_status_bonus(&player), 0.0);
+        assert_eq!(
+            visitor.domestic_cup_opportunity_bonus(&player, &cup, true),
+            baseline.0
+        );
+        assert_eq!(
+            visitor.player_development_credibility(&player, Contest::SLOT, date),
+            baseline.1
+        );
+    }
+    // Being frozen out is the club's verdict, not a squad role: it holds
+    // in whichever of its squads picks him.
+    player.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
+    assert!(owner.squad_status_bonus(&player) < 0.0);
+    assert_eq!(
+        visitor.squad_status_bonus(&player),
+        owner.squad_status_bonus(&player)
+    );
+    assert_eq!(
+        visitor.player_development_credibility(&player, Contest::SLOT, date),
+        0.0
+    );
+    assert!(
+        visitor.domestic_cup_opportunity_bonus(&player, &cup, true) < baseline.0,
+        "a frozen-out visitor gets no fresh-name cup pull"
+    );
+    let intent = crate::club::staff::PlayerMatchIntent::assess(
+        &player, &staff, date, 0.3, false, false,
+    );
+    assert!(!intent.development);
+}
+
+fn call_up_fixture() -> (Team, Player) {
+    let date = Utc::now().date_naive();
+    let tactics = Tactics::new(MatchTacticType::T442);
+    let players = tactics
+        .positions()
+        .iter()
+        .enumerate()
+        .map(|(i, &slot)| make_test_player(i as u32 + 1, &[(slot, 18)], 160, date))
+        .collect();
+    let team = cup_team(players);
+    let mut youth = make_test_player(900, &[(PlayerPositionType::MidfielderRight, 20)], 80, date);
+    youth.birth_date = date - Duration::days(18 * 365);
+    let mut contract = PlayerClubContract::new(1000, date + Duration::days(365));
+    contract.squad_status = PlayerSquadStatus::KeyPlayer;
+    youth.contract = Some(contract);
+    youth.load.form_rating = 9.0;
+    youth.training.training_performance = 20.0;
+    (team, youth)
+}
+
+#[test]
+fn academy_key_player_is_cover_not_an_automatic_senior_starter() {
+    let (team, mut youth) = call_up_fixture();
+    let staff = TestCoach::good_youth();
+    let ctx = SelectionContext {
+        match_importance: 1.0,
+        ..Default::default()
+    };
+    for status in [PlayerSquadStatus::KeyPlayer, PlayerSquadStatus::NotNeeded] {
+        youth.contract.as_mut().unwrap().squad_status = status;
+        let result = SquadSelector::select_with_context(&team, &staff, &[&youth], &ctx);
+        assert_eq!(result.main_squad.len(), 11);
+        assert!(!result.main_squad.iter().any(|p| p.id == youth.id));
+        assert!(result.substitutes.iter().any(|p| p.id == youth.id));
+        assert!(!result.omissions.iter().any(|p| p.player_id == youth.id));
+    }
+}
+
+#[test]
+fn senior_call_up_gate_preserves_ready_players_pins_and_emergency_starts() {
+    let (mut team, mut youth) = call_up_fixture();
+    let staff = TestCoach::good_youth();
+    let ctx = SelectionContext {
+        match_importance: 1.0,
+        ..Default::default()
+    };
+    let mut available = team.players.players();
+    available.push(&youth);
+    assert!(
+        !SquadSelector::starting_pool(&team, &available, &ctx, team.tactics.as_ref().unwrap())
+            .iter()
+            .any(|p| p.id == youth.id)
+    );
+    FixtureSkills::stamp(&mut youth, 18.0);
+    let ready = SquadSelector::select_with_context(&team, &staff, &[&youth], &ctx);
+    assert!(ready.main_squad.iter().any(|p| p.id == youth.id));
+    FixtureSkills::stamp(&mut youth, 8.0);
+    youth.is_force_match_selection = true;
+    let pinned = SquadSelector::select_with_context(&team, &staff, &[&youth], &ctx);
+    assert!(pinned.main_squad.iter().any(|p| p.id == youth.id));
+    youth.is_force_match_selection = false;
+    team.players
+        .players
+        .retain(|p| p.position() != PlayerPositionType::MidfielderRight);
+    let emergency = SquadSelector::select_with_context(&team, &staff, &[&youth], &ctx);
+    assert_eq!(emergency.main_squad.len(), 11);
+    assert!(emergency.main_squad.iter().any(|p| p.id == youth.id));
+}
+
+#[test]
+fn call_up_readiness_does_not_use_a_weak_fringe_player_or_empty_group_as_a_pass() {
+    let date = Utc::now().date_naive();
+    let seniors: Vec<Player> = [160, 150, 60]
+        .into_iter()
+        .enumerate()
+        .map(|(i, level)| {
+            make_test_player(
+                i as u32,
+                &[(PlayerPositionType::MidfielderCenter, 18)],
+                level,
+                date,
+            )
+        })
+        .collect();
+    let roster: Vec<&Player> = seniors.iter().collect();
+    let mut youth = make_test_player(900, &[(PlayerPositionType::MidfielderCenter, 18)], 80, date);
+    assert!(!CallUpReadiness::meets_level(&youth, &roster, 25));
+    youth.positions = PlayerPositions {
+        positions: vec![PlayerPosition {
+            position: PlayerPositionType::Striker,
+            level: 18,
+        }],
+    };
+    assert!(!CallUpReadiness::meets_level(&youth, &roster, 25));
+}
+
+#[test]
+fn call_up_starting_standard_tightens_for_important_matches() {
+    let (team, mut youth) = call_up_fixture();
+    FixtureSkills::stamp(&mut youth, 14.0);
+    let mut available = team.players.players();
+    available.push(&youth);
+    let pool_contains = |importance, friendly| {
+        let ctx = SelectionContext {
+            match_importance: importance,
+            is_friendly: friendly,
+            ..Default::default()
+        };
+        SquadSelector::starting_pool(&team, &available, &ctx, team.tactics.as_ref().unwrap())
+            .iter()
+            .any(|p| p.id == youth.id)
+    };
+    assert!(pool_contains(0.1, false));
+    assert!(!pool_contains(1.0, false));
+    assert!(pool_contains(1.0, true));
+}
+
+#[test]
+fn call_up_emergency_count_includes_an_outfielder_covering_goal() {
+    let (mut team, youth) = call_up_fixture();
+    team.players
+        .players
+        .retain(|p| !p.positions.is_goalkeeper());
+    let staff = TestCoach::good_youth();
+    let result =
+        SquadSelector::select_with_context(&team, &staff, &[&youth], &SelectionContext::default());
+    assert_eq!(result.main_squad.len(), 11);
+    assert!(result.main_squad.iter().any(|p| p.id == youth.id));
+}
+
+#[test]
 fn manager_plan_changes_the_actual_xi_and_explains_its_score() {
     use crate::club::staff::PlannedRole;
     let date = Utc::now().date_naive();

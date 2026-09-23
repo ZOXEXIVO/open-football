@@ -795,15 +795,27 @@ struct BorrowerPositionDepth {
 
 impl BorrowerPositionDepth {
     fn snapshot(team: &Team) -> Self {
+        // The observable read is the expensive part and does not depend on
+        // the group, so it is taken once per man rather than once per row.
+        let observed: Vec<(&Player, PlayerFieldPositionGroup, u8)> = team
+            .players
+            .iter()
+            .map(|p| {
+                (
+                    p,
+                    p.position().position_group(),
+                    AbilityEstimator::observable_level(p),
+                )
+            })
+            .collect();
         let rows = PlayerFieldPositionGroup::ALL
             .iter()
             .map(|&group| {
                 let max = group.ideal_squad_depth();
-                let abilities: Vec<u8> = team
-                    .players
+                let abilities: Vec<u8> = observed
                     .iter()
-                    .filter(|p| p.position().position_group() == group)
-                    .map(AbilityEstimator::observable_level)
+                    .filter(|(_, filed, _)| *filed == group)
+                    .map(|(_, _, level)| *level)
                     .collect();
                 (group, max, abilities)
             })
@@ -811,15 +823,10 @@ impl BorrowerPositionDepth {
         let role_rows = PlayerFieldPositionGroup::ALL
             .iter()
             .map(|&group| {
-                let abilities: Vec<u8> = team
-                    .players
+                let abilities: Vec<u8> = observed
                     .iter()
-                    .filter_map(|p| {
-                        let effective = RoleFamiliarity::best_in_group(
-                            &p.positions,
-                            AbilityEstimator::observable_level(p),
-                            group,
-                        );
+                    .filter_map(|(p, _, level)| {
+                        let effective = RoleFamiliarity::best_in_group(&p.positions, *level, group);
                         (effective > 0).then_some(effective)
                     })
                     .collect();

@@ -6,6 +6,46 @@ use chrono::NaiveDate;
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
 pub const DEFAULT_BENCH_SIZE: usize = 7;
 
+/// A call-up must be close to the receiving team's playing level. Academy
+/// form and potential cannot replace the visible skills needed at that level.
+pub(crate) struct CallUpReadiness;
+
+impl CallUpReadiness {
+    pub(crate) fn level(player: &Player) -> u8 {
+        crate::club::staff::perception::PotentialEstimator::visible_ability(player)
+    }
+
+    pub(crate) fn reference(player: &Player, roster: &[&Player]) -> Option<u8> {
+        let group = player.position().position_group();
+        let mut peers: Vec<u8> = roster
+            .iter()
+            .filter(|p| !p.positions.is_goalkeeper())
+            .filter(|p| p.position().position_group() == group)
+            .map(|p| Self::level(p))
+            .collect();
+        peers.sort_unstable_by(|a, b| b.cmp(a));
+        if !peers.is_empty() {
+            // The playing standard, not the weakest fringe player. Taking
+            // two peers avoids making one exceptional star the whole standard.
+            let n = peers.len().min(2);
+            return Some((peers[..n].iter().map(|&v| v as u16).sum::<u16>() / n as u16) as u8);
+        }
+        // No natural peer is not evidence that any academy player is ready.
+        let mut levels: Vec<u8> = roster
+            .iter()
+            .filter(|p| !p.positions.is_goalkeeper())
+            .map(|p| Self::level(p))
+            .collect();
+        levels.sort_unstable();
+        levels.get(levels.len() / 2).copied()
+    }
+
+    pub(crate) fn meets_level(player: &Player, roster: &[&Player], band: u8) -> bool {
+        Self::reference(player, roster)
+            .is_some_and(|level| Self::level(player).saturating_add(band) >= level)
+    }
+}
+
 /// Succession-heir identification: for each position group whose best
 /// available player is inside the late-career window, the strongest
 /// credible young player in the same group is the heir the coach

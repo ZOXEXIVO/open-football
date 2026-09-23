@@ -290,7 +290,7 @@ impl PlayerSquadStatus {
     /// Like [`calculate`](Self::calculate), but aware of WHICH squad the
     /// ranking runs in. Senior role labels are club-level promises owned
     /// only by squads listed in [`TeamType::owns_squad_status`]. On a
-    /// development or parking squad (Reserve, U20..U23) ranking whoever is
+    /// development or parking squad (Reserve, U18..U23) ranking whoever is
     /// parked there against reserve teammates would crown a journeyman
     /// third keeper "Key Player" of a squad that has no key players — so
     /// there a youngster still gets his prospect label refreshed, while a
@@ -342,6 +342,14 @@ impl PlayerSquadStatus {
             | PlayerSquadStatus::DecentYoungster => PlayerSquadStatus::MainBackupPlayer,
             other => other.clone(),
         }
+    }
+
+    /// Whether the label still speaks when another squad of the club picks
+    /// him. A surplus verdict is the club's decision about the man and holds
+    /// wherever he is registered; a role claim or a prospect label ranks him
+    /// only inside the squad that awarded it.
+    pub fn carries_across_squads(&self) -> bool {
+        matches!(self, PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid)
     }
 
     /// The same label re-read as a **first-team** designation, given the

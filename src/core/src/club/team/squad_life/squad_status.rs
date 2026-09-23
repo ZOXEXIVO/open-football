@@ -317,7 +317,7 @@ impl SquadStatusUpdater {
     }
 
     /// Label pass for squads that don't own role labels (Reserve,
-    /// U20..U23 — see [`crate::TeamType::owns_squad_status`]). Youngsters
+    /// U18..U23 — see [`crate::TeamType::owns_squad_status`]). Youngsters
     /// get their prospect label refreshed; a senior keeps his club-level
     /// label collapsed to at most backup via
     /// [`PlayerSquadStatus::calculate_for_team`] — a Main-team backup
@@ -635,6 +635,31 @@ mod development_squad_tests {
             PlayerSquadStatus::HotProspectForTheFuture
         );
         assert_eq!(status_of(&team, 2), PlayerSquadStatus::DecentYoungster);
+    }
+
+    /// The best boy in the academy is not the club's "Key Player": the
+    /// U18 / U19 sides hand out the prospect pair only, whatever label
+    /// he arrived with.
+    #[test]
+    fn academy_squad_mints_only_prospect_labels() {
+        for team_type in [TeamType::U18, TeamType::U19] {
+            let mut team = squad_of(
+                team_type,
+                vec![
+                    keeper(1, 2009, 110, PlayerSquadStatus::KeyPlayer),
+                    keeper(2, 2009, 70, PlayerSquadStatus::FirstTeamRegular),
+                    keeper(3, 2010, 60, PlayerSquadStatus::NotYetSet),
+                ],
+            );
+            SquadStatusUpdater::apply(&mut team, today());
+
+            assert_eq!(
+                status_of(&team, 1),
+                PlayerSquadStatus::HotProspectForTheFuture
+            );
+            assert_eq!(status_of(&team, 2), PlayerSquadStatus::DecentYoungster);
+            assert_eq!(status_of(&team, 3), PlayerSquadStatus::DecentYoungster);
+        }
     }
 
     /// Labelled a prospect at nineteen, parked on a reserve roster, and

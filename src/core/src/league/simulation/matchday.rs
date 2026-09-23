@@ -1,16 +1,15 @@
-use crate::club::staff::perception::{AbilityEstimator, DevelopmentFormEvidence};
+use crate::club::staff::perception::DevelopmentFormEvidence;
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueDynamics, LeagueMatch, LeagueMatchResultResult, LeagueTable};
 use crate::r#match::MatchSquad;
 use crate::r#match::squad::selection::helpers::PlayerAvailability;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
-use crate::{
-    Club, ClubPhilosophy, MatchRuntime, Person, Player, PlayerFieldPositionGroup, Team, TeamType,
-};
+use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 /// Per-matchday snapshot of clubs and teams indexed by id. Built once
@@ -98,8 +97,11 @@ impl League {
         let today = ctx.simulation.date.date();
         let is_cup = self.is_cup;
         let lookup = MatchdayLookup::build(clubs);
+        // Each fixture's two squads are picked from shared reads only, so a
+        // matchday's fixtures are built in parallel; the indexed collect keeps
+        // them paired with `scheduled_matches` for `apply_matchday_results`.
         scheduled_matches
-            .iter()
+            .par_iter()
             .map(|scheduled_match| {
                 // Count upcoming competitive fixtures within 5 days for
                 // each side. A team with a cup tie three days from now
@@ -999,11 +1001,11 @@ impl MatchdayPool {
 /// squad, collect cameos, and only then earn the permanent move (the
 /// cameos feed `PromotionEvidence` in the weekly squad rebalance).
 ///
-/// Two gates, either admits: an observable level within a band of the
-/// weakest senior peer at the position (the kid holds his own in first-team
-/// training), or breakout youth-league form (the season everyone at the
-/// club is talking about). Capped per matchday so the academy sides keep
-/// their squads, and goalkeepers are excluded — GK borrowing stays with
+/// Visible skills must approach the senior playing standard. Breakout youth
+/// form widens the band modestly; it never bypasses readiness. A missing
+/// position group uses the senior outfield standard rather than admitting
+/// an unready youngster automatically. Capped per matchday so the academy
+/// sides keep their squads, and goalkeepers are excluded — GK borrowing stays with
 /// the emergency sweep, since a green keeper cameo is a different risk
 /// class from an outfield one.
 struct YouthSeniorCallUp;
@@ -1012,9 +1014,10 @@ impl YouthSeniorCallUp {
     const TIERS: [TeamType; 3] = [TeamType::U20, TeamType::U19, TeamType::U18];
     /// At most this many academy call-ups join the pool per matchday.
     const MAX_PER_MATCHDAY: usize = 2;
-    /// Observable-level band (1..200 scale) below the weakest senior peer
-    /// at the position within which a youth player is call-up ready.
+    /// Visible-skill band (1..200 scale) below the senior playing standard.
     const LEVEL_BAND: u8 = 15;
+    /// Youth results earn a little more latitude, never an ability exemption.
+    const BREAKOUT_LEVEL_BAND: u8 = 25;
     /// Breakout-form arm: a real sample of games...
     const FORM_MIN_GAMES: u16 = 6;
     /// ...at a regressed rating clearly above the ~6.6 positional neutral.
@@ -1030,16 +1033,8 @@ impl YouthSeniorCallUp {
             return;
         };
 
-        // Weakest observable level per position group on the main roster.
-        // An empty group is a hole — any academy candidate at the position
-        // passes the readiness gate.
-        let weakest_at = |group: PlayerFieldPositionGroup| -> Option<u8> {
-            main.players
-                .iter()
-                .filter(|p| p.position().position_group() == group)
-                .map(AbilityEstimator::observable_level)
-                .min()
-        };
+        use crate::r#match::squad::selection::helpers::CallUpReadiness;
+        let senior_roster = main.players.players();
 
         let mut candidates: Vec<(&'a Player, u8)> = Vec::new();
         for team in club
@@ -1058,11 +1053,13 @@ impl YouthSeniorCallUp {
                 if reserves.iter().any(|r| r.id == p.id) {
                     continue;
                 }
-                let level = AbilityEstimator::observable_level(p);
-                let near_senior = weakest_at(p.position().position_group())
-                    .map(|weakest| level.saturating_add(Self::LEVEL_BAND) >= weakest)
-                    .unwrap_or(true);
-                if near_senior || Self::breakout_form(p) {
+                let level = CallUpReadiness::level(p);
+                let band = if Self::breakout_form(p) {
+                    Self::BREAKOUT_LEVEL_BAND
+                } else {
+                    Self::LEVEL_BAND
+                };
+                if CallUpReadiness::meets_level(p, &senior_roster, band) {
                     candidates.push((p, level));
                 }
             }
@@ -1667,21 +1664,23 @@ mod tests {
 
     #[test]
     fn breakout_youth_form_earns_call_up() {
-        // Observable level far below the seniors, but a breakout
-        // youth-league season (friendly bucket) makes the case instead.
+        // Breakout youth form modestly widens the skill band; it cannot
+        // make a player far below the senior level ready.
         let main_players: Vec<Player> = (1..=18)
             .map(|id| md_player(id, PlayerPositionType::MidfielderCenter, 130))
             .collect();
         let main = md_team(1, 100, TeamType::Main, main_players);
-        let mut breakout = md_player(40, PlayerPositionType::MidfielderCenter, 60);
+        let mut breakout = md_player(40, PlayerPositionType::MidfielderCenter, 110);
         breakout.friendly_statistics.played = 12;
         for _ in 0..12 {
             breakout
                 .friendly_statistics
                 .record_match_rating(8.0, 90, true);
         }
-        let quiet = md_player(41, PlayerPositionType::MidfielderCenter, 60);
-        let u19 = md_team(2, 100, TeamType::U19, vec![breakout, quiet]);
+        let quiet = md_player(41, PlayerPositionType::MidfielderCenter, 110);
+        let mut unready = md_player(42, PlayerPositionType::MidfielderCenter, 60);
+        unready.friendly_statistics = breakout.friendly_statistics.clone();
+        let u19 = md_team(2, 100, TeamType::U19, vec![breakout, quiet, unready]);
         let clubs = vec![md_club(100, vec![main, u19])];
 
         let reserves = League::collect_reserve_players(&clubs, 100, 1, false, true, md_date());
@@ -1692,6 +1691,10 @@ mod tests {
         assert!(
             !reserve_has(&reserves, 41),
             "the same level without the form case does not"
+        );
+        assert!(
+            !reserve_has(&reserves, 42),
+            "youth form cannot bridge a large skill gap"
         );
     }
 

@@ -105,16 +105,15 @@ impl TeamType {
         matches!(self, TeamType::Main | TeamType::B | TeamType::Second)
     }
 
-    /// Squads whose roster owns real role labels (Key Player / First Team
-    /// Regular / … for seniors, the prospect pair for youth): the senior
-    /// sides competing under their own brand (Main / B / Second) and the
-    /// age-capped academy teams (U18 / U19). Development and parking squads
-    /// (Reserve, U20..U23) return false — a player there keeps his
-    /// club-level label instead of being re-ranked against reserve
-    /// teammates, which would crown a parked veteran "Key Player" of a
-    /// squad that has no such role.
+    /// Squads whose roster owns senior role labels (Key Player / First Team
+    /// Regular / …): only the senior sides competing under their own brand
+    /// (Main / B / Second). Academy, development and parking squads
+    /// (Reserve, U18..U23) return false — ranking a boy against his U18
+    /// team-mates would crown him "Key Player" of a squad that has no such
+    /// role, so youngsters there carry the prospect pair and a parked senior
+    /// keeps his club-level label.
     pub fn owns_squad_status(&self) -> bool {
-        self.is_own_team() || matches!(self, TeamType::U18 | TeamType::U19)
+        self.is_own_team()
     }
 
     /// Squads that appoint a standing club captain and vice-captain. Only

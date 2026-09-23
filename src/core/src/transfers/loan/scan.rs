@@ -44,7 +44,8 @@ use crate::{
     Club, Country, PathwayStage, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
     ReputationLevel, TeamType,
 };
-use rustc_hash::FxHashMap;
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 use super::*;
@@ -265,13 +266,20 @@ impl LoanBoard {
         // young prospects and rotation players go as development loans and
         // genuine surplus goes at any age up to the loan cap — but a
         // first-team contributor is never cold-approached.
-        let scan_unsolicited = LoanPipeline::is_market_day(date);
-        let mut unsolicited_targets: Vec<LoanListing> = Vec::new();
-        if scan_unsolicited {
-            for club in &country.clubs {
+        if !LoanPipeline::is_market_day(date) {
+            return Vec::new();
+        }
+        // Each club's targets are read off its own roster against
+        // country-constant facts, so the clubs are read in parallel; the
+        // ordered flatten keeps the board in club order.
+        country
+            .clubs
+            .par_iter()
+            .map(|club| {
+                let mut unsolicited_targets: Vec<LoanListing> = Vec::new();
                 let parent_team = match club.teams.main().or_else(|| club.teams.teams.first()) {
                     Some(t) => t,
-                    None => continue,
+                    None => return unsolicited_targets,
                 };
                 let parent_rep = parent_team.reputation.world;
                 let asset_ctx = SquadAssetContext::build(club, date);
@@ -422,23 +430,37 @@ impl LoanBoard {
                         });
                     }
                 }
-            }
-        }
-        unsolicited_targets
+                unsolicited_targets
+            })
+            .collect::<Vec<Vec<LoanListing>>>()
+            .into_iter()
+            .flatten()
+            .collect()
     }
 }
 
-/// What carries across one club's four sweeps: how many looks it has spent,
-/// and which position groups it has already claimed somebody for.
-struct ScanState {
-    scans_this_club: usize,
-    scanned_position_groups: Vec<PlayerFieldPositionGroup>,
+/// What every borrower's turn reads of the rest of the market, taken once for
+/// the pass: the scan only stages actions, so the negotiation set is frozen.
+struct LoanScanLoad {
+    pending_loans: HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+    pending_foreign: FxHashMap<u32, u32>,
+    active_counts: FxHashMap<u32, u32>,
+    active_pairs: FxHashSet<(u32, u32)>,
+}
+
+/// One sweep's candidates, scored, before the pass's claims are taken out.
+type ScoredSlate<'a> = Vec<(&'a LoanListing, f32)>;
+
+/// One open request's slate.
+struct RequestSlate<'a> {
+    group: PlayerFieldPositionGroup,
+    reason: &'static str,
+    candidates: ScoredSlate<'a>,
 }
 
 /// One borrowing club, resolved once: its appetite, its depth, its taste, and
 /// what its year and payroll can carry.
 struct BorrowerScan<'a> {
-    country: &'a Country,
     club: &'a Club,
     date: NaiveDate,
     mid_season_window: bool,
@@ -460,6 +482,7 @@ struct BorrowerScan<'a> {
     /// shirt, so a request for a first-team defender does not read as an
     /// invitation for anybody who plays there.
     open_requests: Vec<TransferRequest>,
+    active_pairs: &'a FxHashSet<(u32, u32)>,
 }
 
 impl<'a> BorrowerScan<'a> {
@@ -469,8 +492,7 @@ impl<'a> BorrowerScan<'a> {
         country: &'a Country,
         club_idx: usize,
         tick: LoanScanTick,
-        pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
-        pending_foreign: &FxHashMap<u32, u32>,
+        load: &'a LoanScanLoad,
     ) -> Option<Self> {
         let date = tick.date;
         let mid_season_window = tick.mid_season_window;
@@ -494,9 +516,7 @@ impl<'a> BorrowerScan<'a> {
         }
 
         // Respect concurrent negotiation limits
-        let actual_active = country
-            .transfer_market
-            .active_negotiation_count_for_club(club.id);
+        let actual_active = load.active_counts.get(&club.id).copied().unwrap_or(0);
         if actual_active >= plan.max_concurrent_negotiations {
             return None;
         }
@@ -524,14 +544,14 @@ impl<'a> BorrowerScan<'a> {
             if avg == 0 { 50 } else { avg }
         };
 
-        // Track position groups already targeted in this scan pass
-        // to avoid starting multiple negotiations for the same position
-
         // Borrower-side depth snapshot — shared with the foreign
         // scan. A club with 3 mediocre GKs should still loan a
         // world-class GK, but not a 4th mediocre one.
-        let borrower_depth = BorrowerPositionDepth::snapshot(team)
-            .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
+        let borrower_depth = BorrowerPositionDepth::snapshot(team).with_pending_loans(
+            load.pending_loans
+                .get(&club.id)
+                .map_or(&[], |v| v.as_slice()),
+        );
         let borrower_world_rep = team.reputation.world;
         // Standard of football on offer here — the division gate reads
         // this against the parent's own competition.
@@ -572,10 +592,9 @@ impl<'a> BorrowerScan<'a> {
             .collect();
         let foreign_slots =
             SquadRegistrationLimits::new(country.id, &country.regulations).count(club);
-        let pending_foreign = pending_foreign.get(&club.id).copied().unwrap_or(0);
+        let pending_foreign = load.pending_foreign.get(&club.id).copied().unwrap_or(0);
 
         Some(BorrowerScan {
-            country,
             club,
             date,
             mid_season_window,
@@ -592,6 +611,7 @@ impl<'a> BorrowerScan<'a> {
             foreign_slots,
             pending_foreign,
             open_requests,
+            active_pairs: &load.active_pairs,
         })
     }
 
@@ -758,341 +778,39 @@ impl<'a> BorrowerScan<'a> {
         }
     }
 
-    /// The four sweeps, in the order the old body ran them. Each stops at the
-    /// same per-club cap, and each sees what the ones before it claimed.
-    fn run(&self, board: &LoanBoard, actions: &mut Vec<LoanScanAction>) {
-        let mut state = ScanState {
-            scans_this_club: 0,
-            scanned_position_groups: Vec::new(),
-        };
-        self.against_open_requests(&board.listed, &mut state, actions);
-        self.opportunistically(&board.listed, &mut state, actions);
-        self.in_january(&board.listed, &mut state, actions);
-        self.cold(&board.unsolicited, &mut state, actions);
-    }
-
-    /// Against the club's own open requests first — a loan that answers a brief
-    /// the club has already written. Emergency free-agent depth requests are
-    /// excluded: those are the free-agent matcher's, never a loan's.
-    fn against_open_requests(
-        &self,
-        loan_listings: &[LoanListing],
-        state: &mut ScanState,
-        actions: &mut Vec<LoanScanAction>,
-    ) {
-        let country = self.country;
-        let club = self.club;
-        let plan = &self.club.transfer_plan;
-        let date = self.date;
-        let _rep_level = self.rep_level.clone();
-        let max_loan_fee = self.max_loan_fee;
-        let max_scans = self.max_scans;
-        let taste = &self.taste;
-        let should_skip_loan =
-            |group: PlayerFieldPositionGroup, loan_ability: u8, development: bool| -> bool {
-                self.should_skip_loan(group, loan_ability, development)
-            };
-        let profile_of =
-            |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
-        let mut scans_this_club = state.scans_this_club;
-        let mut scanned_position_groups = std::mem::take(&mut state.scanned_position_groups);
-
-        // Check unfulfilled transfer requests first. Emergency
-        // free-agent depth requests are excluded — they're
-        // serviced by the free-agent matcher only, not by loans.
-        let unfulfilled = plan.transfer_requests.iter().filter(|r| {
-            r.status != TransferRequestStatus::Fulfilled
-                && r.status != TransferRequestStatus::Abandoned
-                && !r.is_emergency_free_agent_depth()
-        });
-
-        for request in unfulfilled {
-            if scans_this_club >= max_scans {
-                break;
-            }
-
-            // Only scan once per position group — multiple requests for the same
-            // group (e.g. FormationGap + DepthCover for GK) should not each trigger
-            // a separate loan negotiation
-            let pos_group = request.position.position_group();
-            if scanned_position_groups.contains(&pos_group) {
-                continue;
-            }
-
-            // Skip if position is full AND loan wouldn't be an upgrade.
-            // Request-driven cover uses the strict bar — a club with a
-            // full line asked for depth elsewhere, not a keeper prospect.
-            if should_skip_loan(pos_group, request.min_ability, false) {
-                continue;
-            }
-
-            // Relaxed thresholds: min_ability - 5, age_max + 3
-            let relaxed_min = request.min_ability.saturating_sub(5);
-            let relaxed_age_max = request
-                .preferred_age_max
-                .saturating_add(3)
-                .min(MAX_LOAN_TARGET_AGE);
-
-            let qualified: Vec<&LoanListing> = loan_listings
-                .iter()
-                .filter(|l| {
-                    l.club_id != club.id
-                && !club.is_rival(l.club_id) // no loans from rivals
-                && l.position_group == pos_group
-                && l.ability >= relaxed_min
-                && l.age <= relaxed_age_max
-                && l.age >= request.preferred_age_min
-                && l.asking_price * 0.8 <= max_loan_fee
-                && !plan.is_loan_approach_barred(l.player_id, date)
-                && !country
-                    .transfer_market
-                    .has_active_negotiation_for(l.player_id, club.id)
-                && !actions.iter().any(|a| a.player_id == l.player_id)
-                })
-                .collect();
-
-            // Everything left has cleared every gate. Which of them the
-            // club goes for is a matter of preference, so it is drawn in
-            // proportion to interest rather than taken as the top row of an
-            // ability sort — the argmax made this a fixed pairing that
-            // repeated until the listing disappeared.
-            let weighted: Vec<(u32, f32)> = qualified
-                .iter()
-                .enumerate()
-                .filter_map(|(i, l)| {
-                    // Priced once per pair: the score IS the filter, and
-                    // running the agreement twice emitted the trace line
-                    // twice for every candidate a club looked at.
-                    let agreement = self.agreement_for(l)?;
-                    taste
-                        .interest_in(&profile_of(l, l.asking_price * 0.8))
-                        .map(|score| (i as u32, score * agreement))
-                })
-                .collect();
-
-            if let Some(best) = InterestDraw::pick(&weighted).map(|i| qualified[i as usize]) {
-                let reason = TransferReason::key(request.reason.as_signing_reason_key());
-                actions.push(LoanScanAction {
-                    club_id: club.id,
-                    player_id: best.player_id,
-                    selling_club_id: best.club_id,
-                    offer_amount: FormattingUtils::round_fee(best.asking_price * 0.8),
-                    reason,
-                    is_unsolicited: false,
-                    seller_asking: best.asking_price,
-                    is_development: best.is_development,
-                });
-                scanned_position_groups.push(pos_group);
-                scans_this_club += 1;
-            }
-        }
-
-        state.scans_this_club = scans_this_club;
-        state.scanned_position_groups = scanned_position_groups;
-    }
-
-    /// Small clubs always look for a deal, not just in January; National clubs
-    /// join them when the squad has a genuine shortage.
-    fn opportunistically(
-        &self,
-        loan_listings: &[LoanListing],
-        state: &mut ScanState,
-        actions: &mut Vec<LoanScanAction>,
-    ) {
-        let country = self.country;
-        let club = self.club;
-        let plan = &self.club.transfer_plan;
-        let date = self.date;
-        let max_loan_fee = self.max_loan_fee;
-        let max_scans = self.max_scans;
-        let taste = &self.taste;
+    /// Score every sweep's slate. Nothing here depends on what any other club
+    /// claims, so clubs are scored in parallel; [`BorrowerTurn::claim`] runs
+    /// the sweeps against the claims afterwards.
+    fn score<'b>(&self, board: &'b LoanBoard) -> BorrowerTurn<'b> {
+        // The same listing sits in several sweeps' slates and prices the same
+        // in each, so each is priced once.
+        let mut listed_memo: Vec<Option<Option<f32>>> = vec![None; board.listed.len()];
+        let requests = self.request_slates(&board.listed, &mut listed_memo);
         let avg_ability = self.avg_ability;
-        let profile_of =
-            |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
-        let mut scans_this_club = state.scans_this_club;
-        let mut scanned_position_groups = std::mem::take(&mut state.scanned_position_groups);
-
-        // Opportunistic scan: small clubs always look for deals,
-        // not just in January. National clubs join in too when
-        // their squad has a genuine shortage — the critical-need
-        // override above already let them in past `should_scan`,
-        // but the opportunistic branch was small-club-only and
         // Every club reads the loan market. How many looks it spends is
-        // the scan budget above — a bigger club simply has fewer, because
+        // the scan budget — a bigger club simply has fewer, because
         // fewer of the names on it are for it. Reserving the whole
         // opportunistic sweep for small clubs and emergencies was a
         // category gate in front of an appetite term that already prices
         // the same fact.
-        if scans_this_club < max_scans {
-            let opps: Vec<&LoanListing> = loan_listings
-                .iter()
-                .filter(|l| {
-                    l.club_id != club.id
-                && !club.is_rival(l.club_id)
-                && l.age <= MAX_LOAN_TARGET_AGE
-                // Squad-average floor is for cover loans; a youth
-                // match-practice loan leans on the minutes gate.
-                && (l.is_development || l.ability >= avg_ability.saturating_sub(5))
-                && l.asking_price * 0.8 <= max_loan_fee
-                && !plan.is_loan_approach_barred(l.player_id, date)
-                && !country
-                    .transfer_market
-                    .has_active_negotiation_for(l.player_id, club.id)
-                && !actions.iter().any(|a| a.player_id == l.player_id)
-                })
-                .collect();
-
-            // Weighted sample without replacement, in place of "sort by
-            // ability, take the top N" — which returned the same N in the
-            // same order for as long as the listings stood.
-            let weighted: Vec<(u32, f32)> = opps
-                .iter()
-                .enumerate()
-                .filter_map(|(i, l)| {
-                    // Priced once per pair: the score IS the filter, and
-                    // running the agreement twice emitted the trace line
-                    // twice for every candidate a club looked at.
-                    let agreement = self.agreement_for(l)?;
-                    taste
-                        .interest_in(&profile_of(l, l.asking_price * 0.8))
-                        .map(|score| (i as u32, score * agreement))
-                })
-                .collect();
-
-            // Draw a surplus and walk it: the slate is filtered once, so
-            // without a running group check one pass could open three
-            // negotiations for the same position — which the scan's own
-            // `scanned_position_groups` bookkeeping exists to prevent and
-            // the old sort-and-take quietly allowed. Over-drawing keeps the
-            // club's full scan budget usable despite the extra constraint.
-            let wanted = max_scans - scans_this_club;
-            for idx in InterestDraw::pick_several(&weighted, (wanted * 4).min(weighted.len())) {
-                if scans_this_club >= max_scans {
-                    break;
-                }
-                let opp = opps[idx as usize];
-                if scanned_position_groups.contains(&opp.position_group) {
-                    continue;
-                }
-                actions.push(LoanScanAction {
-                    club_id: club.id,
-                    player_id: opp.player_id,
-                    selling_club_id: opp.club_id,
-                    offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
-                    reason: TransferReason::key("signing_reason_loan_opportunistic_upgrade"),
-                    is_unsolicited: false,
-                    seller_asking: opp.asking_price,
-                    is_development: opp.is_development,
-                });
-                scanned_position_groups.push(opp.position_group);
-                scans_this_club += 1;
-            }
-        }
-
-        state.scans_this_club = scans_this_club;
-        state.scanned_position_groups = scanned_position_groups;
-    }
-
-    /// The mid-season window, where even a National club that is not short
-    /// goes looking.
-    fn in_january(
-        &self,
-        loan_listings: &[LoanListing],
-        state: &mut ScanState,
-        actions: &mut Vec<LoanScanAction>,
-    ) {
-        let country = self.country;
-        let club = self.club;
-        let plan = &self.club.transfer_plan;
-        let date = self.date;
-        let _rep_level = self.rep_level.clone();
-        let max_loan_fee = self.max_loan_fee;
-        let max_scans = self.max_scans;
-        let taste = &self.taste;
-        let mid_season_window = self.mid_season_window;
-        let avg_ability = self.avg_ability;
-        let profile_of =
-            |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
-        let scans_this_club = state.scans_this_club;
-        let scanned_position_groups = std::mem::take(&mut state.scanned_position_groups);
-
+        let opportunistic = self.slate(&board.listed, &mut listed_memo, |l| {
+            l.age <= MAX_LOAN_TARGET_AGE
+            // Squad-average floor is for cover loans; a youth
+            // match-practice loan leans on the minutes gate.
+            && (l.is_development || l.ability >= avg_ability.saturating_sub(5))
+        });
         // The mid-season window is a second look for everybody: the
         // shape of a season is known by then and a hole is a hole.
-        if mid_season_window && scans_this_club < max_scans {
-            let mid_season: Vec<&LoanListing> = loan_listings
-                .iter()
-                .filter(|l| {
-                    l.club_id != club.id
-                && !club.is_rival(l.club_id)
-                && l.age <= MAX_LOAN_TARGET_AGE
+        let january = if self.mid_season_window {
+            self.slate(&board.listed, &mut listed_memo, |l| {
+                l.age <= MAX_LOAN_TARGET_AGE
                 // Squad-average floor is for cover loans; a youth
                 // match-practice loan leans on the minutes gate.
                 && (l.is_development || l.ability >= avg_ability.saturating_sub(8))
-                && l.asking_price * 0.8 <= max_loan_fee
-                && !plan.is_loan_approach_barred(l.player_id, date)
-                && !country
-                    .transfer_market
-                    .has_active_negotiation_for(l.player_id, club.id)
-                && !actions.iter().any(|a| a.player_id == l.player_id)
-                })
-                .collect();
-
-            let weighted: Vec<(u32, f32)> = mid_season
-                .iter()
-                .enumerate()
-                .filter_map(|(i, l)| {
-                    // Priced once per pair: the score IS the filter, and
-                    // running the agreement twice emitted the trace line
-                    // twice for every candidate a club looked at.
-                    let agreement = self.agreement_for(l)?;
-                    taste
-                        .interest_in(&profile_of(l, l.asking_price * 0.8))
-                        .map(|score| (i as u32, score * agreement))
-                })
-                .collect();
-
-            if let Some(opp) = InterestDraw::pick(&weighted).map(|i| mid_season[i as usize]) {
-                actions.push(LoanScanAction {
-                    club_id: club.id,
-                    player_id: opp.player_id,
-                    selling_club_id: opp.club_id,
-                    offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
-                    reason: TransferReason::key("signing_reason_loan_midseason_reinforcement"),
-                    is_unsolicited: false,
-                    seller_asking: opp.asking_price,
-                    is_development: opp.is_development,
-                });
-            }
-        }
-
-        state.scans_this_club = scans_this_club;
-        state.scanned_position_groups = scanned_position_groups;
-    }
-
-    /// A cold approach: a player his club never loan-listed. The badge is not
-    /// a precondition for loan demand — the move only has to be credible, so
-    /// the parent must be bigger, the player must actually get minutes, and
-    /// the reputation drop must be plausible.
-    fn cold(
-        &self,
-        unsolicited_targets: &[LoanListing],
-        state: &mut ScanState,
-        actions: &mut Vec<LoanScanAction>,
-    ) {
-        let country = self.country;
-        let club = self.club;
-        let plan = &self.club.transfer_plan;
-        let date = self.date;
-        let max_loan_fee = self.max_loan_fee;
-        let max_scans = self.max_scans;
-        let borrower_world_rep = self.borrower_world_rep;
-        let taste = &self.taste;
-        let scan_unsolicited = self.scan_unsolicited;
-        let profile_of =
-            |l: &LoanListing, fee: f64| -> LoanCandidateProfile { self.profile_of(l, fee) };
-        let scans_this_club = state.scans_this_club;
-        let scanned_position_groups = std::mem::take(&mut state.scanned_position_groups);
-
+            })
+        } else {
+            Vec::new()
+        };
         // ── Unsolicited loan approach (no `Loa` required) ─────────
         //
         // A lower-/mid-tier club asks a bigger club to take a player who
@@ -1106,69 +824,268 @@ impl<'a> BorrowerScan<'a> {
         // Every tier cold-calls, Elite included: the agreement prices
         // the distance between two clubs continuously, and a second
         // hard reading of it is a gate doing a price's job.
-        if scan_unsolicited && scans_this_club < max_scans {
-            let cold: Vec<&LoanListing> = unsolicited_targets
-                .iter()
-                .filter(|l| {
-                    l.club_id != club.id
-                && !club.is_rival(l.club_id)
+        let cold = if self.scan_unsolicited {
+            let borrower_world_rep = self.borrower_world_rep;
+            let mut cold_memo: Vec<Option<Option<f32>>> = vec![None; board.unsolicited.len()];
+            self.slate(&board.unsolicited, &mut cold_memo, |l| {
                 // Approach "up": only a club below the parent
                 // borrows the player for minutes.
-                && l.parent_rep > borrower_world_rep
-                && l.age <= MAX_LOAN_TARGET_AGE
-                && l.asking_price * 0.8 <= max_loan_fee
-                && !plan.is_loan_approach_barred(l.player_id, date)
-                && !country
-                    .transfer_market
-                    .has_active_negotiation_for(l.player_id, club.id)
-                && !actions.iter().any(|a| a.player_id == l.player_id)
-                })
-                .collect();
+                l.parent_rep > borrower_world_rep && l.age <= MAX_LOAN_TARGET_AGE
+            })
+        } else {
+            Vec::new()
+        };
 
-            let weighted: Vec<(u32, f32)> = cold
-                .iter()
-                .enumerate()
-                .filter_map(|(i, l)| {
-                    // Priced once per pair: the score IS the filter, and
-                    // running the agreement twice emitted the trace line
-                    // twice for every candidate a club looked at.
-                    let agreement = self.agreement_for(l)?;
-                    taste
-                        .interest_in(&profile_of(l, l.asking_price * 0.8))
-                        .map(|score| (i as u32, score * agreement))
-                })
-                .collect();
+        BorrowerTurn {
+            club_id: self.club.id,
+            max_scans: self.max_scans,
+            mid_season_window: self.mid_season_window,
+            scan_unsolicited: self.scan_unsolicited,
+            requests,
+            opportunistic,
+            january,
+            cold,
+        }
+    }
 
+    /// Against the club's own open requests first — a loan that answers a brief
+    /// the club has already written. Emergency free-agent depth requests are
+    /// excluded: those are the free-agent matcher's, never a loan's.
+    fn request_slates<'b>(
+        &self,
+        listings: &'b [LoanListing],
+        memo: &mut [Option<Option<f32>>],
+    ) -> Vec<RequestSlate<'b>> {
+        self.club
+            .transfer_plan
+            .transfer_requests
+            .iter()
+            .filter(|r| {
+                r.status != TransferRequestStatus::Fulfilled
+                    && r.status != TransferRequestStatus::Abandoned
+                    && !r.is_emergency_free_agent_depth()
+            })
+            // Skip if position is full AND loan wouldn't be an upgrade.
+            // Request-driven cover uses the strict bar — a club with a
+            // full line asked for depth elsewhere, not a keeper prospect.
+            .filter(|r| !self.should_skip_loan(r.position.position_group(), r.min_ability, false))
+            .map(|request| {
+                let pos_group = request.position.position_group();
+                // Relaxed thresholds: min_ability - 5, age_max + 3
+                let relaxed_min = request.min_ability.saturating_sub(5);
+                let relaxed_age_max = request
+                    .preferred_age_max
+                    .saturating_add(3)
+                    .min(MAX_LOAN_TARGET_AGE);
+                RequestSlate {
+                    group: pos_group,
+                    reason: request.reason.as_signing_reason_key(),
+                    candidates: self.slate(listings, memo, |l| {
+                        l.position_group == pos_group
+                            && l.ability >= relaxed_min
+                            && l.age <= relaxed_age_max
+                            && l.age >= request.preferred_age_min
+                    }),
+                }
+            })
+            .collect()
+    }
+
+    /// Every listing that clears this club's standing gates and the sweep's
+    /// own, priced. Which of them the club goes for is a matter of preference,
+    /// so the claim draws in proportion to interest rather than taking the
+    /// top row of an ability sort — the argmax made this a fixed pairing that
+    /// repeated until the listing disappeared.
+    fn slate<'b>(
+        &self,
+        listings: &'b [LoanListing],
+        memo: &mut [Option<Option<f32>>],
+        sweep: impl Fn(&LoanListing) -> bool,
+    ) -> ScoredSlate<'b> {
+        let club = self.club;
+        let plan = &club.transfer_plan;
+        listings
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.club_id != club.id
+                && !club.is_rival(l.club_id) // no loans from rivals
+                && l.asking_price * 0.8 <= self.max_loan_fee
+                && sweep(l)
+                && !plan.is_loan_approach_barred(l.player_id, self.date)
+                && !self.active_pairs.contains(&(l.player_id, club.id))
+            })
+            .filter_map(|(i, l)| {
+                let score = *memo[i].get_or_insert_with(|| self.scored(l));
+                score.map(|s| (l, s))
+            })
+            .collect()
+    }
+
+    /// The agreement times the club's own interest in him. Priced once per
+    /// pair: the score IS the filter, and running the agreement twice emitted
+    /// the trace line twice for every candidate a club looked at.
+    fn scored(&self, l: &LoanListing) -> Option<f32> {
+        let agreement = self.agreement_for(l)?;
+        self.taste
+            .interest_in(&self.profile_of(l, l.asking_price * 0.8))
+            .map(|score| score * agreement)
+    }
+}
+
+/// One borrowing club's four sweeps, scored before any club has claimed
+/// anybody.
+struct BorrowerTurn<'a> {
+    club_id: u32,
+    max_scans: usize,
+    mid_season_window: bool,
+    scan_unsolicited: bool,
+    requests: Vec<RequestSlate<'a>>,
+    opportunistic: ScoredSlate<'a>,
+    january: ScoredSlate<'a>,
+    cold: ScoredSlate<'a>,
+}
+
+impl BorrowerTurn<'_> {
+    /// The four sweeps, in the order the old body ran them. Each stops at the
+    /// same per-club cap, and each sees what the ones before it — this club's
+    /// and every club earlier in the visit order — claimed.
+    fn claim(&self, claimed: &mut FxHashSet<u32>, actions: &mut Vec<LoanScanAction>) {
+        let mut scans_this_club = 0usize;
+        // Track position groups already targeted in this scan pass
+        // to avoid starting multiple negotiations for the same position
+        let mut scanned_position_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
+
+        for request in &self.requests {
+            if scans_this_club >= self.max_scans {
+                break;
+            }
+            // Only scan once per position group — multiple requests for the same
+            // group (e.g. FormationGap + DepthCover for GK) should not each trigger
+            // a separate loan negotiation
+            if scanned_position_groups.contains(&request.group) {
+                continue;
+            }
+            let open = Self::unclaimed(&request.candidates, claimed);
+            if let Some(best) = InterestDraw::pick(&Self::weights(&open)).map(|i| open[i as usize].0)
+            {
+                self.stage(best, TransferReason::key(request.reason), false, claimed, actions);
+                scanned_position_groups.push(request.group);
+                scans_this_club += 1;
+            }
+        }
+
+        if scans_this_club < self.max_scans {
+            let open = Self::unclaimed(&self.opportunistic, claimed);
+            let weighted = Self::weights(&open);
+            // Draw a surplus and walk it: the slate is filtered once, so
+            // without a running group check one pass could open three
+            // negotiations for the same position — which the scan's own
+            // `scanned_position_groups` bookkeeping exists to prevent and
+            // the old sort-and-take quietly allowed. Over-drawing keeps the
+            // club's full scan budget usable despite the extra constraint.
+            let wanted = self.max_scans - scans_this_club;
+            for idx in InterestDraw::pick_several(&weighted, (wanted * 4).min(weighted.len())) {
+                if scans_this_club >= self.max_scans {
+                    break;
+                }
+                let opp = open[idx as usize].0;
+                if scanned_position_groups.contains(&opp.position_group) {
+                    continue;
+                }
+                self.stage(
+                    opp,
+                    TransferReason::key("signing_reason_loan_opportunistic_upgrade"),
+                    false,
+                    claimed,
+                    actions,
+                );
+                scanned_position_groups.push(opp.position_group);
+                scans_this_club += 1;
+            }
+        }
+
+        if self.mid_season_window && scans_this_club < self.max_scans {
+            let open = Self::unclaimed(&self.january, claimed);
+            if let Some(opp) = InterestDraw::pick(&Self::weights(&open)).map(|i| open[i as usize].0)
+            {
+                self.stage(
+                    opp,
+                    TransferReason::key("signing_reason_loan_midseason_reinforcement"),
+                    false,
+                    claimed,
+                    actions,
+                );
+            }
+        }
+
+        if self.scan_unsolicited && scans_this_club < self.max_scans {
+            let open = Self::unclaimed(&self.cold, claimed);
+            let weighted = Self::weights(&open);
             // Terminal branch for this club: the draw is already capped at
             // the per-club scan budget, and nothing after this reads the
             // counter or the scanned-groups set, so the only bookkeeping
             // left is the within-draw group guard.
             let mut cold_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
-            let wanted = max_scans - scans_this_club;
+            let wanted = self.max_scans - scans_this_club;
             for idx in InterestDraw::pick_several(&weighted, (wanted * 4).min(weighted.len())) {
                 if cold_groups.len() >= wanted {
                     break;
                 }
-                let tgt = cold[idx as usize];
+                let tgt = open[idx as usize].0;
                 if cold_groups.contains(&tgt.position_group) {
                     continue;
                 }
                 cold_groups.push(tgt.position_group);
-                actions.push(LoanScanAction {
-                    club_id: club.id,
-                    player_id: tgt.player_id,
-                    selling_club_id: tgt.club_id,
-                    offer_amount: FormattingUtils::round_fee(tgt.asking_price * 0.8),
-                    reason: TransferReason::key("signing_reason_loan_development_approach"),
-                    is_unsolicited: true,
-                    seller_asking: tgt.asking_price,
-                    is_development: tgt.is_development,
-                });
+                self.stage(
+                    tgt,
+                    TransferReason::key("signing_reason_loan_development_approach"),
+                    true,
+                    claimed,
+                    actions,
+                );
             }
         }
+    }
 
-        state.scans_this_club = scans_this_club;
-        state.scanned_position_groups = scanned_position_groups;
+    /// The slate as it stands when the sweep opens — a sweep does not re-read
+    /// the claims its own draws make.
+    fn unclaimed<'s>(
+        slate: &'s [(&'s LoanListing, f32)],
+        claimed: &FxHashSet<u32>,
+    ) -> Vec<&'s (&'s LoanListing, f32)> {
+        slate
+            .iter()
+            .filter(|(l, _)| !claimed.contains(&l.player_id))
+            .collect()
+    }
+
+    fn weights(open: &[&(&LoanListing, f32)]) -> Vec<(u32, f32)> {
+        open.iter()
+            .enumerate()
+            .map(|(i, (_, score))| (i as u32, *score))
+            .collect()
+    }
+
+    fn stage(
+        &self,
+        l: &LoanListing,
+        reason: TransferReason,
+        is_unsolicited: bool,
+        claimed: &mut FxHashSet<u32>,
+        actions: &mut Vec<LoanScanAction>,
+    ) {
+        claimed.insert(l.player_id);
+        actions.push(LoanScanAction {
+            club_id: self.club_id,
+            player_id: l.player_id,
+            selling_club_id: l.club_id,
+            offer_amount: FormattingUtils::round_fee(l.asking_price * 0.8),
+            reason,
+            is_unsolicited,
+            seller_asking: l.asking_price,
+            is_development: l.is_development,
+        });
     }
 }
 
@@ -1358,21 +1275,33 @@ impl LoanMarketScan {
             return;
         }
 
-        let mut actions: Vec<LoanScanAction> = Vec::new();
-        let pending_loans = LoanPipeline::pending_incoming_loans_by_club(country);
-        let pending_foreign = LoanPipeline::pending_foreign_registrations_by_club(country);
+        let load = LoanScanLoad {
+            pending_loans: LoanPipeline::pending_incoming_loans_by_club(country),
+            pending_foreign: LoanPipeline::pending_foreign_registrations_by_club(country),
+            active_counts: country.transfer_market.active_negotiation_counts(),
+            active_pairs: country.transfer_market.active_negotiation_pairs(),
+        };
 
-        // Rotate who looks first. The per-pass dedup below is "has anybody
-        // claimed him yet", so registration order was first refusal on the
-        // whole market — the lowest-id club took the pick of every listing,
-        // every tick, forever.
-        for club_idx in InterestDraw::visit_order(country.clubs.len()) {
-            if let Some(scan) =
-                BorrowerScan::open(country, club_idx, tick, &pending_loans, &pending_foreign)
-            {
-                scan.run(&board, &mut actions);
+        let country_ref: &Country = country;
+        let turns: Vec<Option<BorrowerTurn<'_>>> = (0..country_ref.clubs.len())
+            .into_par_iter()
+            .map(|club_idx| {
+                BorrowerScan::open(country_ref, club_idx, tick, &load).map(|scan| scan.score(&board))
+            })
+            .collect();
+
+        // Rotate who looks first. The per-pass dedup is "has anybody claimed
+        // him yet", so registration order was first refusal on the whole
+        // market — the lowest-id club took the pick of every listing, every
+        // tick, forever.
+        let mut actions: Vec<LoanScanAction> = Vec::new();
+        let mut claimed: FxHashSet<u32> = FxHashSet::default();
+        for club_idx in InterestDraw::visit_order(turns.len()) {
+            if let Some(turn) = &turns[club_idx] {
+                turn.claim(&mut claimed, &mut actions);
             }
         }
+        drop(turns);
 
         LoanScanCommit::apply(country, actions, date);
     }

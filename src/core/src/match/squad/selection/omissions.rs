@@ -87,6 +87,11 @@ impl<'a> OmissionBuilder<'a> {
             .collect();
 
         for &player in self.available.iter() {
+            // A U18 regular is not a dropped senior regular. His owning
+            // team's selector accounts for his role and omissions.
+            if !self.engine.owns_player(player) && !player.is_force_match_selection {
+                continue;
+            }
             if starter_ids.contains(&player.id) {
                 continue;
             }

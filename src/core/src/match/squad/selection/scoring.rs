@@ -264,6 +264,10 @@ impl SlotScoreBreakdown {
 }
 
 pub(crate) struct ScoringEngine {
+    /// Squad roles belong to the roster which assigned them. A borrowed
+    /// player brings only the club-wide verdicts
+    /// ([`PlayerSquadStatus::carries_across_squads`]) into this team.
+    pub(crate) owning_roster: Option<std::collections::HashSet<u32>>,
     pub(crate) profile: CoachProfile,
     /// Club philosophy tilts selection — DevelopAndSell pushes youth further
     /// up the XI, LoanFocused prefers loan signings when merit is close.
@@ -278,6 +282,7 @@ pub(crate) struct ScoringEngine {
 impl ScoringEngine {
     pub fn from_staff(staff: &Staff) -> Self {
         ScoringEngine {
+            owning_roster: None,
             profile: CoachProfile::from_staff(staff),
             philosophy: None,
             honor_force_selection: true,
@@ -290,10 +295,32 @@ impl ScoringEngine {
         is_main_team: bool,
     ) -> Self {
         ScoringEngine {
+            owning_roster: None,
             profile: CoachProfile::from_staff(staff),
             philosophy,
             honor_force_selection: is_main_team,
         }
+    }
+
+    pub(crate) fn owns_player(&self, player: &Player) -> bool {
+        self.owning_roster
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&player.id))
+    }
+
+    pub(crate) fn squad_status<'p>(&self, player: &'p Player) -> Option<&'p PlayerSquadStatus> {
+        player
+            .contract
+            .as_ref()
+            .map(|c| &c.squad_status)
+            .filter(|status| self.owns_player(player) || status.carries_across_squads())
+    }
+
+    pub(crate) fn is_established(&self, player: &Player) -> bool {
+        matches!(
+            self.squad_status(player),
+            Some(PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular)
+        )
     }
 
     /// Philosophy-specific selection tilt. Small magnitudes so philosophy
@@ -774,10 +801,10 @@ impl ScoringEngine {
     /// preferential nod in rotation calls. Conservative coaches lean into
     /// the plan; risk-takers override it on form.
     pub fn squad_status_bonus(&self, player: &Player) -> f32 {
-        let Some(contract) = player.contract.as_ref() else {
+        let Some(status) = self.squad_status(player) else {
             return 0.0;
         };
-        let raw = match contract.squad_status {
+        let raw = match status {
             PlayerSquadStatus::KeyPlayer => 1.8,
             PlayerSquadStatus::FirstTeamRegular => 1.0,
             PlayerSquadStatus::FirstTeamSquadRotation => 0.3,
@@ -852,12 +879,11 @@ impl ScoringEngine {
 
         // Shop window / value protection — only while he's still a useful squad
         // member the club would field, not one it has already frozen out.
-        let still_useful = player
-            .contract
-            .as_ref()
-            .map(|c| {
+        let still_useful = self
+            .squad_status(player)
+            .map(|status| {
                 !matches!(
-                    c.squad_status,
+                    status,
                     PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
                 )
             })
@@ -1027,8 +1053,8 @@ impl ScoringEngine {
         // manager rotates away from the established XI toward the fringe.
         // Negative bases (KeyPlayer/FirstTeamRegular) are star-rest penalties
         // and scale with opponent strength too — both push rotation harder.
-        if let Some(contract) = player.contract.as_ref() {
-            rotation_tilt += stage.status_base(&contract.squad_status);
+        if let Some(status) = self.squad_status(player) {
+            rotation_tilt += stage.status_base(status);
         }
 
         // Youth get extra rope to play their way in during early rounds.
@@ -1061,7 +1087,7 @@ impl ScoringEngine {
         // early-round XI. This is a rotation push (the manager rests a tired
         // star, regardless of opponent strength it should still apply), so
         // it goes into the rotation bucket.
-        if CupRotation::is_established(player)
+        if self.is_established(player)
             && (player.load.physical_load_7 >= CupRotation::OVERLOAD_PHYSICAL_LOAD
                 || player.load.minutes_last_7 >= CupRotation::OVERLOAD_MINUTES)
         {
@@ -1138,10 +1164,9 @@ impl ScoringEngine {
 
         // Role multiplier: rotation/backup/prospect get the strongest pull,
         // KeyPlayer/FirstTeamRegular barely move.
-        let role_mult = player
-            .contract
-            .as_ref()
-            .map(|c| match c.squad_status {
+        let role_mult = self
+            .squad_status(player)
+            .map(|status| match status {
                 PlayerSquadStatus::FirstTeamSquadRotation
                 | PlayerSquadStatus::MainBackupPlayer
                 | PlayerSquadStatus::HotProspectForTheFuture => 1.25,
@@ -1166,7 +1191,7 @@ impl ScoringEngine {
         cup: &DomesticCupContext,
     ) -> f32 {
         let stage = cup.stage();
-        if CupRotation::is_established(player) {
+        if self.is_established(player) {
             // Established #1 only steps aside against a comparable/weaker
             // opponent, and only in the early rounds.
             if stage == CupStage::Early
@@ -1186,6 +1211,7 @@ impl ScoringEngine {
             // [`CupRotation::GK_CUP_DEPUTY_DESIGNATION`].
             let designated = stage == CupStage::Early
                 && cup.opponent_ratio < CupRotation::GK_FIRST_CHOICE_OPPONENT_RATIO_CAP
+                && self.owns_player(player)
                 && CupRotation::is_senior_deputy(player);
             if designated {
                 CupRotation::GK_CUP_DEPUTY_DESIGNATION
@@ -1409,9 +1435,9 @@ impl ScoringEngine {
     ) -> f32 {
         // A player the club has frozen out is not on a development pathway,
         // regardless of age or potential.
-        if let Some(c) = player.contract.as_ref() {
+        if let Some(status) = self.squad_status(player) {
             if matches!(
-                c.squad_status,
+                status,
                 PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
             ) {
                 return 0.0;
@@ -1554,12 +1580,13 @@ impl ScoringEngine {
         // Accumulate visible planning evidence.
         let mut signals = 0.0;
         if let Some(c) = player.contract.as_ref() {
-            signals += match c.squad_status {
-                PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular => 0.0,
-                PlayerSquadStatus::FirstTeamSquadRotation => 0.3,
-                PlayerSquadStatus::MainBackupPlayer => 0.5,
-                PlayerSquadStatus::NotNeeded => 0.8,
-                _ => 0.2,
+            signals += match self.squad_status(player) {
+                Some(PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular) => 0.0,
+                Some(PlayerSquadStatus::FirstTeamSquadRotation) => 0.3,
+                Some(PlayerSquadStatus::MainBackupPlayer) => 0.5,
+                Some(PlayerSquadStatus::NotNeeded) => 0.8,
+                Some(_) => 0.2,
+                None => 0.0,
             };
             let days_left = (c.expiration - date).num_days();
             if days_left < 220 {

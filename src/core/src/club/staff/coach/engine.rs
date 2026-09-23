@@ -74,6 +74,7 @@ pub struct CoachLiveMatchContext {
 /// an engine without pulling the whole staff record across the match
 /// boundary. Squad selection uses [`Self::from_staff`] for convenience.
 pub struct CoachDecisionEngine<'a> {
+    owning_roster: Option<&'a std::collections::HashSet<u32>>,
     pub memory: &'a CoachMemoryStore,
     pub strategy: CoachStrategy,
     pub profile: &'a CoachProfile,
@@ -87,6 +88,7 @@ impl<'a> CoachDecisionEngine<'a> {
         strategy: CoachStrategy,
     ) -> Self {
         CoachDecisionEngine {
+            owning_roster: None,
             memory,
             profile,
             strategy,
@@ -99,6 +101,11 @@ impl<'a> CoachDecisionEngine<'a> {
         intents: &'a std::collections::HashMap<u32, super::PlayerMatchIntent>,
     ) -> Self {
         self.player_intents = Some(intents);
+        self
+    }
+
+    pub fn with_owning_roster(mut self, roster: &'a std::collections::HashSet<u32>) -> Self {
+        self.owning_roster = Some(roster);
         self
     }
 
@@ -146,7 +153,13 @@ impl<'a> CoachDecisionEngine<'a> {
             reasons.push(CoachDecisionReason::RoleMismatch);
         }
 
-        let development_priority = AssessmentMath::development_priority(player, ctx, self.profile);
+        let development_priority = AssessmentMath::development_priority(
+            player,
+            ctx,
+            self.profile,
+            self.owning_roster
+                .is_none_or(|ids| ids.contains(&player.id)),
+        );
         if development_priority >= 0.6 {
             reasons.push(CoachDecisionReason::DevelopmentPathway);
         }
@@ -605,6 +618,7 @@ impl AssessmentMath {
         player: &Player,
         ctx: &CoachSelectionContext<'_>,
         profile: &CoachProfile,
+        owns_player: bool,
     ) -> f32 {
         let age = DateUtils::age(player.birth_date, ctx.date);
         let age_bucket = if age <= 19 {
@@ -621,11 +635,15 @@ impl AssessmentMath {
             .as_ref()
             .map(|c| c.squad_status.clone())
             .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-        let status_bump = match status {
-            PlayerSquadStatus::HotProspectForTheFuture => 0.25,
-            PlayerSquadStatus::DecentYoungster => 0.10,
-            PlayerSquadStatus::FirstTeamSquadRotation => 0.05,
-            _ => 0.0,
+        let status_bump = if !owns_player {
+            0.0
+        } else {
+            match status {
+                PlayerSquadStatus::HotProspectForTheFuture => 0.25,
+                PlayerSquadStatus::DecentYoungster => 0.10,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0.05,
+                _ => 0.0,
+            }
         };
         (age_bucket + status_bump) * profile.development_patience()
     }
