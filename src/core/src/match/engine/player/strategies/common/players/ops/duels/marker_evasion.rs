@@ -58,6 +58,22 @@ pub struct MarkerRead {
     pub edge: f32,
 }
 
+impl MarkerRead {
+    /// Bit-for-bit equality, for the memo oracle in [`MarkerEvasion::read`].
+    fn same(a: Option<MarkerRead>, b: Option<MarkerRead>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.marker.id == b.marker.id
+                    && a.to_marker == b.to_marker
+                    && a.tightness.to_bits() == b.tightness.to_bits()
+                    && a.edge.to_bits() == b.edge.to_bits()
+            }
+            _ => false,
+        }
+    }
+}
+
 pub struct MarkerEvasion;
 
 impl MarkerEvasion {
@@ -246,6 +262,35 @@ impl MarkerEvasion {
     /// to be touch-tight. An opponent standing in front of me on his way
     /// somewhere else is not marking me.
     pub fn read(ctx: &StateProcessingContext) -> Option<MarkerRead> {
+        let tick = ctx.current_tick();
+        let condition = ctx.player.player_attributes.condition;
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .marker_read
+            .filter(|(cached_condition, _)| *cached_condition == condition)
+            .map(|(_, read)| read);
+        if let Some(read) = cached {
+            debug_assert!(
+                MarkerRead::same(read, Self::read_uncached(ctx)),
+                "marker-read memo mismatch: player={} tick={}",
+                ctx.player.id,
+                tick
+            );
+            return read;
+        }
+        let read = Self::read_uncached(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .marker_read = Some((condition, read));
+        read
+    }
+
+    fn read_uncached(ctx: &StateProcessingContext) -> Option<MarkerRead> {
         let me = ctx.player.position;
         let goal = ctx.player().opponent_goal_position();
         let to_goal = (goal - me).try_normalize(0.01)?;
@@ -344,12 +389,9 @@ impl MarkerEvasion {
             .opponents()
             .nearby(Self::MARK_RADIUS * 2.0)
             .filter(|o| o.id != read.marker.id && !o.tactical_positions.is_goalkeeper())
-            .min_by(|a, b| {
-                let da = (a.position - me).magnitude();
-                let db = (b.position - me).magnitude();
-                da.total_cmp(&db)
-            })
-            .and_then(|second| {
+            .map(|o| (o, (o.position - me).magnitude()))
+            .min_by(|(_, da), (_, db)| da.total_cmp(db))
+            .and_then(|(second, _)| {
                 let mid = (read.marker.position + second.position) * 0.5;
                 (mid - me).try_normalize(0.01)
             })

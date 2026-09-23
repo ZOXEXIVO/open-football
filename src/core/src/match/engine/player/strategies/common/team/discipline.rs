@@ -242,37 +242,7 @@ impl ShapeDiscipline {
     /// an ordinarily-led side gets the same recall he always did, and the
     /// band is narrow (±15%) because this is organisation, not a
     /// different sport.
-    ///
-    /// Memoized per `(player, tick)` — `apply_with_pull` is on the
-    /// positional hot path (every player, every tick, and both
-    /// `velocity()` and `process()` reach it), and `decision_quality`
-    /// builds a full `SkillBands` set. Every input is tick-frozen.
     fn organisation(ctx: &StateProcessingContext) -> f32 {
-        let tick = ctx.current_tick();
-        let cached = ctx
-            .tick_context
-            .player_agg_cache
-            .borrow_mut()
-            .slot_mut(ctx.player.id, tick)
-            .shape_organisation;
-        if let Some(v) = cached {
-            debug_assert_eq!(
-                v.to_bits(),
-                Self::organisation_uncached(ctx).to_bits(),
-                "shape-organisation memo mismatch"
-            );
-            return v;
-        }
-        let v = Self::organisation_uncached(ctx);
-        ctx.tick_context
-            .player_agg_cache
-            .borrow_mut()
-            .slot_mut(ctx.player.id, tick)
-            .shape_organisation = Some(v);
-        v
-    }
-
-    fn organisation_uncached(ctx: &StateProcessingContext) -> f32 {
         /// Population mean of the `own`/`organiser` blend below. Both
         /// composites sit near it for a mid-table squad, so a mid-table
         /// squad multiplies its recall by ~1.0.

@@ -1139,7 +1139,7 @@ impl PassEvaluator {
         let delivery = sc::passing_execution(passer, minute);
         let shift = MatchStandard::shift(ctx.context);
 
-        let store = ctx.tick_context.positions.players.as_slice();
+        let store = &ctx.tick_context.positions.players;
         // The last stride and a half is the receiver's — pressure on his
         // first touch is `receiver_positioning`'s term, not this one's.
         let contested = pass_distance - CONTROL_DISTANCE;
@@ -1150,7 +1150,7 @@ impl PassEvaluator {
             if along <= 0.0 || along >= contested {
                 continue;
             }
-            let Some(man) = store.iter().find(|m| m.player_id == opponent.id) else {
+            let Some(man) = store.get(opponent.id) else {
                 continue;
             };
             let arrives = along / pace;

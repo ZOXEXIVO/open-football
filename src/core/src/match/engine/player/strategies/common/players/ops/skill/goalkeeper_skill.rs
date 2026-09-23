@@ -164,13 +164,45 @@ impl GoalkeeperSkillProfile {
     /// ever move.
     pub const POPULATION_READ: f32 = 0.479;
 
+    /// Memoized per (player, tick, vitals) in front of [`Self::from_memo`],
+    /// the same two layers `DefenderSkillProfile::from_ctx` keeps.
+    pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
+        let tick = ctx.current_tick();
+        let vitals = (ctx.player.player_attributes.condition as u16 as u32)
+            | (ctx.player.player_attributes.jadedness as u16 as u32) << 16;
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .goalkeeper_profile
+            .filter(|(cached_vitals, _)| *cached_vitals == vitals)
+            .map(|(_, profile)| profile);
+        if let Some(profile) = cached {
+            debug_assert!(
+                profile == Self::from_memo(ctx),
+                "goalkeeper-profile tick memo mismatch: player={} tick={}",
+                ctx.player.id,
+                tick
+            );
+            return profile;
+        }
+        let profile = Self::from_memo(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .goalkeeper_profile = Some((vitals, profile));
+        profile
+    }
+
     /// Cross-tick memoized per (condition, jadedness, minute) — see
     /// `DefenderSkillProfile::from_player_memo` for the pattern. The GK
     /// profile's only in-match-varying inputs are those three integers
     /// (everything else it reads is static skills / crowd arousal), so
     /// the cached copy is bit-identical between key changes; the debug
     /// oracle recomputes on every hit.
-    pub fn from_ctx(ctx: &StateProcessingContext) -> Self {
+    fn from_memo(ctx: &StateProcessingContext) -> Self {
         let player = ctx.player;
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let condition_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);

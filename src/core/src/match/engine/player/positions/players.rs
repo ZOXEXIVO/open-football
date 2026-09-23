@@ -119,7 +119,11 @@ impl PlayerFieldData {
     fn lookup_index(&self, player_id: u32) -> Option<usize> {
         let mask = (SLOT_TABLE_SIZE - 1) as u32;
         let mut idx = Self::hash_slot(player_id);
-        for _ in 0..8 {
+        // Walk to the first empty slot, as `insert_slot` did: the hash only
+        // reads an id's low bits, and a lookup that gave up after eight
+        // probes lost whoever the insert had displaced further — one man
+        // in roughly one 36-player store in six.
+        for _ in 0..SLOT_TABLE_SIZE {
             let entry = unsafe { self.id_slots.get_unchecked(idx as usize) };
             if entry.1 == SLOT_EMPTY {
                 return None;
@@ -181,6 +185,14 @@ impl PlayerFieldData {
             }
         }
         self.position(player_id)
+    }
+
+    /// Everything the store holds for this player, by the same O(1)
+    /// probe as [`Self::position`].
+    #[inline]
+    pub fn get(&self, player_id: u32) -> Option<&PlayerFieldMetadata> {
+        self.lookup_index(player_id)
+            .map(|idx| unsafe { self.items.get_unchecked(idx) })
     }
 
     #[inline]

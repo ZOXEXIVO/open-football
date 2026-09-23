@@ -58,6 +58,11 @@ pub struct SpatialGrid {
     /// Bit i set ⇔ `all_players[i]` is visible to proximity queries.
     /// Clear only for players dropped by the MAX_PER_CELL overflow rule.
     query_mask: u32,
+    /// Bit i set ⇔ `all_players[i]` plays for `teams[k]`, so a query
+    /// picks its side with one mask rather than branching on every
+    /// entry's team.
+    team_bits: [u32; 2],
+    teams: [u32; 2],
     num_players: usize,
     id_slots: [(u32, u8); SLOT_TABLE_SIZE],
     /// Last tick's (id, cell key) per FIELD index, plus the sorted
@@ -83,6 +88,8 @@ impl SpatialGrid {
             }; MAX_GRID_PLAYERS],
             key_start: [0; NUM_CELLS + 1],
             query_mask: 0,
+            team_bits: [0; 2],
+            teams: [0; 2],
             num_players: 0,
             id_slots: [(0, SLOT_EMPTY); SLOT_TABLE_SIZE],
             prev_ids: [0; MAX_GRID_PLAYERS],
@@ -101,7 +108,11 @@ impl SpatialGrid {
     fn lookup_index(&self, player_id: u32) -> Option<usize> {
         let mask = (SLOT_TABLE_SIZE - 1) as u32;
         let mut idx = Self::hash_of(player_id);
-        for _ in 0..8 {
+        // Walk to the first empty slot, as `insert_slot` did: the hash only
+        // reads an id's low bits, and a lookup that gave up after eight
+        // probes lost whoever the insert had displaced further — one man
+        // in roughly one 36-player store in six.
+        for _ in 0..SLOT_TABLE_SIZE {
             let entry = unsafe { self.id_slots.get_unchecked(idx as usize) };
             if entry.1 == SLOT_EMPTY {
                 return None;
@@ -208,6 +219,7 @@ impl SpatialGrid {
         // fixed-size buckets — they stay id-addressable). Count per-key
         // occupancy for the prefix table as we go.
         self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+        self.team_bits = [0; 2];
         let mut counts = [0u8; NUM_CELLS];
         let mut visible = 0u32;
         let mut run_key = u16::MAX;
@@ -220,6 +232,20 @@ impl SpatialGrid {
                 position: p.position,
                 tactical_position: p.tactical_position.current_position,
             };
+            // The first team seen is `teams[0]`, the first other one
+            // `teams[1]`; a third (never in a real match) joins neither
+            // mask, so no query can mistake it for either side.
+            let side = if slot == 0 || p.team_id == self.teams[0] {
+                Some(0)
+            } else if self.team_bits[1] == 0 || p.team_id == self.teams[1] {
+                Some(1)
+            } else {
+                None
+            };
+            if let Some(k) = side {
+                self.teams[k] = p.team_id;
+                self.team_bits[k] |= 1 << slot;
+            }
             counts[key as usize] += 1;
             if key == run_key {
                 run_len += 1;
@@ -306,8 +332,7 @@ impl SpatialGrid {
             r_max,
             c_min,
             c_max,
-            same_team: false,
-            team_id,
+            candidates: self.side_mask(team_id, false),
             player_id,
             position,
             radius_sq: max_distance * max_distance,
@@ -333,8 +358,7 @@ impl SpatialGrid {
             r_max,
             c_min,
             c_max,
-            same_team: true,
-            team_id,
+            candidates: self.side_mask(team_id, true),
             player_id,
             position,
             radius_sq: max_distance * max_distance,
@@ -351,6 +375,21 @@ impl SpatialGrid {
         }
     }
 
+    /// Query-visible entries on `team_id`'s side (`same_team`) or on the
+    /// other — the set a per-entry `(team == team_id) == same_team` test
+    /// keeps.
+    #[inline]
+    fn side_mask(&self, team_id: u32, same_team: bool) -> u32 {
+        let mine = if team_id == self.teams[0] && self.team_bits[0] != 0 {
+            self.team_bits[0]
+        } else if team_id == self.teams[1] && self.team_bits[1] != 0 {
+            self.team_bits[1]
+        } else {
+            0
+        };
+        (if same_team { mine } else { !mine }) & self.query_mask
+    }
+
     /// Smallest squared distance from `player_id` to any query-visible
     /// same/other-team entry — the whole-board reduction behind the
     /// `exists(radius)` fast path: `∃ entry with dist_sq ≤ r²` ⇔
@@ -365,16 +404,11 @@ impl SpatialGrid {
         let center = self.all_players[i].position;
         let team_id = self.all_players[i].team_id;
         let mut best = f32::INFINITY;
-        for (slot, gp) in self.all_players[..self.num_players].iter().enumerate() {
-            if self.query_mask & (1 << slot) == 0 {
-                continue;
-            }
-            if gp.id == player_id {
-                continue;
-            }
-            if (gp.team_id == team_id) != same_team {
-                continue;
-            }
+        let mut candidates = self.side_mask(team_id, same_team) & !(1 << i);
+        while candidates != 0 {
+            let slot = candidates.trailing_zeros() as usize;
+            candidates &= candidates - 1;
+            let gp = &self.all_players[slot];
             let dx = gp.position.x - center.x;
             let dy = gp.position.y - center.y;
             let dist_sq = dx * dx + dy * dy;
@@ -412,8 +446,7 @@ impl SpatialGrid {
                     r_max,
                     c_min,
                     c_max,
-                    same_team,
-                    team_id: gp.team_id,
+                    candidates: self.side_mask(gp.team_id, same_team),
                     player_id,
                     position: gp.position,
                     radius_sq: max_distance * max_distance,
@@ -429,8 +462,7 @@ impl SpatialGrid {
                 r_max: 0,
                 c_min: 0,
                 c_max: 0,
-                same_team,
-                team_id: 0,
+                candidates: 0,
                 player_id,
                 position: Vector3::zeros(),
                 radius_sq: 0.0,
@@ -457,8 +489,8 @@ pub struct NearbyIter<'g> {
     r_max: usize,
     c_min: usize,
     c_max: usize,
-    same_team: bool,
-    team_id: u32,
+    /// The entries on the queried side — see `SpatialGrid::side_mask`.
+    candidates: u32,
     player_id: u32,
     position: Vector3<f32>,
     radius_sq: f32,
@@ -475,14 +507,11 @@ impl<'g> Iterator for NearbyIter<'g> {
                 let i = self.idx;
                 self.idx += 1;
 
-                if self.grid.query_mask & (1 << i) == 0 {
+                if self.candidates & (1 << i) == 0 {
                     continue;
                 }
                 let gp = &self.grid.all_players[i];
                 if gp.id == self.player_id {
-                    continue;
-                }
-                if (gp.team_id == self.team_id) != self.same_team {
                     continue;
                 }
 

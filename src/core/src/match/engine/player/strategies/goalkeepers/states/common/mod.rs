@@ -412,6 +412,37 @@ impl KeeperRestPosition {
     /// could hand him a target the sweep model would immediately send him
     /// back from.
     pub fn for_keeper(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let tick = ctx.current_tick();
+        let vitals = (ctx.player.player_attributes.condition as u16 as u32)
+            | (ctx.player.player_attributes.jadedness as u16 as u32) << 16;
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .keeper_rest
+            .filter(|(cached_vitals, _)| *cached_vitals == vitals)
+            .map(|(_, point)| point);
+        if let Some(point) = cached {
+            debug_assert_eq!(
+                point,
+                Self::for_keeper_uncached(ctx),
+                "keeper-rest memo mismatch: player={} tick={}",
+                ctx.player.id,
+                tick
+            );
+            return point;
+        }
+        let point = Self::for_keeper_uncached(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .keeper_rest = Some((vitals, point));
+        point
+    }
+
+    fn for_keeper_uncached(ctx: &StateProcessingContext) -> Vector3<f32> {
         // A dead ball at his goal has its own place to stand, and it is
         // not a function of the ball's distance. See [`KeeperSetPieceStance`].
         if let Some(mark) = KeeperSetPieceStance::point(ctx) {

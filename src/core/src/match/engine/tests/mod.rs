@@ -25,6 +25,7 @@ mod marker_read_tests;
 mod match_realism_tests;
 mod offside_restart_tests;
 mod pass_pressure_tests;
+mod position_store_tests;
 mod recording_globals;
 mod run_out_tests;
 mod solid_engine_tests;

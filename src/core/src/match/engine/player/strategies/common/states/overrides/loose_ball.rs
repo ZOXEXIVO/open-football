@@ -24,7 +24,13 @@ use nalgebra::Vector3;
 /// The path can END early — see [`Self::end_at`]: a pass in flight goes
 /// no further than the man it was played to.
 pub struct ChasePath {
-    samples: [(Vector3<f32>, f32); Self::SAMPLES + 1],
+    /// The roll after `sample_t[i]` ticks is at `(sample_x[i],
+    /// sample_y[i])`, index 0 being the ball now. Kept by axis so a
+    /// runner is tested against every sample in one pass — see
+    /// [`Self::roll_time`].
+    sample_x: [f32; Self::SAMPLES + 1],
+    sample_y: [f32; Self::SAMPLES + 1],
+    sample_t: [f32; Self::SAMPLES + 1],
     origin: Vector3<f32>,
     dir: Vector3<f32>,
     speed: f32,
@@ -36,6 +42,7 @@ pub struct ChasePath {
 }
 
 impl ChasePath {
+    /// A multiple of four — see the lanes in [`Self::roll_time`].
     const SAMPLES: usize = 12;
 
     pub fn project(ball: &BallFieldData, field_width: f32, field_height: f32) -> Self {
@@ -53,7 +60,9 @@ impl ChasePath {
             / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
             .clamp(0.0, 1.0);
         let mut path = ChasePath {
-            samples: [(origin, 0.0); Self::SAMPLES + 1],
+            sample_x: [origin.x; Self::SAMPLES + 1],
+            sample_y: [origin.y; Self::SAMPLES + 1],
+            sample_t: [0.0; Self::SAMPLES + 1],
             origin,
             dir,
             speed,
@@ -68,9 +77,16 @@ impl ChasePath {
             // every meeting happens, gets the resolution.
             let share = i as f32 / Self::SAMPLES as f32;
             let t = rest_ticks * share * share;
-            path.samples[i] = (path.roll_at(t), t);
+            let at = path.roll_at(t);
+            path.sample_x[i] = at.x;
+            path.sample_y[i] = at.y;
+            path.sample_t[i] = t;
         }
-        path.rest = path.samples[Self::SAMPLES].0;
+        path.rest = Vector3::new(
+            path.sample_x[Self::SAMPLES],
+            path.sample_y[Self::SAMPLES],
+            0.0,
+        );
         path
     }
 
@@ -110,9 +126,11 @@ impl ChasePath {
     pub fn end_at(&mut self, t: f32) -> Vector3<f32> {
         let t = t.min(self.rest_ticks);
         let stop = self.roll_at(t);
-        for sample in self.samples.iter_mut() {
-            if sample.1 > t {
-                *sample = (stop, t);
+        for i in 0..=Self::SAMPLES {
+            if self.sample_t[i] > t {
+                self.sample_x[i] = stop.x;
+                self.sample_y[i] = stop.y;
+                self.sample_t[i] = t;
             }
         }
         self.rest = stop;
@@ -140,28 +158,45 @@ impl ChasePath {
         // How far outside `reach` he still is at each sample, flat out.
         // Squared until the crossing: only the sample either side of it
         // needs the real shortfall, for the interpolation.
-        let (start, _) = self.samples[0];
-        if (start - position).norm_squared() <= reach * reach {
+        let gap_sq = |i: usize| {
+            let dx = self.sample_x[i] - position.x;
+            let dy = self.sample_y[i] - position.y;
+            dx * dx + dy * dy
+        };
+        if gap_sq(0) <= reach * reach {
             return 0.0;
         }
-        let mut prev = self.samples[0];
-        for &(point, t) in &self.samples[1..] {
-            let within = reach + speed * t;
-            let gap_sq = (point - position).norm_squared();
-            if gap_sq <= within * within {
-                let (prev_point, prev_t) = prev;
-                // Clamped to their signs: the squared test and the real
-                // one can disagree by a rounding at the boundary.
-                let prev_short = ((prev_point - position).norm() - reach - speed * prev_t).max(0.0);
-                let short = (gap_sq.sqrt() - within).min(0.0);
-                let span = prev_short - short;
-                return if span > 0.0 {
-                    prev_t + (t - prev_t) * prev_short / span
-                } else {
-                    prev_t
-                };
+        // Every sample at once, four lanes at a time, rather than a walk
+        // to the first one in reach: most of the pitch never reaches the
+        // path at all, and for them the walk was the whole roll anyway.
+        let mut inside = 0u32;
+        for block in 0..Self::SAMPLES / 4 {
+            let base = 1 + 4 * block;
+            let mut gap = [0.0f32; 4];
+            let mut limit = [0.0f32; 4];
+            for lane in 0..4 {
+                let within = reach + speed * self.sample_t[base + lane];
+                gap[lane] = gap_sq(base + lane);
+                limit[lane] = within * within;
             }
-            prev = (point, t);
+            for lane in 0..4 {
+                inside |= ((gap[lane] <= limit[lane]) as u32) << (base + lane);
+            }
+        }
+        if inside != 0 {
+            let i = inside.trailing_zeros() as usize;
+            let (t, prev_t) = (self.sample_t[i], self.sample_t[i - 1]);
+            let within = reach + speed * t;
+            // Clamped to their signs: the squared test and the real one
+            // can disagree by a rounding at the boundary.
+            let prev_short = (gap_sq(i - 1).sqrt() - reach - speed * prev_t).max(0.0);
+            let short = (gap_sq(i).sqrt() - within).min(0.0);
+            let span = prev_short - short;
+            return if span > 0.0 {
+                prev_t + (t - prev_t) * prev_short / span
+            } else {
+                prev_t
+            };
         }
         // Past the roll the ball is a fixed point.
         (((self.rest - position).norm() - reach).max(0.0) / speed).max(self.rest_ticks)

@@ -590,8 +590,24 @@ pub fn mobility(player: &MatchPlayer, minute: u32) -> f32 {
 /// signal in spots where no single execution composite fits.
 /// `decisions*0.32 + composure*0.18 + concentration*0.18
 ///  + anticipation*0.14 + teamwork*0.10 + vision*0.08`
+///
+/// Read off the player's memo while it is current — the shape tether
+/// asks this of nearly every player on every tick.
 pub fn decision_quality(player: &MatchPlayer, minute: u32) -> f32 {
-    let b = SkillBands::for_player(player, minute);
+    if let Some(v) = player.current_decision_quality(minute) {
+        debug_assert_eq!(
+            v.to_bits(),
+            decision_quality_with(player, &SkillBands::priced(player, minute)).to_bits(),
+            "decision-quality memo mismatch: player={}",
+            player.id
+        );
+        return v;
+    }
+    decision_quality_with(player, &SkillBands::for_player(player, minute))
+}
+
+/// [`decision_quality`] on bands already in hand.
+pub fn decision_quality_with(player: &MatchPlayer, b: &SkillBands) -> f32 {
     let s = &player.skills;
     let v = (n(b.apply(s.mental.decisions, MENT)) * 0.32
         + n(b.apply(s.mental.composure, MENT)) * 0.18

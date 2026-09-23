@@ -3,9 +3,85 @@ use super::constants::{
     FATIGUE_RATE_MULTIPLIER, MATCH_CONDITION_FLOOR, MAX_CONDITION, MAX_JADEDNESS,
     RECOVERY_RATE_MULTIPLIER,
 };
-use crate::r#match::ConditionContext;
+use crate::r#match::{ConditionContext, MatchPlayer};
 use log::trace;
 use std::marker::PhantomData;
+
+/// The per-player multipliers [`ConditionProcessor::process`] scales a
+/// tick's drain by, with the inputs they were priced on. Stamina, natural
+/// fitness, chronic fitness and the recovery debt carried in are fixed for
+/// the match and jadedness moves only a few times, yet all five were
+/// re-derived — five divisions — for every player on every tick.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FatigueLoad {
+    key: (u32, u32, i16, u32, i16),
+    stamina_factor: f32,
+    fitness_factor: f32,
+    chronic_mult: f32,
+    debt_mult: f32,
+    jaded_mult: f32,
+}
+
+impl FatigueLoad {
+    /// This player's multipliers — his memo when it was priced on what he
+    /// carries now, priced afresh (and remembered) otherwise.
+    #[inline]
+    fn of(player: &mut MatchPlayer) -> Self {
+        let key = Self::key(player);
+        if let Some(load) = player.fatigue_load.filter(|load| load.key == key) {
+            debug_assert_eq!(load, Self::priced(player), "fatigue-load memo mismatch");
+            return load;
+        }
+        let load = Self::priced(player);
+        player.fatigue_load = Some(load);
+        load
+    }
+
+    #[inline]
+    fn key(player: &MatchPlayer) -> (u32, u32, i16, u32, i16) {
+        (
+            player.skills.physical.stamina.to_bits(),
+            player.skills.physical.natural_fitness.to_bits(),
+            player.player_attributes.fitness,
+            player.starting_recovery_debt.to_bits(),
+            player.player_attributes.jadedness,
+        )
+    }
+
+    fn priced(player: &MatchPlayer) -> Self {
+        let stamina_skill = player.skills.physical.stamina;
+        let natural_fitness = player.skills.physical.natural_fitness;
+        let chronic_fitness = player.player_attributes.fitness;
+        let jadedness = player.player_attributes.jadedness;
+        let recovery_debt = player.starting_recovery_debt;
+
+        // Chronic fitness (training base) further tilts tick fatigue:
+        // a player in deep season-long form tires slower than a
+        // recently-returned-from-injury one with the same NF/stamina.
+        // 0.90..1.15× band: peak fitness ≈ 0.90, baseline ≈ 1.15.
+        let chronic_fitness01 = (chronic_fitness as f32 / 10_000.0).clamp(0.0, 1.0);
+
+        // Recovery-debt and jadedness pile-on. A player walking into a
+        // match with deep debt or chronic tiredness drains faster on
+        // top of everything else — back-to-back fixtures finally cost
+        // the legs the engine knew about, not just the post-match
+        // bookkeeping.
+        let debt01 = (recovery_debt / 1_500.0).clamp(0.0, 1.0);
+
+        FatigueLoad {
+            key: Self::key(player),
+            // Stamina affects how tired the player gets (better stamina =
+            // less fatigue). Range: 0.5x to 1.5x (high stamina players
+            // tire 50% slower)
+            stamina_factor: 1.5 - (stamina_skill / 20.0),
+            // Natural fitness affects recovery and fatigue resistance
+            fitness_factor: 1.3 - (natural_fitness / 20.0) * 0.6,
+            chronic_mult: 1.15 - chronic_fitness01 * 0.25,
+            debt_mult: 1.0 + debt01 * 0.35,
+            jaded_mult: 1.0 + (jadedness as f32 / 10_000.0).clamp(0.0, 1.0) * 0.20,
+        }
+    }
+}
 
 /// Generic condition processor with role-specific configurations
 pub struct ConditionProcessor<T: ActivityIntensityConfig> {
@@ -53,34 +129,14 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // fatigue and movement, so the two can never drift apart.
         ctx.player.last_activity_intensity = self.intensity;
 
-        let stamina_skill = ctx.player.skills.physical.stamina;
-        let natural_fitness = ctx.player.skills.physical.natural_fitness;
-        let chronic_fitness = ctx.player.player_attributes.fitness;
-        let jadedness = ctx.player.player_attributes.jadedness;
-        let recovery_debt = ctx.player.starting_recovery_debt;
-
-        // Stamina affects how tired the player gets (better stamina = less fatigue)
-        // Range: 0.5x to 1.5x (high stamina players tire 50% slower)
-        let stamina_factor = 1.5 - (stamina_skill / 20.0);
-
-        // Natural fitness affects recovery and fatigue resistance
-        let fitness_factor = 1.3 - (natural_fitness / 20.0) * 0.6;
-
-        // Chronic fitness (training base) further tilts tick fatigue:
-        // a player in deep season-long form tires slower than a
-        // recently-returned-from-injury one with the same NF/stamina.
-        // 0.90..1.15× band: peak fitness ≈ 0.90, baseline ≈ 1.15.
-        let chronic_fitness01 = (chronic_fitness as f32 / 10_000.0).clamp(0.0, 1.0);
-        let chronic_mult = 1.15 - chronic_fitness01 * 0.25;
-
-        // Recovery-debt and jadedness pile-on. A player walking into a
-        // match with deep debt or chronic tiredness drains faster on
-        // top of everything else — back-to-back fixtures finally cost
-        // the legs the engine knew about, not just the post-match
-        // bookkeeping.
-        let debt01 = (recovery_debt / 1_500.0).clamp(0.0, 1.0);
-        let debt_mult = 1.0 + debt01 * 0.35;
-        let jaded_mult = 1.0 + (jadedness as f32 / 10_000.0).clamp(0.0, 1.0) * 0.20;
+        let FatigueLoad {
+            stamina_factor,
+            fitness_factor,
+            chronic_mult,
+            debt_mult,
+            jaded_mult,
+            ..
+        } = FatigueLoad::of(ctx.player);
 
         // Calculate velocity-based fatigue (75% of total effect)
         // Use squared values to avoid sqrt — compare ratio² against threshold²
@@ -217,6 +273,7 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             ctx.player.player_attributes.condition = (ctx.player.player_attributes.condition
                 - condition_change)
                 .clamp(MATCH_CONDITION_FLOOR, MAX_CONDITION);
+            ctx.player.on_condition_changed();
 
             trace!(
                 "Condition: player={}, vel_sq={:.3}, change={}, acc={:.3}, condition: {} -> {}",

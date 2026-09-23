@@ -128,13 +128,7 @@ impl KeeperReleaseSpace {
         {
             return None;
         }
-        let holder = ctx
-            .tick_context
-            .positions
-            .players
-            .as_slice()
-            .iter()
-            .find(|e| e.player_id == holder_id)?;
+        let holder = ctx.tick_context.positions.players.get(holder_id)?;
         let holder_side = holder.side;
         if Some(holder_side) == ctx.player.side {
             return Self::offer_outlet(ctx, holder.position, holder_side);

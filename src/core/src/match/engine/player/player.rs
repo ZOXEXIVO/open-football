@@ -3,7 +3,7 @@ use crate::club::player::traits::PlayerTrait;
 #[cfg(feature = "match-logs")]
 use crate::r#match::MovementEffort;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::common_states::{RecoveryChallenge, TackleEngagement};
+use crate::r#match::common_states::{FatigueLoad, RecoveryChallenge, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
 #[cfg(feature = "match-logs")]
@@ -23,6 +23,8 @@ use crate::r#match::midfielders::states::common::MidfielderCondition;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
+use crate::r#match::player::strategies::players::ops::effective_skill::SkillBands;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::transition::TransitionSource;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::waypoints::census::WaypointCensus;
@@ -342,6 +344,57 @@ pub struct MatchPlayer {
     /// plain field keeps `MatchPlayer` `Sync`. The sentinel peak-bits `0`
     /// never matches a real key (sprint peaks are 7/9/10).
     pub(crate) velocity_fatigue_memo: (u32, u32, f32),
+
+    /// The fatigue processor's per-player multipliers — see
+    /// `FatigueLoad`. `None` until his first processed tick.
+    pub(crate) fatigue_load: Option<FatigueLoad>,
+
+    /// The fatigue model's bands and `decision_quality` as last priced —
+    /// see [`MatchPlayer::refresh_skill_reads`]. `None` until the first
+    /// refresh.
+    skill_reads: Option<SkillReads>,
+}
+
+/// Everything a player's skill reads depend on that can move in a match.
+/// Skills themselves are static in-match.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SkillReadsKey {
+    condition: i16,
+    minute: u32,
+    entry_match_time_ms: u64,
+    entered_cold: bool,
+    crowd_arousal: u32,
+    settledness: u32,
+    matchday_form: u32,
+}
+
+impl SkillReadsKey {
+    #[inline]
+    fn of(player: &MatchPlayer, minute: u32) -> Self {
+        SkillReadsKey {
+            condition: player.player_attributes.condition,
+            minute,
+            entry_match_time_ms: player.entry_match_time_ms,
+            entered_cold: player.entered_cold,
+            crowd_arousal: player.crowd_arousal.to_bits(),
+            settledness: player.settledness.to_bits(),
+            matchday_form: player.matchday_form.to_bits(),
+        }
+    }
+}
+
+/// A player's [`SkillBands`] and `decision_quality`, with the key they
+/// were priced on. Both are pure functions of that key, yet every
+/// fatigue-aware skill read rebuilt the bands and the shape tether asks
+/// for `decision_quality` on almost every player every tick. A plain
+/// field, re-priced only through `&mut` (so `MatchPlayer` stays `Sync`),
+/// and served only on an exact key match — a stale entry is never read,
+/// the reader prices afresh instead.
+#[derive(Debug, Clone, Copy)]
+struct SkillReads {
+    key: SkillReadsKey,
+    bands: SkillBands,
+    decision_quality: f32,
 }
 
 /// `(condition, max_speed)` packed into one `AtomicU64` (key in the high
@@ -409,6 +462,48 @@ impl MatchPlayer {
         let value = self.skills.max_speed_with_condition(condition);
         self.max_speed_memo.set(condition, value);
         value
+    }
+
+    /// Re-price the memoized skill reads if anything they were priced on
+    /// has moved. Called where those inputs move: at the top of every
+    /// update (the minute) and on a condition change.
+    pub fn refresh_skill_reads(&mut self, minute: u32) {
+        if self.skill_reads_at(minute).is_some() {
+            return;
+        }
+        let bands = SkillBands::priced(self, minute);
+        self.skill_reads = Some(SkillReads {
+            key: SkillReadsKey::of(self, minute),
+            bands,
+            decision_quality: sc::decision_quality_with(self, &bands),
+        });
+    }
+
+    /// His condition has just moved; keep the skill reads priced on it.
+    pub fn on_condition_changed(&mut self) {
+        if let Some(reads) = self.skill_reads {
+            self.refresh_skill_reads(reads.key.minute);
+        }
+    }
+
+    /// The memoized bands, if they are current for `minute`.
+    #[inline]
+    pub fn current_skill_bands(&self, minute: u32) -> Option<SkillBands> {
+        self.skill_reads_at(minute).map(|reads| reads.bands)
+    }
+
+    /// The memoized `decision_quality`, if it is current for `minute`.
+    #[inline]
+    pub fn current_decision_quality(&self, minute: u32) -> Option<f32> {
+        self.skill_reads_at(minute)
+            .map(|reads| reads.decision_quality)
+    }
+
+    #[inline]
+    fn skill_reads_at(&self, minute: u32) -> Option<&SkillReads> {
+        self.skill_reads
+            .as_ref()
+            .filter(|reads| reads.key == SkillReadsKey::of(self, minute))
     }
 }
 
@@ -568,6 +663,8 @@ impl MatchPlayer {
             matchday_form: player.matchday_form(now),
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            fatigue_load: None,
+            skill_reads: None,
             #[cfg(feature = "match-logs")]
             motion_trace: Default::default(),
         }
@@ -654,6 +751,8 @@ impl MatchPlayer {
             matchday_form,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            fatigue_load: None,
+            skill_reads: None,
             #[cfg(feature = "match-logs")]
             motion_trace: Default::default(),
         }
@@ -942,6 +1041,7 @@ impl MatchPlayer {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        self.refresh_skill_reads(sc::minute_from_ms(context.total_match_time));
         self.tick_tackle_cooldown();
         // Before the state machine, so a `Tackling` state asking
         // `TackleDecision::is_eligible` this tick sees a clock that
@@ -949,11 +1049,13 @@ impl MatchPlayer {
         // tick he arrives.
         self.tick_contact_clock(tick_context);
 
-        let player_events = PlayerMatchState::process(self, context, tick_context);
+        PlayerMatchState::process(self, context, tick_context, events);
 
-        events.add_from_collection(player_events);
-
-        self.update_waypoint_index_at(field_index, tick_context);
+        // The route index steers nobody while routes are disarmed; only
+        // the census reads it then.
+        if TacticalRoutes::armed() || cfg!(feature = "match-logs") {
+            self.update_waypoint_index_at(field_index, tick_context);
+        }
 
         // Move first, THEN clamp. Clamping before the move meant the
         // boundary check could never actually stop anyone leaving the
@@ -999,6 +1101,7 @@ impl MatchPlayer {
         ball_vel: Vector3<f32>,
         restart_taker: Option<u32>,
     ) {
+        self.refresh_skill_reads(sc::minute_from_ms(context.total_match_time));
         self.tick_tackle_cooldown();
         // An LOD-skipped player is by definition far from the ball, so he
         // is not in contact with anybody — and leaving a stale count

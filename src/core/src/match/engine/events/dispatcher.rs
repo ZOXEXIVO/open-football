@@ -25,7 +25,11 @@ pub const DISPATCH_REMAINING_INLINE_CAP: usize = 8;
 pub struct EventCollection {
     inline: [Option<Event>; INLINE_EVENT_CAP],
     inline_len: u8,
-    overflow: Vec<Event>,
+    /// Boxed so an empty spill costs one pointer rather than a whole `Vec`
+    /// header: that keeps `StateProcessingResult` inside the 128 bytes
+    /// the compiler still moves inline, instead of a `memcpy` call on
+    /// every player update.
+    overflow: Option<Box<Vec<Event>>>,
 }
 
 impl Default for EventCollection {
@@ -42,7 +46,7 @@ impl EventCollection {
         EventCollection {
             inline: std::array::from_fn(|_| None),
             inline_len: 0,
-            overflow: Vec::new(),
+            overflow: None,
         }
     }
 
@@ -54,11 +58,7 @@ impl EventCollection {
         EventCollection {
             inline: std::array::from_fn(|_| None),
             inline_len: 0,
-            overflow: if extra > 0 {
-                Vec::with_capacity(extra)
-            } else {
-                Vec::new()
-            },
+            overflow: (extra > 0).then(|| Box::new(Vec::with_capacity(extra))),
         }
     }
 
@@ -77,7 +77,7 @@ impl EventCollection {
             self.inline[n] = Some(event);
             self.inline_len = (n + 1) as u8;
         } else {
-            self.overflow.push(event);
+            self.overflow.get_or_insert_default().push(event);
         }
     }
 
@@ -108,8 +108,8 @@ impl EventCollection {
             }
         }
         events.inline_len = 0;
-        if !events.overflow.is_empty() {
-            for e in events.overflow.drain(..) {
+        if let Some(overflow) = events.overflow {
+            for e in *overflow {
                 self.add(e);
             }
         }
@@ -117,7 +117,7 @@ impl EventCollection {
 
     #[inline]
     pub fn has_events(&self) -> bool {
-        self.inline_len > 0 || !self.overflow.is_empty()
+        self.inline_len > 0 || self.overflow.as_ref().is_some_and(|o| !o.is_empty())
     }
 
     #[inline]
@@ -127,7 +127,9 @@ impl EventCollection {
             *slot = None;
         }
         self.inline_len = 0;
-        self.overflow.clear();
+        if let Some(overflow) = self.overflow.as_mut() {
+            overflow.clear();
+        }
     }
 
     /// Move every event out of the collection, leaving it empty once
@@ -138,7 +140,7 @@ impl EventCollection {
         // collection, and the iterator's own Drop guarantees any
         // un-consumed inline slots get cleared.
         self.inline_len = 0;
-        let overflow = std::mem::take(&mut self.overflow);
+        let overflow = self.overflow.take().map(|o| *o).unwrap_or_default();
         EventDrain {
             coll: self,
             inline_idx: 0,

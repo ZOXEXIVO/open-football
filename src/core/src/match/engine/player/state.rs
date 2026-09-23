@@ -349,7 +349,8 @@ impl PlayerMatchState {
         player: &mut MatchPlayer,
         context: &MatchContext,
         tick_context: &GameTickContext,
-    ) -> EventCollection {
+        events: &mut EventCollection,
+    ) {
         let player_position_group = player.tactical_position.current_position.position_group();
 
         let state_change_result =
@@ -735,7 +736,9 @@ impl PlayerMatchState {
             }
         }
 
-        state_change_result.events
+        if state_change_result.events.has_events() {
+            events.add_from_collection(state_change_result.events);
+        }
     }
 
     /// How high a player takes himself, in metres, on entering `state` —

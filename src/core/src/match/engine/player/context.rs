@@ -7,6 +7,7 @@ use crate::r#match::engine::ball::ball::{
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
+use crate::r#match::player::strategies::players::ops::marker_evasion::MarkerRead;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::position_players::PlayerFieldData;
 use crate::r#match::{
@@ -183,6 +184,11 @@ pub struct PlayerTickCache {
     /// change. See `DefenderSkillProfile::from_ctx`.
     pub defender_profile: Option<(u32, DefenderSkillProfile)>,
     pub midfielder_profile: Option<MidfielderSkillProfile>,
+    /// The keeper's profile, keyed on his vitals like `defender_profile`:
+    /// the resting states ask for it from `velocity()`, `process()` and the
+    /// rest position every tick, and the cross-tick memo behind it sits
+    /// out of cache by the time the next keeper tick comes round.
+    pub goalkeeper_profile: Option<(u32, GoalkeeperSkillProfile)>,
     /// Deepest outfield opponent's x (the offside line) as computed by
     /// `MidfielderAttackSupportingState::is_offside_risk` — a roster
     /// min-scan that does not depend on the candidate position being
@@ -216,13 +222,16 @@ pub struct PlayerTickCache {
     /// `PassEvaluator::calculate_passer_ability` — only the per-
     /// candidate distance blend varies between calls.
     pub passing_composites: Option<(f32, f32)>,
-    /// `ShapeDiscipline::organisation` — the recall multiplier. Read on
-    /// the positional hot path (`apply_with_pull` runs for every player
-    /// every tick, and `velocity()` and `process()` both reach it), and
-    /// it builds a `SkillBands` set for `decision_quality`. Tick-frozen:
-    /// skills are static in-match and the team aggregate it reads is
-    /// itself only recomputed every ~100 ticks.
-    pub shape_organisation: Option<f32>,
+    /// `KeeperRestPosition::for_keeper` — a resting keeper's `velocity()`
+    /// and `process()` both ask it every tick, and each ask prices his
+    /// profile and a `powf` depth curve. Keyed on condition and
+    /// jadedness as well, like `defender_profile`, so it can never
+    /// answer across a fatigue step.
+    pub keeper_rest: Option<(u32, Vector3<f32>)>,
+    /// `MarkerEvasion::read` — a runner's `evade` and `burst` both ask it
+    /// each tick, and the box movement asks again. Keyed on condition, the
+    /// one input (through `mover_quality`) that moves inside a tick.
+    pub marker_read: Option<(i16, Option<MarkerRead>)>,
 }
 
 impl Default for PlayerTickCache {
@@ -246,13 +255,15 @@ impl PlayerTickCache {
             defensive_role: None,
             defender_profile: None,
             midfielder_profile: None,
+            goalkeeper_profile: None,
             offside_last_defender_x: None,
             nearest_opponent_sq: None,
             nearest_teammate_sq: None,
             guard_target: None,
             pass_pressure_factor: None,
             passing_composites: None,
-            shape_organisation: None,
+            keeper_rest: None,
+            marker_read: None,
         }
     }
 
@@ -270,13 +281,15 @@ impl PlayerTickCache {
             self.defensive_role = None;
             self.defender_profile = None;
             self.midfielder_profile = None;
+            self.goalkeeper_profile = None;
             self.offside_last_defender_x = None;
             self.nearest_opponent_sq = None;
             self.nearest_teammate_sq = None;
             self.guard_target = None;
             self.pass_pressure_factor = None;
             self.passing_composites = None;
-            self.shape_organisation = None;
+            self.keeper_rest = None;
+            self.marker_read = None;
         }
         self
     }
@@ -456,13 +469,8 @@ impl LooseBallChase {
         self.end = (ball.flags.in_flight_state > 0)
             .then_some(ball.pass_target_player_id)
             .flatten()
-            .and_then(|id| {
-                positions
-                    .players
-                    .as_slice()
-                    .iter()
-                    .find(|meta| meta.player_id == id && meta.chase_eligible)
-            })
+            .and_then(|id| positions.players.get(id))
+            .filter(|meta| meta.chase_eligible)
             .map(|meta| {
                 let tick = path.time_to_reach(meta.position, meta.max_speed, CONTROL_DISTANCE);
                 PathEnd {

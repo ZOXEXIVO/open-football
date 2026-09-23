@@ -152,12 +152,17 @@ impl<'b> TeamOperationsImpl<'b> {
     /// position. `None` when he holds a zone, presses, or covers — or
     /// when his man has left the pitch.
     pub fn my_mark(&self) -> Option<MatchPlayerLite> {
-        let target = self.my_duty().target()?;
+        self.opponent(self.my_duty().target()?)
+    }
+
+    /// The opponent with this id, resolved to a live position. `None`
+    /// once he has left the pitch.
+    fn opponent(&self, id: u32) -> Option<MatchPlayerLite> {
         self.ctx
             .players()
             .opponents()
             .all()
-            .find(|opp| opp.id == target)
+            .find(|opp| opp.id == id)
     }
 
     /// Where this player should be standing to do his duty: goal-side of
@@ -197,8 +202,8 @@ impl<'b> TeamOperationsImpl<'b> {
                 let to_goal = (own_goal - point).try_normalize(0.01)?;
                 Some(point + to_goal * Self::COVER_DEPTH)
             }
-            DefensiveDuty::Mark(_) => {
-                let man = self.my_mark()?;
+            DefensiveDuty::Mark(target) => {
+                let man = self.opponent(target)?;
                 // Goal-side shoulder, leaning toward the ball — the same
                 // blend `DefenderMarkingState` steers onto, so the anchor
                 // and the state agree about where marking happens.

@@ -261,7 +261,25 @@ impl EntrySettling {
 /// of them shift every skill-mediated action (duels, passing, saves,
 /// finishing) by the same small continuous factor instead of dialling
 /// one outcome.
+#[inline]
 pub fn effective_skill(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f32 {
+    if let Some(bands) = player.current_skill_bands(ctx.minute) {
+        let v = bands.apply(base, ctx.category);
+        debug_assert_eq!(
+            v.to_bits(),
+            effective_skill_direct(player, base, ctx).to_bits(),
+            "skill-bands memo mismatch: player={}",
+            player.id
+        );
+        return v;
+    }
+    effective_skill_direct(player, base, ctx)
+}
+
+/// The fatigue model for one read, from scratch — what a player whose
+/// memo is not current costs (the match-start copies in
+/// `MatchContext::players` never have one).
+fn effective_skill_direct(player: &MatchPlayer, base: f32, ctx: ActionContext) -> f32 {
     let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
     let band = band_multipliers(cond_pct, ctx.category);
     // Mitigate the penalty: elite stamina recovers a fraction of the
@@ -294,22 +312,18 @@ where
 
 /// Pre-factored fatigue scalars for a single `(player, minute)`.
 ///
-/// Everything in [`effective_skill`] except the final `base` multiply
+/// Everything in the fatigue model except the final `base` multiply
 /// depends ONLY on `(player, category, minute)` — `cond_pct`, the band
 /// `powf`, the mitigation blend, the cap, the late-game-mental extra and
 /// `crowd_arousal`. A profile builder reads 24–33 attributes for the
-/// same player across only the three categories, recomputing those
-/// scalars (incl. the `powf`) on every read. `SkillBands` computes them
-/// ONCE per category, so each read collapses to the same three
-/// multiplies the original did.
+/// same player across only the three categories, so the scalars are
+/// computed ONCE per category and each read collapses to the multiplies.
 ///
-/// [`apply`](Self::apply) is **bit-identical** to [`effective_skill`]:
-/// it performs `(base * recovered * extra * crowd).clamp(1.0, 20.0)` with
-/// the exact same operands in the exact same left-to-right order, and the
-/// `recovered` / `extra` / `crowd` values are produced by the same
-/// private helpers. The `effective_skill_bit_identical_to_bands` test
-/// pins this across a grid of conditions, minutes, categories and bases.
-#[derive(Debug, Clone, Copy)]
+/// [`apply`](Self::apply) is **bit-identical** to the per-read model: it
+/// multiplies the exact same operands in the exact same left-to-right
+/// order. The `effective_skill_bit_identical_to_bands` test pins this
+/// across a grid of conditions, minutes, categories and bases.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkillBands {
     recovered_technical: f32,
     recovered_mental: f32,
@@ -330,14 +344,30 @@ pub struct SkillBands {
 }
 
 impl SkillBands {
-    /// Compute the three per-category `recovered` scalars + the mental
-    /// late-game extra + crowd, once for this `(player, minute)`.
+    /// The bands for this `(player, minute)`: the player's memoized set
+    /// while it is current (see `MatchPlayer::refresh_skill_reads`),
+    /// priced afresh otherwise.
     #[inline]
     pub fn for_player(player: &MatchPlayer, minute: u32) -> Self {
+        if let Some(bands) = player.current_skill_bands(minute) {
+            debug_assert!(
+                bands == Self::priced(player, minute),
+                "skill-bands memo mismatch: player={}",
+                player.id
+            );
+            return bands;
+        }
+        Self::priced(player, minute)
+    }
+
+    /// Compute the three per-category `recovered` scalars + the mental
+    /// late-game extra + crowd, once for this `(player, minute)`.
+    pub fn priced(player: &MatchPlayer, minute: u32) -> Self {
         let cond_pct = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
         let mitigation = mitigation_score(player);
         let cap = mitigation_cap(cond_pct);
-        // Same expression as `effective_skill`'s `recovered`, per category.
+        // Same expression as `effective_skill_direct`'s `recovered`, per
+        // category.
         let recover = |category: SkillCategory| -> f32 {
             let band = band_multipliers(cond_pct, category);
             1.0 - (1.0 - band) * (1.0 - mitigation * cap)
@@ -465,20 +495,30 @@ mod tests {
                     p.settledness = settlednesses[(cond as usize + crowd.to_bits() as usize) % 2];
                     for &minute in &minutes {
                         let bands = SkillBands::for_player(&p, minute);
+                        // …and through the player's memo, which is what the
+                        // engine reads once a tick has refreshed it.
+                        p.refresh_skill_reads(minute);
                         for &cat in &categories {
                             let ctx = ActionContext {
                                 minute,
                                 category: cat,
                             };
                             for &base in &bases {
-                                let reference = effective_skill(&p, base, ctx);
+                                let reference = effective_skill_direct(&p, base, ctx);
                                 let factored = bands.apply(base, cat);
+                                let memoized = effective_skill(&p, base, ctx);
                                 assert_eq!(
                                     reference.to_bits(),
                                     factored.to_bits(),
                                     "mismatch cond={cond} stam={stam} crowd={crowd} \
                                      minute={minute} cat={cat:?} base={base}: \
                                      reference={reference} factored={factored}"
+                                );
+                                assert_eq!(
+                                    reference.to_bits(),
+                                    memoized.to_bits(),
+                                    "memo mismatch cond={cond} stam={stam} crowd={crowd} \
+                                     minute={minute} cat={cat:?} base={base}"
                                 );
                             }
                         }

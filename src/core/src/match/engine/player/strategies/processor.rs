@@ -224,20 +224,6 @@ impl PlayerFieldPositionGroup {
         }
     }
 
-    /// Which side a player is on, from the live position store. Returns
-    /// `None` for an id that isn't on the pitch, which compares unequal
-    /// to any real side — the safe answer for the receiving override.
-    #[inline]
-    fn side_of(player_id: u32, tick_context: &GameTickContext) -> Option<PlayerSide> {
-        tick_context
-            .positions
-            .players
-            .as_slice()
-            .iter()
-            .find(|e| e.player_id == player_id)
-            .map(|e| e.side)
-    }
-
     /// True when this player is in TakeBall but another teammate is
     /// strictly-closer to the ball. Releases the chase so the pack doesn't
     /// accumulate ex-chasers who overshot or got passed by the ball.
@@ -296,7 +282,7 @@ impl PlayerFieldPositionGroup {
                 if target_id == player.id {
                     return false;
                 }
-                if Self::side_of(target_id, tick_context) == player.side {
+                if tick_context.positions.players.side(target_id) == player.side {
                     return true;
                 }
             }
@@ -463,7 +449,7 @@ impl PlayerFieldPositionGroup {
                 if target_id == player.id {
                     return true;
                 }
-                if Self::side_of(target_id, tick_context) == player.side {
+                if tick_context.positions.players.side(target_id) == player.side {
                     return false;
                 }
             }

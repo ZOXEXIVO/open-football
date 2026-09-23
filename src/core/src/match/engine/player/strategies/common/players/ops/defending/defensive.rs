@@ -164,11 +164,9 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
                 true
             })
-            .min_by(|a, b| {
-                let dist_a = a.distance(self.ctx);
-                let dist_b = b.distance(self.ctx);
-                dist_a.total_cmp(&dist_b)
-            })
+            .map(|opp| (opp, opp.distance(self.ctx)))
+            .min_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(opp, _)| opp)
     }
 
     /// Find the opponent defensive line position — single-pass, zero allocation
@@ -646,11 +644,9 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .opponents()
             .nearby(max_distance)
             .filter(|opp| !self.is_opponent_being_engaged(opp))
-            .max_by(|a, b| {
-                let score_a = self.calculate_opponent_danger_score(a, own_goal);
-                let score_b = self.calculate_opponent_danger_score(b, own_goal);
-                score_a.total_cmp(&score_b)
-            })
+            .map(|opp| (opp, self.calculate_opponent_danger_score(&opp, own_goal)))
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(opp, _)| opp)
     }
 
     /// Calculate danger score for an opponent
