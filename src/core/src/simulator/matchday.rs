@@ -39,6 +39,7 @@ use rayon::prelude::IntoParallelRefMutIterator;
 
 use crate::MatchRuntime;
 use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
+use crate::country::result::transfers::{TransferTail, TransferTick};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 use crate::transfers::pool::FreeAgentBumpBatch;
@@ -258,8 +259,12 @@ impl<'gc> WorldMatchdayResult<'gc> {
     /// returns there is no per-continent matchday state left for the
     /// rest of the tick.
     pub fn drain_into(self, data: &mut SimulatorData, result: &mut SimulationResult) {
-        for continent_result in self.continents {
-            continent_result.process(data, result);
-        }
+        let date = data.date.date();
+        let tails: Vec<TransferTail> = self
+            .continents
+            .into_iter()
+            .flat_map(|continent_result| continent_result.process(data, result))
+            .collect();
+        TransferTick::conclude(data, tails, date);
     }
 }

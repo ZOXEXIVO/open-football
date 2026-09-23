@@ -7,7 +7,7 @@ pub mod transfers;
 
 use crate::club::board::manager::ManagerMarketTick;
 use crate::country::result::transfers::DeferredTransferOps;
-use crate::country::result::transfers::TransferTick;
+use crate::country::result::transfers::{TransferTail, TransferTick};
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
 use crate::r#match::MatchResult;
@@ -48,7 +48,14 @@ impl CountryResult {
         }
     }
 
-    pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
+    /// Drain this country's Phase-A output into the world. The transfer
+    /// tail comes back unfinished — [`TransferTick::conclude`] ends every
+    /// country's at once.
+    pub(crate) fn process(
+        self,
+        data: &mut SimulatorData,
+        result: &mut SimulationResult,
+    ) -> Option<TransferTail> {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
 
@@ -158,11 +165,11 @@ impl CountryResult {
         // DeferredTransferOps: sweep shortlists for signed players,
         // mutate `data.free_agents`, execute deferred transfers,
         // kickoff foreign negotiations.
-        if let Some(ops) = self.deferred_transfer_ops {
+        self.deferred_transfer_ops.map(|ops| {
             PerformanceProfiler::stage("drain_transfer_ops", 2, || {
                 TransferTick::apply_deferred_transfer_ops(data, ops, current_date)
-            });
-        }
+            })
+        })
     }
 
     fn get_country_id(&self, _data: &SimulatorData) -> u32 {

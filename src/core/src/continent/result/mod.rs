@@ -10,6 +10,7 @@ pub use types::*;
 
 use crate::SimulationResult;
 use crate::country::CountryResult;
+use crate::country::result::transfers::TransferTail;
 use crate::r#match::MatchResult;
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
@@ -45,7 +46,11 @@ impl ContinentResult {
         }
     }
 
-    pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
+    pub(crate) fn process(
+        self,
+        data: &mut SimulatorData,
+        result: &mut SimulationResult,
+    ) -> Vec<TransferTail> {
         let current_date = data.date.date();
 
         let stage = PerformanceProfiler::stage_scope("drain_national_results", 1);
@@ -81,9 +86,12 @@ impl ContinentResult {
         // applied immediately after that parallel pass, before this
         // method runs.
 
-        for country_result in self.countries {
-            PerformanceProfiler::stage("drain_country", 1, || country_result.process(data, result));
-        }
+        self.countries
+            .into_iter()
+            .filter_map(|country_result| {
+                PerformanceProfiler::stage("drain_country", 1, || country_result.process(data, result))
+            })
+            .collect()
     }
 
     pub(crate) fn get_continent_id(&self) -> u32 {

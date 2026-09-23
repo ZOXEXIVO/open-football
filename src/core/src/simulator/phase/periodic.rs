@@ -47,8 +47,11 @@ impl PeriodicPasses {
         let _phase = PerformanceProfiler::phase_scope("C7_drain", 0);
         matchday.drain_into(data, result);
 
-        data.daily_world_player_pool = None;
-        data.daily_global_free_agents = None;
+        // Freeing a whole world of summaries is serial work nothing waits
+        // on, so a pool worker does it while the tick carries on.
+        let pool = data.daily_world_player_pool.take();
+        let free_agents = data.daily_global_free_agents.take();
+        rayon::spawn(move || drop((pool, free_agents)));
     }
 
     /// Monthly rankings, quarterly economic zone, yearly regulations and

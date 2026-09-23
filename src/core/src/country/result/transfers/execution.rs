@@ -573,6 +573,16 @@ impl SquadReactionPass {
 /// cannot drift.
 pub(crate) struct TransferExecutor;
 
+/// What [`TransferExecutor::move_all`] did: one flag per input transfer, the
+/// players who actually moved, and which of those moves stage a development
+/// loan once the world sweep has run.
+#[derive(Default)]
+pub(crate) struct TransferMoves {
+    pub(crate) results: Vec<bool>,
+    pub(crate) moved: Vec<u32>,
+    pathways: Vec<usize>,
+}
+
 impl TransferExecutor {
     /// Unified transfer execution — handles both domestic and cross-country.
     /// When selling_country_id == buying_country_id it's domestic (single country).
@@ -697,9 +707,10 @@ impl TransferExecutor {
 
     /// Execute one deferred transfer end to end. The single-move entry point:
     /// it moves the player, sweeps the world for stale interest in him, and
-    /// stages the development loan. `execute_transfers` is the batched form the
-    /// tick actually uses — same three steps, one sweep for everybody.
-    #[allow(dead_code)] // single-move form; the tick uses `execute_transfers`
+    /// stages the development loan. The tick runs the same three steps split
+    /// across the world drain — [`Self::move_all`], one sweep for everybody,
+    /// [`Self::stage_pathways`].
+    #[allow(dead_code)] // single-move form; the tick uses `move_all`
     pub(crate) fn one(
         data: &mut SimulatorData,
         transfer: &DeferredTransfer,
@@ -715,38 +726,41 @@ impl TransferExecutor {
         success
     }
 
-    /// Execute a tick's worth of deferred transfers for one country.
-    ///
-    /// Same three steps as [`execute_transfer`] and the same order between
-    /// them — move, sweep, stage — but the sweep walks the world ONCE for
-    /// everyone who moved instead of once per move, which is what it used to
-    /// do. The order matters and is why the phases are separated rather than
-    /// interleaved: the sweep completes every open listing for a player it is
-    /// given, so a development loan listed before it ran would be cancelled by
-    /// it. Returns one flag per input, in order.
-    pub(crate) fn batch(
+    /// Move a tick's worth of deferred transfers for one country — the first
+    /// of the three steps [`Self::one`] takes. The interest sweep and the
+    /// development-loan staging wait for the world drain: the sweep walks the
+    /// world ONCE for everybody who moved anywhere, and staging must follow
+    /// it because the sweep completes every open listing for a player it is
+    /// given, so a development loan listed before it ran would be cancelled.
+    pub(crate) fn move_all(
         data: &mut SimulatorData,
         transfers: &[DeferredTransfer],
         date: NaiveDate,
-    ) -> Vec<bool> {
-        let mut results = Vec::with_capacity(transfers.len());
-        let mut moved: Vec<u32> = Vec::new();
-        let mut pathways: Vec<usize> = Vec::new();
+    ) -> TransferMoves {
+        let mut moves = TransferMoves::default();
         for (index, transfer) in transfers.iter().enumerate() {
             let (success, stage_pathway) = Self::move_player(data, transfer, date);
-            results.push(success);
+            moves.results.push(success);
             if success {
-                moved.push(transfer.player_id);
+                moves.moved.push(transfer.player_id);
                 if stage_pathway {
-                    pathways.push(index);
+                    moves.pathways.push(index);
                 }
             }
         }
-        ApproachPass::cleanup_player_transfer_interest_batch(data, &moved);
-        for index in pathways {
+        moves
+    }
+
+    /// The last of the three steps, once the world sweep has run.
+    pub(crate) fn stage_pathways(
+        data: &mut SimulatorData,
+        transfers: &[DeferredTransfer],
+        moves: &TransferMoves,
+        date: NaiveDate,
+    ) {
+        for &index in &moves.pathways {
             Self::stage_development_loan(data, &transfers[index], date);
         }
-        results
     }
 
     /// Development pathway: a young Development-plan signing at a big club may

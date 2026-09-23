@@ -33,7 +33,7 @@ use crate::world::SimulatorData;
 use crate::{Country, PlayerStatusType};
 use chrono::NaiveDate;
 use config::TransferConfig;
-use execution::TransferExecutor;
+use execution::{TransferExecutor, TransferMoves};
 use free::GlobalFreeAgentSigning;
 use free::precontract::PreContractManager;
 pub(crate) use free::{GlobalFreeAgentPool, GlobalFreeAgentSummary};
@@ -42,6 +42,17 @@ use settlement::TransferClauseSettler;
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
 use types::{CountryRoster, PendingPlayerSignal};
+
+/// One country's transfer drain, stopped where the world's single interest
+/// sweep has to run: the players it placed or moved, and the follow-ups that
+/// must wait for the sweep — see [`TransferTick::conclude`].
+pub(crate) struct TransferTail {
+    country_id: u32,
+    window_open: bool,
+    transfers: Vec<DeferredTransfer>,
+    moves: TransferMoves,
+    swept: Vec<u32>,
+}
 
 /// Cross-country tail of the transfer market — populated by
 /// `simulate_transfer_market_local` running on `&mut Country` inside
@@ -233,7 +244,7 @@ impl TransferTick {
         data: &mut SimulatorData,
         ops: DeferredTransferOps,
         current_date: NaiveDate,
-    ) {
+    ) -> TransferTail {
         let config = TransferConfig::default();
 
         // Cross-country interest sweep used to fire per signed id here.
@@ -276,19 +287,13 @@ impl TransferTick {
         // `data.free_agents`).
         let mut completed = ops.completed_after;
         let stage = PerformanceProfiler::stage_scope("drain_free_agent_signings", 3);
-        let mut placed_from_pool: Vec<u32> = Vec::new();
+        let mut swept: Vec<u32> = Vec::new();
         for signing in &ops.global_signings {
             if GlobalFreeAgentPool::execute_signing(data, signing, current_date, &config) {
                 completed += 1;
-                placed_from_pool.push(signing.player_id);
+                swept.push(signing.player_id);
             }
         }
-        // One world sweep for everyone this country just took out of the
-        // pool, not one per signing. Still ahead of the foreign-negotiation
-        // kickoff below, so no club can open a saga for a player who was
-        // signed a moment ago.
-        ApproachPass::cleanup_player_transfer_interest_batch(data, &placed_from_pool);
-
         drop(stage);
 
         // If anything moved this tick the global indexes need refreshing.
@@ -312,38 +317,65 @@ impl TransferTick {
             .signed_same_country_expired
             .saturating_add(domestic_expiry);
 
-        // Phase 2: Execute all completed transfers (domestic + foreign).
-        // One call for the whole country: the executor moves every player,
-        // then sweeps the world once for all of them, then stages the
-        // development loans — the same order a per-transfer call keeps, at
-        // one world walk instead of one per transfer.
+        // Phase 2: move every completed transfer (domestic + foreign). The
+        // interest sweep and everything that must follow it wait for
+        // [`Self::conclude`].
         let stage = PerformanceProfiler::stage_scope("drain_execute_transfers", 3);
-        let outcomes =
-            execution::TransferExecutor::batch(data, &ops.deferred_transfers, current_date);
-        for (transfer, success) in ops.deferred_transfers.iter().zip(outcomes) {
-            if success {
-                data.dirty_player_index = true;
-                continue;
+        let moves = TransferExecutor::move_all(data, &ops.deferred_transfers, current_date);
+        drop(stage);
+        swept.extend_from_slice(&moves.moved);
+
+        TransferTail {
+            country_id: ops.country_id,
+            window_open: ops.window_open,
+            transfers: ops.deferred_transfers,
+            moves,
+            swept,
+        }
+    }
+
+    /// The end of every country's transfer drain, after all of them have
+    /// moved their players.
+    ///
+    /// The interest sweep walks the whole world, so it runs ONCE for everyone
+    /// placed or moved anywhere this tick instead of once per country — per
+    /// country it was two world-wide fan-outs each, and the drain spent more
+    /// time waking the pool than sweeping. The follow-ups keep their order
+    /// behind it: development loans are staged after the sweep (it would
+    /// cancel their listings), and no club opens a foreign negotiation until
+    /// every signing in the world has been swept.
+    pub(crate) fn conclude(data: &mut SimulatorData, tails: Vec<TransferTail>, date: NaiveDate) {
+        let swept: Vec<u32> = tails.iter().flat_map(|t| t.swept.iter().copied()).collect();
+        PerformanceProfiler::stage("drain_interest_sweep", 2, || {
+            ApproachPass::cleanup_player_transfer_interest_batch(data, &swept)
+        });
+
+        for tail in tails {
+            TransferExecutor::stage_pathways(data, &tail.transfers, &tail.moves, date);
+            for (transfer, &success) in tail.transfers.iter().zip(&tail.moves.results) {
+                if success {
+                    data.dirty_player_index = true;
+                    continue;
+                }
+                if let Some(country) = data.country_mut(transfer.buying_country_id) {
+                    country.transfer_market.transfer_history.retain(|t| {
+                        !(t.player_id == transfer.player_id
+                            && t.to_club_id == transfer.buying_club_id
+                            && t.transfer_date == date)
+                    });
+                }
+                // The deal was optimistically finalised at medical stage but
+                // never executed — roll the market state back so the player
+                // stays visible and the buyer keeps looking.
+                TransferExecutor::compensate_failure(data, transfer);
             }
-            if let Some(country) = data.country_mut(transfer.buying_country_id) {
-                country.transfer_market.transfer_history.retain(|t| {
-                    !(t.player_id == transfer.player_id
-                        && t.to_club_id == transfer.buying_club_id
-                        && t.transfer_date == current_date)
+
+            // Foreign negotiation initiation (domestic priority).
+            if tail.window_open {
+                PerformanceProfiler::stage("drain_foreign_negotiations", 3, || {
+                    ApproachPass::initiate_foreign_negotiations(data, tail.country_id, date)
                 });
             }
-            // The deal was optimistically finalised at medical stage but
-            // never executed — roll the market state back so the player
-            // stays visible and the buyer keeps looking.
-            execution::TransferExecutor::compensate_failure(data, transfer);
-        }
-        drop(stage);
-
-        // Phase 3: Foreign negotiation initiation (domestic priority).
-        if ops.window_open {
-            PerformanceProfiler::stage("drain_foreign_negotiations", 3, || {
-                ApproachPass::initiate_foreign_negotiations(data, ops.country_id, current_date)
-            });
         }
     }
 
