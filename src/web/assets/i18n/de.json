@@ -2154,5 +2154,8 @@
   "yth": "Jgd",
   "clear": "Leeren",
   "ai_error_not_configured": "KI ist nicht konfiguriert",
-  "ai_error_no_data": "Simulationsdaten sind nicht geladen"
+  "ai_error_no_data": "Simulationsdaten sind nicht geladen",
+  "selection_factor_manager_plan": "der Plan des Trainers für seine Rolle",
+  "selection_factor_playing_time_commitment": "zugesagte Einsatzzeit",
+  "selection_factor_loan_agreement": "die Bedingungen seiner Leihvereinbarung"
 }

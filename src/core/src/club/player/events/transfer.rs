@@ -447,6 +447,9 @@ impl Player {
         }
         self.happiness = PlayerHappiness::new();
         self.load = PlayerLoad::new();
+        // A promise was made by the previous club's staff and its baseline
+        // was read off the ledger just wiped above; it cannot be judged here.
+        self.promises.clear();
         // Squad social view belongs to the previous club's roster; the
         // new club's weekly pre-tick will rebuild it on its next Monday.
         self.squad_social_view = None;

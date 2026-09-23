@@ -37,6 +37,7 @@ pub struct CountryFreeAgentsTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    pub team_suffix: &'static str,
     pub players: Vec<FreeAgentPlayerDto>,
 }
 
@@ -188,6 +189,7 @@ pub async fn country_free_agents_action(
         i18n,
         active_tab: "free_agents",
         country_slug: route_params.country_slug,
+        team_suffix: "",
         players,
     })
 }

@@ -155,6 +155,8 @@ pub struct PlayerPlanEntry {
     /// For [`PlannedRole::SuccessionHeir`], the incumbent he is being
     /// groomed to replace.
     pub succeeds: Option<u32>,
+    /// Progress belongs to this intention, and survives unchanged reviews.
+    pub baseline: crate::club::player::PlayerUsage,
 }
 
 /// Every player the coach currently holds an opinion about.
@@ -205,6 +207,7 @@ impl CoachSquadPlan {
                 role,
                 set_on: today,
                 succeeds: None,
+                baseline: Default::default(),
             },
         );
     }
@@ -275,16 +278,18 @@ impl CoachSquadPlan {
         let mut changes = Vec::new();
 
         for player in players.iter() {
-            // Loanees are their parent club's to plan for.
-            if player.is_on_loan() {
-                continue;
-            }
             let standing = memory.and_then(|store| store.standing_of(player.id));
             let derived = Self::keeper_role(player, keepers)
                 .unwrap_or_else(|| Self::derive_role(player, &ranks, today));
             let level = AbilityEstimator::observable_level(player);
             let role = StandingRead::bound_role(derived, standing, ranks.rank_of(player, level));
             let previous = self.entries.get(&player.id).map(|e| e.role);
+            if previous == Some(role) {
+                if role == PlannedRole::SuccessionHeir {
+                    self.entries.get_mut(&player.id).unwrap().succeeds = ranks.incumbent_of(player);
+                }
+                continue;
+            }
             if previous != Some(role) {
                 changes.push((player.id, role));
             }
@@ -298,6 +303,7 @@ impl CoachSquadPlan {
                     } else {
                         None
                     },
+                    baseline: crate::club::player::PlayerUsage::of(player),
                 },
             );
         }
@@ -364,12 +370,16 @@ impl CoachSquadPlan {
         // ── The heir ──
         // A young player the staff believe will reach the level of an
         // ageing man ahead of him is being groomed, not warehoused.
-        if ranks.is_succession_heir(player, age, ceiling) {
+        let permanent_future = player
+            .contract_loan
+            .as_ref()
+            .is_none_or(|loan| loan.loan_future_fee.is_some());
+        if permanent_future && ranks.is_succession_heir(player, age, ceiling) {
             return PlannedRole::SuccessionHeir;
         }
 
         // ── Youth ──
-        if age <= 21 && ceiling > level.saturating_add(8) {
+        if rank > 0 && age <= 21 && ceiling > level.saturating_add(8) {
             return PlannedRole::DevelopmentPathway;
         }
 
@@ -379,7 +389,8 @@ impl CoachSquadPlan {
         // the shop window or, for a player with nothing left to offer,
         // no future at all — and the point of saying so is that the
         // player finds out.
-        let stalled = age > 23
+        let stalled = !player.is_on_loan()
+            && age > 23
             && StuckCareerScan::of(player, today).is_some_and(|scan| scan.stuck_years >= 2);
         if stalled {
             // A keeper is a special case: only one man can play, so a
@@ -433,9 +444,6 @@ impl SquadDepthRanks {
         let mut top_level: u8 = 0;
 
         for player in players.iter() {
-            if player.is_on_loan() {
-                continue;
-            }
             let group = player.position().position_group();
             let level = AbilityEstimator::observable_level(player);
             group_levels.entry(group).or_default().push(level);
@@ -451,9 +459,6 @@ impl SquadDepthRanks {
         // his age so an heir can be recognised.
         let mut incumbents: HashMap<PlayerFieldPositionGroup, (u32, u8, u8)> = HashMap::new();
         for player in players.iter() {
-            if player.is_on_loan() {
-                continue;
-            }
             let group = player.position().position_group();
             let level = AbilityEstimator::observable_level(player);
             let best = group_levels

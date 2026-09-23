@@ -2154,5 +2154,8 @@
   "yth": "Juv",
   "clear": "Borrar",
   "ai_error_not_configured": "La IA no está configurada",
-  "ai_error_no_data": "Los datos de la simulación no están cargados"
+  "ai_error_no_data": "Los datos de la simulación no están cargados",
+  "selection_factor_manager_plan": "el plan del entrenador para su rol",
+  "selection_factor_playing_time_commitment": "los compromisos de tiempo de juego",
+  "selection_factor_loan_agreement": "las condiciones de su cesión"
 }

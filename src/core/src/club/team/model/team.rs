@@ -1,8 +1,8 @@
 use crate::HappinessEventType;
+use crate::club::news::TeamNewsroom;
 use crate::club::player::player::ManagerPromiseKind;
 use crate::club::staff::coach::PlannedRole;
 use crate::club::staff::coach::standing::StandingEvidence;
-use crate::club::news::TeamNewsroom;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
@@ -246,9 +246,11 @@ impl Team {
                     .promises
                     .iter()
                     .any(|promise| promise.made_by_staff_id == Some(coach_id))
-                    || player.interactions.entries.iter().any(|entry| {
-                        entry.staff_id == coach_id && entry.promise_created
-                    })
+                    || player
+                        .interactions
+                        .entries
+                        .iter()
+                        .any(|entry| entry.staff_id == coach_id && entry.promise_created)
             })
             .flat_map(|player| {
                 player
@@ -301,17 +303,18 @@ impl Team {
         let Some(coach) = self.staffs.head_coach_mut() else {
             return;
         };
-        if !coach.squad_plan.due_for_revision(date) {
+        if !coach.squad_plan.due_for_revision(date)
+            && self
+                .players
+                .iter()
+                .all(|p| coach.squad_plan.entry(p.id).is_some())
+        {
             return;
         }
         let mut plan = std::mem::take(&mut coach.squad_plan);
         let memory = std::mem::take(&mut coach.coach_memory);
-        let changes = plan.revise_with_standing(
-            &self.players,
-            keepers.as_ref(),
-            Some(&memory),
-            date,
-        );
+        let changes =
+            plan.revise_with_standing(&self.players, keepers.as_ref(), Some(&memory), date);
         if let Some(coach) = self.staffs.head_coach_mut() {
             coach.squad_plan = plan;
             coach.coach_memory = memory;

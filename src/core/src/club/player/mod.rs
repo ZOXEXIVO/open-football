@@ -23,6 +23,7 @@ pub mod transfer;
 pub use ability::{attributes, position, position_weights, registry, skills, traits};
 pub use condition::load;
 pub use contract::agent;
+pub use core::PlayerUsage;
 pub use core::{builder, collection, context, player, result, utils};
 pub use events::{
     AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,

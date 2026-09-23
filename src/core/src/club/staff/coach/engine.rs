@@ -77,6 +77,7 @@ pub struct CoachDecisionEngine<'a> {
     pub memory: &'a CoachMemoryStore,
     pub strategy: CoachStrategy,
     pub profile: &'a CoachProfile,
+    pub player_intents: Option<&'a std::collections::HashMap<u32, super::PlayerMatchIntent>>,
 }
 
 impl<'a> CoachDecisionEngine<'a> {
@@ -89,7 +90,16 @@ impl<'a> CoachDecisionEngine<'a> {
             memory,
             profile,
             strategy,
+            player_intents: None,
         }
+    }
+
+    pub fn with_player_intents(
+        mut self,
+        intents: &'a std::collections::HashMap<u32, super::PlayerMatchIntent>,
+    ) -> Self {
+        self.player_intents = Some(intents);
+        self
     }
 
     /// Convenience constructor for callers that hold a full `Staff`
@@ -185,8 +195,7 @@ impl<'a> CoachDecisionEngine<'a> {
         );
         AssessmentMath::push_standing_reasons(memory, &standing, &mut reasons);
 
-        let selection_confidence =
-            (selection_confidence + standing.start_shift).clamp(0.0, 1.0);
+        let selection_confidence = (selection_confidence + standing.start_shift).clamp(0.0, 1.0);
         let drop_risk = (1.0 - selection_confidence).clamp(0.0, 1.0);
 
         // Bench preference is a softened version of start preference —
@@ -524,11 +533,7 @@ impl AssessmentMath {
     const BENCH_SCALE: f32 = 0.30;
     const LIVE_SCALE: f32 = 0.30;
 
-    fn form_confidence(
-        memory: Option<&CoachMemory>,
-        profile: &CoachProfile,
-        dampener: f32,
-    ) -> f32 {
+    fn form_confidence(memory: Option<&CoachMemory>, profile: &CoachProfile, dampener: f32) -> f32 {
         let Some(m) = memory else { return 0.5 };
         if !m.is_well_observed() {
             return 0.5;
@@ -547,8 +552,8 @@ impl AssessmentMath {
         // Two dampeners, and they are different things: the coach's own
         // tolerance for one bad game, and how far he is backing this
         // particular man through a slump.
-        let net =
-            (lift * reaction - pressure * one_bad_game * standing_backing * reaction).clamp(-1.0, 1.0);
+        let net = (lift * reaction - pressure * one_bad_game * standing_backing * reaction)
+            .clamp(-1.0, 1.0);
         (0.5 + net * 0.5).clamp(0.0, 1.0)
     }
 

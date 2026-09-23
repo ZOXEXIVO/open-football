@@ -1,6 +1,5 @@
-use crate::club::player::ManagerPromiseKind;
 use crate::club::staff::goalkeeping::KeeperSelectionBrief;
-use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext};
+use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext, PlayerMatchIntent};
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
@@ -16,7 +15,7 @@ use super::model::{
     EligibilityDecision, EligibilityEvaluator, MatchSelectionGameModel, MatchTypeSignal,
 };
 use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
-use super::scoring::ScoringEngine;
+use super::scoring::{ScoringEngine, SlotScoreBreakdown};
 use super::{CupStage, DomesticCupContext, SelectionCompetition, SelectionPolicy};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -140,6 +139,9 @@ impl SelectionScoringContext<'_> {
         slot: PlayerPositionType,
         available: &[&Player],
     ) -> f32 {
+        if self.staff.squad_plan.entry(player.id).is_some() {
+            return 0.0;
+        }
         self.engine.future_pathway_adjustment(
             player,
             slot,
@@ -156,6 +158,9 @@ impl SelectionScoringContext<'_> {
     /// not-quite-ready prospect (who would lose the same-role contest for a
     /// start) still earns a place on the matchday bench.
     fn future_pathway_bench(&self, player: &Player) -> f32 {
+        if self.staff.squad_plan.entry(player.id).is_some() {
+            return 0.0;
+        }
         let slot = helpers::best_tactical_position(player, self.tactics);
         self.engine.future_pathway_adjustment(
             player,
@@ -203,7 +208,7 @@ impl SelectionScoringContext<'_> {
         // order keeps a real keeper in goal whenever possible.
         let picked_gk = self
             .pick_forced_goalkeeper(available, &used_ids)
-            .or_else(|| self.pick_best_goalkeeper(available, &used_ids))
+            .or_else(|| self.pick_best_goalkeeper(available, &used_ids, true))
             .or_else(|| Self::pick_any_goalkeeper_fallback(available, &used_ids));
         if let Some(gk) = picked_gk {
             squad.push(MatchPlayer::from_player(
@@ -695,7 +700,7 @@ impl SelectionScoringContext<'_> {
         let mut used_ids: Vec<u32> = Vec::new();
 
         // 1. Backup goalkeeper
-        if let Some(gk) = self.pick_best_goalkeeper(remaining, &used_ids) {
+        if let Some(gk) = self.pick_best_goalkeeper(remaining, &used_ids, false) {
             subs.push(MatchPlayer::from_player(
                 team_id,
                 gk,
@@ -873,7 +878,7 @@ impl SelectionScoringContext<'_> {
             return;
         }
 
-        let Some(gk) = self.pick_best_goalkeeper(remaining, used_ids.as_slice()) else {
+        let Some(gk) = self.pick_best_goalkeeper(remaining, used_ids.as_slice(), false) else {
             return;
         };
 
@@ -1198,8 +1203,18 @@ impl SelectionScoringContext<'_> {
         slot: PlayerPositionType,
         available: &[&Player],
     ) -> f32 {
+        self.starting_slot_breakdown(player, slot, available)
+            .total()
+    }
+
+    pub(crate) fn starting_slot_breakdown(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        available: &[&Player],
+    ) -> SlotScoreBreakdown {
         let target_group = slot.position_group();
-        self.engine.score_player_for_slot(
+        let (_, mut b) = self.engine.score_player_for_slot_with_breakdown(
             player,
             slot,
             target_group,
@@ -1208,62 +1223,59 @@ impl SelectionScoringContext<'_> {
             self.date,
             self.is_friendly,
             &[],
-        ) + self
+        );
+        b.development_minutes = self
             .engine
             .development_minutes_bonus(player, self.match_importance)
-            + self.engine.fatigue_penalty(player, self.is_friendly)
-            - self
+            + self.policy_starting_adjustment(player);
+        b.condition_floor += self.engine.fatigue_penalty(player, self.is_friendly);
+        b.injury_risk =
+            -self
                 .engine
-                .injury_risk_penalty(player, self.match_importance, self.is_friendly)
-            + self.policy_starting_adjustment(player)
-            + self.cup_opportunity(player, true)
-            + self.future_pathway_start(player, slot, available)
-            + self.want_away_adjustment(player)
-            + self.coach_starting_adjustment(player, slot)
-            + self.opponent_matchup_adjustment(player, slot)
-            + self.role_duty_adjustment(player, slot)
-            + self.eligibility_rule_penalty(player)
-            + self.medical_caution_adjustment(player)
-            + self.loan_match_fee_start(player)
-            + self.promise_pull_adjustment(player, true)
+                .injury_risk_penalty(player, self.match_importance, self.is_friendly);
+        b.domestic_cup_opportunity = self.cup_opportunity(player, true);
+        b.future_pathway = self.future_pathway_start(player, slot, available);
+        b.coach_relationship +=
+            self.want_away_adjustment(player) + self.coach_starting_adjustment(player, slot);
+        b.opponent_matchup = self.opponent_matchup_adjustment(player, slot);
+        b.role_duty_fit = self.role_duty_adjustment(player, slot);
+        b.eligibility_rule = self.eligibility_rule_penalty(player);
+        b.medical_risk = self.medical_caution_adjustment(player);
+        b.loan_incentive = self.loan_match_fee_start(player);
+        let intent = self.starting_intent(player, slot, available);
+        b.manager_plan = intent.planned_start;
+        b.playing_time_commitment = intent.start_adjustment() - intent.planned_start;
+        b
     }
 
-    /// Active playing-time / starting-role promises pull the player
-    /// toward the XI: a conscientious coach delivers what he promised,
-    /// and the pull grows continuously as the deadline closes in.
-    /// Bounded well below a genuine quality gap so a promise shades
-    /// marginal calls without hijacking selection — this is what makes
-    /// promise-keeping emergent rather than accidental, and makes a
-    /// stubborn low-discipline manager a genuinely worse promise-keeper.
-    fn promise_pull_adjustment(&self, player: &Player, for_starting: bool) -> f32 {
-        if self.is_friendly || player.promises.is_empty() {
-            return 0.0;
+    /// A development plan earns a start only while the prospect is within
+    /// reach of the best established man for the same role.
+    fn starting_intent(
+        &self,
+        player: &Player,
+        slot: PlayerPositionType,
+        available: &[&Player],
+    ) -> PlayerMatchIntent {
+        let mut intent = self.player_intent(player);
+        if intent.development {
+            let gap = self
+                .engine
+                .same_role_quality_gap(player, slot, self.date, available);
+            let tolerance = 1.5 + self.engine.profile.potential_accuracy * 2.5;
+            intent.planned_start *= (1.0 - gap / tolerance).clamp(0.0, 1.0);
         }
-        let mental = &self.staff.staff_attributes.mental;
-        let conscientiousness = (mental.discipline as f32 + mental.man_management as f32) / 40.0;
-        let mut pull: f32 = 0.0;
-        for promise in &player.promises {
-            let weight = match promise.kind {
-                // A starting-role promise is only served by a start.
-                ManagerPromiseKind::StartingRole if for_starting => 1.0,
-                // A playing-time promise is served by minutes — a start
-                // fully, a bench slot partially (sub minutes count).
-                ManagerPromiseKind::PlayingTime => {
-                    if for_starting {
-                        0.7
-                    } else {
-                        0.9
-                    }
-                }
-                _ => continue,
-            };
-            let window = (promise.deadline - promise.made_on).num_days().max(1) as f32;
-            let remaining = (promise.deadline - self.date).num_days().max(0) as f32;
-            // Near 0 the day the promise was made, 1.0 at the deadline.
-            let pressure = (1.0 - remaining / window).clamp(0.15, 1.0);
-            pull += 0.9 * weight * pressure * (0.45 + conscientiousness * 0.75);
-        }
-        pull.min(1.2)
+        intent
+    }
+
+    pub(crate) fn player_intent(&self, player: &Player) -> PlayerMatchIntent {
+        PlayerMatchIntent::assess(
+            player,
+            self.staff,
+            self.date,
+            self.match_importance,
+            matches!(self.competition, SelectionCompetition::DomesticCup { .. }),
+            self.is_friendly,
+        )
     }
 
     /// Opponent-matchup nudge, gated by the presence of a richer game
@@ -1514,7 +1526,7 @@ impl SelectionScoringContext<'_> {
             + self.coach_bench_adjustment(player)
             + self.bench_scenario_coverage_score(player)
             + self.eligibility_rule_penalty(player)
-            + self.promise_pull_adjustment(player, false)
+            + self.player_intent(player).bench_adjustment()
     }
 
     /// Per-fixture bench scenario coverage bonus. Returns 0 when no
@@ -1746,6 +1758,7 @@ impl SelectionScoringContext<'_> {
         &self,
         available: &[&'p Player],
         used_ids: &[u32],
+        for_starting: bool,
     ) -> Option<&'p Player> {
         // In real football the #1 keeper plays everything unless injured,
         // genuinely out of form, or the fixture is low priority (early cup
@@ -1775,6 +1788,13 @@ impl SelectionScoringContext<'_> {
             .filter(|p| p.positions.is_goalkeeper())
             .max_by(|a, b| {
                 let score = |p: &Player| {
+                    let management = if for_starting {
+                        self.starting_intent(p, PlayerPositionType::Goalkeeper, available)
+                            .start_adjustment()
+                            + self.coach_starting_adjustment(p, PlayerPositionType::Goalkeeper)
+                    } else {
+                        self.player_intent(p).bench_adjustment() + self.coach_bench_adjustment(p)
+                    };
                     self.engine
                         .goalkeeper_score(p, self.staff, self.is_friendly, self.date)
                         + self
@@ -1783,6 +1803,10 @@ impl SelectionScoringContext<'_> {
                         + self.cup_goalkeeper(p)
                         + self.keeper_brief_adjustment(p)
                         + self.want_away_adjustment(p)
+                        + management
+                        + self
+                            .engine
+                            .loan_match_fee_pull(p, for_starting, self.is_friendly)
                 };
                 score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)
             })

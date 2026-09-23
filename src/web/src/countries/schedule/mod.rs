@@ -6,7 +6,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::Country;
+use core::{Country, NationalTeamLevel};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -35,6 +35,7 @@ pub struct CountryScheduleTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    pub team_suffix: &'static str,
     pub items: Vec<CountryScheduleItem>,
 }
 
@@ -56,6 +57,21 @@ pub struct CountryScheduleResult {
 pub async fn country_schedule_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountryScheduleRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_schedule(state, route_params, NationalTeamLevel::Senior).await
+}
+
+pub async fn country_u21_schedule_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<CountryScheduleRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_schedule(state, route_params, NationalTeamLevel::Under21).await
+}
+
+async fn render_country_schedule(
+    state: GameAppData,
+    route_params: CountryScheduleRequest,
+    level: NationalTeamLevel,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -97,8 +113,12 @@ pub async fn country_schedule_action(
             ))
         })?;
 
-    let items: Vec<CountryScheduleItem> = country
-        .national_team
+    let (team, team_suffix) = match level {
+        NationalTeamLevel::Senior => (&country.national_team, ""),
+        NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
+    };
+
+    let items: Vec<CountryScheduleItem> = team
         .schedule
         .iter()
         .map(|fixture| {
@@ -132,8 +152,8 @@ pub async fn country_schedule_action(
         .collect();
 
     let current_path = format!(
-        "/{}/countries/{}/schedule",
-        route_params.lang, route_params.country_slug
+        "/{}/countries/{}{}/schedule",
+        route_params.lang, route_params.country_slug, team_suffix
     );
     let cl: Vec<(&str, &str)> = country
         .leagues
@@ -183,6 +203,7 @@ pub async fn country_schedule_action(
         i18n,
         active_tab: "schedule",
         country_slug: route_params.country_slug,
+        team_suffix,
         items,
     })
 }

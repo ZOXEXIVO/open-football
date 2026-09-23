@@ -81,6 +81,93 @@ fn anonymous(pos: PlayerFieldPositionGroup) -> PlayerMatchEndStats {
     make_stats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0.0, pos)
 }
 
+#[test]
+fn outfield_dangerous_giveaways_reduce_ratings_before_a_shot_occurs() {
+    for pos in [
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ] {
+        let clean = make_stats(0, 0, 35, 29, 1, 2, 2, 1, 0, 0.3, pos);
+        let mut third = clean.clone();
+        third.zone_stats.dangerous_turnovers_own_third = 2;
+        let mut own_box = clean.clone();
+        own_box.zone_stats.dangerous_turnovers_own_box = 2;
+        let clean_rating = RatingContext::new(&clean, 1, 1).calculate();
+        let third_rating = RatingContext::new(&third, 1, 1).calculate();
+        let box_rating = RatingContext::new(&own_box, 1, 1).calculate();
+        assert!(
+            clean_rating > third_rating && third_rating > box_rating,
+            "{pos:?}: clean {clean_rating:.3}, own-third {third_rating:.3}, own-box {box_rating:.3}"
+        );
+        assert!(
+            clean_rating - box_rating >= 0.05,
+            "{pos:?}: own-box giveaways must have a visible cost: {clean_rating:.3} -> {box_rating:.3}"
+        );
+    }
+}
+
+#[test]
+fn outfield_giveaway_promotions_do_not_double_count_or_improve_the_rating() {
+    for pos in [
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ] {
+        for errors in 1..=8 {
+            let mut giveaway = make_stats(0, 0, 35, 29, 1, 2, 2, 1, 0, 0.3, pos);
+            giveaway.zone_stats.dangerous_turnovers_own_box = errors;
+            let mut shot = giveaway.clone();
+            shot.errors_leading_to_shot = errors;
+            let mut shot_only = shot.clone();
+            shot_only.zone_stats.dangerous_turnovers_own_box = 0;
+            let mut goal = shot.clone();
+            goal.errors_leading_to_goal = 1;
+            let rate = |stats: &PlayerMatchEndStats| RatingContext::new(stats, 1, 1).calculate();
+            assert!(
+                rate(&shot) < rate(&giveaway),
+                "{pos:?}: {errors} promotions"
+            );
+            assert!((rate(&shot) - rate(&shot_only)).abs() < 1e-6);
+            assert!(rate(&goal) < rate(&shot));
+        }
+        // Consume the own-box error first, then the own-third one;
+        // one additional dangerous giveaway must still carry a cost.
+        let mut mixed = make_stats(0, 0, 35, 29, 1, 2, 2, 1, 0, 0.3, pos);
+        mixed.errors_leading_to_shot = 2;
+        mixed.errors_leading_to_goal = 1;
+        let error_rating = RatingContext::new(&mixed, 1, 1).calculate();
+        mixed.zone_stats.dangerous_turnovers_own_box = 1;
+        mixed.zone_stats.dangerous_turnovers_own_third = 1;
+        assert!((RatingContext::new(&mixed, 1, 1).calculate() - error_rating).abs() < 1e-6);
+        mixed.zone_stats.dangerous_turnovers_own_third += 1;
+        assert!(RatingContext::new(&mixed, 1, 1).calculate() < error_rating);
+    }
+}
+
+#[test]
+fn outfield_cameos_receive_only_a_share_of_team_result_credit_and_blame() {
+    for pos in [
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ] {
+        let full = anonymous(pos);
+        let mut cameo = full.clone();
+        cameo.minutes_played = 10;
+        let effect = |stats: &PlayerMatchEndStats| {
+            RatingContext::new(stats, 1, 0).performance_value()
+                - RatingContext::new(stats, 0, 3).performance_value()
+        };
+        assert!(
+            effect(&cameo) < effect(&full) * 0.20,
+            "{pos:?}: ten minutes should not bank a full team outcome"
+        );
+        cameo.minutes_played = 0;
+        assert!(effect(&cameo).abs() < 1e-6);
+    }
+}
+
 // ===========================================================
 // Behavioral invariants
 // ===========================================================
@@ -2773,15 +2860,10 @@ fn protected_shutout_curve_is_smooth_and_monotonic() {
 }
 
 #[test]
-fn top_gk_season_average_lands_in_real_football_band() {
-    // Regression for the 2026-06 issue where Courtois / Maignan /
-    // Unai Simón posted season averages in the 6.21-6.62 band — well
-    // below the WhoScored reference 6.8-7.0 for elite keepers. The
-    // root cause was the cumulative tightening: GkModest cap +0.75,
-    // GkPassenger cap +0.50, halved context credit, and an over-tiered
-    // CS bonus. With the recalibration, a representative 38-match
-    // schedule for a TOP keeper in a strong defensive side must
-    // average comfortably above 6.7.
+fn strong_defence_keeper_season_requires_individual_merit() {
+    // A strong defensive side is not evidence of elite goalkeeping.
+    // This schedule contains many quiet shutouts and no recorded shot
+    // difficulty, so it must not guarantee a 6.8+ individual average.
     //
     // The synthetic schedule below approximates the observed match
     // distribution for Maignan (43% CS, 30% concede-1, 17% concede-2,
@@ -2855,19 +2937,9 @@ fn top_gk_season_average_lands_in_real_football_band() {
     }
     let avg = total / count as f32;
     assert!(
-        avg > 6.7,
-        "TOP-GK season average rated {} across {} matches — must \
-             clear 6.7 so elite keepers in a strong defensive side \
-             land in the real-football 6.8-7.0 reference band (was \
-             collapsing to 6.3 after the prior tightening)",
-        avg,
-        count,
-    );
-    assert!(
-        avg < 7.3,
-        "TOP-GK season average rated {} across {} matches — must \
-             stay under 7.3 so the routine band doesn't drift back \
-             into the elite zone the 2026-04 pass was guarding against",
+        (6.40..=6.70).contains(&avg),
+        "keeper behind a strong defence rated {} across {} matches — \
+             ordinary shot-stopping should average 6.40..=6.70",
         avg,
         count,
     );
@@ -4009,8 +4081,8 @@ fn untested_keeper_clean_sheet_is_ordinary_not_good() {
     let gk = make_gk(0, 0);
     let r = RatingContext::new(&gk, 1, 0).calculate();
     assert!(
-        (6.40..=7.00).contains(&r),
-        "untested keeper on a clean sheet should read ORDINARY (6.30-6.85), got {r:.2} — \
+        (6.50..=6.60).contains(&r),
+        "untested keeper on a clean sheet should read ORDINARY (6.50-6.60), got {r:.2} — \
          a keeper who never touched a shot has not earned the good band"
     );
 }
@@ -4021,8 +4093,46 @@ fn routine_clean_sheet_keeper_is_solid() {
     let gk = make_gk(2, 2);
     let r = RatingContext::new(&gk, 1, 0).calculate();
     assert!(
-        (6.95..=7.55).contains(&r),
-        "2-save clean sheet should read SOLID (6.70-7.30), got {r:.2}"
+        (6.75..=7.05).contains(&r),
+        "2-save clean sheet should read SOLID (6.75-7.05), got {r:.2}"
+    );
+}
+
+#[test]
+fn keeper_save_quality_separates_identical_clean_sheet_counts() {
+    let mut tame = make_gk(3, 3);
+    tame.xg_faced = 3.0 * 0.15;
+    let mut difficult = tame.clone();
+    difficult.xg_faced = 3.0 * 0.80;
+
+    let tame_rating = RatingContext::new(&tame, 1, 0).calculate();
+    let difficult_rating = RatingContext::new(&difficult, 1, 0).calculate();
+    assert!(
+        (6.60..=6.85).contains(&tame_rating),
+        "three tame saves must not earn a good rating: {tame_rating:.3}"
+    );
+    assert!(
+        difficult_rating >= 7.30 && difficult_rating - tame_rating >= 0.60,
+        "same save count must reward difficulty: tame {tame_rating:.3}, difficult {difficult_rating:.3}"
+    );
+}
+
+#[test]
+fn difficult_saves_do_not_erase_a_keeper_howler() {
+    let mut clean = make_gk(6, 7);
+    clean.xg_faced = 7.0 * 0.75;
+    let mut howler = clean.clone();
+    howler.errors_leading_to_shot = 1;
+    howler.errors_leading_to_goal = 1;
+    let clean_rating = RatingContext::new(&clean, 1, 1).calculate();
+    let howler_rating = RatingContext::new(&howler, 1, 1).calculate();
+    assert!(
+        clean_rating >= 7.50,
+        "difficult saves earned {clean_rating:.3}"
+    );
+    assert!(
+        clean_rating - howler_rating >= 1.0,
+        "a howler must still matter after difficult saves: {clean_rating:.3} -> {howler_rating:.3}"
     );
 }
 
@@ -4074,15 +4184,16 @@ fn keeper_error_to_goal_is_a_bad_day() {
     );
 }
 
-/// Heroic in defeat still rates well — volume of genuine intervention
-/// is the keeper's currency, and a loss must not erase it.
+/// Difficult saves in defeat still rate well. Save count alone cannot
+/// establish that the performance was heroic.
 #[test]
 fn heroic_keeper_in_defeat_still_rates_well() {
-    let gk = make_gk(8, 10);
+    let mut gk = make_gk(8, 10);
+    gk.xg_faced = 10.0 * 0.75;
     let r = RatingContext::new(&gk, 0, 2).calculate();
     assert!(
-        r >= 7.00,
-        "8 saves conceding 2 is a standout losing display, expected >= 7.00, got {r:.2}"
+        r >= 7.50,
+        "8 difficult saves conceding 2 should earn >= 7.50 in defeat, got {r:.2}"
     );
 }
 
@@ -4109,9 +4220,9 @@ fn keeper_beaten_twice_with_saves_is_below_solid() {
     let gk = make_gk(3, 5);
     let r = RatingContext::new(&gk, 1, 2).calculate();
     assert!(
-        (6.00..=6.60).contains(&r),
+        (5.85..=6.35).contains(&r),
         "3 saves / 2 conceded is the commonest keeper line in a 2.7-goal \
-         league and must read 6.00-6.60, got {r:.2}"
+         league and must read 5.85-6.35, got {r:.2}"
     );
 }
 
@@ -4231,7 +4342,7 @@ fn untested_keeper_lands_on_the_anchor() {
     // shutout itself.
     let r = RatingContext::new(&gk, 0, 0).calculate();
     assert!(
-        (6.60..=7.10).contains(&r),
+        (6.50..=6.55).contains(&r),
         "an untested keeper on a goalless draw rated {r:.3} — he did his \
          job and nothing more, which is what the anchor means"
     );

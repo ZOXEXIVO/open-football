@@ -8,8 +8,11 @@ src/web/assets/static/viewer/
 **/target
 
 .idea/
+.qwen/
+.agents/
 .claude/
 CLAUDE.md
+openspec
 
 training_result.json
 

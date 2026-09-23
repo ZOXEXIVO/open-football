@@ -79,7 +79,11 @@ impl Team {
             ctx.date,
         );
 
-        let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+        let coach_snapshot = MatchCoachSnapshot::for_selection_context(
+            head_coach,
+            ctx,
+            self.players.iter().chain(reserve_players.iter().copied()),
+        );
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -141,7 +145,11 @@ impl Team {
             ctx.date,
         );
 
-        let coach_snapshot = MatchCoachSnapshot::for_selection_context(head_coach, ctx);
+        let coach_snapshot = MatchCoachSnapshot::for_selection_context(
+            head_coach,
+            ctx,
+            self.players.iter().chain(reserve_players.iter().copied()),
+        );
         let penalty_taker_id = self.select_penalty_taker(&squad_result.main_squad);
         let free_kick_taker_id = self.select_free_kick_taker(&squad_result.main_squad);
 
@@ -275,20 +283,36 @@ impl MatchCoachSnapshot {
     /// showing "manager strategy" and the match engine's in-flight
     /// reads agree on the same call, including the fixture game
     /// model's derby / opponent-strength / squad-depth signals.
-    fn for_selection_context(
+    fn for_selection_context<'a>(
         head_coach: &Staff,
         ctx: &SelectionContext,
+        players: impl Iterator<Item = &'a Player>,
     ) -> Option<CoachMatchSnapshot> {
         if head_coach.id == 0 {
             return None;
         }
         let profile = CoachProfile::from_staff(head_coach);
         let strategy = CoachStrategyForSelection::derive(&profile, ctx);
-        Some(CoachMatchSnapshot::new(
-            head_coach.coach_memory.clone(),
-            profile,
-            strategy,
-            ctx.date,
-        ))
+        let mut snapshot =
+            CoachMatchSnapshot::new(head_coach.coach_memory.clone(), profile, strategy, ctx.date);
+        snapshot.player_intents = players
+            .map(|p| {
+                (
+                    p.id,
+                    crate::club::staff::PlayerMatchIntent::assess(
+                        p,
+                        head_coach,
+                        ctx.date,
+                        ctx.match_importance,
+                        matches!(
+                            ctx.competition,
+                            crate::r#match::SelectionCompetition::DomesticCup { .. }
+                        ),
+                        ctx.is_friendly,
+                    ),
+                )
+            })
+            .collect();
+        Some(snapshot)
     }
 }

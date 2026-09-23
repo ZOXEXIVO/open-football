@@ -7,7 +7,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Datelike;
-use core::Country;
+use core::{Country, NationalTeamLevel};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -36,6 +36,7 @@ pub struct CountryStaffTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    pub team_suffix: &'static str,
     pub staff: Vec<NationalStaffDto>,
 }
 
@@ -52,6 +53,21 @@ pub struct NationalStaffDto {
 pub async fn country_staff_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountryStaffRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_staff(state, route_params, NationalTeamLevel::Senior).await
+}
+
+pub async fn country_u21_staff_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<CountryStaffRequest>,
+) -> ApiResult<impl IntoResponse> {
+    render_country_staff(state, route_params, NationalTeamLevel::Under21).await
+}
+
+async fn render_country_staff(
+    state: GameAppData,
+    route_params: CountryStaffRequest,
+    level: NationalTeamLevel,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -95,8 +111,12 @@ pub async fn country_staff_action(
 
     let now = simulator_data.date.date();
 
-    let staff: Vec<NationalStaffDto> = country
-        .national_team
+    let (team, team_suffix) = match level {
+        NationalTeamLevel::Senior => (&country.national_team, ""),
+        NationalTeamLevel::Under21 => (&country.u21_national_team, "/u21"),
+    };
+
+    let staff: Vec<NationalStaffDto> = team
         .staff
         .iter()
         .map(|s| {
@@ -116,8 +136,8 @@ pub async fn country_staff_action(
         .collect();
 
     let current_path = format!(
-        "/{}/countries/{}/staff",
-        route_params.lang, route_params.country_slug
+        "/{}/countries/{}{}/staff",
+        route_params.lang, route_params.country_slug, team_suffix
     );
     let cl: Vec<(&str, &str)> = country
         .leagues
@@ -167,6 +187,7 @@ pub async fn country_staff_action(
         i18n,
         active_tab: "staff",
         country_slug: route_params.country_slug,
+        team_suffix,
         staff,
     })
 }

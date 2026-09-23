@@ -55,6 +55,8 @@ pub struct PlayerHappiness {
     pub eligible_official_matches_since_join: u16,
     /// Of those eligible matches, the ones the player started.
     pub starts_since_join: u16,
+    /// Actual official minutes, across league and cup, reset on club change.
+    pub official_minutes_since_join: u32,
     /// …the ones the player came on as a substitute.
     pub sub_apps_since_join: u16,
     /// …the ones the player was named to the bench but never used.
@@ -198,6 +200,7 @@ impl PlayerHappiness {
             recent_low_rating_len: 0,
             eligible_official_matches_since_join: 0,
             starts_since_join: 0,
+            official_minutes_since_join: 0,
             sub_apps_since_join: 0,
             unused_bench_since_join: 0,
             left_out_since_join: 0,
@@ -676,6 +679,7 @@ impl PlayerHappiness {
         self.recent_low_rating_len = 0;
         self.eligible_official_matches_since_join = 0;
         self.starts_since_join = 0;
+        self.official_minutes_since_join = 0;
         self.sub_apps_since_join = 0;
         self.unused_bench_since_join = 0;
         self.left_out_since_join = 0;

@@ -88,6 +88,11 @@ const LOSS: f32 = -0.13;
 
 /// Mistakes short of a goal.
 const ERROR_TO_SHOT: f32 = -0.40;
+/// Dangerous giveaways that did not become shots carry a smaller cost.
+/// Expressed as fractions of a shot-error so promoting an incident to
+/// a shot can only increase its penalty, even at high event counts.
+const OWN_BOX_GIVEAWAY: f32 = 0.50;
+const OWN_THIRD_GIVEAWAY: f32 = 0.25;
 
 /// Defining moments, in **rating points**, applied after the shape so a
 /// single catastrophe still reaches the disaster band.
@@ -159,7 +164,8 @@ impl<'a> RatingContext<'a> {
         (s.goals as f32 - expected).clamp(FINISHING_MIN, FINISHING_MAX) * FINISHING
     }
 
-    /// Result, clean sheet, and shared blame for goals conceded.
+    /// Result, clean sheet, and shared blame for goals conceded, weighted
+    /// by time played. A late substitute did not earn the full team result.
     fn team_context(&self) -> f32 {
         let mut value = if self.team_goals > self.opponent_goals {
             WIN
@@ -170,7 +176,7 @@ impl<'a> RatingContext<'a> {
         };
         value += self.clean_sheet_context();
         value += self.conceded_context();
-        value
+        value * (self.stats.minutes_played as f32 / 90.0).clamp(0.0, 1.0)
     }
 
     /// Errors short of a goal, plus discipline and profligacy. Returns
@@ -185,7 +191,24 @@ impl<'a> RatingContext<'a> {
         let shot_errors = s
             .errors_leading_to_shot
             .saturating_sub(s.errors_leading_to_goal);
-        RatingMath::sat(shot_errors as f32, 1.2) * ERROR_TO_SHOT + self.discipline()
+
+        // The engine records dangerous giveaways immediately, then
+        // promotes the same incident to an error if a shot/goal follows.
+        // Consume those promoted events first (own box, then own third)
+        // so they are charged once. Goal errors are already included in
+        // errors_leading_to_shot and paid as defining moments below.
+        let z = s.zone_stats;
+        let own_box = z
+            .dangerous_turnovers_own_box
+            .saturating_sub(s.errors_leading_to_shot);
+        let spill = s
+            .errors_leading_to_shot
+            .saturating_sub(z.dangerous_turnovers_own_box);
+        let own_third = z.dangerous_turnovers_own_third.saturating_sub(spill);
+        let mistakes = shot_errors as f32
+            + own_box as f32 * OWN_BOX_GIVEAWAY
+            + own_third as f32 * OWN_THIRD_GIVEAWAY;
+        RatingMath::sat(mistakes, 1.2) * ERROR_TO_SHOT + self.discipline()
     }
 
     /// Events a match report leads with, in rating points, applied

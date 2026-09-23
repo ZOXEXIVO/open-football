@@ -181,19 +181,19 @@ impl RatingShape {
 // *distribution* is described — the component weights describe what
 // counts as good, this describes what counts as normal.
 //
-// Both numbers are measured, not chosen: `dev_match league` prints the
-// per-position mean and sd of the raw performance value (PERFORMANCE
-// SCALE block). Re-derive them there whenever component weights or
-// engine emission move; nothing else needs re-tuning when they do,
-// because the anchor and the shape are independent of them. That
-// separation is the whole point — under the old additive model every
-// coefficient change moved the population level and had to be paid for
-// with a compensating change somewhere else.
+// `dev_match league` reports per-position mean and sd (PERFORMANCE
+// SCALE block) for calibration. The keeper's centre is deliberately
+// zero match value: changing the mix of team results must not redefine
+// neutral shot-stopping. Each role's anchor and the shared curve remain
+// independent of the component weights and observed spread.
 
 #[derive(Clone, Copy)]
 struct PerformanceScale {
+    /// Neutral verdict for this role. A keeper with no meaningful work
+    /// starts at 6.5; positive shot-stopping must earn a higher rating.
+    anchor: f32,
     /// The performance value that reads as an ordinary shift for this
-    /// position — the one that earns [`RatingShape::ANCHOR`].
+    /// position — the one that earns this scale's `anchor`.
     mean: f32,
     /// Spread of the position's performance distribution: the raw
     /// standard deviation, taken straight from the `sd` column of the
@@ -229,10 +229,12 @@ impl PerformanceScale {
     /// value swings on whole goals: one concession moves him two thirds
     /// of a goal in a single event.
     const KEEPER: PerformanceScale = PerformanceScale {
-        // Near-zero by construction: a keeper who neither prevents nor
-        // concedes beyond what the strikes he faced were worth had an
-        // ordinary afternoon. Measured −0.068 (3 draws, 2026-08-08).
-        mean: -0.07,
+        anchor: 6.50,
+        // Zero goals of match value is neutral. The former 6.72 anchor
+        // and negative mean rewarded even an untested keeper before
+        // the small clean-sheet, result and distribution credits.
+        // Centre on performance, not the population's team results.
+        mean: 0.0,
         sd: 1.20,
         // Raised 0.88 → 1.20 alongside the sd. The two move together on
         // purpose: `sd` widened because the expectation now varies with
@@ -277,6 +279,7 @@ impl PerformanceScale {
     /// through the divisors. Reconciling them means making the two
     /// describe the same distribution, not picking a number between.
     const DEFENDER: PerformanceScale = PerformanceScale {
+        anchor: RatingShape::ANCHOR,
         mean: 0.42,
         sd: 0.56,
         sensitivity: 0.52,
@@ -293,6 +296,7 @@ impl PerformanceScale {
     /// it until the reference run and the fixtures describe the same
     /// population.
     const MIDFIELDER: PerformanceScale = PerformanceScale {
+        anchor: RatingShape::ANCHOR,
         mean: 0.26,
         sd: 0.56,
         // Trimmed 0.62 → 0.52 (2026-08-08). Midfielders were reaching
@@ -316,6 +320,7 @@ impl PerformanceScale {
     /// slightly below par rather than as a failure — his position's
     /// average *includes* the goals he is expected to score.
     const FORWARD: PerformanceScale = PerformanceScale {
+        anchor: RatingShape::ANCHOR,
         // DELIBERATELY NOT re-measured, unlike the other three. The
         // 2026-08-08 measurement puts the forward distribution at
         // mean 0.34-0.37, sd 1.00-1.07 (3 draws) — a long way from these
@@ -342,7 +347,7 @@ impl PerformanceScale {
     /// Turn a raw performance value into a rating.
     #[inline]
     fn rate(&self, raw: f32) -> f32 {
-        RatingShape::ANCHOR + self.sensitivity * RatingShape::delta(self.standardise(raw))
+        self.anchor + self.sensitivity * RatingShape::delta(self.standardise(raw))
     }
 
     #[inline]

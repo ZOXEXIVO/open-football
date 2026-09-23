@@ -106,6 +106,19 @@ impl CoachPlayerBond {
         Self::from_inputs(&inputs)
     }
 
+    /// Selection's social preference. Sporting trust is already scored by
+    /// the coach engine; being denied minutes must not itself lower the
+    /// player's chance of earning them back.
+    pub fn social_selection_adjustment(player: &Player, staff: &Staff, today: NaiveDate) -> f32 {
+        let mut inputs = BondInputs::collect(player, staff, today);
+        inputs.coach_memory_tactical_trust = 0.5;
+        inputs.coach_memory_big_match_trust = 0.5;
+        inputs.role_fairness = 0.5;
+        Self::from_inputs(&inputs)
+            .selection_adjustment(1.4)
+            .clamp(-0.8, 0.6)
+    }
+
     /// Build the bond AND surface the 16 pre-aggregated input signals
     /// that fed each axis. Used by debug / LLM consumers that need to
     /// explain *why* a particular bond reads the way it does, and by

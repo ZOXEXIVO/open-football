@@ -299,6 +299,9 @@ impl SelectionRole {
 /// the renderer doesn't have to expose raw f32 scores.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionScoreFactor {
+    ManagerPlan,
+    PlayingTimeCommitment,
+    LoanAgreement,
     PositionFit,
     PerceivedQuality,
     MatchReadiness,
@@ -338,6 +341,11 @@ impl SelectionScoreFactor {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
             SelectionScoreFactor::PositionFit => "selection_factor_position_fit",
+            SelectionScoreFactor::ManagerPlan => "selection_factor_manager_plan",
+            SelectionScoreFactor::PlayingTimeCommitment => {
+                "selection_factor_playing_time_commitment"
+            }
+            SelectionScoreFactor::LoanAgreement => "selection_factor_loan_agreement",
             SelectionScoreFactor::PerceivedQuality => "selection_factor_perceived_quality",
             SelectionScoreFactor::MatchReadiness => "selection_factor_match_readiness",
             SelectionScoreFactor::Fatigue => "selection_factor_fatigue",

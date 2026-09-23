@@ -21,6 +21,7 @@ pub mod assessment;
 pub mod bond;
 pub mod dossier;
 pub mod engine;
+pub mod intent;
 pub mod plan;
 pub mod reason;
 pub mod snapshot;
@@ -44,6 +45,7 @@ pub use dossier::{
     SpellCloser, SpellOpening,
 };
 pub use engine::{CoachDecisionEngine, CoachLiveMatchContext, CoachSelectionContext};
+pub use intent::PlayerMatchIntent;
 pub use memory::{
     CoachMatchObservation, CoachMemory, CoachMemoryFlags, CoachMemoryStore, MemoryEngine,
 };

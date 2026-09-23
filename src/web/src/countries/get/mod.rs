@@ -35,6 +35,7 @@ pub struct CountryGetTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    pub team_suffix: &'static str,
     /// League sections in tier order: grouped competitions (Primera
     /// Division zones, MLS conferences) carry a heading, consecutive
     /// ungrouped divisions share an unnamed section.
@@ -206,6 +207,7 @@ pub async fn country_get_action(
         i18n,
         active_tab: "leagues",
         country_slug: route_params.country_slug,
+        team_suffix: "",
         sections,
     })
 }

@@ -1693,13 +1693,13 @@ impl SeasonFixture {
 // ===========================================================
 
 #[test]
-fn top_gk_league_season_lands_in_fm_band() {
+fn modest_save_volume_at_top_club_stays_ordinary() {
     let f = SeasonFixture::top_gk_league_season();
     let avg = f.average();
     assert!(
-        (6.60..=7.00).contains(&avg),
+        (6.30..=6.60).contains(&avg),
         "top-club GK season (35 starts, 12 CS, 29 conceded) averaged {:.3} — \
-         FM band is 6.60..=7.00\n{}",
+         modest save volume should average 6.30..=6.60\n{}",
         avg,
         f.breakdown()
     );
@@ -1723,23 +1723,18 @@ const ELITE_SAVE_RATE: f32 = 0.75;
 const AVERAGE_SAVE_RATE: f32 = 0.67;
 const YOUNG_SAVE_RATE: f32 = 0.57;
 
-/// NB on the bands below. They sit slightly under the engine-population
-/// targets for the same descriptions (elite 6.9-7.2, weak 6.2-6.5,
-/// measured with `dev_match gap`) because this club is a harsher one
-/// than the population average: a mid-table side at 0.55 shot share,
-/// where the keeper faces 3.6 on target a match and the weak one ships
-/// 51 goals across 34 games with four errors leading to a goal. That
-/// season is genuinely worse than the engine's equal-teams average, and
-/// the bands are what a correct model returns for these stat lines
-/// rather than what would make the two contexts agree.
+/// These count-only fixtures use ordinary shot difficulty. A 75% save
+/// rate is only modestly above the reference 70.8%, so it earns a solid
+/// verdict, not an automatic elite rating. The separate difficulty
+/// regression supplies evidence for a stronger individual performance.
 #[test]
-fn elite_keeper_season_at_one_club_lands_in_the_good_band() {
+fn seventy_five_percent_saves_at_ordinary_difficulty_reads_solid() {
     let f = SeasonFixture::keeper_at_one_club(ELITE_SAVE_RATE, 1);
     let avg = f.average();
     assert!(
-        (6.75..=7.10).contains(&avg),
-        "an elite keeper (75% saves, one error all season) averaged {:.3} — \
-         expected 6.75..=7.10\n{}",
+        (6.50..=6.75).contains(&avg),
+        "75% saves at ordinary difficulty, one error all season averaged {:.3} — \
+         expected 6.50..=6.75\n{}",
         avg,
         f.breakdown()
     );
@@ -1750,9 +1745,9 @@ fn young_keeper_first_senior_season_reads_as_a_struggle() {
     let f = SeasonFixture::keeper_at_one_club(YOUNG_SAVE_RATE, 4);
     let avg = f.average();
     assert!(
-        (6.15..=6.55).contains(&avg),
+        (5.85..=6.25).contains(&avg),
         "a young keeper's first senior season (57% saves, four errors leading to a \
-         goal) averaged {:.3} — expected 5.95..=6.30. This is the number the whole \
+         goal) averaged {:.3} — expected 5.85..=6.25. This is the number the whole \
          campaign is about: at 6.8+ a teenager thrown into a first team reads like \
          the international he replaced\n{}",
         avg,
@@ -1775,6 +1770,47 @@ fn keeper_quality_orders_strictly_at_the_same_club() {
         "the gap between a weak young keeper and an elite one over a season must be \
          at least 0.50 of rating — young {young:.3}, elite {elite:.3}. A narrower \
          spread than this is the flat-population symptom returning"
+    );
+}
+
+#[test]
+fn protected_keeper_season_cannot_average_six_eight_from_routine_work() {
+    let mut season = SeasonFixture {
+        matches: Vec::new(),
+        team_shot_share: 0.70,
+        team_possession: 0.65,
+    };
+    for i in 0..36 {
+        let saves = i % 3;
+        let mut stats = LineFactory::gk(saves, saves, 0);
+        stats.xg_faced = saves as f32 * 0.15;
+        // Even a perfect team record, tidy distribution and 36 clean
+        // sheets do not establish outstanding individual goalkeeping.
+        season.push(stats, 2, 0);
+    }
+    let avg = season.average();
+    assert!(
+        (6.50..=6.65).contains(&avg),
+        "protected keeper with only routine saves averaged {avg:.3}"
+    );
+}
+
+#[test]
+fn sustained_difficult_shot_stopping_can_still_earn_a_good_season() {
+    let ordinary = SeasonFixture::keeper_at_one_club(ELITE_SAVE_RATE, 1);
+    let mut difficult = SeasonFixture::keeper_at_one_club(ELITE_SAVE_RATE, 1);
+    for m in &mut difficult.matches {
+        m.stats.xg_faced = m.stats.shots_faced as f32 * 0.75;
+    }
+    let ordinary_avg = ordinary.average();
+    let difficult_avg = difficult.average();
+    assert!(
+        (6.75..=7.20).contains(&difficult_avg),
+        "sustained difficult shot-stopping must still earn a good season: {difficult_avg:.3}"
+    );
+    assert!(
+        difficult_avg - ordinary_avg >= 0.15,
+        "quality must separate identical save counts: ordinary {ordinary_avg:.3}, difficult {difficult_avg:.3}"
     );
 }
 
@@ -1842,9 +1878,9 @@ fn gk_continental_cluster_stays_in_underperformance_band() {
     let f = SeasonFixture::gk_continental_cluster();
     let avg = f.average();
     assert!(
-        (6.20..=6.60).contains(&avg),
+        (5.80..=6.20).contains(&avg),
         "continental GK cluster (6 apps, 9 conceded, few saves) averaged {:.3} — \
-         expected 5.55..=6.15: poor, but not a broken-model collapse\n{}",
+         expected 5.80..=6.20: poor, but not a broken-model collapse\n{}",
         avg,
         f.breakdown()
     );
@@ -1930,13 +1966,13 @@ fn season_archetypes_order_strictly_by_output() {
 }
 
 #[test]
-fn second_tier_shutout_gk_season_reads_good_not_elite() {
+fn second_tier_shutout_gk_season_reads_solid_not_elite() {
     let f = SeasonFixture::second_tier_shutout_gk_season();
     let avg = f.average();
     assert!(
-        (6.60..=7.10).contains(&avg),
+        (6.45..=6.70).contains(&avg),
         "second-tier 16-CS/26-start GK season averaged {:.3} — a historically \
-         great defensive season reads good (6.60..=7.10) but must stay below \
+         great defensive season reads solid (6.45..=6.70) but must stay below \
          the 7.11-7.37 robot band that motivated the 2026-04 GK tightening\n{}",
         avg,
         f.breakdown()
@@ -1944,19 +1980,15 @@ fn second_tier_shutout_gk_season_reads_good_not_elite() {
 }
 
 #[test]
-fn dominant_defense_gk_season_reads_elite_not_buried() {
+fn dominant_defense_gk_season_does_not_imply_elite_goalkeeping() {
     let f = SeasonFixture::dominant_defense_gk_season();
     let avg = f.average();
-    // A 24-CS / 5-conceded season is a historically great defensive
-    // campaign and must read clearly in the good-to-elite band, NOT the
-    // ~6.4 passenger hole the protected-shutout penalties used to bury it
-    // in. Upper-bounded so an untested-but-immaculate keeper still can't
-    // reach the 7.2+ robot band the GK tightening guards against.
+    // Most of these 24 clean sheets contain no saves. Reward the work
+    // recorded, without treating the team's defence as keeper merit.
     assert!(
-        (6.75..=7.20).contains(&avg),
+        (6.45..=6.65).contains(&avg),
         "dominant-defence 24-CS/29-start GK season averaged {:.3} — a \
-         historically great defensive season must land in 6.75..=7.20, not \
-         the ~6.4 passenger hole protected shutouts used to fall into\n{}",
+         largely untested keeper should average 6.45..=6.65\n{}",
         avg,
         f.breakdown()
     );
@@ -1978,7 +2010,8 @@ fn dominant_defense_gk_clearly_beats_leaky_gk() {
     // average — so the term that finally made goals conceded count reads
     // it, correctly, as an ordinary defensive season rather than a leaky
     // one. The load-bearing assertion is the dominant-beats-leaky gap
-    // below, which is unaffected: dominant sits in 6.75..=7.20.
+    // below: an untested season remains better than poor shot-stopping,
+    // even though it no longer implies an elite individual verdict.
     assert!(
         leaky < 6.62,
         "leaky 9-CS/30-conceded GK season averaged {:.3} — a season that \
@@ -2143,6 +2176,22 @@ fn defender_and_midfielder_archetypes_order_correctly() {
          CB season {:.3}",
         cb_cs,
         cb_leaky
+    );
+}
+
+#[test]
+fn repeated_dangerous_giveaways_lower_a_tidy_passing_season() {
+    let clean = SeasonFixture::cm_recycler_season();
+    let mut risky = SeasonFixture::cm_recycler_season();
+    for m in &mut risky.matches {
+        m.stats.zone_stats.dangerous_turnovers_own_box = 1;
+        m.stats.zone_stats.dangerous_turnovers_own_third = 2;
+    }
+    let clean_avg = clean.average();
+    let risky_avg = risky.average();
+    assert!(
+        clean_avg - risky_avg >= 0.10,
+        "tidy passing must not hide dangerous giveaways: clean {clean_avg:.3}, risky {risky_avg:.3}"
     );
 }
 

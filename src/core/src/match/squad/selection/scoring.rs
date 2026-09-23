@@ -26,6 +26,9 @@ use std::cmp::Ordering;
 /// the comparison line in the player-events render.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SlotScoreBreakdown {
+    pub manager_plan: f32,
+    pub playing_time_commitment: f32,
+    pub loan_incentive: f32,
     pub position_fit: f32,
     pub perceived_quality: f32,
     pub match_readiness: f32,
@@ -82,7 +85,10 @@ pub struct SlotScoreBreakdown {
 
 impl SlotScoreBreakdown {
     pub fn total(&self) -> f32 {
-        self.position_fit
+        self.manager_plan
+            + self.playing_time_commitment
+            + self.loan_incentive
+            + self.position_fit
             + self.perceived_quality
             + self.match_readiness
             + self.condition_floor
@@ -120,7 +126,19 @@ impl SlotScoreBreakdown {
         omitted: &SlotScoreBreakdown,
         limit: usize,
     ) -> Vec<SelectionScoreFactor> {
-        let factors: [(SelectionScoreFactor, f32); 25] = [
+        let factors: [(SelectionScoreFactor, f32); 28] = [
+            (
+                SelectionScoreFactor::ManagerPlan,
+                self.manager_plan - omitted.manager_plan,
+            ),
+            (
+                SelectionScoreFactor::PlayingTimeCommitment,
+                self.playing_time_commitment - omitted.playing_time_commitment,
+            ),
+            (
+                SelectionScoreFactor::LoanAgreement,
+                self.loan_incentive - omitted.loan_incentive,
+            ),
             (
                 SelectionScoreFactor::PositionFit,
                 self.position_fit - omitted.position_fit,
@@ -518,27 +536,12 @@ impl ScoringEngine {
         raw_rep * rep_susceptibility * 2.5
     }
 
-    /// Coach-player relationship score — single source of truth for
-    /// the selection layer. Delegates to [`CoachPlayerBond::build`]
-    /// (which blends staff relation + rapport + promise credibility +
-    /// recent talk outcomes + coach memory) and converts the
-    /// resulting `selection_trust` into a small signed nudge via the
-    /// bond's asymmetric `selection_adjustment` (positive ×0.85,
-    /// negative ×1.20).
-    ///
-    /// Pre-polish history: the layer used a handcrafted weighted sum
-    /// over `StaffRelation` axes that ignored rapport, promises, and
-    /// coach memory entirely. The replacement makes the bond model
-    /// canonical — every consumer of "does the coach want this player"
-    /// now reads the same number, so a kept promise, a successful
-    /// talk, and a coach memory of strong form all show up in the
-    /// score consistently.
-    ///
-    /// Output is clamped to the design band `-0.8..+0.6` so the
-    /// relationship can nudge close calls but never override quality.
+    /// Social preference only: rapport, personal relationship and conversations.
+    /// Sporting memory is scored by the coach engine. Role dissatisfaction
+    /// does not make an already omitted player less likely to get a chance.
+    /// Bounded to -0.8..+0.6 so relationships shade close sporting decisions.
     pub fn relationship_score(&self, player: &Player, staff: &Staff, date: NaiveDate) -> f32 {
-        let bond = CoachPlayerBond::build(player, staff, date);
-        bond.selection_adjustment(1.4).clamp(-0.8, 0.6)
+        CoachPlayerBond::social_selection_adjustment(player, staff, date)
     }
 
     /// Newcomer integration penalty
@@ -725,6 +728,10 @@ impl ScoringEngine {
             _ => 0.0,
         };
         b.youth_preference = p.youth_preference * youth_multiplier;
+        if staff.squad_plan.entry(player.id).is_some() {
+            // An explicit individual plan replaces the blanket age preference.
+            b.youth_preference = 0.0;
+        }
 
         b.training_impression = (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
@@ -1634,7 +1641,9 @@ impl ScoringEngine {
             21 => 0.8,
             _ => 0.0,
         };
-        score += p.youth_preference * youth_multiplier;
+        if staff.squad_plan.entry(player.id).is_none() {
+            score += p.youth_preference * youth_multiplier;
+        }
 
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 

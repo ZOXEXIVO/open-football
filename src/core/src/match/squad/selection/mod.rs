@@ -245,6 +245,17 @@ impl Default for SelectionContext {
 }
 
 impl SquadSelector {
+    /// Competition restrictions apply before counting depth or borrowing
+    /// reserves, and also to emergency keepers and manager-pinned players.
+    fn eligible_under_rules(player: &Player, ctx: &SelectionContext) -> bool {
+        ctx.game_model.as_ref().is_none_or(|model| {
+            !matches!(
+                model::EligibilityEvaluator::evaluate(player, &model.competition_rules),
+                model::EligibilityDecision::HardBlocked { .. }
+            )
+        })
+    }
+
     // ========== PUBLIC API ==========
 
     pub fn select(team: &Team, staff: &Staff) -> PlayerSelectionResult {
@@ -301,6 +312,7 @@ impl SquadSelector {
         let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
         for &p in team.players.players().iter() {
             if PlayerAvailability::is_available(p, ctx.is_friendly)
+                && Self::eligible_under_rules(p, ctx)
                 && (is_main_team || !p.is_force_match_selection)
                 && available_ids.insert(p.id)
             {
@@ -321,7 +333,9 @@ impl SquadSelector {
             if registration_cap.is_some_and(|cap| rp.age(ctx.date) > cap) {
                 continue;
             }
-            if PlayerAvailability::is_available(rp, ctx.is_friendly) && available_ids.insert(rp.id)
+            if PlayerAvailability::is_available(rp, ctx.is_friendly)
+                && Self::eligible_under_rules(rp, ctx)
+                && available_ids.insert(rp.id)
             {
                 available.push(rp);
             }
@@ -345,7 +359,9 @@ impl SquadSelector {
                 // competitive match, banned ones — a low condition is the only
                 // reason it relaxes. Force-selected players in non-Main squads
                 // stay dropped (the Main-team pin is honoured elsewhere).
-                if !KeeperAvailability::is_fallback_available(p, ctx.is_friendly) {
+                if !KeeperAvailability::is_fallback_available(p, ctx.is_friendly)
+                    || !Self::eligible_under_rules(p, ctx)
+                {
                     continue;
                 }
                 if !is_main_team && p.is_force_match_selection {
@@ -592,6 +608,7 @@ impl SquadSelector {
         let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
         for &p in team.players.players().iter() {
             if PlayerAvailability::is_available(p, ctx.is_friendly)
+                && Self::eligible_under_rules(p, ctx)
                 && (is_main_team || !p.is_force_match_selection)
                 && available_ids.insert(p.id)
             {
@@ -619,6 +636,7 @@ impl SquadSelector {
                     continue;
                 }
                 if PlayerAvailability::is_available(rp, ctx.is_friendly)
+                    && Self::eligible_under_rules(rp, ctx)
                     && available_ids.insert(rp.id)
                 {
                     available.push(rp);
@@ -639,6 +657,7 @@ impl SquadSelector {
                         return false;
                     }
                     PlayerAvailability::is_available(rp, ctx.is_friendly)
+                        && Self::eligible_under_rules(rp, ctx)
                         && !available_ids.contains(&rp.id)
                 })
                 .copied()

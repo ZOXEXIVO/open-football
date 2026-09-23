@@ -1,7 +1,7 @@
 //! Outfield contextual deltas: clean sheet, shared blame for goals
-//! conceded, and discipline. Applied at full strength (no minute
-//! damping) because they are scoreline/team signals, not on-the-ball
-//! work. Goalkeeper equivalents live in [`super::keeper`].
+//! conceded, and discipline. The caller weights team-outcome terms by
+//! time played; individual disciplinary events retain their full cost.
+//! Goalkeeper equivalents live in [`super::keeper`].
 
 use super::{RatingContext, RatingMath};
 use crate::PlayerFieldPositionGroup;

@@ -2154,5 +2154,8 @@
   "yth": "ユース",
   "clear": "クリア",
   "ai_error_not_configured": "AIが設定されていません",
-  "ai_error_no_data": "シミュレーションデータが読み込まれていません"
+  "ai_error_no_data": "シミュレーションデータが読み込まれていません",
+  "selection_factor_manager_plan": "監督が思い描く役割",
+  "selection_factor_playing_time_commitment": "約束された出場時間",
+  "selection_factor_loan_agreement": "レンタル契約の条件"
 }

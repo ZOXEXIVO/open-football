@@ -222,6 +222,10 @@ impl Player {
         if !o.is_friendly {
             self.happiness
                 .note_official_appearance(matches!(o.participation, MatchParticipation::Starter));
+            self.happiness.official_minutes_since_join = self
+                .happiness
+                .official_minutes_since_join
+                .saturating_add(o.stats.minutes_played as u32);
         }
     }
 

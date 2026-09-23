@@ -83,6 +83,8 @@ impl Fixture {
             deadline: made_on + Duration::days(90),
             baseline_apps: 0,
             baseline_starts: 0,
+            baseline_eligible: 0,
+            baseline_tracked: false,
             target_value: 60,
             made_by_staff_id: Some(COACH),
             credibility_at_creation: 80,
@@ -95,6 +97,9 @@ impl Fixture {
 #[test]
 fn a_broken_promise_is_filed_against_the_man_who_made_it() {
     let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.on_match_overlooked(false);
+    }
     p.promises.push(Fixture::overdue_promise(
         Fixture::date(2026, 1, 1),
         80,
@@ -144,6 +149,9 @@ fn a_kept_promise_files_the_other_way() {
 fn how_much_the_promise_mattered_decides_how_deeply_it_lands() {
     let encode = |importance: u8, public: bool| -> f32 {
         let mut p = Fixture::player();
+        for _ in 0..10 {
+            p.happiness.note_official_non_appearance(true);
+        }
         p.promises.push(Fixture::overdue_promise(
             Fixture::date(2026, 1, 1),
             importance,
@@ -175,6 +183,9 @@ fn how_much_the_promise_mattered_decides_how_deeply_it_lands() {
 #[test]
 fn a_promise_from_nobody_in_particular_still_registers_but_files_against_no_one() {
     let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.happiness.note_official_non_appearance(true);
+    }
     p.promises.push(ManagerPromise {
         made_by_staff_id: None,
         ..Fixture::overdue_promise(Fixture::date(2026, 1, 1), 80, false)
@@ -210,6 +221,9 @@ fn a_pattern_of_broken_promises_becomes_a_judgement_that_outlives_them() {
     {
         p.promises
             .push(Fixture::overdue_promise(made_on, 85, index == 2));
+        for _ in 0..10 {
+            p.happiness.note_official_non_appearance(true);
+        }
         p.verify_promises(made_on + Duration::days(120), Some(CLUB));
     }
 
@@ -241,6 +255,9 @@ fn a_pattern_of_broken_promises_becomes_a_judgement_that_outlives_them() {
 #[test]
 fn the_club_and_the_coach_are_remembered_separately() {
     let mut p = Fixture::player();
+    for _ in 0..10 {
+        p.happiness.note_official_non_appearance(true);
+    }
 
     // Good things at the club, a bad man in the dugout.
     let ctx = p.mind_context(Fixture::date(2026, 1, 10), Some(CLUB));
@@ -1698,7 +1715,10 @@ fn going_out_on_loan_leaves_the_old_club_behind() {
         );
     }
     assert!(
-        p.mind.goals().get(GoalKind::ProveMyselfAtMyParentClub).is_some(),
+        p.mind
+            .goals()
+            .get(GoalKind::ProveMyselfAtMyParentClub)
+            .is_some(),
         "the club that owns him did not change — that is what a loan is"
     );
     assert!(
@@ -1743,7 +1763,12 @@ fn a_loanee_sold_on_keeps_neither_club() {
 
     p.mind.on_spell_change(SpellChange::transfer(CLUB, false));
 
-    assert!(p.mind.goals().get(GoalKind::ProveMyselfAtMyParentClub).is_none());
+    assert!(
+        p.mind
+            .goals()
+            .get(GoalKind::ProveMyselfAtMyParentClub)
+            .is_none()
+    );
     assert!(p.mind.goals().get(GoalKind::StayAtThisLoanClub).is_none());
     assert!(
         p.mind.goals().get(GoalKind::GoHome).is_some(),

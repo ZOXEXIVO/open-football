@@ -2154,5 +2154,8 @@
   "yth": "Jeu",
   "clear": "Effacer",
   "ai_error_not_configured": "L'IA n'est pas configurée",
-  "ai_error_no_data": "Les données de simulation ne sont pas chargées"
+  "ai_error_no_data": "Les données de simulation ne sont pas chargées",
+  "selection_factor_manager_plan": "le rôle prévu par l'entraîneur",
+  "selection_factor_playing_time_commitment": "les engagements de temps de jeu",
+  "selection_factor_loan_agreement": "les conditions de son prêt"
 }

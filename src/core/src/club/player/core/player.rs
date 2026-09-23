@@ -529,15 +529,18 @@ pub struct ManagerPromise {
     pub kind: ManagerPromiseKind,
     pub made_on: NaiveDate,
     pub deadline: NaiveDate,
-    /// Snapshot of the player's `statistics.played + played_subs` at the
-    /// time the promise was made. Used to compute "games since promise".
+    /// Official appearances across league and cup at promise creation.
     pub baseline_apps: u16,
-    /// Snapshot of starts (`statistics.played`) at promise time. Lets
+    /// Snapshot of official starts at promise time. Lets
     /// StartingRole tell appearances apart from starts.
     pub baseline_starts: u16,
+    /// Eligible team fixtures at creation, including unused bench / omissions.
+    pub baseline_eligible: u16,
+    /// Whether the baseline used tracked club-spell opportunities.
+    pub baseline_tracked: bool,
     /// Kind-specific target. Interpretation per kind:
     ///   - PlayingTime: minimum apps in the window (0 → derive from days).
-    ///   - StartingRole: required starts/(starts+subs) ratio × 100.
+    ///   - StartingRole: required starts/eligible team fixtures ratio × 100.
     ///   - LoanDevelopment: minimum apps from loan_min_appearances.
     ///   - others: 0, verifier reads other state.
     pub target_value: u16,
@@ -902,8 +905,9 @@ impl Player {
         is_public: bool,
     ) {
         let deadline = made_on + Duration::days(horizon_days);
-        let baseline_apps = self.statistics.played + self.statistics.played_subs;
-        let baseline_starts = self.statistics.played;
+        let usage = super::usage::PlayerUsage::of(self);
+        let baseline_apps = usage.appearances;
+        let baseline_starts = usage.starts;
         let credibility = self.promise_credibility(kind, made_by_staff_id);
         let importance = self.promise_importance(kind);
         let target = target_value.unwrap_or_else(|| default_target(kind, &self.contract));
@@ -914,6 +918,8 @@ impl Player {
             deadline,
             baseline_apps,
             baseline_starts,
+            baseline_eligible: usage.eligible,
+            baseline_tracked: usage.tracked,
             target_value: target,
             made_by_staff_id,
             credibility_at_creation: credibility,
@@ -1030,8 +1036,7 @@ impl Player {
         if self.promises.is_empty() {
             return;
         }
-        let current_apps = self.statistics.played + self.statistics.played_subs;
-        let current_starts = self.statistics.played;
+        let usage = super::usage::PlayerUsage::of(self);
         let mut kept_weight: f32 = 0.0;
         let mut broken_weight: f32 = 0.0;
         // Who made each promise that came due, and how much it mattered.
@@ -1090,48 +1095,24 @@ impl Player {
             if now < p.deadline {
                 return true;
             }
-            let delta_apps = current_apps.saturating_sub(p.baseline_apps);
-            let delta_starts = current_starts.saturating_sub(p.baseline_starts);
+            if p.involvement_progress(usage, loan_min_apps).is_some()
+                && p.usage_since_promise(usage).eligible == 0
+            {
+                return true;
+            }
+            let delta_apps = p.usage_since_promise(usage).appearances;
             let days = (p.deadline - p.made_on).num_days().max(1) as u16;
 
             let kept = match p.kind {
-                ManagerPromiseKind::PlayingTime => {
-                    let required = if p.target_value > 0 {
-                        p.target_value
-                    } else {
-                        (days / 10).max(1)
-                    };
-                    delta_apps >= required
-                }
-                ManagerPromiseKind::StartingRole => {
-                    if delta_apps == 0 {
-                        false
-                    } else {
-                        let starts_pct =
-                            (delta_starts as u32 * 100 / delta_apps.max(1) as u32) as u16;
-                        // Default target 60% of appearances as starts.
-                        let req = if p.target_value > 0 {
-                            p.target_value
-                        } else {
-                            60
-                        };
-                        starts_pct >= req
-                    }
-                }
+                ManagerPromiseKind::PlayingTime
+                | ManagerPromiseKind::StartingRole
+                | ManagerPromiseKind::LoanDevelopment => p
+                    .involvement_progress(usage, loan_min_apps)
+                    .is_some_and(|(delivered, required)| delivered >= required),
                 ManagerPromiseKind::PreferredPosition => in_preferred_pos,
                 ManagerPromiseKind::TacticalRole => {
                     let required = (days / 10).max(2);
                     high_status && delta_apps >= required
-                }
-                ManagerPromiseKind::LoanDevelopment => {
-                    let target = p.target_value.max(loan_min_apps.unwrap_or(0));
-                    if target == 0 {
-                        delta_apps >= (days / 14).max(1)
-                    } else {
-                        // Linear projection: are we on pace given days
-                        // elapsed vs deadline length?
-                        delta_apps >= target
-                    }
                 }
                 ManagerPromiseKind::TransferPermission => {
                     // Kept by default unless a recent TransferBidRejected

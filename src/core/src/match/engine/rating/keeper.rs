@@ -30,7 +30,8 @@
 //!   goals_prevented = CONVERSION·saves − (1 − CONVERSION)·conceded
 //! ```
 //!
-//! i.e. **a save is worth +0.34 of a goal and a concession costs −0.66**.
+//! At ordinary difficulty, a save is worth +0.292 of a goal and a
+//! concession costs −0.708.
 //! The two invariants a reader applies instinctively then hold by
 //! construction, not by calibration:
 //!
@@ -64,9 +65,16 @@
 //! model pretending he is independent of it.
 //!
 //! A protected shutout (0 shots faced, 0 conceded) scores exactly zero
-//! goals prevented and lands on the anchor — "did his job, nothing to
+//! goals prevented and stays near the anchor — "did his job, nothing to
 //! judge" — instead of needing the bespoke `dominant_defense` credit the
 //! old model bolted on to rescue it.
+//!
+//! The neutral goalkeeper verdict is 6.5, centred on zero performance.
+//! The small outcome and distribution terms can make a quiet shift
+//! slightly better than neutral, but a season of protected clean sheets
+//! must not imply sustained good shot-stopping. Age, debut status and
+//! attributes never enter the rating: a 6.8 season is earned by the
+//! recorded performances, whoever produced them.
 //!
 //! # Layout
 //!
@@ -82,15 +90,12 @@
 use super::{PerformanceScale, RatingContext, RatingMath};
 use crate::r#match::engine::zones::ZoneCoeffs;
 
-/// Share of shots on target that beat a league-average keeper. Real
-/// football sits at ~1/3 and the engine population measures 34.5%
-/// (`dev_match league` keeper ladder, 3061 shots faced / 1057 conceded)
-/// — they agree, which is what makes the resulting band honest rather
-/// than merely internally consistent.
+/// Reference share of shots on target conceded: 29.2%. This supplies
+/// the ordinary-difficulty expectation when no shot-quality data exists.
 ///
 /// This constant is the model's anchor: with the population value here,
-/// the league-average keeper scores exactly zero goals prevented and
-/// therefore rates exactly [`RatingShape::ANCHOR`]. Re-derive it from
+/// ordinary shot-stopping scores zero goals prevented. The remaining
+/// performance terms still affect the final verdict. Re-derive it from
 /// the keeper ladder if the engine's shot or save model moves.
 const ON_TARGET_CONVERSION: f32 = 0.292;
 
@@ -249,7 +254,7 @@ const TURNOVER_SCALE: f32 = 2.0;
 
 /// Defining moments, in **rating points**, applied after the spread
 /// curve. An error that becomes a goal is already costing the keeper
-/// −0.66 goals through the concession itself; this is the additional
+/// −0.708 goals through an ordinary concession itself; this is the additional
 /// "and it was his fault" verdict on top.
 const ERROR_TO_GOAL: f32 = -1.05;
 const FAILED_CLAIM_TO_GOAL: f32 = -0.85;

@@ -105,12 +105,14 @@ impl Substitutions {
         // wire-format reconstruction) keep the legacy memory-less path.
         let home_snapshot = std::mem::take(&mut field.home_coach_snapshot);
         let away_snapshot = std::mem::take(&mut field.away_coach_snapshot);
-        let home_engine = home_snapshot
-            .as_ref()
-            .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
-        let away_engine = away_snapshot
-            .as_ref()
-            .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
+        let home_engine = home_snapshot.as_ref().map(|s| {
+            CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy)
+                .with_player_intents(&s.player_intents)
+        });
+        let away_engine = away_snapshot.as_ref().map(|s| {
+            CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy)
+                .with_player_intents(&s.player_intents)
+        });
         Self::process_with_coaches(
             field,
             context,
@@ -1278,7 +1280,16 @@ impl Substitutions {
                 // memory can swing a borderline swap without ever
                 // dominating the physical/tactical case outright.
                 let coach_nudge = (coach_off_nudge + coach_in_nudge).clamp(-0.30, 0.30);
-                let pair_score = out_score + in_score + tactical_bonus + coach_nudge - disruption;
+                let planned_cameo = coach
+                    .and_then(|c| c.player_intents)
+                    .and_then(|intents| intents.get(&sub.id))
+                    .map(|intent| {
+                        intent.cameo_adjustment(live.match_minute, live.goal_diff, fit, out.id)
+                    })
+                    .unwrap_or(0.0);
+                let pair_score =
+                    out_score + in_score + tactical_bonus + coach_nudge + planned_cameo
+                        - disruption;
                 if pair_score < min_threshold {
                     continue;
                 }
@@ -1799,6 +1810,58 @@ mod tests {
         // 26-year-old — past the development-priority threshold so
         // the dev bonus on bench players is 0.0 by default.
         d(1999, 1, 1)
+    }
+
+    #[test]
+    fn planned_cameo_changes_the_live_choice_only_when_the_match_allows_it() {
+        use crate::club::staff::{
+            CoachMemoryStore, CoachProfile, CoachStrategy, PlayerMatchIntent,
+        };
+        let pos = PlayerPositionType::MidfielderCenterLeft;
+        let mut home = build_roster(1, 100, adult_birth());
+        for p in &mut home {
+            p.is_force_match_selection = p.tactical_position.current_position != pos;
+            if !p.is_force_match_selection {
+                p.player_attributes.condition = 5000;
+            }
+        }
+        let bench = vec![
+            build_player(200, 1, adult_birth(), pos, 9500),
+            build_player(201, 1, adult_birth(), pos, 9500),
+        ];
+        let field = make_test_field(home, bench, build_roster(2, 300, adult_birth()), vec![]);
+        let memory = CoachMemoryStore::new();
+        let profile = CoachProfile::from_staff(&crate::StaffStub::default());
+        let intents = std::collections::HashMap::from([(
+            201,
+            PlayerMatchIntent {
+                planned_bench: 1.2,
+                development: true,
+                cameo_from: 70,
+                minimum_lead: 2,
+                ..Default::default()
+            },
+        )]);
+        let coach = CoachDecisionEngine::new(&memory, &profile, CoachStrategy::DevelopYouth)
+            .with_player_intents(&intents);
+        let chosen = |lead| {
+            Substitutions::best_discretionary_pair_with_coach(
+                &field,
+                1,
+                TacticalNeed::Fatigue,
+                lead,
+                0,
+                75 * 60_000,
+                today(),
+                1.0,
+                0.0,
+                Some(&coach),
+            )
+            .unwrap()
+            .1
+        };
+        assert_eq!(chosen(2), 201);
+        assert_eq!(chosen(0), 200);
     }
 
     #[test]

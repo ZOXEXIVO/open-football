@@ -14,6 +14,115 @@ use crate::{
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
 
+#[test]
+fn manager_plan_changes_the_actual_xi_and_explains_its_score() {
+    use crate::club::staff::PlannedRole;
+    let date = Utc::now().date_naive();
+    let pair = |id| {
+        DevPlayer::with_skill(
+            DevPlayer::build(
+                id,
+                Contest::SLOT,
+                18,
+                PlayerSquadStatus::FirstTeamRegular,
+                26,
+                150,
+                150,
+                7,
+                10,
+            ),
+            14.0,
+        )
+    };
+    let team = cup_team(Contest::roster(pair(1), pair(2)));
+    let mut staff = TestCoach::good_youth();
+    staff.staff_attributes.mental.man_management = 1;
+    let ctx = SelectionContext {
+        date,
+        match_importance: 0.5,
+        ..Default::default()
+    };
+    for preferred in [1, 2] {
+        let other = 3 - preferred;
+        staff
+            .squad_plan
+            .force_role(preferred, PlannedRole::Starter, date);
+        staff
+            .squad_plan
+            .force_role(other, PlannedRole::NotInPlans, date);
+        let result = SquadSelector::select_with_context(&team, &staff, &[], &ctx);
+        assert!(result.main_squad.iter().any(|p| p.id == preferred));
+        assert!(!result.main_squad.iter().any(|p| p.id == other));
+        let engine = ScoringEngine::from_staff(&staff);
+        let scx = competitive::SelectionScoringContext {
+            staff: &staff,
+            tactics: team.tactics.as_ref().unwrap(),
+            engine: &engine,
+            date,
+            is_friendly: false,
+            match_importance: 0.5,
+            policy: SelectionPolicy::ManagedMinutes,
+            cup: None,
+            coach: None,
+            competition: SelectionCompetition::League,
+            game_model: None,
+            succession_heirs: &[],
+            keeper_brief: None,
+        };
+        let pool = team.players.players();
+        let wanted = pool.iter().find(|p| p.id == preferred).unwrap();
+        let omitted = pool.iter().find(|p| p.id == other).unwrap();
+        let a = scx.starting_slot_breakdown(wanted, Contest::SLOT, &pool);
+        let b = scx.starting_slot_breakdown(omitted, Contest::SLOT, &pool);
+        assert!(a.total() > b.total());
+        assert!(
+            a.top_factors_against(&b, 3)
+                .contains(&crate::SelectionScoreFactor::ManagerPlan)
+        );
+    }
+}
+
+#[test]
+fn hard_competition_rules_exclude_pins_and_emergency_candidates() {
+    let mut team = generate_test_team();
+    let staff = generate_test_staff();
+    let blocked: Vec<u32> = team.players.iter().take(2).map(|p| p.id).collect();
+    for player in team.players.players.iter_mut().take(2) {
+        player.is_force_match_selection = true;
+    }
+    let mut model = model::MatchSelectionGameModel::default();
+    model.competition_rules.clause_blocked_player_ids = blocked.clone();
+    let ctx = SelectionContext {
+        game_model: Some(model),
+        ..Default::default()
+    };
+    for result in [
+        SquadSelector::select_with_context(&team, &staff, &[], &ctx),
+        SquadSelector::select_for_rotation_with_context(&team, &staff, &[], &ctx),
+    ] {
+        assert!(
+            result
+                .main_squad
+                .iter()
+                .chain(&result.substitutes)
+                .all(|p| !blocked.contains(&p.id))
+        );
+        assert!(result.overlooked.iter().all(|id| !blocked.contains(id)));
+    }
+}
+
+#[test]
+fn selection_social_preference_does_not_punish_missing_minutes_or_count_memory_twice() {
+    let date = Utc::now().date_naive();
+    let mut p = make_test_player(1, &[(PlayerPositionType::MidfielderCenter, 18)], 140, date);
+    let staff = generate_test_staff();
+    let engine = ScoringEngine::from_staff(&staff);
+    p.happiness.factors.role_clarity = 0.0;
+    let neutral = engine.relationship_score(&p, &staff, date);
+    p.happiness.factors.role_clarity = -8.0;
+    assert_eq!(engine.relationship_score(&p, &staff, date), neutral);
+}
+
 fn test_names() -> PeopleNameGeneratorData {
     PeopleNameGeneratorData {
         first_names: vec!["Test".to_string()],

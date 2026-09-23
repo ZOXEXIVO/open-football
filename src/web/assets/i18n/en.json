@@ -2154,5 +2154,8 @@
   "yth": "Yth",
   "clear": "Clear",
   "ai_error_not_configured": "AI is not configured",
-  "ai_error_no_data": "Simulation data is not loaded"
+  "ai_error_no_data": "Simulation data is not loaded",
+  "selection_factor_manager_plan": "the manager's plan for his role",
+  "selection_factor_playing_time_commitment": "outstanding playing-time commitments",
+  "selection_factor_loan_agreement": "the terms of his loan agreement"
 }

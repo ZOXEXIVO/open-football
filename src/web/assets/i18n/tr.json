@@ -2154,5 +2154,8 @@
   "yth": "Gnç",
   "clear": "Temizle",
   "ai_error_not_configured": "Yapay zekâ yapılandırılmamış",
-  "ai_error_no_data": "Simülasyon verileri yüklenmedi"
+  "ai_error_no_data": "Simülasyon verileri yüklenmedi",
+  "selection_factor_manager_plan": "teknik direktörün onun için planladığı rol",
+  "selection_factor_playing_time_commitment": "verilen oynama süresi sözleri",
+  "selection_factor_loan_agreement": "kiralık sözleşmesinin şartları"
 }

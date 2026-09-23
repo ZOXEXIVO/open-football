@@ -39,6 +39,7 @@ pub struct CountrySquadTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub country_slug: String,
+    pub team_suffix: &'static str,
     /// Players for the single national-team level shown on this page.
     pub players: Vec<NationalSquadPlayerDto>,
     /// i18n key for the squad panel title — "squad" (senior) or
@@ -133,10 +134,17 @@ async fn render_country_squad(
     // Pick the team for the requested level. Each table shows real
     // call-ups + synthetic depth players (so weak nations don't render
     // empty); caps/goals columns are level-appropriate.
-    let (team, panel_title_key, caps_key, goals_key) = match level {
-        NationalTeamLevel::Senior => (&country.national_team, "squad", "int_apps", "int_goals"),
+    let (team, team_suffix, panel_title_key, caps_key, goals_key) = match level {
+        NationalTeamLevel::Senior => (
+            &country.national_team,
+            "",
+            "squad",
+            "int_apps",
+            "int_goals",
+        ),
         NationalTeamLevel::Under21 => (
             &country.u21_national_team,
+            "/u21",
             "u21_national_team",
             "u21_caps",
             "u21_goals",
@@ -206,6 +214,7 @@ async fn render_country_squad(
         i18n,
         active_tab: "squad",
         country_slug: route_params.country_slug,
+        team_suffix,
         players,
         panel_title_key,
         caps_key,
