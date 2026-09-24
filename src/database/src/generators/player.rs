@@ -17,6 +17,7 @@ use core::{
     WageCalculator,
 };
 use log::warn;
+use std::cmp::Reverse;
 
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
@@ -401,15 +402,15 @@ impl BodySkillPrior {
         }
         // Mass relative to height: heavier builds trade acceleration for
         // strength.
-        if let Some(w) = weight {
-            if (50..=120).contains(&w) {
-                let h_m = h as f32 / 100.0;
-                let bmi = w as f32 / (h_m * h_m);
-                let bt = ((bmi - 23.2) / 1.5).clamp(-2.0, 2.0);
-                let p = &mut skills.physical;
-                p.strength = (p.strength + bt * 0.8).clamp(1.0, 20.0);
-                p.acceleration = (p.acceleration - bt * 0.5).clamp(1.0, 20.0);
-            }
+        if let Some(w) = weight
+            && (50..=120).contains(&w)
+        {
+            let h_m = h as f32 / 100.0;
+            let bmi = w as f32 / (h_m * h_m);
+            let bt = ((bmi - 23.2) / 1.5).clamp(-2.0, 2.0);
+            let p = &mut skills.physical;
+            p.strength = (p.strength + bt * 0.8).clamp(1.0, 20.0);
+            p.acceleration = (p.acceleration - bt * 0.5).clamp(1.0, 20.0);
         }
     }
 }
@@ -930,7 +931,7 @@ impl PlayerGenerator {
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
                 .into_iter()
-                .map(|lang| core::PlayerLanguage::native(lang))
+                .map(core::PlayerLanguage::native)
                 .collect();
 
         Player::builder()
@@ -1042,14 +1043,14 @@ impl PlayerGenerator {
         // Mental cohesion: mentality is largely unified — strong-willed
         // players are strong-willed across the board, not just one slot.
         let m_avg: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
-        for i in 14..28 {
-            skills[i] = skills[i] * 0.70 + m_avg * 0.30;
+        for skill in &mut skills[14..28] {
+            *skill = *skill * 0.70 + m_avg * 0.30;
         }
 
         // Physical cohesion: lighter pull, keeps individuality.
         let p_avg: f32 = skills[28..36].iter().sum::<f32>() / 8.0;
-        for i in 28..36 {
-            skills[i] = skills[i] * 0.85 + p_avg * 0.15;
+        for skill in &mut skills[28..36] {
+            *skill = *skill * 0.85 + p_avg * 0.15;
         }
 
         // Affinities + country bias before the age cap, so the cap is final.
@@ -1239,8 +1240,8 @@ impl PlayerGenerator {
         gk_skills[7] = gk_skills[7].max(core_floor); // one_on_ones
 
         // All other skills get general floor
-        for i in 0..13 {
-            gk_skills[i] = gk_skills[i].max(general_floor).clamp(1.0, 20.0);
+        for skill in &mut gk_skills[0..13] {
+            *skill = skill.max(general_floor).clamp(1.0, 20.0);
         }
 
         Goalkeeping {
@@ -1405,32 +1406,30 @@ impl PlayerGenerator {
 
         // Cross-side versatility: ~15% chance for wide players to play opposite flank.
         // These players (e.g. M L/R, D L/R) are more versatile and valuable.
-        if let Some(opposite) = PositionLayout::cross_side(primary) {
-            if IntegerUtils::random(0, 99) < 15 {
-                if !positions.iter().any(|p| p.position == opposite) {
-                    let level = IntegerUtils::random(12, 16) as u8;
-                    positions.push(PlayerPosition {
-                        position: opposite,
-                        level,
-                    });
-                }
-            }
+        if let Some(opposite) = PositionLayout::cross_side(primary)
+            && IntegerUtils::random(0, 99) < 15
+            && !positions.iter().any(|p| p.position == opposite)
+        {
+            let level = IntegerUtils::random(12, 16) as u8;
+            positions.push(PlayerPosition {
+                position: opposite,
+                level,
+            });
         }
 
         // Higher PA → additional chance of a versatile position beyond adjacent
         let pa = potential_ability as i32;
         let versatility_pct = (pa * pa / 800).min(35); // PA 120→18%, PA 160→32%, PA 200→35%
-        if IntegerUtils::random(0, 99) < versatility_pct {
-            if let Some(extra) = PositionLayout::extra(primary) {
-                if !positions.iter().any(|p| p.position == extra) {
-                    let min_level = 10 + (potential_ability as i32 / 30).min(6);
-                    let max_level = 14 + (potential_ability as i32 / 50).min(4);
-                    positions.push(PlayerPosition {
-                        position: extra,
-                        level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
-                    });
-                }
-            }
+        if IntegerUtils::random(0, 99) < versatility_pct
+            && let Some(extra) = PositionLayout::extra(primary)
+            && !positions.iter().any(|p| p.position == extra)
+        {
+            let min_level = 10 + (potential_ability as i32 / 30).min(6);
+            let max_level = 14 + (potential_ability as i32 / 50).min(4);
+            positions.push(PlayerPosition {
+                position: extra,
+                level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
+            });
         }
 
         PlayerPositions { positions }
@@ -1882,18 +1881,18 @@ impl ClubJoinAnchor {
         let ours = Self::seasons_as_our_player(record);
         let away = Self::last_season_away(record, ours.is_empty());
 
-        if let Some(away) = away {
-            if ours.last().is_none_or(|latest| away > *latest) {
-                // Another club's player after the last season he was ours, so
-                // he arrived in the close season that followed. Only the
-                // window just gone is datable; an older gap could hide any
-                // number of undocumented moves and leaves the arrival
-                // genuinely unplaced.
-                if away + 1 < world_season_start_year {
-                    return None;
-                }
-                return Some(Season::new(world_season_start_year).start_date());
+        if let Some(away) = away
+            && ours.last().is_none_or(|latest| away > *latest)
+        {
+            // Another club's player after the last season he was ours, so
+            // he arrived in the close season that followed. Only the
+            // window just gone is datable; an older gap could hide any
+            // number of undocumented moves and leaves the arrival
+            // genuinely unplaced.
+            if away + 1 < world_season_start_year {
+                return None;
             }
+            return Some(Season::new(world_season_start_year).start_date());
         }
 
         let mut spell_start = *ours.last()?;
@@ -2207,7 +2206,7 @@ fn positions_from_odb(player_id: u32, odb_positions: &[OdbPosition]) -> PlayerPo
     // order isn't guaranteed to lead with the main role — a GK listed
     // second would otherwise hydrate as an outfielder with no GK skills.
     // Stable sort keeps record order between equal levels.
-    positions.sort_by(|a, b| b.level.cmp(&a.level));
+    positions.sort_by_key(|p| Reverse(p.level));
     PlayerPositions { positions }
 }
 
@@ -3594,13 +3593,8 @@ mod generator_validation_tests {
         // weight-table regressions silently flattening profiles.
         let g = make_gen();
         // (bucket, position-anchor extractor, anchor name, baseline extractor, baseline name)
-        let cases: &[(
-            PositionType,
-            &dyn Fn(&core::PlayerSkills) -> f32,
-            &str,
-            &dyn Fn(&core::PlayerSkills) -> f32,
-            &str,
-        )] = &[
+        type Extract = dyn Fn(&core::PlayerSkills) -> f32;
+        let cases: &[(PositionType, &Extract, &str, &Extract, &str)] = &[
             (
                 PositionType::Goalkeeper,
                 &|s| s.goalkeeping.handling,
@@ -3894,7 +3888,7 @@ mod generator_validation_tests {
         for p in elite.iter().chain(weak.iter()) {
             let mr = p.skills.physical.match_readiness;
             assert!(
-                mr >= 5.0 && mr <= 17.0,
+                (5.0..=17.0).contains(&mr),
                 "match_readiness out of state range: {} (CA={})",
                 mr,
                 p.player_attributes.current_ability

@@ -152,10 +152,12 @@ mod free_agent_retirement_tests {
             free_since: NaiveDate,
             today: NaiveDate,
         ) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca;
-            attrs.world_reputation = world_reputation;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca,
+                world_reputation,
+                ..Default::default()
+            };
             let birth = today - Duration::days(age_years * 365 + 30);
             let mut player = PlayerBuilder::new()
                 .id(id)

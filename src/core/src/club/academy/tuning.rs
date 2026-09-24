@@ -5,10 +5,9 @@
 //!
 //!   * `AcademyTuning` — knobs (intake month, target sizes, PA thresholds).
 //!   * `AcademyTier`   — 1..10 short-scale tier derived from a 1..20
-//!                       facility rating. Owns every formula that
-//!                       needs "how strong is this academy" on the
-//!                       short scale (norm, readiness threshold,
-//!                       sessions-per-phase, …).
+//!     facility rating. Owns every formula that needs "how strong is this
+//!     academy" on the short scale (norm, readiness threshold,
+//!     sessions-per-phase, …).
 
 /// Half-open size bands the academy aims to keep itself inside, indexed
 /// by 1..10 pathway tier (index 0 unused). The pathway-review tick
@@ -82,7 +81,7 @@ impl AcademyTier {
     /// Collapse the 1..20 facility-rating scale into the 1..10 tier.
     pub fn from_level(level: u8) -> Self {
         let lvl = level.clamp(1, 20) as u16;
-        AcademyTier((((lvl + 1) / 2) as u8).clamp(1, 10))
+        AcademyTier((lvl.div_ceil(2) as u8).clamp(1, 10))
     }
 
     /// Raw tier number, 1..10.

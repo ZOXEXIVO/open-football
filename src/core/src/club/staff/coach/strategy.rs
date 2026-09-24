@@ -21,9 +21,10 @@ use crate::club::staff::CoachProfile;
 /// Ordered roughly by aggressiveness of selection — `WinNow` cares
 /// about the best XI right now, `DevelopYouth` accepts a quality drop
 /// for the long run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CoachStrategy {
     /// Field the best XI possible — limit rotation, prioritise form.
+    #[default]
     WinNow,
     /// Spread minutes / rest a few starters — balance result vs load.
     RotateForLoad,
@@ -152,12 +153,6 @@ impl StrategyDeriver {
     }
 }
 
-impl Default for CoachStrategy {
-    fn default() -> Self {
-        CoachStrategy::WinNow
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,7 +179,7 @@ mod tests {
         }
 
         fn baseline() -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.staff_attributes.knowledge.judging_player_ability = 14;
             staff.staff_attributes.knowledge.judging_player_potential = 14;

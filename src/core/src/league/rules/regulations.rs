@@ -78,6 +78,12 @@ pub struct DisciplinaryActions {
     pub new_suspensions: Vec<(u32, u8)>,
 }
 
+impl Default for LeagueRegulations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeagueRegulations {
     pub fn new() -> Self {
         LeagueRegulations {
@@ -453,9 +459,9 @@ mod tests {
     fn record_suspension_served_clears_counter() {
         let mut regs = LeagueRegulations::new();
         regs.suspended_players.insert(7, 2);
-        assert_eq!(regs.record_suspension_served(7), false);
+        assert!(!regs.record_suspension_served(7));
         assert_eq!(regs.suspended_players.get(&7), Some(&1));
-        assert_eq!(regs.record_suspension_served(7), true);
+        assert!(regs.record_suspension_served(7));
         assert!(!regs.suspended_players.contains_key(&7));
     }
 

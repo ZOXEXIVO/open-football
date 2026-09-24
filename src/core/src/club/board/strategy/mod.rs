@@ -86,7 +86,7 @@ impl ReviewFrequency {
     pub fn evaluates_on_month(self, month_index: u32) -> bool {
         match self {
             ReviewFrequency::Monthly => true,
-            ReviewFrequency::Quarterly => month_index % 3 == 0,
+            ReviewFrequency::Quarterly => month_index.is_multiple_of(3),
             ReviewFrequency::SeasonEndOnly => false,
         }
     }

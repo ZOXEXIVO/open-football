@@ -279,7 +279,7 @@ mod tests {
                 played(pairings[1].0, pairings[1].1, 1, 1, 2, 4),
             ],
         );
-        let alive = advancing_teams(&[r1.clone()], &field).unwrap();
+        let alive = advancing_teams(std::slice::from_ref(&r1), &field).unwrap();
         // 2 winners + 2 byes = 4 alive (a power of two).
         assert_eq!(alive.len(), 4);
         assert!(alive.contains(&1) && alive.contains(&2));
@@ -313,7 +313,7 @@ mod tests {
                 played(p[1].0, p[1].1, 0, 2, 0, 0),
             ],
         );
-        let semis_winners = advancing_teams(&[r1.clone()], &field).unwrap();
+        let semis_winners = advancing_teams(std::slice::from_ref(&r1), &field).unwrap();
         assert_eq!(semis_winners.len(), 2);
         // Final.
         let (pf, _) = pair_knockout_round(&semis_winners);

@@ -3,10 +3,10 @@ extern crate rand;
 use crate::club::mind::organs::goals::GoalKind;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindClock};
 use crate::club::mind::verdict::{MindOption, ReasonSet};
+use crate::club::staff::coach::dossier::closer::{PartingReport, SpellCloser};
 use crate::club::staff::goalkeeping::KeeperRoomPlan;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::mind::{StaffMind, StaffTickContext};
-use crate::club::staff::coach::dossier::closer::{PartingReport, SpellCloser};
 use crate::club::staff::{
     CoachDossierStore, CoachMemoryStore, CoachSquadPlan, DossierTuning, Dossiers, ReunionSeeder,
     ScarFlags, SeparationCause, SpellOpening,
@@ -170,7 +170,7 @@ impl StaffCollection {
         StaffCollection {
             staffs,
             responsibility: StaffResponsibility::default(),
-            stub: StaffStub::default(),
+            stub: StaffStub::build(),
         }
     }
 
@@ -179,7 +179,7 @@ impl StaffCollection {
             .staffs
             .iter_mut()
             .map(|staff| {
-                let message = &format!("simulate staff: id: {}", &staff.id);
+                let message = &format!("simulate staff: id: {}", staff.id);
                 Logging::estimate_result(|| staff.simulate(ctx.with_staff(Some(staff.id))), message)
             })
             .collect();
@@ -217,10 +217,10 @@ impl StaffCollection {
         team_type: &TeamType,
         group: PlayerFieldPositionGroup,
     ) -> &Staff {
-        if group == PlayerFieldPositionGroup::Goalkeeper {
-            if let Some(specialist) = self.goalkeeper_coach() {
-                return specialist;
-            }
+        if group == PlayerFieldPositionGroup::Goalkeeper
+            && let Some(specialist) = self.goalkeeper_coach()
+        {
+            return specialist;
         }
         self.training_coach(team_type)
     }
@@ -627,13 +627,14 @@ pub struct StaffPerformance {
     pub last_evaluation_date: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum CoachingStyle {
-    Authoritarian,    // Strict discipline, high demands
-    Democratic,       // Collaborative, player input
-    LaissezFaire,     // Hands-off, player autonomy
+    Authoritarian, // Strict discipline, high demands
+    #[default]
+    Democratic, // Collaborative, player input
+    LaissezFaire,  // Hands-off, player autonomy
     Transformational, // Inspirational, vision-focused
-    Tactical,         // Detail-oriented, system-focused
+    Tactical,      // Detail-oriented, system-focused
 }
 
 impl Staff {
@@ -922,7 +923,12 @@ impl Staff {
     /// As [`Self::player_joined_at`], for callers with no age in hand. The
     /// reunion still seeds; it simply cannot apply the age-band discount,
     /// which errs toward the coach trusting his old read.
-    pub fn player_joined(&mut self, player_id: u32, club_id: u32, today: NaiveDate) -> SpellOpening {
+    pub fn player_joined(
+        &mut self,
+        player_id: u32,
+        club_id: u32,
+        today: NaiveDate,
+    ) -> SpellOpening {
         let age = Dossiers::of(&self.dossiers, player_id)
             .map(|record| record.age_at_parting)
             .unwrap_or(0);
@@ -965,7 +971,9 @@ impl Staff {
         } else {
             scar * DossierTuning::AFFINITY_W_SCAR * 0.5
         };
-        let convictions = self.mind.believes(FactClaim::HeIsWorthBuildingAround, player)
+        let convictions = self
+            .mind
+            .believes(FactClaim::HeIsWorthBuildingAround, player)
             * DossierTuning::AFFINITY_CONVICTION_WORTH
             + self.mind.believes(FactClaim::HeLetMeDown, player)
                 * DossierTuning::AFFINITY_CONVICTION_LET_DOWN
@@ -1232,10 +1240,10 @@ impl Staff {
             satisfaction_change -= 2.0; // Overworked
         }
 
-        if let Some(contract) = &self.contract {
-            if self.is_underpaid(contract.salary) {
-                satisfaction_change -= 1.5; // Salary dissatisfaction
-            }
+        if let Some(contract) = &self.contract
+            && self.is_underpaid(contract.salary)
+        {
+            satisfaction_change -= 1.5; // Salary dissatisfaction
         }
 
         // Apply change with dampening
@@ -1390,15 +1398,13 @@ impl Staff {
         result: &mut StaffResult,
     ) {
         // Check for license upgrade opportunities
-        if self.should_upgrade_license() {
-            if rand::random::<f32>() < 0.01 {
-                // Small daily chance
-                result.license_upgrade_available = true;
-                self.add_event(StaffEventType::LicenseUpgrade);
+        if self.should_upgrade_license() && rand::random::<f32>() < 0.01 {
+            // Small daily chance
+            result.license_upgrade_available = true;
+            self.add_event(StaffEventType::LicenseUpgrade);
 
-                if self.attributes.ambition > 15.0 {
-                    result.wants_license_upgrade = true;
-                }
+            if self.attributes.ambition > 15.0 {
+                result.wants_license_upgrade = true;
             }
         }
 
@@ -1467,45 +1473,39 @@ impl Staff {
     }
 
     fn plan_weekly_training(&self, _ctx: &GlobalContext<'_>) -> Vec<StaffTrainingSession> {
-        let mut sessions = Vec::new();
-
         // Simplified training plan
-        // Monday - Recovery
-        sessions.push(StaffTrainingSession {
-            session_type: TrainingType::Recovery,
-            intensity: TrainingIntensity::Light,
-            duration_minutes: 60,
-        });
-
-        // Tuesday - Technical
-        sessions.push(StaffTrainingSession {
-            session_type: TrainingType::BallControl,
-            intensity: TrainingIntensity::Moderate,
-            duration_minutes: 90,
-        });
-
-        // Wednesday - Tactical
-        sessions.push(StaffTrainingSession {
-            session_type: TrainingType::TeamShape,
-            intensity: TrainingIntensity::Moderate,
-            duration_minutes: 90,
-        });
-
-        // Thursday - Physical
-        sessions.push(StaffTrainingSession {
-            session_type: TrainingType::Endurance,
-            intensity: TrainingIntensity::High,
-            duration_minutes: 75,
-        });
-
-        // Friday - Match preparation
-        sessions.push(StaffTrainingSession {
-            session_type: TrainingType::Positioning,
-            intensity: TrainingIntensity::Light,
-            duration_minutes: 60,
-        });
-
-        sessions
+        vec![
+            // Monday - Recovery
+            StaffTrainingSession {
+                session_type: TrainingType::Recovery,
+                intensity: TrainingIntensity::Light,
+                duration_minutes: 60,
+            },
+            // Tuesday - Technical
+            StaffTrainingSession {
+                session_type: TrainingType::BallControl,
+                intensity: TrainingIntensity::Moderate,
+                duration_minutes: 90,
+            },
+            // Wednesday - Tactical
+            StaffTrainingSession {
+                session_type: TrainingType::TeamShape,
+                intensity: TrainingIntensity::Moderate,
+                duration_minutes: 90,
+            },
+            // Thursday - Physical
+            StaffTrainingSession {
+                session_type: TrainingType::Endurance,
+                intensity: TrainingIntensity::High,
+                duration_minutes: 75,
+            },
+            // Friday - Match preparation
+            StaffTrainingSession {
+                session_type: TrainingType::Positioning,
+                intensity: TrainingIntensity::Light,
+                duration_minutes: 60,
+            },
+        ]
     }
 
     fn get_todays_training(&self, date: NaiveDateTime) -> Option<&StaffTrainingSession> {
@@ -1590,10 +1590,10 @@ impl Staff {
         // Contract issues
         if self.contract.is_none() {
             prob += 0.1;
-        } else if let Some(contract) = &self.contract {
-            if self.is_underpaid(contract.salary) {
-                prob += 0.1;
-            }
+        } else if let Some(contract) = &self.contract
+            && self.is_underpaid(contract.salary)
+        {
+            prob += 0.1;
         }
 
         prob.min(0.9) // Cap at 90% chance
@@ -1856,12 +1856,6 @@ impl Default for StaffPerformance {
     }
 }
 
-impl Default for CoachingStyle {
-    fn default() -> Self {
-        CoachingStyle::Democratic
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct StaffTrainingSession {
     pub session_type: TrainingType,
@@ -1885,7 +1879,7 @@ mod tests {
     use crate::club::staff::mind::{StaffSubMind, WelfareMind};
 
     fn make_contracted_staff(id: u32, position: StaffPosition) -> Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = id;
         staff.contract = Some(StaffClubContract::new(
             50_000,

@@ -188,8 +188,10 @@ mod tests {
 
     #[test]
     fn healthy_finances_and_priority_approve_upgrade() {
-        let mut vision = ClubVision::default();
-        vision.infrastructure_priority = InfrastructurePriority::Training;
+        let vision = ClubVision {
+            infrastructure_priority: InfrastructurePriority::Training,
+            ..Default::default()
+        };
         let owner = OwnershipModel {
             base_wealth: 80,
             ..Default::default()
@@ -208,8 +210,10 @@ mod tests {
     fn ffp_breach_rejects_upgrade() {
         let mut ctx = rich_ctx();
         ctx.ffp_status = FfpStatus::Breach;
-        let mut vision = ClubVision::default();
-        vision.infrastructure_priority = InfrastructurePriority::Training;
+        let vision = ClubVision {
+            infrastructure_priority: InfrastructurePriority::Training,
+            ..Default::default()
+        };
         let owner = OwnershipModel::default();
         let decisions = FacilityReview::run(&ctx, &vision, &owner);
         assert!(decisions.iter().any(|d| matches!(

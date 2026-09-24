@@ -561,18 +561,18 @@ impl NationalTeamCompetition {
         home_score: u8,
         away_score: u8,
     ) {
-        if let Some(group) = self.qualifying_groups.get_mut(group_idx) {
-            if let Some(fixture) = group.fixtures.get_mut(fixture_idx) {
-                let home_id = fixture.home_country_id;
-                let away_id = fixture.away_country_id;
+        if let Some(group) = self.qualifying_groups.get_mut(group_idx)
+            && let Some(fixture) = group.fixtures.get_mut(fixture_idx)
+        {
+            let home_id = fixture.home_country_id;
+            let away_id = fixture.away_country_id;
 
-                fixture.result = Some(FixtureResult {
-                    home_score,
-                    away_score,
-                });
+            fixture.result = Some(FixtureResult {
+                home_score,
+                away_score,
+            });
 
-                group.update_standings(home_id, away_id, home_score, away_score);
-            }
+            group.update_standings(home_id, away_id, home_score, away_score);
         }
     }
 
@@ -597,18 +597,18 @@ impl NationalTeamCompetition {
         home_score: u8,
         away_score: u8,
     ) {
-        if let Some(group) = self.tournament_groups.get_mut(group_idx) {
-            if let Some(fixture) = group.fixtures.get_mut(fixture_idx) {
-                let home_id = fixture.home_country_id;
-                let away_id = fixture.away_country_id;
+        if let Some(group) = self.tournament_groups.get_mut(group_idx)
+            && let Some(fixture) = group.fixtures.get_mut(fixture_idx)
+        {
+            let home_id = fixture.home_country_id;
+            let away_id = fixture.away_country_id;
 
-                fixture.result = Some(FixtureResult {
-                    home_score,
-                    away_score,
-                });
+            fixture.result = Some(FixtureResult {
+                home_score,
+                away_score,
+            });
 
-                group.update_standings(home_id, away_id, home_score, away_score);
-            }
+            group.update_standings(home_id, away_id, home_score, away_score);
         }
     }
 
@@ -712,14 +712,14 @@ impl NationalTeamCompetition {
         away_score: u8,
         penalty_winner: Option<u32>,
     ) {
-        if let Some(bracket) = self.knockout.get_mut(bracket_idx) {
-            if let Some(fixture) = bracket.fixtures.get_mut(fixture_idx) {
-                fixture.result = Some(KnockoutResult {
-                    home_score,
-                    away_score,
-                    penalty_winner,
-                });
-            }
+        if let Some(bracket) = self.knockout.get_mut(bracket_idx)
+            && let Some(fixture) = bracket.fixtures.get_mut(fixture_idx)
+        {
+            fixture.result = Some(KnockoutResult {
+                home_score,
+                away_score,
+                penalty_winner,
+            });
         }
     }
 

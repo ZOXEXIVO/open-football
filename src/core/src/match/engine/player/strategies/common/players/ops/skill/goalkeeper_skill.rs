@@ -664,9 +664,11 @@ mod tests {
     use chrono::NaiveDate;
 
     fn build_keeper(fill: f32, condition: i16) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
-        attrs.jadedness = 0;
+        let attrs = PlayerAttributes {
+            condition,
+            jadedness: 0,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         // Goalkeeping
         skills.goalkeeping.aerial_reach = fill;

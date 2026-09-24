@@ -3,6 +3,9 @@ use core::Club;
 use core::SimulatorData;
 use core::league::League;
 
+/// `(club teams, country leagues)` for the left menu, each entry `(label, slug)`.
+pub type NeighborMenus = (Vec<(String, String)>, Vec<(String, String)>);
+
 /// Build the parent-club's left-menu team list ready for the template:
 /// sorted with Main first, then Second, B, Reserve, U23..U18, with
 /// reputation tiebreaking inside a type. Each entry is `(label, slug)`.

@@ -493,7 +493,7 @@ mod minutes_curve_tests {
         for season in 0..=10u8 {
             let share = c.share(season);
             assert!((0.0..=1.0).contains(&share), "{season}: {share}");
-            assert!(share >= 0.04 && share <= 0.61, "{season}: {share}");
+            assert!((0.04..=0.61).contains(&share), "{season}: {share}");
         }
     }
 

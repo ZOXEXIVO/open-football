@@ -79,10 +79,10 @@ impl CountryResult {
         }
 
         let international_success = Self::calculate_international_success(country);
-        reputation_change += international_success as i16;
+        reputation_change += international_success;
 
         let transfer_reputation = Self::calculate_transfer_market_reputation(country);
-        reputation_change += transfer_reputation as i16;
+        reputation_change += transfer_reputation;
 
         let new_reputation =
             (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;

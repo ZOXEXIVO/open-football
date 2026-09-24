@@ -155,14 +155,13 @@ impl StateProcessingHandler for MidfielderStandingState {
         }
 
         // Only press if opponent is nearby AND has the ball AND we're closest
-        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            if opponent.distance(ctx) < PRESSING_DISTANCE_THRESHOLD
-                && ctx.team().is_best_player_to_chase_ball()
-            {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
-            }
+        if let Some(opponent) = ctx.players().opponents().with_ball().next()
+            && opponent.distance(ctx) < PRESSING_DISTANCE_THRESHOLD
+            && ctx.team().is_best_player_to_chase_ball()
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Pressing,
+            ));
         }
 
         // Check if a teammate is making a run and needs support

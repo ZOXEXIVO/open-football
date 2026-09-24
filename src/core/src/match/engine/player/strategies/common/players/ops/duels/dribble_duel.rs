@@ -304,8 +304,10 @@ mod tests {
         anticipation: f32,
         traits: Vec<PlayerTrait>,
     ) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 9000;
+        let attrs = PlayerAttributes {
+            condition: 9000,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.technical.dribbling = dribbling;
         skills.technical.technique = technique;

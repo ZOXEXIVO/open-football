@@ -64,18 +64,17 @@ impl ContinentResult {
             }
         }
 
-        if let Some(id) = outcome.winner {
-            if let Some(player) = data.player_mut(id) {
-                player.happiness.add_event_default_with_cooldown(
-                    HappinessEventType::ContinentalPlayerOfYear,
-                    330,
-                );
-                player.apply_award_reputation_impact(
-                    AwardReputationKind::ContinentalPlayerOfYear,
-                    AwardReputationInput::new(),
-                    date,
-                );
-            }
+        if let Some(id) = outcome.winner
+            && let Some(player) = data.player_mut(id)
+        {
+            player
+                .happiness
+                .add_event_default_with_cooldown(HappinessEventType::ContinentalPlayerOfYear, 330);
+            player.apply_award_reputation_impact(
+                AwardReputationKind::ContinentalPlayerOfYear,
+                AwardReputationInput::new(),
+                date,
+            );
         }
     }
 

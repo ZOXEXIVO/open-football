@@ -67,9 +67,11 @@ fn squad(team_id: u32, base_id: u32) -> MatchSquad {
         .iter()
         .enumerate()
         .map(|(index, position)| {
-            let mut attributes = PlayerAttributes::default();
-            attributes.condition = 9000;
-            attributes.current_ability = 150;
+            let attributes = PlayerAttributes {
+                condition: 9000,
+                current_ability: 150,
+                ..Default::default()
+            };
             let mut skills = PlayerSkills::default();
             skills.physical.pace = 14.0;
             skills.physical.acceleration = 14.0;

@@ -119,7 +119,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // Zidane keeps it under his foot longer than a holding player.
         let max_dribble_ticks =
             ((0.9 + mid_profile.carry_selection * 1.6) * TICKS_PER_SECOND) as u64;
-        if ctx.in_state_time as u64 > max_dribble_ticks {
+        if ctx.in_state_time > max_dribble_ticks {
             if PassEvaluator::find_best_pass_option(ctx, 200.0).is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
@@ -135,12 +135,13 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // front has closed the space down). Give it rather than run into
         // him. Continuous: the same quantity that opened the take-on
         // closes it, so there is no separate rule to disagree with.
-        if ctx.in_state_time > 20 && TakeOn::appetite(ctx, &lane, &mid_profile) < 0.10 {
-            if PassEvaluator::find_best_pass_option(ctx, 200.0).is_some() {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Passing,
-                ));
-            }
+        if ctx.in_state_time > 20
+            && TakeOn::appetite(ctx, &lane, &mid_profile) < 0.10
+            && PassEvaluator::find_best_pass_option(ctx, 200.0).is_some()
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
         }
 
         None

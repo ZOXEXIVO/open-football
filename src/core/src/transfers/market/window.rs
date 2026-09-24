@@ -115,6 +115,7 @@ impl TransferWindowManager {
     /// given country. Returns `Some` when:
     ///   - we're already inside an open registration window (today), or
     ///   - the next summer/winter window opens within the next ~12 months.
+    ///
     /// `None` only when no window definition resolves (should not happen
     /// for known countries — European defaults always apply).
     pub fn next_registration_open_date(

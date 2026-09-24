@@ -26,6 +26,12 @@ pub struct SimulatorDataIndexes {
     pub league_positions: HashMap<u32, (u32, u32, u32)>,
 }
 
+impl Default for SimulatorDataIndexes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SimulatorDataIndexes {
     pub fn new() -> Self {
         SimulatorDataIndexes {
@@ -198,12 +204,11 @@ impl SimulatorDataIndexes {
     }
 
     pub fn get_league_location(&self, league_id: u32) -> Option<(u32, u32)> {
-        match self.league_indexes.get(&league_id) {
-            Some((league_continent_id, league_country_id)) => {
-                Some((*league_continent_id, *league_country_id))
-            }
-            None => None,
-        }
+        self.league_indexes
+            .get(&league_id)
+            .map(|(league_continent_id, league_country_id)| {
+                (*league_continent_id, *league_country_id)
+            })
     }
 
     //club indexes
@@ -214,12 +219,9 @@ impl SimulatorDataIndexes {
     }
 
     pub fn get_club_location(&self, club_id: u32) -> Option<(u32, u32)> {
-        match self.club_indexes.get(&club_id) {
-            Some((club_continent_id, club_country_id)) => {
-                Some((*club_continent_id, *club_country_id))
-            }
-            None => None,
-        }
+        self.club_indexes
+            .get(&club_id)
+            .map(|(club_continent_id, club_country_id)| (*club_continent_id, *club_country_id))
     }
 
     //team data indexes
@@ -245,12 +247,11 @@ impl SimulatorDataIndexes {
     }
 
     pub fn get_team_location(&self, team_id: u32) -> Option<(u32, u32, u32)> {
-        match self.team_indexes.get(&team_id) {
-            Some((team_continent_id, team_country_id, team_club_id)) => {
-                Some((*team_continent_id, *team_country_id, *team_club_id))
-            }
-            None => None,
-        }
+        self.team_indexes
+            .get(&team_id)
+            .map(|(team_continent_id, team_country_id, team_club_id)| {
+                (*team_continent_id, *team_country_id, *team_club_id)
+            })
     }
 
     /// Rebuild only the player indexes (after transfers move players between clubs)
@@ -349,17 +350,16 @@ impl SimulatorDataIndexes {
     }
 
     pub fn get_player_location(&self, player_id: u32) -> Option<(u32, u32, u32, u32)> {
-        match self.player_indexes.get(&player_id) {
-            Some((player_continent_id, player_country_id, player_club_id, player_team_id)) => {
-                Some((
+        self.player_indexes.get(&player_id).map(
+            |(player_continent_id, player_country_id, player_club_id, player_team_id)| {
+                (
                     *player_continent_id,
                     *player_country_id,
                     *player_club_id,
                     *player_team_id,
-                ))
-            }
-            None => None,
-        }
+                )
+            },
+        )
     }
 
     //staff indexes
@@ -377,12 +377,11 @@ impl SimulatorDataIndexes {
     }
 
     pub fn get_staff_location(&self, staff_id: u32) -> Option<(u32, u32, u32, u32)> {
-        match self.staff_indexes.get(&staff_id) {
-            Some((continent_id, country_id, club_id, team_id)) => {
-                Some((*continent_id, *country_id, *club_id, *team_id))
-            }
-            None => None,
-        }
+        self.staff_indexes
+            .get(&staff_id)
+            .map(|(continent_id, country_id, club_id, team_id)| {
+                (*continent_id, *country_id, *club_id, *team_id)
+            })
     }
 
     // Positional setters/getters. Tuple values are array indices
@@ -460,6 +459,12 @@ pub struct SlugIndexes {
     team_slug_index: HashMap<String, u32>,
 }
 
+impl Default for SlugIndexes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SlugIndexes {
     pub fn new() -> Self {
         SlugIndexes {
@@ -474,10 +479,7 @@ impl SlugIndexes {
         self.country_slug_index.insert(slug.into(), country_id);
     }
     pub fn get_country_by_slug(&self, slug: &str) -> Option<u32> {
-        match self.country_slug_index.get(slug) {
-            Some(country_id) => Some(*country_id),
-            None => None,
-        }
+        self.country_slug_index.get(slug).copied()
     }
 
     // team id slug index
@@ -485,10 +487,7 @@ impl SlugIndexes {
         self.league_slug_index.insert(slug.into(), league_id);
     }
     pub fn get_league_by_slug(&self, slug: &str) -> Option<u32> {
-        match self.league_slug_index.get(slug) {
-            Some(league_id) => Some(*league_id),
-            None => None,
-        }
+        self.league_slug_index.get(slug).copied()
     }
 
     // team id slug index
@@ -496,10 +495,7 @@ impl SlugIndexes {
         self.team_slug_index.insert(slug.into(), team_id);
     }
     pub fn get_team_by_slug(&self, slug: &str) -> Option<u32> {
-        match self.team_slug_index.get(slug) {
-            Some(team_id) => Some(*team_id),
-            None => None,
-        }
+        self.team_slug_index.get(slug).copied()
     }
 
     /// Absorb another shard's slug entries. Used during the parallel

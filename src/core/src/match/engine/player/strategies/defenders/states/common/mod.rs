@@ -13,43 +13,6 @@ use crate::r#match::player::strategies::common::team::ShapeDiscipline;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
 
-/// The one rule every defender obeys regardless of which state he is in:
-/// **do not let the ball sit behind you.**
-///
-/// # Why this is a cross-state constraint and not a state
-///
-/// Line depth used to live in exactly one place — the zonal target in
-/// `DefenderHoldingLineState::velocity` — and that state hands off to
-/// `Pressing` / `Running` / `Covering` / `Marking` on every
-/// `DefensiveRole` branch the moment `opponents().with_ball()` is `Some`.
-/// So the only code in the engine that knew about defensive depth was
-/// dead in precisely the situation it existed for: opposition
-/// possession. The team-shared `defensive_line_x` did not cover for it
-/// either — that value is read only as a deviation guard, never as a
-/// steering target, and it is computed from game phase alone without
-/// ever consulting where the ball is.
-///
-/// The measured result (`dev_match stats`, `block_diag`): shots struck
-/// from 11.4m against a back four sitting at **34.6m** from its own goal,
-/// with **0.18** opposition outfielders goal-side of the ball against a
-/// real 2-4, and 0.0% of 187k shot-ticks ever finding a defender in the
-/// lane. `blocks` read 0.01 per defender per match against a real ~0.9,
-/// and every shot in the game was effectively a one-on-one with the
-/// keeper — which is also why keeper quality was so far and away the
-/// most load-bearing attribute in a squad.
-///
-/// # The rule
-///
-/// If the ball is goal-side of me and I am not the man engaging it, my
-/// movement must carry me back toward my own goal. The `Primary` role is
-/// exempt: somebody has to go to the ball, and that is his job. Everyone
-/// else recovers. Lateral movement is untouched, so marking, covering
-/// and shuttling all keep working — this only overrides the depth
-/// component, which no defender state was managing at all.
-///
-/// Naturally inert whenever the ball is upfield of the defender, which
-/// is every possession spent in the opposition half.
-
 /// Holding a position that is itself moving.
 ///
 /// # Why this exists
@@ -89,6 +52,42 @@ impl StationKeeping {
     }
 }
 
+/// The one rule every defender obeys regardless of which state he is in:
+/// **do not let the ball sit behind you.**
+///
+/// # Why this is a cross-state constraint and not a state
+///
+/// Line depth used to live in exactly one place — the zonal target in
+/// `DefenderHoldingLineState::velocity` — and that state hands off to
+/// `Pressing` / `Running` / `Covering` / `Marking` on every
+/// `DefensiveRole` branch the moment `opponents().with_ball()` is `Some`.
+/// So the only code in the engine that knew about defensive depth was
+/// dead in precisely the situation it existed for: opposition
+/// possession. The team-shared `defensive_line_x` did not cover for it
+/// either — that value is read only as a deviation guard, never as a
+/// steering target, and it is computed from game phase alone without
+/// ever consulting where the ball is.
+///
+/// The measured result (`dev_match stats`, `block_diag`): shots struck
+/// from 11.4m against a back four sitting at **34.6m** from its own goal,
+/// with **0.18** opposition outfielders goal-side of the ball against a
+/// real 2-4, and 0.0% of 187k shot-ticks ever finding a defender in the
+/// lane. `blocks` read 0.01 per defender per match against a real ~0.9,
+/// and every shot in the game was effectively a one-on-one with the
+/// keeper — which is also why keeper quality was so far and away the
+/// most load-bearing attribute in a squad.
+///
+/// # The rule
+///
+/// If the ball is goal-side of me and I am not the man engaging it, my
+/// movement must carry me back toward my own goal. The `Primary` role is
+/// exempt: somebody has to go to the ball, and that is his job. Everyone
+/// else recovers. Lateral movement is untouched, so marking, covering
+/// and shuttling all keep working — this only overrides the depth
+/// component, which no defender state was managing at all.
+///
+/// Naturally inert whenever the ball is upfield of the defender, which
+/// is every possession spent in the opposition half.
 pub struct DefensiveRecovery;
 
 /// Is there a ball here that could actually be intercepted?

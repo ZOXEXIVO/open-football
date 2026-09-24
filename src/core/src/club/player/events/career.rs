@@ -83,8 +83,8 @@ impl AwardReputationKind {
         }
     }
 
-    /// Continental / World POY are league-agnostic. They skip the league
-    /// + headroom + saturation envelopes entirely so the historic
+    /// Continental / World POY are league-agnostic. They skip the league,
+    /// headroom and saturation envelopes entirely so the historic
     /// `+500/+500/+250` and `+900/+900/+500` scales are preserved
     /// regardless of where the recipient plays.
     fn is_global(self) -> bool {
@@ -668,12 +668,10 @@ impl Player {
                     1.0
                 }
             }
-            AwardReputationKind::YoungTeamOfTheMonthSelection => {
-                if recent(H::YoungPlayerOfTheMonth, 3) || recent(H::PlayerOfTheMonth, 3) {
-                    0.30
-                } else {
-                    1.0
-                }
+            AwardReputationKind::YoungTeamOfTheMonthSelection
+                if (recent(H::YoungPlayerOfTheMonth, 3) || recent(H::PlayerOfTheMonth, 3)) =>
+            {
+                0.30
             }
             _ => 1.0,
         }

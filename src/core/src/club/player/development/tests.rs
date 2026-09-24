@@ -109,13 +109,15 @@ fn make_player(
     pa: u8,
     person: PersonAttributes,
 ) -> Player {
-    let mut attrs = PlayerAttributes::default();
-    attrs.potential_ability = pa;
-    // Start CA below PA so per-skill growth has room.
-    attrs.current_ability = (pa as f32 * 0.5) as u8;
-    attrs.condition = 9500;
-    attrs.jadedness = 1000;
-    attrs.injury_proneness = 5;
+    let attrs = PlayerAttributes {
+        potential_ability: pa,
+        // Start CA below PA so per-skill growth has room.
+        current_ability: (pa as f32 * 0.5) as u8,
+        condition: 9500,
+        jadedness: 1000,
+        injury_proneness: 5,
+        ..Default::default()
+    };
 
     PlayerBuilder::new()
         .id(1)
@@ -144,8 +146,8 @@ fn skill_array_round_trip_preserves_all_fields() {
     // Stamp every skill with a unique value so a missing field shows up
     // as a stale default rather than a coincidence.
     let mut tagged = [0.0f32; SKILL_COUNT];
-    for i in 0..SKILL_COUNT {
-        tagged[i] = 1.0 + (i as f32) * 0.1; // 1.0, 1.1, 1.2, ... 5.9
+    for (i, v) in tagged.iter_mut().enumerate() {
+        *v = 1.0 + (i as f32) * 0.1; // 1.0, 1.1, 1.2, ... 5.9
     }
     write_skills_back(&mut p, &tagged);
 

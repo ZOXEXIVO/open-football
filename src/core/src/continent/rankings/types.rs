@@ -8,6 +8,12 @@ pub struct ContinentalRankings {
     pub qualification_spots: HashMap<u32, QualificationSpots>,
 }
 
+impl Default for ContinentalRankings {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContinentalRankings {
     pub fn new() -> Self {
         ContinentalRankings {

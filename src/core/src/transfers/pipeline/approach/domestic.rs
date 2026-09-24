@@ -400,7 +400,7 @@ impl DomesticApproachPass {
         let country = buyer.country;
         let club = buyer.club;
         let plan = buyer.plan;
-        let rep_level = buyer.rep_level.clone();
+        let rep_level = buyer.rep_level;
         let buying_rep_score = buyer.buying_rep_score;
         let buying_league_reputation = buyer.buying_league_reputation;
         let budget = buyer.budget;
@@ -454,12 +454,11 @@ impl DomesticApproachPass {
         // Same relaxed band as every insertion path: min strict,
         // max + 3. Staged as a reject so the cursor advances to
         // the next candidate instead of stalling.
-        if let Some(req) = request {
-            if player_age < req.preferred_age_min
-                || player_age > req.preferred_age_max.saturating_add(3)
-            {
-                return TargetOutcome::Reject;
-            }
+        if let Some(req) = request
+            && (player_age < req.preferred_age_min
+                || player_age > req.preferred_age_max.saturating_add(3))
+        {
+            return TargetOutcome::Reject;
         }
         // "Gettable" signals: a peer/bigger seller only parts with
         // a prospect who is listed, wants out, or barely plays.
@@ -625,7 +624,7 @@ impl DomesticApproachPass {
                     negotiation.reason = action.reason.clone();
                     negotiation.player_name = action.player_name.clone();
                     negotiation.selling_club_name = action.selling_club_name.clone();
-                    negotiation.player_sold_from = action.player_sold_from.clone();
+                    negotiation.player_sold_from = action.player_sold_from;
                     negotiation.open_salary_at(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                     negotiation.selling_league_reputation = action.selling_league_reputation;
@@ -644,12 +643,10 @@ impl DomesticApproachPass {
                         .shortlists
                         .iter_mut()
                         .find(|s| s.transfer_request_id == action.shortlist_request_id)
+                        && let Some(candidate) = shortlist.current_candidate_mut()
+                        && candidate.player_id == action.player_id
                     {
-                        if let Some(candidate) = shortlist.current_candidate_mut() {
-                            if candidate.player_id == action.player_id {
-                                candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
-                            }
-                        }
+                        candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
                     }
 
                     if let Some(req) = plan

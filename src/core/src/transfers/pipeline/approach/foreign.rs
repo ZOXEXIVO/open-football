@@ -312,7 +312,7 @@ impl ForeignApproachPass {
             is_loan,
             true, // unsolicited — the buyer is reaching out abroad
             date,
-            &market_map,
+            market_map,
         );
         let assessment = TransferMovePlausibility::assess(&plausibility_inputs);
         if TransferTrace::is(cand.player_id) {
@@ -434,18 +434,11 @@ impl ForeignApproachPass {
         let selling_rep = seller.rep;
         let asking_price = &seller.asking_price;
 
-        let buy_country = match data.country(country_id) {
-            Some(c) => c,
-            None => return None,
-        };
-        let buy_club = match buy_country
+        let buy_country = data.country(country_id)?;
+        let buy_club = buy_country
             .clubs
             .iter()
-            .find(|c| c.id == cand.buying_club_id)
-        {
-            Some(c) => c,
-            None => return None,
-        };
+            .find(|c| c.id == cand.buying_club_id)?;
 
         let buying_rep = buy_club
             .teams
@@ -734,7 +727,7 @@ impl ForeignApproachPass {
             asking_price,
             player_name,
             selling_club_name,
-            player_sold_from: player.sold_from.clone(),
+            player_sold_from: player.sold_from,
             offered_annual_wage: action.offered_annual_wage,
             buying_league_reputation,
             selling_league_reputation,
@@ -769,19 +762,10 @@ impl ForeignApproachPass {
         let found = ApproachPass::resolve_foreign_player_club(data, country_id, player_id);
 
         let (sell_country_id, sell_club_id, sell_price_level, sell_continent_id, sell_country_code) =
-            match found {
-                Some(v) => v,
-                None => return None,
-            };
+            found?;
 
-        let sell_country = match data.country(sell_country_id) {
-            Some(c) => c,
-            None => return None,
-        };
-        let player = match PlayerView::find_player_in_country(sell_country, player_id) {
-            Some(p) => p,
-            None => return None,
-        };
+        let sell_country = data.country(sell_country_id)?;
+        let player = PlayerView::find_player_in_country(sell_country, player_id)?;
         if player.is_on_loan() {
             return None;
         }
@@ -796,10 +780,7 @@ impl ForeignApproachPass {
             return None;
         }
 
-        let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) {
-            Some(c) => c,
-            None => return None,
-        };
+        let sell_club = sell_country.clubs.iter().find(|c| c.id == sell_club_id)?;
         let asking_price = AskingPrice::calculate_asking_price(
             player,
             sell_country,
@@ -929,12 +910,10 @@ impl ForeignApproachPass {
                         .shortlists
                         .iter_mut()
                         .find(|s| s.transfer_request_id == action.shortlist_request_id)
+                        && let Some(candidate) = shortlist.current_candidate_mut()
+                        && candidate.player_id == action.player_id
                     {
-                        if let Some(candidate) = shortlist.current_candidate_mut() {
-                            if candidate.player_id == action.player_id {
-                                candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
-                            }
-                        }
+                        candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
                     }
                     if let Some(req) = plan
                         .transfer_requests
@@ -969,33 +948,32 @@ impl ForeignApproachPass {
         // Apply the foreign plausibility rejects: mark each shortlist
         // candidate unavailable and advance the shortlist so the next
         // pursuit cycle skips the impossible move instead of retrying it.
-        if !foreign_rejected.is_empty() {
-            if let Some(country) = data.country_mut(country_id) {
-                for reject in foreign_rejected {
-                    if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
-                        if let Some(shortlist) = club
-                            .transfer_plan
-                            .shortlists
-                            .iter_mut()
-                            .find(|s| s.transfer_request_id == reject.shortlist_request_id)
-                        {
-                            if let Some(candidate) = shortlist
-                                .candidates
-                                .iter_mut()
-                                .find(|c| c.player_id == reject.player_id)
-                            {
-                                candidate.status = ShortlistCandidateStatus::Unavailable;
-                            }
-                            shortlist.advance_to_next();
-                        }
+        if !foreign_rejected.is_empty()
+            && let Some(country) = data.country_mut(country_id)
+        {
+            for reject in foreign_rejected {
+                if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id)
+                    && let Some(shortlist) = club
+                        .transfer_plan
+                        .shortlists
+                        .iter_mut()
+                        .find(|s| s.transfer_request_id == reject.shortlist_request_id)
+                {
+                    if let Some(candidate) = shortlist
+                        .candidates
+                        .iter_mut()
+                        .find(|c| c.player_id == reject.player_id)
+                    {
+                        candidate.status = ShortlistCandidateStatus::Unavailable;
                     }
-                    ApproachPass::on_negotiation_resolved(
-                        country,
-                        reject.club_id,
-                        reject.player_id,
-                        false,
-                    );
+                    shortlist.advance_to_next();
                 }
+                ApproachPass::on_negotiation_resolved(
+                    country,
+                    reject.club_id,
+                    reject.player_id,
+                    false,
+                );
             }
         }
     }

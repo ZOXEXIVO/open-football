@@ -425,9 +425,11 @@ mod tests {
     use chrono::NaiveDate;
 
     fn build_player(condition: i16, stamina: f32, natural_fitness: f32) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
-        attrs.jadedness = 0;
+        let attrs = PlayerAttributes {
+            condition,
+            jadedness: 0,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.physical.stamina = stamina;
         skills.physical.natural_fitness = natural_fitness;

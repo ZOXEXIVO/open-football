@@ -272,7 +272,7 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "core"
-version = "1.7.900"
+version = "1.7.950"
 dependencies = [
  "chrono",
  "deunicode",
@@ -884,7 +884,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "match_viewer_build"
-version = "1.7.900"
+version = "1.7.950"
 dependencies = [
  "flate2",
  "wasm-bindgen-cli-support",
@@ -1349,7 +1349,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.7.900"
+version = "1.7.950"
 
 [[package]]
 name = "shlex"

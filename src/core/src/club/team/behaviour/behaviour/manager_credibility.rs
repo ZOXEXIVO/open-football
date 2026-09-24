@@ -209,12 +209,10 @@ fn compute_role_pressure(player: &Player, age: u8) -> f32 {
         // Prospects benefit from role clarity: a positive drift only
         // when they're young, recently active, and the starter_ratio
         // is climbing (proxy: ≥0.20).
-        PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
-            if age <= 21 && days < 30 && (apps_tracked >= 1 || starter_ratio >= 0.20) {
-                0.04
-            } else {
-                0.0
-            }
+        PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster
+            if age <= 21 && days < 30 && (apps_tracked >= 1 || starter_ratio >= 0.20) =>
+        {
+            0.04
         }
         _ => 0.0,
     }
@@ -261,10 +259,12 @@ mod tests {
         squad_status: PlayerSquadStatus,
         birth_date: NaiveDate,
     ) -> Player {
-        let mut player_attrs = PlayerAttributes::default();
-        player_attrs.current_ability = ca;
-        player_attrs.current_reputation = rep;
-        player_attrs.world_reputation = rep;
+        let player_attrs = PlayerAttributes {
+            current_ability: ca,
+            current_reputation: rep,
+            world_reputation: rep,
+            ..Default::default()
+        };
 
         let mut contract = PlayerClubContract::new(50_000, d(2030, 6, 1));
         contract.squad_status = squad_status;

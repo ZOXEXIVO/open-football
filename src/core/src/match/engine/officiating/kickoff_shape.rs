@@ -96,12 +96,12 @@ impl KickoffShape {
     /// asked once more — a kick-off is two men out of one scan, and the
     /// formation dots put the pair a real kick-off uses at the top of it
     /// whatever the shape.
-    fn partner<'a>(
-        players: &'a [MatchPlayer],
+    fn partner(
+        players: &[MatchPlayer],
         side: PlayerSide,
         taker_id: u32,
         spot: Vector3<f32>,
-    ) -> Option<&'a MatchPlayer> {
+    ) -> Option<&MatchPlayer> {
         players
             .iter()
             .filter(|p| {

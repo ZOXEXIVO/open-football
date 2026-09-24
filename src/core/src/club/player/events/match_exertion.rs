@@ -262,7 +262,7 @@ impl Player {
         // 25% competitive floor would otherwise lift them. Overnight
         // recovery belongs to `process_condition_recovery`, not here.
         let computed_after_match = (starting as f32 - condition_drop).round() as i32;
-        let floored = computed_after_match.max(post_match_floor as i32);
+        let floored = computed_after_match.max(post_match_floor);
         let new_condition = floored.min(starting as i32).clamp(0, 10_000) as i16;
         self.player_attributes.condition = new_condition;
 

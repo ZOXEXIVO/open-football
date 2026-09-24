@@ -8,6 +8,7 @@ use crate::club::staff::StaffPosition;
 use crate::{SimulatorData, Staff};
 use chrono::NaiveDate;
 use rayon::prelude::*;
+use std::cmp::Reverse;
 
 pub struct ManagerShortlist;
 
@@ -75,7 +76,7 @@ impl ManagerShortlist {
             })
             .collect();
 
-        scored.sort_unstable_by(|a, b| b.fit_score.cmp(&a.fit_score));
+        scored.sort_unstable_by_key(|s| Reverse(s.fit_score));
         scored.truncate(Self::MAX_LEN);
         scored
     }
@@ -179,7 +180,7 @@ impl ManagerShortlist {
             combined.retain(|c| c.target_salary <= ceiling);
         }
 
-        combined.sort_unstable_by(|a, b| b.fit_score.cmp(&a.fit_score));
+        combined.sort_unstable_by_key(|c| Reverse(c.fit_score));
         combined.truncate(Self::MAX_LEN);
         combined
     }

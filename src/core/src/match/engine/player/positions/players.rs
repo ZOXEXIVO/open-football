@@ -179,10 +179,10 @@ impl PlayerFieldData {
     /// always what `position()` would produce.
     #[inline]
     pub fn position_by_index(&self, index: usize, player_id: u32) -> Vector3<f32> {
-        if let Some(item) = self.items.get(index) {
-            if item.player_id == player_id {
-                return item.position;
-            }
+        if let Some(item) = self.items.get(index)
+            && item.player_id == player_id
+        {
+            return item.position;
         }
         self.position(player_id)
     }

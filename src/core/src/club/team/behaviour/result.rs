@@ -1,5 +1,3 @@
-use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
-use crate::club::staff::perception::CoachProfile;
 use crate::club::player::ManagerPromiseKind;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::FreeAgentReleaseReason;
@@ -7,6 +5,8 @@ use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
     default_cooldown_days,
 };
+use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
+use crate::club::staff::perception::CoachProfile;
 use crate::league::result::LeagueProcessAccess;
 use crate::{
     ChangeType, ConflictLocation, HappinessEventCause, HappinessEventChangeKind,
@@ -139,18 +139,15 @@ impl TeamBehaviourResult {
                     .teams
                     .main_mut()
                     .and_then(|team| team.staffs.head_coach_mut())
+                    && coach.id != 0
                 {
-                    if coach.id != 0 {
-                        let profile = CoachProfile::from_staff(coach);
-                        let lens = EvidenceLens {
-                            loyalty: coach.attributes.loyalty,
-                            ..EvidenceLens::default()
-                        };
-                        if let Some(standing) =
-                            coach.coach_memory.standing_of_mut(fine.player_id)
-                        {
-                            StandingEvidence::indiscipline(standing, &profile, &lens);
-                        }
+                    let profile = CoachProfile::from_staff(coach);
+                    let lens = EvidenceLens {
+                        loyalty: coach.attributes.loyalty,
+                        ..EvidenceLens::default()
+                    };
+                    if let Some(standing) = coach.coach_memory.standing_of_mut(fine.player_id) {
+                        StandingEvidence::indiscipline(standing, &profile, &lens);
                     }
                 }
             }
@@ -176,12 +173,12 @@ impl TeamBehaviourResult {
             if let Some(player) = data.player_mut(termination.player_id) {
                 player.on_contract_terminated(date, termination.reason);
             }
-            if termination.payout > 0 {
-                if let Some(club) = data.club_mut(club_id) {
-                    club.finance
-                        .balance
-                        .push_expense_player_wages(termination.payout as i64);
-                }
+            if termination.payout > 0
+                && let Some(club) = data.club_mut(club_id)
+            {
+                club.finance
+                    .balance
+                    .push_expense_player_wages(termination.payout as i64);
             }
             // Now a free agent — drop him from every club's shortlist,
             // scouting, and loan-out lists in this country so stale interest
@@ -373,11 +370,11 @@ impl TeamBehaviourResult {
                             );
                             promise_created = true;
                         }
-                        ManagerTalkType::LoanRequest => {
+                        ManagerTalkType::LoanRequest
                             // Force-pinned players: the listing flag wins
                             // even over a successful loan-request talk —
                             // nothing actually happens, the player stays.
-                            if !player.is_force_match_selection {
+                            if !player.is_force_match_selection => {
                                 player.statuses.add(sim_date, PlayerStatusType::Loa);
                                 let lctx =
                                     LoanEventContext::new(LoanEventKind::LoanListingAccepted);
@@ -394,7 +391,6 @@ impl TeamBehaviourResult {
                                     happiness_ctx,
                                 );
                             }
-                        }
                         _ => {}
                     }
                 } else {
@@ -841,10 +837,10 @@ impl PairEventContextBuilder {
         // into the football-realistic atom the user can read.
         match change_type {
             ChangeType::CompetitionRivalry => {
-                if let Some(pos) = partner_position {
-                    if pos == &from_player.position() {
-                        evidence.push(HappinessEventEvidence::SamePositionCompetition);
-                    }
+                if let Some(pos) = partner_position
+                    && pos == &from_player.position()
+                {
+                    evidence.push(HappinessEventEvidence::SamePositionCompetition);
                 }
                 if let (Some(theirs), Some(ours)) = (
                     partner_squad_status,
@@ -852,10 +848,9 @@ impl PairEventContextBuilder {
                         .contract
                         .as_ref()
                         .map(|c| c.squad_status.clone()),
-                ) {
-                    if Self::same_status_tier(theirs, ours) {
-                        evidence.push(HappinessEventEvidence::SimilarSquadStatusCompetition);
-                    }
+                ) && Self::same_status_tier(theirs, ours)
+                {
+                    evidence.push(HappinessEventEvidence::SimilarSquadStatusCompetition);
                 }
                 if from_player.attributes.ambition >= 15.0 {
                     evidence.push(HappinessEventEvidence::HighAmbition);
@@ -866,10 +861,10 @@ impl PairEventContextBuilder {
             }
             ChangeType::MatchCooperation => {
                 evidence.push(HappinessEventEvidence::MatchCooperation);
-                if let Some(pos) = partner_position {
-                    if pos != &from_player.position() {
-                        evidence.push(HappinessEventEvidence::ComplementaryRoles);
-                    }
+                if let Some(pos) = partner_position
+                    && pos != &from_player.position()
+                {
+                    evidence.push(HappinessEventEvidence::ComplementaryRoles);
                 }
             }
             ChangeType::ReputationTension => {

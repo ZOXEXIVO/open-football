@@ -57,7 +57,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
+                    PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
                         .with_reason("GK_DISTRIBUTING")

@@ -62,7 +62,7 @@ impl BallRoll {
     /// which is what makes it safe to ask this for a chase the runner
     /// cannot win.
     pub fn distance(speed: f32, ticks: f32) -> f32 {
-        if !(ticks > 0.0) || speed <= Self::STOPPED {
+        if ticks.is_nan() || ticks <= 0.0 || speed <= Self::STOPPED {
             return 0.0;
         }
         Self::distance_decayed(speed, Self::decay(ticks))

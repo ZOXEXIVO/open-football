@@ -192,9 +192,9 @@ impl BoardComponentScores {
         let mut s = 0.0f32;
 
         let total_squad = ctx.main_squad_size + ctx.reserve_squad_size;
-        if total_squad > targets.max_squad_size as usize + 5 {
-            s -= 6.0;
-        } else if ctx.main_squad_size < targets.min_squad_size as usize {
+        if total_squad > targets.max_squad_size as usize + 5
+            || ctx.main_squad_size < targets.min_squad_size as usize
+        {
             s -= 6.0;
         } else {
             s += 2.0;
@@ -293,7 +293,7 @@ impl BoardComponentScores {
     /// Compact human-readable summary of the dominant grievance / strength
     /// for logs and (later) UI.
     pub fn headline(&self) -> &'static str {
-        let worst = [
+        ([
             (self.sporting, "sporting"),
             (self.financial, "financial"),
             (self.squad_building, "squad"),
@@ -302,8 +302,7 @@ impl BoardComponentScores {
         .into_iter()
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal))
         .map(|(_, name)| name)
-        .unwrap_or("none");
-        worst
+        .unwrap_or("none")) as _
     }
 }
 

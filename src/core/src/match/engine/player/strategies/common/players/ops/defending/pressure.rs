@@ -117,6 +117,7 @@ impl<'p> PressureOperationsImpl<'p> {
     ///   * work_rate    (25%)
     ///   * anticipation (15%)
     ///   * condition    (15%)
+    ///
     /// Returns true only when the team is in the counter-press window
     /// AND this player scores above 0.55. The team-shared
     /// `counterpress_window` flag is the gate; per-player score picks

@@ -16,6 +16,13 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# Bevy systems take their world access as parameters, so wide signatures and
+# nested `Query<(..), (With<..>, Without<..>)>` types are the idiom; Bevy's own
+# templates allow both lints.
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
 [dependencies]
 # Shared with the server, which is the whole point of it: the colour tables a
 # player's complexion is drawn from have to be the same ones his portrait was

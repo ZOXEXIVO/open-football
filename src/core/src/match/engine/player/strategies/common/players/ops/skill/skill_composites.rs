@@ -337,8 +337,8 @@ pub fn pressing(player: &MatchPlayer, minute: u32) -> f32 {
 // ---------------------------------------------------------------------------
 
 /// Off-ball attacking-movement composite.
-/// `off_the_ball*0.35 + anticipation*0.20 + decisions*0.15
-///  + acceleration*0.10 + pace*0.08 + teamwork*0.07 + bravery*0.05`
+/// `off_the_ball*0.35 + anticipation*0.20 + decisions*0.15 +
+/// acceleration*0.10 + pace*0.08 + teamwork*0.07 + bravery*0.05`
 /// (5% bravery makes the composite sum to 1.0 — runs in behind require
 /// some bravery, this isn't a free slot.)
 pub fn off_ball_attack(player: &MatchPlayer, minute: u32) -> f32 {
@@ -879,10 +879,15 @@ mod tests {
     };
     use chrono::NaiveDate;
 
+    type Composite = fn(&MatchPlayer, u32) -> f32;
+    type Raise = fn(&mut MatchPlayer);
+
     fn build_player(fill: f32, condition: i16) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
-        attrs.jadedness = 0;
+        let attrs = PlayerAttributes {
+            condition,
+            jadedness: 0,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.technical.passing = fill;
         skills.technical.technique = fill;
@@ -1406,7 +1411,7 @@ mod tests {
         let avg = build_player(11.0, 9000);
         let elite = build_player(18.0, 9000);
         let m = 30u32;
-        let pairs: &[(&str, fn(&MatchPlayer, u32) -> f32)] = &[
+        let pairs: &[(&str, Composite)] = &[
             ("mobility", mobility),
             ("decision_quality", decision_quality),
             ("movement_speed_with_ball", movement_speed_with_ball),
@@ -1438,7 +1443,7 @@ mod tests {
     #[test]
     fn dead_ball_composites_are_carried_by_their_specialist_attribute() {
         let m = 30u32;
-        let cases: &[(&str, fn(&mut MatchPlayer), fn(&MatchPlayer, u32) -> f32)] = &[
+        let cases: &[(&str, Raise, Composite)] = &[
             (
                 "corners",
                 |p: &mut MatchPlayer| p.skills.technical.corners = 19.0,
@@ -1736,11 +1741,11 @@ mod tests {
         ];
         for (name, lo, hi) in cases {
             assert!(
-                lo >= COMPOSITE_FLOOR && lo <= COMPOSITE_CEIL,
+                (COMPOSITE_FLOOR..=COMPOSITE_CEIL).contains(&lo),
                 "{name} lo={lo} out of bounds"
             );
             assert!(
-                hi >= COMPOSITE_FLOOR && hi <= COMPOSITE_CEIL,
+                (COMPOSITE_FLOOR..=COMPOSITE_CEIL).contains(&hi),
                 "{name} hi={hi} out of bounds"
             );
             assert!(hi > lo, "{name} hi={hi} <= lo={lo}");

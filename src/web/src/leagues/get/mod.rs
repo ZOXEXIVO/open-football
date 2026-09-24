@@ -18,6 +18,7 @@ use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
 use itertools::*;
 use serde::Deserialize;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
@@ -187,9 +188,9 @@ impl StandingsZones {
             .map(|zone| StandingsLegendItem {
                 zone: self.zone_class(zone),
                 label: match zone {
-                    StandingsZone::Continental(i) => {
-                        i18n.t(Self::tier_label_key(&self.continental[i].tier)).to_string()
-                    }
+                    StandingsZone::Continental(i) => i18n
+                        .t(Self::tier_label_key(&self.continental[i].tier))
+                        .to_string(),
                     StandingsZone::Promotion => i18n.t("promotion").to_string(),
                     StandingsZone::Relegation => i18n.t("relegation").to_string(),
                 },
@@ -453,7 +454,7 @@ pub async fn league_get_action(
 
     // The round in play, or the last one to have kicked off. Its results
     // hold the panel for as long as nothing newer has started.
-    let latest_started = tours.iter().filter(|t| t.start_date() <= today).last();
+    let latest_started = tours.iter().rfind(|t| t.start_date() <= today);
 
     // The round to come, once it is within a day of its first kick-off.
     // Disjoint from the one above, so a matchday never lists twice.
@@ -475,7 +476,7 @@ pub async fn league_get_action(
         for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
             current_tour_schedule.push(TourSchedule {
                 date: key.format("%d.%m.%Y").to_string(),
-                matches: group.map(|item| map_item(item)).collect(),
+                matches: group.map(&map_item).collect(),
             });
         }
     }
@@ -502,7 +503,7 @@ pub async fn league_get_action(
         })
         .collect();
 
-    reputation_data.sort_by(|a, b| b.0.cmp(&a.0));
+    reputation_data.sort_by_key(|r| Reverse(r.0));
 
     let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
         .into_iter()
@@ -627,17 +628,16 @@ pub async fn league_get_action(
             let team_slug = team.slug.clone();
 
             let mut effective: Vec<&core::Player> = team.players.players.iter().collect();
-            if team.team_type == core::TeamType::Main {
-                if let Some(club) = simulator_data.club(team.club_id) {
-                    for sibling in &club.teams.teams {
-                        if sibling.id == team.id {
-                            continue;
-                        }
-                        for p in &sibling.players.players {
-                            if p.is_force_match_selection && !effective.iter().any(|q| q.id == p.id)
-                            {
-                                effective.push(p);
-                            }
+            if team.team_type == core::TeamType::Main
+                && let Some(club) = simulator_data.club(team.club_id)
+            {
+                for sibling in &club.teams.teams {
+                    if sibling.id == team.id {
+                        continue;
+                    }
+                    for p in &sibling.players.players {
+                        if p.is_force_match_selection && !effective.iter().any(|q| q.id == p.id) {
+                            effective.push(p);
                         }
                     }
                 }
@@ -675,8 +675,8 @@ pub async fn league_get_action(
     let min_rated_apps = std::cmp::max(5, max_played_in_league / 2);
     rating_data.retain(|(_, _, _, _, played, _)| *played >= min_rated_apps);
 
-    scorer_data.sort_by(|a, b| b.5.cmp(&a.5));
-    assister_data.sort_by(|a, b| b.5.cmp(&a.5));
+    scorer_data.sort_by_key(|s| Reverse(s.5));
+    assister_data.sort_by_key(|a| Reverse(a.5));
     rating_data.sort_by(|a, b| b.5.partial_cmp(&a.5).unwrap_or(std::cmp::Ordering::Equal));
 
     let top_scorers: Vec<LeaguePlayerStatItem> = scorer_data
@@ -726,7 +726,7 @@ pub async fn league_get_action(
         )
         .collect();
 
-    let league_title = views::league_display_name(&league, &i18n, simulator_data);
+    let league_title = views::league_display_name(league, &i18n, simulator_data);
 
     Ok(LeagueGetTemplate {
         css_version: CSS_VERSION,
@@ -737,7 +737,7 @@ pub async fn league_get_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
@@ -751,7 +751,7 @@ pub async fn league_get_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("/{}/leagues/{}", &route_params.lang, &league.slug);
+            let current_path = format!("/{}/leagues/{}", route_params.lang, league.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,

@@ -172,13 +172,13 @@ impl DatabaseGenerator {
         // synthetic ids below are deterministic across runs.
         let mut by_competition: BTreeMap<String, Vec<&League>> = BTreeMap::new();
         for league in leagues {
-            if let Some(group) = &league.settings.league_group {
-                if group.playoff.is_some() {
-                    by_competition
-                        .entry(group.competition.clone())
-                        .or_default()
-                        .push(league);
-                }
+            if let Some(group) = &league.settings.league_group
+                && group.playoff.is_some()
+            {
+                by_competition
+                    .entry(group.competition.clone())
+                    .or_default()
+                    .push(league);
             }
         }
 

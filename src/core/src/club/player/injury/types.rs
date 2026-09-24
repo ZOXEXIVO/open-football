@@ -543,11 +543,11 @@ mod tests {
     fn test_random_duration_in_range() {
         for _ in 0..100 {
             let duration = InjuryType::Bruise.random_duration();
-            assert!(duration >= 2 && duration <= 5);
+            assert!((2..=5).contains(&duration));
         }
         for _ in 0..100 {
             let duration = InjuryType::ACLTear.random_duration();
-            assert!(duration >= 90 && duration <= 150);
+            assert!((90..=150).contains(&duration));
         }
     }
 
@@ -555,12 +555,16 @@ mod tests {
     fn test_recovery_days_in_range() {
         for _ in 0..100 {
             let days = InjuryType::Cramp.recovery_days();
-            assert!(days >= 2 && days <= 4, "Minor recovery {} not in 2-4", days);
+            assert!(
+                (2..=4).contains(&days),
+                "Minor recovery {} not in 2-4",
+                days
+            );
         }
         for _ in 0..100 {
             let days = InjuryType::HamstringStrain.recovery_days();
             assert!(
-                days >= 5 && days <= 10,
+                (5..=10).contains(&days),
                 "Moderate recovery {} not in 5-10",
                 days
             );
@@ -568,7 +572,7 @@ mod tests {
         for _ in 0..100 {
             let days = InjuryType::ACLTear.recovery_days();
             assert!(
-                days >= 14 && days <= 21,
+                (14..=21).contains(&days),
                 "Critical recovery {} not in 14-21",
                 days
             );
@@ -679,7 +683,7 @@ mod tests {
     fn test_injury_recovery_countdown() {
         let injury = InjuryType::MinorKnock;
         let mut days = injury.random_duration();
-        assert!(days >= 2 && days <= 6);
+        assert!((2..=6).contains(&days));
 
         while days > 0 {
             days -= 1;

@@ -64,8 +64,11 @@ pub struct KnockoutTieDto {
     pub winner_name: Option<String>,
 }
 
-
-fn club_display(simulator_data: &core::SimulatorData, i18n: &I18n, club_id: u32) -> (String, String) {
+fn club_display(
+    simulator_data: &core::SimulatorData,
+    i18n: &I18n,
+    club_id: u32,
+) -> (String, String) {
     if let Some(club) = simulator_data.club(club_id) {
         let slug = club
             .teams
@@ -127,7 +130,9 @@ pub async fn champions_league_get_action(
                 .collect();
 
             groups.push(ClGroupDto {
-                name: i18n.t("group_name").replace("{letter}", &letter.to_string()),
+                name: i18n
+                    .t("group_name")
+                    .replace("{letter}", &letter.to_string()),
                 rows,
             });
         }
@@ -150,7 +155,7 @@ pub async fn champions_league_get_action(
         }
     }
 
-    let current_path = format!("/{}/champions-league", &route_params.lang);
+    let current_path = format!("/{}/champions-league", route_params.lang);
 
     Ok(ChampionsLeagueGetTemplate {
         css_version: CSS_VERSION,

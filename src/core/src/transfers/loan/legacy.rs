@@ -422,9 +422,6 @@ impl LoanDestinationLevel {
         LevelBand::readiness_of(self.ability, self.parent_best_in_group)
     }
 
-    /// [`Self::readiness`] from the two bare numbers, for the gates that
-    /// hold them without building a whole destination.
-
     /// Share of the parent's league level this loan may drop to.
     pub(in crate::transfers::loan) fn division_floor(&self) -> f32 {
         if self.parent_best_in_group == 0 {

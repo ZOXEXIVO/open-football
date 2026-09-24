@@ -68,8 +68,8 @@ impl StandingEvidence {
 
         // ── What he did ──
         let gap = rating - expected;
-        let mut raw =
-            (gap * StandingTuning::RATING_PER_POINT).clamp(-StandingTuning::RATING_CLAMP, StandingTuning::RATING_CLAMP);
+        let mut raw = (gap * StandingTuning::RATING_PER_POINT)
+            .clamp(-StandingTuning::RATING_CLAMP, StandingTuning::RATING_CLAMP);
 
         if observation.is_starter && observation.is_big_match() {
             raw += if rating >= StandingTuning::BIG_MATCH_GOOD_RATING {
@@ -111,9 +111,7 @@ impl StandingEvidence {
             && !observation.team_won
             && (observation.errors_leading_to_goal > 0 || observation.red_cards > 0);
         if cost_the_occasion {
-            standing
-                .grievance
-                .insert(GrievanceFlags::COST_THE_OCCASION);
+            standing.grievance.insert(GrievanceFlags::COST_THE_OCCASION);
         }
 
         StandingLadder::nudge(standing, Self::scaled(raw, profile, lens));
@@ -151,7 +149,11 @@ impl StandingEvidence {
         };
         // Scaled by how much the coach wanted to keep him: a squad player
         // taking his chance is not a betrayal.
-        let weight = if standing.rung.is_favoured() { 1.0 } else { 0.5 };
+        let weight = if standing.rung.is_favoured() {
+            1.0
+        } else {
+            0.5
+        };
         StandingLadder::nudge(standing, raw * weight);
     }
 
@@ -261,7 +263,8 @@ impl StandingEvidence {
         // And he hears what he expected to hear.
         if lens.first_impression != 0.0 {
             let confirms = lens.first_impression.signum() == raw.signum();
-            let shift = profile.confirmation_bias.clamp(0.0, 1.0) * StandingTuning::CONFIRMATION_SPAN;
+            let shift =
+                profile.confirmation_bias.clamp(0.0, 1.0) * StandingTuning::CONFIRMATION_SPAN;
             scaled *= if confirms { 1.0 + shift } else { 1.0 - shift };
         }
 
@@ -286,7 +289,7 @@ mod tests {
         }
 
         fn staff(mental: StaffMental, style: CoachingStyle) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.staff_attributes.mental = mental;
             staff.staff_attributes.knowledge.judging_player_ability = 12;
@@ -540,11 +543,7 @@ mod tests {
     #[test]
     fn a_man_he_rated_asking_to_leave_stings_more_than_a_squad_player_doing_it() {
         let lens = EvidenceLens::default();
-        let mut favoured = CoachStanding::seeded(
-            0.5,
-            GrievanceFlags::default(),
-            Fx::date(0),
-        );
+        let mut favoured = CoachStanding::seeded(0.5, GrievanceFlags::default(), Fx::date(0));
         let mut fringe = CoachStanding::default();
 
         let before = favoured.score;

@@ -128,8 +128,8 @@ impl NationalTeam {
         // original senior call of `random(22, 34)` (ages 22-33).
         let age = IntegerUtils::random(age_min, age_max);
         let year = now.year() - age;
-        let month = ((country_id + seed_offset) % 12 + 1) as u32;
-        let day = ((country_id + seed_offset * 7) % 28 + 1) as u32;
+        let month = (country_id + seed_offset) % 12 + 1;
+        let day = (country_id + seed_offset * 7) % 28 + 1;
 
         // Use deterministic ID based on country + position + offset
         let id = id_base + country_id * 100 + seed_offset;

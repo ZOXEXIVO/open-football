@@ -58,10 +58,9 @@ impl PlayerCollection {
                 .players
                 .iter_mut()
                 .find(|p| p.id == *transfer_request_player_id)
+                && let Some(ref mut contract) = player.contract
             {
-                if let Some(ref mut contract) = player.contract {
-                    contract.is_transfer_listed = true;
-                }
+                contract.is_transfer_listed = true;
             }
         }
 
@@ -94,7 +93,7 @@ impl PlayerCollection {
     }
 
     pub fn players(&self) -> Vec<&Player> {
-        self.players.iter().map(|player| player).collect()
+        self.players.iter().collect()
     }
 
     pub fn take_player(&mut self, player_id: &u32) -> Option<Player> {
@@ -180,6 +179,6 @@ impl Index<u32> for PlayerCollection {
         self.players
             .iter()
             .find(|p| p.id == player_id)
-            .expect(&format!("no player with id = {}", player_id))
+            .unwrap_or_else(|| panic!("no player with id = {}", player_id))
     }
 }

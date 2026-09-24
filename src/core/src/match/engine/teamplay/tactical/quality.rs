@@ -172,7 +172,7 @@ mod tests {
         for q_int in 0..=20 {
             let q = q_int as f32 / 20.0;
             let v = TeamTacticalState::protect_lead_damping(q);
-            assert!(v >= 0.85 - 1e-6 && v <= 1.05 + 1e-6, "q={q} v={v}");
+            assert!((0.85 - 1e-6..=1.05 + 1e-6).contains(&v), "q={q} v={v}");
         }
     }
 

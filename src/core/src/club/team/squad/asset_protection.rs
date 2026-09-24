@@ -632,7 +632,7 @@ impl SquadAssetContext {
         let clearly_below_group = (level as i16) <= group_avg - Self::NEAR_GROUP_GAP;
         if age <= Self::PROSPECT_MAX_AGE && (level as i16) < group_avg {
             let extra_margin =
-                age.saturating_sub(Self::PROSPECT_DOUBT_AGE) as u8 * Self::CEILING_MARGIN_PER_YEAR;
+                age.saturating_sub(Self::PROSPECT_DOUBT_AGE) * Self::CEILING_MARGIN_PER_YEAR;
             let believed_upside = ceiling
                 > level
                     .saturating_add(Self::CEILING_GAP)
@@ -921,8 +921,8 @@ mod tests {
         }
 
         /// Flat skills tuned so the position-weighted visible ability lands
-        /// on `target`. The classifier now ranks by observable level (skills
-        /// + results + training), never the hidden CA digit, so fixtures must
+        /// on `target`. The classifier now ranks by observable level (skills +
+        /// results + training), never the hidden CA digit, so fixtures must
         /// express quality through skills. Inverts `skill_to_ability`.
         fn skills_for(target: u8) -> PlayerSkills {
             PlayerSkills::flat_for_ability(target)
@@ -941,11 +941,13 @@ mod tests {
             rep: i16,
             status: PlayerSquadStatus,
         ) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca;
-            attrs.current_reputation = rep;
-            attrs.home_reputation = rep;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca,
+                current_reputation: rep,
+                home_reputation: rep,
+                ..Default::default()
+            };
             let birth_year = Self::date().year() - age as i32;
             let mut contract =
                 PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
@@ -1019,8 +1021,10 @@ mod tests {
         }
 
         fn season_row(year: u16, games: u16) -> PlayerStatisticsHistoryItem {
-            let mut stats = PlayerStatistics::default();
-            stats.played = games;
+            let stats = PlayerStatistics {
+                played: games,
+                ..Default::default()
+            };
             PlayerStatisticsHistoryItem {
                 season: Season::new(year),
                 team_name: "T".to_string(),

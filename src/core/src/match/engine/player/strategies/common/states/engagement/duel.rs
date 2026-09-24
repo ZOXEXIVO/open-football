@@ -991,7 +991,10 @@ impl ContactFoul {
 
     /// Is this tick one on which a contact foul is considered?
     pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
-        ctx.in_state_time > 0 && ctx.in_state_time % Self::DECISION_INTERVAL_TICKS == 0
+        ctx.in_state_time > 0
+            && ctx
+                .in_state_time
+                .is_multiple_of(Self::DECISION_INTERVAL_TICKS)
     }
 
     /// Probability this engagement becomes a foul now.

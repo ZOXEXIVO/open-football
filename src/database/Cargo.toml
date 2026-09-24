@@ -13,3 +13,6 @@ rayon = "1.12"
 chrono = { version = "0.4.45", features = ["serde"] }
 flate2 = "1.1.10"
 log = "0.4.34"
+
+[lints]
+workspace = true

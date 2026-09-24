@@ -43,3 +43,6 @@ serde-wincode = "0.1.2"
 # server always serve the same viewer.
 [build-dependencies]
 match_viewer_build = { path = "../match/builder" }
+
+[lints]
+workspace = true

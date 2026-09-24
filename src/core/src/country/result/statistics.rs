@@ -1012,9 +1012,11 @@ mod tests {
         // Simulate the state after a mid-season Main → U21 demotion: a
         // departed Main entry sits in `current` carrying the player's
         // pre-demotion stats.
-        let mut main_stats = PlayerStatistics::default();
-        main_stats.played = 12;
-        main_stats.goals = 3;
+        let main_stats = PlayerStatistics {
+            played: 12,
+            goals: 3,
+            ..Default::default()
+        };
         player.statistics_history.current.push(CurrentSeasonEntry {
             team_name: "Napoli".to_string(),
             team_slug: "napoli".to_string(),

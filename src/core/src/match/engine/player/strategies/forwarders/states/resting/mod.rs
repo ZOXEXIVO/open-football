@@ -35,12 +35,12 @@ impl StateProcessingHandler for ForwardRestingState {
                     ForwardState::TakeBall,
                 ));
             }
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Tackling,
-                    ));
-                }
+            if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+            {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Tackling,
+                ));
             }
         }
 

@@ -246,6 +246,12 @@ impl TransferListing {
     }
 }
 
+impl Default for TransferMarket {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TransferMarket {
     pub fn new() -> Self {
         TransferMarket {
@@ -277,9 +283,8 @@ impl TransferMarket {
             return;
         }
         let per_tranche = amount / years as f64;
-        let id = self.next_pending_clause_id();
-        let mut next_id = id;
-        for i in 1..=years as i32 {
+        let first_id = self.next_pending_clause_id();
+        for (id, i) in (first_id..).zip(1..=years as i32) {
             let target_year = start_date.year() + i;
             let scheduled_date = start_date.with_year(target_year).unwrap_or_else(|| {
                 start_date
@@ -287,7 +292,7 @@ impl TransferMarket {
                     .unwrap_or(start_date)
             });
             self.pending_clauses.push(PendingTransferClause {
-                id: next_id,
+                id,
                 buying_club_id,
                 selling_club_id,
                 player_id,
@@ -298,7 +303,6 @@ impl TransferMarket {
                 expires_on: None,
                 created_on: Some(start_date),
             });
-            next_id += 1;
         }
     }
 
@@ -352,17 +356,18 @@ impl TransferMarket {
         for mut clause in self.pending_clauses.drain(..) {
             // Drop expired entries silently — the player may have left
             // the buying club before the milestone could be reached.
-            if let Some(deadline) = clause.expires_on {
-                if today > deadline {
-                    continue;
-                }
+            if let Some(deadline) = clause.expires_on
+                && today > deadline
+            {
+                continue;
             }
-            if let ClauseTrigger::Installment { scheduled_date } = clause.trigger {
-                if clause.fires_so_far < clause.max_fires && today >= scheduled_date {
-                    clause.fires_so_far = clause.fires_so_far.saturating_add(1);
-                    due.push(clause);
-                    continue;
-                }
+            if let ClauseTrigger::Installment { scheduled_date } = clause.trigger
+                && clause.fires_so_far < clause.max_fires
+                && today >= scheduled_date
+            {
+                clause.fires_so_far = clause.fires_so_far.saturating_add(1);
+                due.push(clause);
+                continue;
             }
             keep.push(clause);
         }
@@ -391,10 +396,10 @@ impl TransferMarket {
         let mut fired: Vec<PendingTransferClause> = Vec::new();
         let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
         for mut clause in self.pending_clauses.drain(..) {
-            if let Some(deadline) = clause.expires_on {
-                if today > deadline {
-                    continue;
-                }
+            if let Some(deadline) = clause.expires_on
+                && today > deadline
+            {
+                continue;
             }
             let crosses_threshold = match clause.trigger {
                 ClauseTrigger::AppearanceMilestone { target_appearances } => {
@@ -432,10 +437,10 @@ impl TransferMarket {
         let mut fired: Vec<PendingTransferClause> = Vec::new();
         let mut keep: Vec<PendingTransferClause> = Vec::with_capacity(self.pending_clauses.len());
         for mut clause in self.pending_clauses.drain(..) {
-            if let Some(deadline) = clause.expires_on {
-                if today > deadline {
-                    continue;
-                }
+            if let Some(deadline) = clause.expires_on
+                && today > deadline
+            {
+                continue;
             }
             if matches!(clause.trigger, ClauseTrigger::Promotion)
                 && clause.fires_so_far < clause.max_fires

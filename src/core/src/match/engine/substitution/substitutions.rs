@@ -121,8 +121,6 @@ impl Substitutions {
             home_engine.as_ref(),
             away_engine.as_ref(),
         );
-        drop(home_engine);
-        drop(away_engine);
         field.home_coach_snapshot = home_snapshot;
         field.away_coach_snapshot = away_snapshot;
     }
@@ -238,39 +236,37 @@ impl Substitutions {
             })
             .map(|p| p.start_position);
 
-        if context.can_substitute(team_id) {
-            if let Some(gk_in) = Self::find_goalkeeper_substitute(field, team_id) {
-                // Sacrifice the weakest non-pinned outfielder; if the
-                // whole XI is pinned, sacrifice the weakest regardless —
-                // playing without a keeper is worse than any pin.
-                let sacrifice = field
-                    .players
-                    .iter()
-                    .filter(|p| {
-                        p.team_id == team_id && !p.is_sent_off && !p.is_force_match_selection
-                    })
-                    .min_by_key(|p| p.player_attributes.current_ability)
-                    .or_else(|| {
-                        field
-                            .players
-                            .iter()
-                            .filter(|p| p.team_id == team_id && !p.is_sent_off)
-                            .min_by_key(|p| p.player_attributes.current_ability)
-                    })
-                    .map(|p| p.id);
-                if let Some(out_id) = sacrifice {
-                    if Self::execute_substitution(
-                        field,
-                        context,
-                        team_id,
-                        out_id,
-                        gk_in,
-                        SubstitutionReason::GoalkeeperEmergency,
-                    ) {
-                        Self::station_in_goal(field, context, gk_in, goal_start);
-                        return;
-                    }
-                }
+        if context.can_substitute(team_id)
+            && let Some(gk_in) = Self::find_goalkeeper_substitute(field, team_id)
+        {
+            // Sacrifice the weakest non-pinned outfielder; if the
+            // whole XI is pinned, sacrifice the weakest regardless —
+            // playing without a keeper is worse than any pin.
+            let sacrifice = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id && !p.is_sent_off && !p.is_force_match_selection)
+                .min_by_key(|p| p.player_attributes.current_ability)
+                .or_else(|| {
+                    field
+                        .players
+                        .iter()
+                        .filter(|p| p.team_id == team_id && !p.is_sent_off)
+                        .min_by_key(|p| p.player_attributes.current_ability)
+                })
+                .map(|p| p.id);
+            if let Some(out_id) = sacrifice
+                && Self::execute_substitution(
+                    field,
+                    context,
+                    team_id,
+                    out_id,
+                    gk_in,
+                    SubstitutionReason::GoalkeeperEmergency,
+                )
+            {
+                Self::station_in_goal(field, context, gk_in, goal_start);
+                return;
             }
         }
 
@@ -373,21 +369,20 @@ impl Substitutions {
                     && p.player_attributes.condition < 2000
             })
             .map(|p| p.id);
-        if let Some(gk_out) = critical_gk {
-            if subs_made < cap && context.can_substitute(team_id) {
-                if let Some(gk_in) = Self::find_goalkeeper_substitute(field, team_id) {
-                    if Self::execute_substitution(
-                        field,
-                        context,
-                        team_id,
-                        gk_out,
-                        gk_in,
-                        SubstitutionReason::CriticalInjury,
-                    ) {
-                        subs_made += 1;
-                    }
-                }
-            }
+        if let Some(gk_out) = critical_gk
+            && subs_made < cap
+            && context.can_substitute(team_id)
+            && let Some(gk_in) = Self::find_goalkeeper_substitute(field, team_id)
+            && Self::execute_substitution(
+                field,
+                context,
+                team_id,
+                gk_out,
+                gk_in,
+                SubstitutionReason::CriticalInjury,
+            )
+        {
+            subs_made += 1;
         }
 
         let mut critical_candidates: Vec<(u32, i16, PlayerPositionType)> = field
@@ -411,17 +406,17 @@ impl Substitutions {
                 break;
             }
             let position_group = position.position_group();
-            if let Some(player_in_id) = Self::find_best_substitute(field, team_id, position_group) {
-                if Self::execute_substitution(
+            if let Some(player_in_id) = Self::find_best_substitute(field, team_id, position_group)
+                && Self::execute_substitution(
                     field,
                     context,
                     team_id,
                     *player_out_id,
                     player_in_id,
                     SubstitutionReason::CriticalInjury,
-                ) {
-                    subs_made += 1;
-                }
+                )
+            {
+                subs_made += 1;
             }
         }
         subs_made
@@ -510,17 +505,16 @@ impl Substitutions {
                 let position_group = position.position_group();
                 if let Some(player_in_id) =
                     Self::find_best_substitute(field, team_id, position_group)
-                {
-                    if Self::execute_substitution(
+                    && Self::execute_substitution(
                         field,
                         context,
                         team_id,
                         *player_out_id,
                         player_in_id,
                         SubstitutionReason::YouthProtection,
-                    ) {
-                        subs_made += 1;
-                    }
+                    )
+                {
+                    subs_made += 1;
                 }
             }
 
@@ -956,15 +950,15 @@ impl Substitutions {
 
         let left_squad = field.left_side_players.as_mut();
         let right_squad = field.right_side_players.as_mut();
-        if let Some(squad) = left_squad {
-            if squad.team_id == team_id {
-                squad.mark_substitute_used(player_in_id);
-            }
+        if let Some(squad) = left_squad
+            && squad.team_id == team_id
+        {
+            squad.mark_substitute_used(player_in_id);
         }
-        if let Some(squad) = right_squad {
-            if squad.team_id == team_id {
-                squad.mark_substitute_used(player_in_id);
-            }
+        if let Some(squad) = right_squad
+            && squad.team_id == team_id
+        {
+            squad.mark_substitute_used(player_in_id);
         }
 
         // And now the part anybody watching actually sees. The roster has
@@ -1427,9 +1421,11 @@ mod tests {
     }
 
     fn build_match_player(birth: NaiveDate, pos: PlayerPositionType) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 9000;
-        attrs.jadedness = 1000;
+        let attrs = PlayerAttributes {
+            condition: 9000,
+            jadedness: 1000,
+            ..Default::default()
+        };
         let player = PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
@@ -1619,10 +1615,12 @@ mod tests {
         pos: PlayerPositionType,
         condition: i16,
     ) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
-        attrs.jadedness = 1000;
-        attrs.current_ability = 150;
+        let attrs = PlayerAttributes {
+            condition,
+            jadedness: 1000,
+            current_ability: 150,
+            ..Default::default()
+        };
 
         // Mid-tier skills across the board so trait_fit / need_fit
         // scores are stable, not zeroed out by missing skill data.
@@ -1831,7 +1829,7 @@ mod tests {
         ];
         let field = make_test_field(home, bench, build_roster(2, 300, adult_birth()), vec![]);
         let memory = CoachMemoryStore::new();
-        let profile = CoachProfile::from_staff(&crate::StaffStub::default());
+        let profile = CoachProfile::from_staff(&crate::StaffStub::build());
         let intents = std::collections::HashMap::from([(
             201,
             PlayerMatchIntent {

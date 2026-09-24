@@ -302,15 +302,11 @@ impl ClubTransferStrategy {
 
         let offer = self.attach_clauses(offer, player, ctx, offer_amount, age);
 
-        // Develop-and-sell: longer contracts for young targets
-        // (resale value protection).
+        // Longer contracts for young targets (resale value protection).
         let contract_years = if ctx.is_loan() {
             // Loans carry no contract length on this side; the
             // negotiation layer fills loan-specific clauses.
             1
-        } else if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell) && age < 24
-        {
-            5
         } else if age < 24 {
             5
         } else if age < 28 {
@@ -327,7 +323,7 @@ impl ClubTransferStrategy {
         // the wage-split is set later by the execution layer.
         let mut offer = offer.with_contract_length(contract_years);
         if !ctx.is_loan() {
-            let terms = PersonalTermsPackager::build(self, player, &ctx, contract_years, age);
+            let terms = PersonalTermsPackager::build(self, player, ctx, contract_years, age);
             offer = offer.with_personal_terms(terms);
         }
         offer
@@ -411,10 +407,10 @@ impl ClubTransferStrategy {
         }
 
         // Competition known to be circling → push harder.
-        if let Some(comp) = ctx.competition_count {
-            if comp >= 2 {
-                offer_amount *= 1.0 + 0.04 * (comp.min(5) as f64);
-            }
+        if let Some(comp) = ctx.competition_count
+            && comp >= 2
+        {
+            offer_amount *= 1.0 + 0.04 * (comp.min(5) as f64);
         }
 
         // Priority + scouting confidence push (Critical requests
@@ -431,10 +427,10 @@ impl ClubTransferStrategy {
                 offer_amount *= 0.9;
             }
         }
-        if let Some(conf) = ctx.scout_confidence {
-            if conf < self.recruitment.min_scouting_confidence {
-                offer_amount *= 0.85;
-            }
+        if let Some(conf) = ctx.scout_confidence
+            && conf < self.recruitment.min_scouting_confidence
+        {
+            offer_amount *= 0.85;
         }
 
         // Financial-stance modulation. Austerity reduces; Ambitious lifts.
@@ -623,7 +619,7 @@ impl RecruitmentPolicy {
         };
 
         RecruitmentPolicy {
-            philosophy: philosophy.clone(),
+            philosophy: *philosophy,
             financial_stance: vision.financial_stance,
             signing_preference: vision.signing_preference,
             youth_focus: vision.youth_focus,
@@ -877,10 +873,10 @@ impl PersonalTermsPackager {
         // makes is the promise it planned, not a second guess from the
         // motive. The motive mapping below stays as the fallback for
         // requests raised by paths that predate the brief.
-        if let Some(req) = ctx.request {
-            if let Some(promised) = Self::promise_from_squad_status(&req.promised_status) {
-                return Some(promised);
-            }
+        if let Some(req) = ctx.request
+            && let Some(promised) = Self::promise_from_squad_status(&req.promised_status)
+        {
+            return Some(promised);
         }
         if let Some(req) = ctx.request {
             return Some(match req.reason {

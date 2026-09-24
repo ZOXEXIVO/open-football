@@ -186,7 +186,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         for p in field.players.iter() {
             let cond = p.player_attributes.condition as f32 / 10000.0;
             let xg = p.memory.xg_total;
-            let shots = p.memory.shots_taken as u32;
+            let shots = p.memory.shots_taken;
             let pressures = p.statistics.pressures as u32;
             let succ = p.statistics.successful_pressures as u32;
             // Passes that arrived in the opponent's box. Our nearest
@@ -322,7 +322,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let tilt_delta = coach
             .cum_field_tilt_ticks
             .saturating_sub(snap.field_tilt_ticks) as u64;
-        let possession_window = elapsed.min(POSSESSION_WINDOW_TICKS).max(1);
+        let possession_window = elapsed.clamp(1, POSSESSION_WINDOW_TICKS);
         let possession_last_10 = (poss_delta as f32 / possession_window as f32).clamp(0.0, 1.0);
         let field_tilt_last_10 = (tilt_delta as f32 / possession_window as f32).clamp(0.0, 1.0);
 
@@ -341,23 +341,23 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             };
         }
 
-        let mut metrics = RollingTeamMetrics::default();
-        metrics.xg_for_last_15 = xg_for;
-        metrics.xg_against_last_15 = xg_against;
-        metrics.shots_for_last_15 = shots_for;
-        metrics.deep_entries_for_last_15 = deep_entries_for_last_15;
-        metrics.field_tilt_last_10 = field_tilt_last_10;
-        metrics.possession_last_10 = possession_last_10;
-        metrics.dangerous_turnovers_last_10 = dangerous_turnovers_last_10;
-        metrics.press_success_rate_last_10 = press_success_rate;
-        // `avg_defensive_line_breaks` is intentionally left at 0 — the
-        // engine doesn't currently track per-side line-break events
-        // (would need to instrument the offside trap / through-ball
-        // resolver). The smart coach evaluator falls back gracefully
-        // when this is 0; remove or implement once the underlying
-        // signal exists.
-        metrics.avg_defensive_line_breaks = 0.0;
-        metrics
+        RollingTeamMetrics {
+            xg_for_last_15: xg_for,
+            xg_against_last_15: xg_against,
+            shots_for_last_15: shots_for,
+            deep_entries_for_last_15,
+            field_tilt_last_10,
+            possession_last_10,
+            dangerous_turnovers_last_10,
+            press_success_rate_last_10: press_success_rate,
+            // `avg_defensive_line_breaks` is intentionally left at 0 — the
+            // engine doesn't currently track per-side line-break events
+            // (would need to instrument the offside trap / through-ball
+            // resolver). The smart coach evaluator falls back gracefully
+            // when this is 0; remove or implement once the underlying
+            // signal exists.
+            avg_defensive_line_breaks: 0.0,
+        }
     }
 
     /// Refresh the team-level tactical state (phase, possession timers,
@@ -394,16 +394,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     }
                 },
             );
-        let home_avg = if home_count > 0 {
-            (home_ca_sum / home_count) as u16
-        } else {
-            0
-        };
-        let away_avg = if away_count > 0 {
-            (away_ca_sum / away_count) as u16
-        } else {
-            0
-        };
+        let home_avg = home_ca_sum.checked_div(home_count).unwrap_or(0) as u16;
+        let away_avg = away_ca_sum.checked_div(away_count).unwrap_or(0) as u16;
         let home_avg_cond = if home_count > 0 {
             home_cond_sum / home_count as f32
         } else {

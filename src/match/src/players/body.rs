@@ -900,7 +900,7 @@ impl Sculptor {
     /// the caps carry their own copies, which keeps their rims crisp.
     fn build(self) -> Mesh {
         let mut normals = vec![Vec3::ZERO; self.positions.len()];
-        for triangle in self.indices.chunks_exact(3) {
+        for triangle in self.indices.as_chunks::<3>().0 {
             let corners = [
                 Vec3::from(self.positions[triangle[0] as usize]),
                 Vec3::from(self.positions[triangle[1] as usize]),
@@ -1450,6 +1450,8 @@ impl BodyParts {
     ];
 
     /// Loose legs and a narrow hem, blended into the waistband by the garment.
+    // -0.318 is a ring height in metres, not 1/π.
+    #[allow(clippy::approx_constant)]
     const SHORTS_LEG: [Ring; 7] = [
         Ring::squared(-0.038, 0.0720, 0.0710, 0.000, 2.26),
         Ring::squared(-0.072, 0.0824, 0.0840, 0.001, 2.34),
@@ -7696,7 +7698,7 @@ pub(crate) mod preview {
             ) / 255.0
         };
 
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             // Sampled per PIXEL rather than per corner. Sampling the three
             // corners and interpolating between them was cheaper and it lied:
             // it made the head as detailed as the mesh is dense, so a sheet
@@ -7937,7 +7939,7 @@ pub(crate) mod preview {
         } else {
             None
         };
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let tint = if cloth_uvs.is_some_and(|uvs| uvs[triangle[0]] == Swatch::Trim.uv()) {
                 TRIM
             } else {
@@ -8991,15 +8993,15 @@ mod tests {
                     punch: step as f32 / 120.0,
                     ..saving(Vec2::ZERO, 1.0)
                 };
-                for digit in 0..5 {
+                for (digit, last) in previous.iter_mut().enumerate() {
                     let tip = fingertip(side, digit, gait);
                     if step > 0 {
                         assert!(
-                            tip.distance(previous[digit]) < 0.008,
+                            tip.distance(*last) < 0.008,
                             "digit {digit} pops while closing"
                         );
                     }
-                    previous[digit] = tip;
+                    *last = tip;
                 }
             }
         }
@@ -9742,9 +9744,6 @@ mod tests {
         );
     }
 
-    /// The hips lead a kick and the shoulders follow, which is what makes it
-    /// look like it came from the ground up rather than from the knee.
-
     /// **The hips lead the opening and the chest follows it.**
     ///
     /// [`Gait::open`] is a rotation of the LOWER body: a footballer coming
@@ -9791,6 +9790,9 @@ mod tests {
             socket.translation.z
         );
     }
+
+    /// The hips lead a kick and the shoulders follow, which is what makes it
+    /// look like it came from the ground up rather than from the knee.
     #[test]
     fn the_hips_lead_the_shoulders() {
         // Measured as how far each has turned by the moment of contact,

@@ -283,13 +283,13 @@ impl<'p> ShootingOperationsImpl<'p> {
     /// Check if in close range for finishing
     pub fn in_close_range(&self) -> bool {
         let distance = self.ctx.ball().distance_to_opponent_goal();
-        distance >= MIN_SHOOTING_DISTANCE && distance <= CLOSE_RANGE_DISTANCE
+        (MIN_SHOOTING_DISTANCE..=CLOSE_RANGE_DISTANCE).contains(&distance)
     }
 
     /// Check if in optimal shooting distance
     pub fn in_optimal_range(&self) -> bool {
         let distance = self.ctx.ball().distance_to_opponent_goal();
-        distance >= MIN_SHOOTING_DISTANCE && distance <= OPTIMAL_SHOOTING_DISTANCE
+        (MIN_SHOOTING_DISTANCE..=OPTIMAL_SHOOTING_DISTANCE).contains(&distance)
     }
 
     /// Get shooting confidence factor (0.0 - 1.0).

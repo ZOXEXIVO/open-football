@@ -164,6 +164,12 @@ pub struct PlayerMailbox {
     messages: VecDeque<PlayerMessage>,
 }
 
+impl Default for PlayerMailbox {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerMailbox {
     pub fn new() -> Self {
         PlayerMailbox {
@@ -199,6 +205,10 @@ impl PlayerMailbox {
     /// pass should (or should not) have pushed a proposal.
     pub fn len(&self) -> usize {
         self.messages.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
     }
 
     /// Read-only view of pending messages. The mailbox processes

@@ -3,8 +3,8 @@ pub struct ClubMood {
     pub state: ClubMoodState,
 }
 
-impl ClubMood {
-    pub fn default() -> Self {
+impl Default for ClubMood {
+    fn default() -> Self {
         ClubMood {
             state: ClubMoodState::Normal,
         }

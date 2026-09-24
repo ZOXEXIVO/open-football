@@ -88,7 +88,7 @@ pub struct SquadFixtureWire {
     pub away: SquadWire,
 }
 
-/// Conversions ─────────────────────────────────────────────────────────
+// Conversions ─────────────────────────────────────────────────────────
 
 impl PlayerWire {
     pub fn from_player(p: &MatchPlayer) -> Self {

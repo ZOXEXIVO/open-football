@@ -11,6 +11,7 @@ use core::league::ScheduleItem;
 use core::league::schedule::cup;
 use core::r#match::player::statistics::MatchStatisticType;
 use serde::Deserialize;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize)]
@@ -238,7 +239,7 @@ pub async fn cup_get_action(
         .enumerate()
         .map(|(r, tour)| CupRound {
             label: cup_round_label(&i18n, tour.items.len()),
-            ties: tour.items.iter().map(|item| build_tie(item)).collect(),
+            ties: tour.items.iter().map(&build_tie).collect(),
             byes: byes_per_round[r]
                 .iter()
                 .filter_map(|&tid| {
@@ -334,7 +335,7 @@ pub async fn cup_get_action(
                 value,
             ));
         }
-        rows.sort_by(|a, b| b.5.cmp(&a.5));
+        rows.sort_by_key(|r| Reverse(r.5));
         rows.into_iter()
             .take(10)
             .map(
@@ -353,8 +354,8 @@ pub async fn cup_get_action(
     let top_scorers = build_stats(&goals_per_player);
     let top_assisters = build_stats(&assists_per_player);
 
-    let title = views::league_display_name(&league, &i18n, simulator_data);
-    let current_path = format!("/{}/cups/{}", &route_params.lang, &league.slug);
+    let title = views::league_display_name(league, &i18n, simulator_data);
+    let current_path = format!("/{}/cups/{}", route_params.lang, league.slug);
     let country_leagues: Vec<(&str, &str)> = country
         .leagues
         .leagues
@@ -394,7 +395,7 @@ pub async fn cup_get_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),

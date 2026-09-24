@@ -14,3 +14,6 @@ publish = false
 # paid for twice: once in the download and once in every page load.
 
 [dependencies]
+
+[lints]
+workspace = true

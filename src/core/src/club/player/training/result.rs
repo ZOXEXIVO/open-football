@@ -589,9 +589,10 @@ impl PlayerTrainingResult {
 
         let (event_type, magnitude) = if positive_qualifies && morale_change > 0.0 {
             (HappinessEventType::GoodTraining, morale_change * 5.0)
-        } else if negative_qualifies && !block_poor_for_fatigue && morale_change < 0.0 {
-            (HappinessEventType::PoorTraining, morale_change * 5.0)
-        } else if recovery_or_fatigue_cause && raw <= 6.5 && morale_change < 0.0 {
+        } else if morale_change < 0.0
+            && ((negative_qualifies && !block_poor_for_fatigue)
+                || (recovery_or_fatigue_cause && raw <= 6.5))
+        {
             (HappinessEventType::PoorTraining, morale_change * 5.0)
         } else {
             if morale_change.abs() > 0.001 {
@@ -722,10 +723,12 @@ mod potential_ceiling_tests {
     use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
 
     fn make_player(skills: PlayerSkills, ca: u8, pa: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.potential_ability = pa;
-        attrs.condition = 9500;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            potential_ability: pa,
+            condition: 9500,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("Test".to_string(), "Player".to_string()))
@@ -828,10 +831,12 @@ mod potential_ceiling_tests {
         // A striker's tackling ceiling is PA-derived × 0.35 — far below
         // his flat skill baseline here, so tackling must freeze while a
         // normally-weighted skill still grows.
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = 80;
-        attrs.potential_ability = 160;
-        attrs.condition = 9500;
+        let attrs = PlayerAttributes {
+            current_ability: 80,
+            potential_ability: 160,
+            condition: 9500,
+            ..Default::default()
+        };
         let mut p = PlayerBuilder::new()
             .id(2)
             .full_name(FullName::new("Test".to_string(), "Striker".to_string()))

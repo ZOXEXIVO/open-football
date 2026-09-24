@@ -556,11 +556,9 @@ pub async fn match_get_action(
                     )
                 })
                 .unwrap_or_else(|| i18n.t("unknown").to_string());
-            let minute = if result_details.match_time_ms > 0 {
-                (g.time * 90 / result_details.match_time_ms) as u32
-            } else {
-                0
-            };
+            let minute = (g.time * 90)
+                .checked_div(result_details.match_time_ms)
+                .unwrap_or(0) as u32;
             GoalEventDisplay {
                 player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
@@ -600,11 +598,9 @@ pub async fn match_get_action(
                     )
                 })
                 .unwrap_or_else(|| i18n.t("unknown").to_string());
-            let minute = if result_details.match_time_ms > 0 {
-                (g.time * 90 / result_details.match_time_ms) as u32
-            } else {
-                0
-            };
+            let minute = (g.time * 90)
+                .checked_div(result_details.match_time_ms)
+                .unwrap_or(0) as u32;
             GoalEventDisplay {
                 player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
@@ -640,7 +636,7 @@ pub async fn match_get_action(
     let (competition_name, competition_url) = if let Some(l) = league {
         (
             views::league_display_name(l, &i18n, simulator_data),
-            format!("/{}/leagues/{}", &route_params.lang, &l.slug),
+            format!("/{}/leagues/{}", route_params.lang, l.slug),
         )
     } else {
         let name = match match_result.league_slug.as_str() {
@@ -651,10 +647,10 @@ pub async fn match_get_action(
             _ => "international",
         };
         let link = match match_result.league_slug.as_str() {
-            "champions-league" => format!("/{}/champions-league", &route_params.lang),
-            "europa-league" => format!("/{}/europa-league", &route_params.lang),
-            "conference-league" => format!("/{}/conference-league", &route_params.lang),
-            "copa-libertadores" => format!("/{}/copa-libertadores", &route_params.lang),
+            "champions-league" => format!("/{}/champions-league", route_params.lang),
+            "europa-league" => format!("/{}/europa-league", route_params.lang),
+            "conference-league" => format!("/{}/conference-league", route_params.lang),
+            "copa-libertadores" => format!("/{}/copa-libertadores", route_params.lang),
             _ => String::new(),
         };
         (i18n.t(name).to_string(), link)

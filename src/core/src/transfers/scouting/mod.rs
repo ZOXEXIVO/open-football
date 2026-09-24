@@ -278,13 +278,6 @@ impl MonitoringWriter {
     }
 }
 
-/// What one country's scouts saw at the weekend's fixtures. The read pass walks
-/// every club while deciding, so nothing can be written until it is done —
-/// which is what the `Pass 1` / `Pass 2` banners inside the old 399-line body
-/// were describing.
-
-/// One fixture a scout was sent to, and the side he was sent to watch.
-
 /// A player a scout actually got to look at tonight, and the standing
 /// assignment that sent him.
 struct PlayerSeen<'a> {
@@ -295,6 +288,7 @@ struct PlayerSeen<'a> {
     match_rating: f32,
 }
 
+/// One fixture a scout was sent to, and the side he was sent to watch.
 struct MatchWatch<'a> {
     assignment: &'a ScoutMatchAssignment,
     target_club: &'a Club,
@@ -304,6 +298,10 @@ struct MatchWatch<'a> {
     judging_potential: u8,
 }
 
+/// What one country's scouts saw at the weekend's fixtures. The read pass walks
+/// every club while deciding, so nothing can be written until it is done —
+/// which is what the `Pass 1` / `Pass 2` banners inside the old 399-line body
+/// were describing.
 struct MatchScoutingStaged {
     observations: Vec<MatchScoutingObservationResult>,
     reports: Vec<ScoutingReportResult>,
@@ -506,7 +504,7 @@ impl ScoutingPass {
                     next_assign_id + i as u32,
                     request.id,
                     scout_id,
-                    request.position.clone(),
+                    request.position,
                     request.min_ability,
                     request.preferred_age_min,
                     request.preferred_age_max,
@@ -1142,53 +1140,52 @@ impl ScoutingPass {
         } = staged;
         // Pass 2: Apply observations, reports, and attendance updates
         for obs in observations {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id) {
-                if let Some(assignment) = club
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id)
+                && let Some(assignment) = club
                     .transfer_plan
                     .scouting_assignments
                     .iter_mut()
                     .find(|a| a.id == obs.assignment_id)
-                {
-                    if obs.is_new {
-                        let mut new_obs = PlayerObservation::new(
-                            obs.player_id,
-                            obs.assessed_ability,
-                            obs.assessed_potential,
-                            current_date,
-                        );
-                        // Start match observations at higher confidence
-                        new_obs.confidence = 0.5;
-                        assignment.observations.push(new_obs);
-                    } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
-                        existing.add_match_observation(
-                            obs.assessed_ability,
-                            obs.assessed_potential,
-                            obs.match_rating,
-                            current_date,
-                        );
-                    }
+            {
+                if obs.is_new {
+                    let mut new_obs = PlayerObservation::new(
+                        obs.player_id,
+                        obs.assessed_ability,
+                        obs.assessed_potential,
+                        current_date,
+                    );
+                    // Start match observations at higher confidence
+                    new_obs.confidence = 0.5;
+                    assignment.observations.push(new_obs);
+                } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
+                    existing.add_match_observation(
+                        obs.assessed_ability,
+                        obs.assessed_potential,
+                        obs.match_rating,
+                        current_date,
+                    );
                 }
             }
         }
 
         for report in reports {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id) {
-                if !club.transfer_plan.scouting_reports.iter().any(|r| {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id)
+                && !club.transfer_plan.scouting_reports.iter().any(|r| {
                     r.player_id == report.report.player_id
                         && r.assignment_id == report.assignment_id
-                }) {
-                    club.transfer_plan.scouting_reports.push(report.report);
+                })
+            {
+                club.transfer_plan.scouting_reports.push(report.report);
 
-                    if let Some(assignment) = club
-                        .transfer_plan
-                        .scouting_assignments
-                        .iter_mut()
-                        .find(|a| a.id == report.assignment_id)
-                    {
-                        assignment.reports_produced += 1;
-                        if assignment.reports_produced >= 1 {
-                            assignment.completed = true;
-                        }
+                if let Some(assignment) = club
+                    .transfer_plan
+                    .scouting_assignments
+                    .iter_mut()
+                    .find(|a| a.id == report.assignment_id)
+                {
+                    assignment.reports_produced += 1;
+                    if assignment.reports_produced >= 1 {
+                        assignment.completed = true;
                     }
                 }
             }
@@ -1196,15 +1193,14 @@ impl ScoutingPass {
 
         // Update last_attended dates
         for (club_id, team_id, date) in attended_updates {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                if let Some(match_assign) = club
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id)
+                && let Some(match_assign) = club
                     .transfer_plan
                     .scout_match_assignments
                     .iter_mut()
                     .find(|a| a.target_team_id == team_id)
-                {
-                    match_assign.last_attended = Some(date);
-                }
+            {
+                match_assign.last_attended = Some(date);
             }
         }
 
@@ -1734,17 +1730,16 @@ impl ScoutingPass {
         }
 
         for u in updates {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == u.club_id) {
-                if let Some(shadow) = club
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == u.club_id)
+                && let Some(shadow) = club
                     .transfer_plan
                     .shadow_reports
                     .iter_mut()
                     .find(|s| s.report.player_id == u.player_id)
-                {
-                    shadow.report.assessed_ability = u.new_ability;
-                    shadow.observed_ability = u.new_ability;
-                    shadow.recorded_on = u.recorded_on;
-                }
+            {
+                shadow.report.assessed_ability = u.new_ability;
+                shadow.observed_ability = u.new_ability;
+                shadow.recorded_on = u.recorded_on;
             }
         }
     }

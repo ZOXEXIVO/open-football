@@ -8,6 +8,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 
 pub fn search_routes() -> axum::Router<GameAppData> {
     routes::routes()
@@ -43,7 +44,7 @@ pub async fn search_page_action(
     Path(route_params): Path<SearchPageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
-    let current_path = format!("/{}/search", &route_params.lang);
+    let current_path = format!("/{}/search", route_params.lang);
     let menu_sections = views::search_menu(&i18n, &route_params.lang, &current_path);
     let title = i18n.t("search").to_string();
 
@@ -141,16 +142,16 @@ pub async fn search_api_action(
             }
 
             for club in &country.clubs {
-                if club.name.to_lowercase().contains(&needle) {
-                    if let Some(main) = club.teams.main() {
-                        clubs.push((
-                            main.reputation.world,
-                            SearchClubDto {
-                                name: club.name.clone(),
-                                team_slug: main.slug.clone(),
-                            },
-                        ));
-                    }
+                if club.name.to_lowercase().contains(&needle)
+                    && let Some(main) = club.teams.main()
+                {
+                    clubs.push((
+                        main.reputation.world,
+                        SearchClubDto {
+                            name: club.name.clone(),
+                            team_slug: main.slug.clone(),
+                        },
+                    ));
                 }
 
                 for team in &club.teams.teams {
@@ -222,8 +223,8 @@ pub async fn search_api_action(
 
     countries.truncate(MAX_RESULTS_PER_KIND);
 
-    clubs.sort_by(|a, b| b.0.cmp(&a.0));
-    players.sort_by(|a, b| b.0.cmp(&a.0));
+    clubs.sort_by_key(|c| Reverse(c.0));
+    players.sort_by_key(|p| Reverse(p.0));
 
     let clubs = clubs
         .into_iter()

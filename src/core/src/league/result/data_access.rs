@@ -32,8 +32,8 @@ use crate::league::League;
 use crate::league::LeagueCollection;
 use crate::shared::indexes::SimulatorDataIndexes;
 use crate::transfers::MarketMap;
-use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::TransferListing;
+use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::world::CountryInfo;
@@ -216,10 +216,10 @@ impl LeagueProcessAccess for SimulatorData {
     }
     fn push_transfer_market_listing(&mut self, selling_club_id: u32, listing: TransferListing) {
         let country_id = self.country_by_club(selling_club_id).map(|c| c.id);
-        if let Some(country_id) = country_id {
-            if let Some(country) = SimulatorData::country_mut(self, country_id) {
-                country.transfer_market.add_listing(listing);
-            }
+        if let Some(country_id) = country_id
+            && let Some(country) = SimulatorData::country_mut(self, country_id)
+        {
+            country.transfer_market.add_listing(listing);
         }
     }
     fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {

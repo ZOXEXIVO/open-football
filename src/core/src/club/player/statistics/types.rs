@@ -628,12 +628,13 @@ mod tests {
     use super::*;
 
     fn make_stats(played: u16, played_subs: u16, goals: u16, rating: f32) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.played_subs = played_subs;
-        s.goals = goals;
-        s.average_rating = rating;
-        s
+        PlayerStatistics {
+            played,
+            played_subs,
+            goals,
+            average_rating: rating,
+            ..Default::default()
+        }
     }
 
     // === PlayerStatistics ===
@@ -757,12 +758,16 @@ mod tests {
 
     #[test]
     fn record_match_rating_starter_weights_higher_than_substitute() {
-        let mut starter = PlayerStatistics::default();
-        starter.played = 1;
+        let mut starter = PlayerStatistics {
+            played: 1,
+            ..Default::default()
+        };
         starter.record_match_rating(7.5, 90, true);
 
-        let mut cameo = PlayerStatistics::default();
-        cameo.played_subs = 1;
+        let mut cameo = PlayerStatistics {
+            played_subs: 1,
+            ..Default::default()
+        };
         cameo.record_match_rating(7.5, 10, false);
 
         // Same per-match rating, but a 90-minute start should carry
@@ -883,13 +888,17 @@ mod tests {
 
     #[test]
     fn merge_from_with_weighted_ledgers_preserves_average() {
-        let mut a = PlayerStatistics::default();
-        a.played = 5;
+        let mut a = PlayerStatistics {
+            played: 5,
+            ..Default::default()
+        };
         for _ in 0..5 {
             a.record_match_rating(7.0, 90, true);
         }
-        let mut b = PlayerStatistics::default();
-        b.played = 5;
+        let mut b = PlayerStatistics {
+            played: 5,
+            ..Default::default()
+        };
         for _ in 0..5 {
             b.record_match_rating(6.0, 90, true);
         }
@@ -1123,8 +1132,10 @@ mod tests {
         // a is legacy (no rating_weight), b is new-style. Merge should
         // synthesise a weight for a and produce a sensible blended avg.
         let a = make_stats(10, 0, 0, 7.0);
-        let mut b = PlayerStatistics::default();
-        b.played = 10;
+        let mut b = PlayerStatistics {
+            played: 10,
+            ..Default::default()
+        };
         for _ in 0..10 {
             b.record_match_rating(6.0, 90, true);
         }

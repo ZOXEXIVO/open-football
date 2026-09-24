@@ -277,14 +277,14 @@ impl PlayerFieldPositionGroup {
         // intended receiver holds the chase however close a teammate
         // gets, and his teammates drop it. The two must agree or a
         // player oscillates between being forced in and yielded out.
-        if tick_context.ball.is_in_flight_state > 0 {
-            if let Some(target_id) = tick_context.ball.pass_target {
-                if target_id == player.id {
-                    return false;
-                }
-                if tick_context.positions.players.side(target_id) == player.side {
-                    return true;
-                }
+        if tick_context.ball.is_in_flight_state > 0
+            && let Some(target_id) = tick_context.ball.pass_target
+        {
+            if target_id == player.id {
+                return false;
+            }
+            if tick_context.positions.players.side(target_id) == player.side {
+                return true;
             }
         }
         let Some(my_side) = player.side else {
@@ -444,14 +444,14 @@ impl PlayerFieldPositionGroup {
         // chaser and his teammates stand off; the defending side keeps
         // its normal designation so it can contest the ball the moment
         // it comes free.
-        if tick_context.ball.is_in_flight_state > 0 {
-            if let Some(target_id) = tick_context.ball.pass_target {
-                if target_id == player.id {
-                    return true;
-                }
-                if tick_context.positions.players.side(target_id) == player.side {
-                    return false;
-                }
+        if tick_context.ball.is_in_flight_state > 0
+            && let Some(target_id) = tick_context.ball.pass_target
+        {
+            if target_id == player.id {
+                return true;
+            }
+            if tick_context.positions.players.side(target_id) == player.side {
+                return false;
             }
         }
 
@@ -749,10 +749,8 @@ impl<'p> StateProcessor<'p> {
         if let Some(change) = handler.process(&processing_ctx) {
             // Extended per-player state trace — only a real transition is
             // worth a line; event-only results keep the current state.
-            if need_extended_state_logging {
-                if let Some(state) = change.state {
-                    debug!("Player, Id={}, State {:?}", player_id, state);
-                }
+            if need_extended_state_logging && let Some(state) = change.state {
+                debug!("Player, Id={}, State {:?}", player_id, state);
             }
             // Keeper state churn. A transition out of a state he entered
             // less than 300 ms ago is not a decision he made, it is two

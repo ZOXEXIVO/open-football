@@ -377,26 +377,26 @@ impl ClubResult {
             // rejection cap fire long before either side compromises, and
             // the stalemate escalates to a listing for a deal the club
             // could have closed.
-            if let Some(ask) = &player.pending_contract_ask {
-                if ask.desired_salary > offered_salary {
-                    let headroom = if wage_budget > 0 {
-                        Some(wage_budget.saturating_sub(current_wage_bill))
-                    } else {
-                        None
-                    };
-                    let stalemate = ContractStalemate::assess(
-                        player,
-                        data.date().date(),
-                        AffordabilityInput {
-                            wage_budget_headroom: headroom,
-                            current_salary,
-                        },
-                    );
-                    if stalemate.should_improve_offer() {
-                        offered_salary = ask.desired_salary;
-                    } else {
-                        offered_salary = (offered_salary + ask.desired_salary) / 2;
-                    }
+            if let Some(ask) = &player.pending_contract_ask
+                && ask.desired_salary > offered_salary
+            {
+                let headroom = if wage_budget > 0 {
+                    Some(wage_budget.saturating_sub(current_wage_bill))
+                } else {
+                    None
+                };
+                let stalemate = ContractStalemate::assess(
+                    player,
+                    data.date().date(),
+                    AffordabilityInput {
+                        wage_budget_headroom: headroom,
+                        current_salary,
+                    },
+                );
+                if stalemate.should_improve_offer() {
+                    offered_salary = ask.desired_salary;
+                } else {
+                    offered_salary = (offered_salary + ask.desired_salary) / 2;
                 }
             }
 
@@ -441,10 +441,10 @@ impl ClubResult {
                 player,
                 data.date().date(),
             ));
-            if let Some(ask) = &player.pending_contract_ask {
-                if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract)) {
-                    years = years.max(ask.desired_years);
-                }
+            if let Some(ask) = &player.pending_contract_ask
+                && matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
+            {
+                years = years.max(ask.desired_years);
             }
 
             // Reactive path stays lean on sweeteners — the player has
@@ -476,17 +476,16 @@ impl ClubResult {
                 if reactive_proposal.release_clause.is_none() {
                     reactive_proposal.release_clause = ask.demanded_release_clause;
                 }
-                if let Some(status) = &ask.demanded_status {
-                    if reactive_proposal.squad_status_promise.is_none()
-                        && status.seniority_rank() > squad_status.seniority_rank()
-                    {
-                        reactive_proposal.squad_status_promise = Some(status.clone());
-                    }
+                if let Some(status) = &ask.demanded_status
+                    && reactive_proposal.squad_status_promise.is_none()
+                    && status.seniority_rank() > squad_status.seniority_rank()
+                {
+                    reactive_proposal.squad_status_promise = Some(status.clone());
                 }
-                if let Some(bonus) = ask.demanded_signing_bonus {
-                    if reactive_proposal.signing_bonus < bonus {
-                        reactive_proposal.signing_bonus = bonus;
-                    }
+                if let Some(bonus) = ask.demanded_signing_bonus
+                    && reactive_proposal.signing_bonus < bonus
+                {
+                    reactive_proposal.signing_bonus = bonus;
                 }
             }
             // Pass the valuation context through so player acceptance
@@ -928,11 +927,10 @@ impl ClubResult {
             // the actual selling team carries the item; loaned players
             // were filtered out earlier, so the parent team is always the
             // current team.
-            if listed_now {
-                if let Some(team) = club.teams.teams.iter_mut().find(|t| t.id == team_id) {
-                    team.transfer_list
-                        .add(TransferItem::new(player_id, asking_price.clone()));
-                }
+            if listed_now && let Some(team) = club.teams.teams.iter_mut().find(|t| t.id == team_id)
+            {
+                team.transfer_list
+                    .add(TransferItem::new(player_id, asking_price.clone()));
             }
         }
 
@@ -1033,9 +1031,11 @@ mod tests {
         decisions: PlayerDecisionHistory,
         contract: Option<PlayerClubContract>,
     ) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ability;
-        attrs.potential_ability = ability;
+        let attrs = PlayerAttributes {
+            current_ability: ability,
+            potential_ability: ability,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("Test".into(), format!("Player{}", id)))

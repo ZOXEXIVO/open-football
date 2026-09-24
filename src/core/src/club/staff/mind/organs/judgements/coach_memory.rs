@@ -807,13 +807,13 @@ mod tests {
 
     /// Test fixture struct — bundles a Staff builder so each test can
     /// override only the attribute that matters. Builds on top of
-    /// `StaffStub::default()` so the tests don't replicate every Staff
+    /// `StaffStub::build()` so the tests don't replicate every Staff
     /// field literal each time.
     struct CoachFixture;
 
     impl CoachFixture {
         fn baseline() -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.staff_attributes.knowledge.judging_player_ability = 14;
             staff.staff_attributes.knowledge.judging_player_potential = 14;

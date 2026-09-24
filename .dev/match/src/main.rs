@@ -22,6 +22,7 @@ use rand::RngExt;
 use rayon::prelude::*;
 use serde::Serialize;
 use shared::{Appearance, Region, SkinBucket, SkinDist};
+use std::cmp::Reverse;
 use std::env;
 use std::io::Write;
 use std::path::PathBuf;
@@ -1565,7 +1566,7 @@ struct MatchOutcome {
     /// pos_group: 0=GK 1=DEF 2=MID 3=FWD (derived from the 442 id slot).
     /// Used to measure per-player concentration, per-line goal share,
     /// and rating distribution by position / goal-count tier.
-    per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
+    per_player: Vec<PlayerRow>,
     /// Goal timing: (time_ms, is_home_team_scored). Used for the
     /// draw-inflation diagnostics: first-goal time, equalizer-response
     /// rate, lead-flip rate, scoring-cascade detection. Captured from
@@ -1727,10 +1728,13 @@ fn pos_group_of(id: u32) -> u8 {
     }
 }
 
+/// `(id, goals, shots, xg, pos_group, rating, minutes, assists)`.
+type PlayerRow = (u32, u16, u16, f32, u8, f32, u16, u16);
+
 /// Collect per-player (id, goals, shots, xg, pos_group, rating, minutes, assists) rows.
 fn per_player_rows(
     result: &core::r#match::MatchResultRaw,
-) -> Vec<(u32, u16, u16, f32, u8, f32, u16, u16)> {
+) -> Vec<PlayerRow> {
     let mut rows = Vec::new();
     for (id, s) in result.player_stats.iter() {
         rows.push((
@@ -1903,7 +1907,7 @@ struct LeagueMatch {
     away_idx: usize,
     home_goals: u8,
     away_goals: u8,
-    per_player: Vec<(u32, u16, u16, f32, u8, f32, u16, u16)>,
+    per_player: Vec<PlayerRow>,
     keepers: Vec<GkRow>,
     /// `(position_group, raw performance value)` per played player —
     /// the input side of the rating model, before standardising. This
@@ -2145,7 +2149,7 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
         .into_iter()
         .map(|(id, (g, sh, xg, apps, grp))| (id, g, sh, xg, apps, grp))
         .collect();
-    scorers.sort_by(|a, b| b.1.cmp(&a.1));
+    scorers.sort_by_key(|s| Reverse(s.1));
     println!("\n--- TOP SCORERS (full season) ---");
     println!(
         "  {:>2} {:<12} {:<4} {:>4} {:>4} {:>5} {:>6} {:>7}",
@@ -4148,10 +4152,10 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
                 ot_b: a.on_target as u32,
                 sv_a: h.saves as u32,
                 sv_b: a.saves as u32,
-                pa_a: h.passes_attempted as u32,
-                pa_b: a.passes_attempted as u32,
-                pc_a: h.passes_completed as u32,
-                pc_b: a.passes_completed as u32,
+                pa_a: h.passes_attempted,
+                pa_b: a.passes_attempted,
+                pc_a: h.passes_completed,
+                pc_b: a.passes_completed,
                 tk_a: h.tackles as u32,
                 tk_b: a.tackles as u32,
                 int_a: h.interceptions,
@@ -4402,7 +4406,7 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
     println!();
     // Bucket-aligned reference rows. Use the actual `level` gap as the
     // bucket key (same as the upset-frequency table in `run_stats`).
-    let gap = (level_a as i32 - level_b as i32).unsigned_abs() as u32;
+    let gap = (level_a as i32 - level_b as i32).unsigned_abs();
     let (ref_fav, ref_draw, ref_up, ref_label) = match gap {
         0..=2 => (45, 25, 30, "gap 0-2 close"),
         3..=5 => (58, 22, 20, "gap 3-5 clear edge"),
@@ -5133,16 +5137,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     for o in &outcomes {
         let h = &o.home;
         let a = &o.away;
-        let h_acc = if h.passes_attempted > 0 {
-            h.passes_completed * 100 / h.passes_attempted
-        } else {
-            0
-        };
-        let a_acc = if a.passes_attempted > 0 {
-            a.passes_completed * 100 / a.passes_attempted
-        } else {
-            0
-        };
+        let h_acc = (h.passes_completed * 100).checked_div(h.passes_attempted).unwrap_or(0);
+        let a_acc = (a.passes_completed * 100).checked_div(a.passes_attempted).unwrap_or(0);
 
         println!(
             "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3}    {:>3}/{:>3}    {:>4.1}/{:>4.1}    {:>3}/{:>3}    {:>3}/{:>3}    {:>3}/{:>3}     {:>4}/{:>4}  {:>2}/{:>2}%",
@@ -5510,7 +5506,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!();
     println!("score total distribution (home+away goals per match):");
     for (total, count) in &score_histogram {
-        let bar: String = std::iter::repeat('#').take(*count as usize).collect();
+        let bar: String = std::iter::repeat_n('#', *count as usize).collect();
         println!("  {:>2}: {:>3} {}", total, count, bar);
     }
 
@@ -5544,13 +5540,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!();
     println!("--- SCORELINE distribution (sorted by frequency) ---");
     let mut scoreline_sorted: Vec<((u8, u8), u32)> = scoreline_counts.into_iter().collect();
-    scoreline_sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    scoreline_sorted.sort_by_key(|s| Reverse(s.1));
     let total_n = n_matches as f32;
     for ((lo, hi), count) in scoreline_sorted.iter().take(15) {
         let pct = *count as f32 / total_n * 100.0;
         let kind = if lo == hi { "DRAW" } else { "DEC " };
-        let bar: String = std::iter::repeat('#')
-            .take((pct.round() as usize).min(40))
+        let bar: String = std::iter::repeat_n('#', (pct.round() as usize).min(40))
             .collect();
         println!(
             "  {}-{}  {}  {:>4} ({:>5.1}%) {}",
@@ -5696,11 +5691,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 } else {
                     None
                 };
-                if let Some(now) = now_leader {
-                    if now != prev_leader {
+                if let Some(now) = now_leader
+                    && now != prev_leader {
                         lead_flips += 1;
                     }
-                }
             }
             if post_diff > 0 {
                 last_leader = Some(true);
@@ -5842,7 +5836,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!("  goals in minutes 0-14, per minute:");
     let early_total: u32 = goals_by_early_minute.iter().sum();
     for (m, nb) in goals_by_early_minute.iter().enumerate() {
-        let bar: String = std::iter::repeat('#').take((*nb as usize) / 3).collect();
+        let bar: String = std::iter::repeat_n('#', (*nb as usize) / 3).collect();
         println!(
             "    min {:>2} : {:>4} ({:>4.1}% of all goals) {}",
             m,
@@ -6180,8 +6174,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         // and the real column is the one every keeper argument turns on.
         println!();
         println!(
-            "  conversion by distance:  {:>8} {:>8} {:>8} {:>8} {:>9}   {}",
-            "on tgt", "on tgt%", "goals", "goal/sh", "saved", "real saved"
+            "  conversion by distance:  {:>8} {:>8} {:>8} {:>8} {:>9}   real saved",
+            "on tgt", "on tgt%", "goals", "goal/sh", "saved"
         );
         let dreal = ["~40%", "~55%", "~70%", "~82%", "~88%", "~92%"];
         for (i, (label, _)) in dlabels.iter().enumerate() {
@@ -6218,8 +6212,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 continue;
             }
             print!("  {:<5}", label);
-            for b in 0..6 {
-                print!(" {:>6.1}%", pd[g][b] as f64 / tot as f64 * 100.0);
+            for &count in pd[g].iter().take(6) {
+                print!(" {:>6.1}%", count as f64 / tot as f64 * 100.0);
             }
             println!();
         }
@@ -6314,7 +6308,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .filter(|(_, n)| **n > 0)
                 .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|r| Reverse(r.1));
             let line: Vec<String> = rows
                 .iter()
                 .map(|(n, c)| format!("{} {:.0}", n, *c as f64 / m))
@@ -6327,7 +6321,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .filter(|(_, n)| **n > 0)
                 .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
                 .collect();
-            rrows.sort_by(|a, b| b.1.cmp(&a.1));
+            rrows.sort_by_key(|r| Reverse(r.1));
             let rline: Vec<String> = rrows
                 .iter()
                 .map(|(n, c)| format!("{} {:.2}", n, *c as f64 / m))
@@ -6340,7 +6334,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .filter(|(_, n)| **n > 0)
                 .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
                 .collect();
-            srows.sort_by(|a, b| b.1.cmp(&a.1));
+            srows.sort_by_key(|s| Reverse(s.1));
             let sline: Vec<String> = srows
                 .iter()
                 .map(|(n, c)| format!("{} {:.2}", n, *c as f64 / m))
@@ -6932,7 +6926,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             e.1 += w;
         }
     }
-    fn dist_summary(vals: &mut Vec<f32>) -> (f32, f32, f32, f32, usize) {
+    fn dist_summary(vals: &mut [f32]) -> (f32, f32, f32, f32, usize) {
         let n = vals.len();
         if n == 0 {
             return (0.0, 0.0, 0.0, 0.0, 0);
@@ -7042,7 +7036,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!();
     println!("--- PER-PLAYER SEASON AVG (minute-weighted, like website's AV RAT) ---");
     let mut player_avgs_by_pos: [Vec<f32>; 4] = Default::default();
-    for (_id, (pts, w, grp)) in &player_rating_sum {
+    for (pts, w, grp) in player_rating_sum.values() {
         if *w <= 0.0 {
             continue;
         }
@@ -7912,7 +7906,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             .filter(|(_, c)| **c > 0)
                             .map(|(i, c)| (i, *c))
                             .collect();
-                        rows.sort_by(|a, b| b.1.cmp(&a.1));
+                        rows.sort_by_key(|r| Reverse(r.1));
                         for (id, c) in rows.iter().take(6) {
                             println!(
                                 "       struck by a player in {:<28} {:>5}",
@@ -8438,7 +8432,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 .enumerate()
                 .filter(|(_, c)| *c > 0)
                 .collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            ranked.sort_by_key(|r| Reverse(r.1));
             let listed = ranked
                 .iter()
                 .take(10)
@@ -8517,7 +8511,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         .into_iter()
         .map(|(id, (g, sh, xg, apps, grp))| (id, g, sh, xg, apps, grp))
         .collect();
-    rows.sort_by(|a, b| b.1.cmp(&a.1));
+    rows.sort_by_key(|r| Reverse(r.1));
     println!();
     println!(
         "--- PER-PLAYER GOALS (aggregated across {} matches) ---",
@@ -8560,7 +8554,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         .iter()
         .map(|&x| x as f32)
         .sum::<f32>()
-        / n as f32;
+        / n;
     println!(
         "  per-match top scorer avg: {:.3} goals  → if one player got every such match: {:.1}/season",
         avg_match_top,
@@ -9119,7 +9113,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 "state", "ticks", "share", "ticks/match", "still"
             );
             let mut sorted = gk.clone();
-            sorted.sort_by(|a, b| b.1.cmp(&a.1));
+            sorted.sort_by_key(|s| Reverse(s.1));
             for (id, ticks, _lag, _axis, still) in sorted {
                 println!(
                     "  {:<26} {:>10} {:>6.2}%  {:>10.1}  {:>6.0}%",
@@ -9433,7 +9427,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     }
                 }
             }
-            rows.sort_by(|a, b| b.0.cmp(&a.0));
+            rows.sort_by_key(|r| Reverse(r.0));
             let quick: u64 = p[400..400 + n * n].iter().sum();
             println!();
             println!(
@@ -10852,7 +10846,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         println!("--- MIDFIELDER ON-BALL DECISION CENSUS (ticks with the ball) ---");
         println!("  total on-ball ticks: {}", total);
         let mut rows: Vec<(usize, u64)> = exits.iter().copied().enumerate().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|r| Reverse(r.1));
         for (i, n) in rows {
             if n == 0 {
                 continue;
@@ -10994,7 +10988,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     );
                     let mut rows: Vec<(usize, u64)> =
                         by_reason.iter().copied().enumerate().collect();
-                    rows.sort_by(|a, b| b.1.cmp(&a.1));
+                    rows.sort_by_key(|r| Reverse(r.1));
                     for (i, c) in rows.into_iter().filter(|(_, c)| *c > 0) {
                         println!(
                             "    {:<26} {:>8}  {:>5.1}%",
@@ -11852,27 +11846,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     }
 }
 
-/// Runtime per-player trace of the two failure modes you can only see by
-/// watching, never by counting events: a player who twitches on the spot,
-/// and a player whose state flips back and forth every tick.
-///
-/// Unlike `paths`, this does NOT read the recorded 30 ms replay track —
-/// that track is deduped (samples under 0.3 u are dropped), so the very
-/// jitter we're hunting is partly filtered out of it. Instead the engine
-/// samples EVERY simulation tick as it runs (`MatchPlayer::trace_motion`)
-/// and rolls the result up per player.
-///
-/// Reported per player:
-///
-///   * **twitch%** — share of one-second windows where the player covered
-///     ≥1.5 m of ground but finished <0.30 m from where they started.
-///     That is the flicker, quantified: motion without displacement.
-///   * **rev/s** — velocity direction reversals per second. A purposeful
-///     run has ~0; a player fought over by two steering targets has many.
-///   * **flips/min** — state transitions per minute, and **pong%**, the
-///     share of them that bounce straight back to the state just left.
-///   * **inst%** — share of transitions that left a state after ≤1 AI
-///     tick, i.e. the state was entered and abandoned immediately.
 /// Play `matches` matches and print the ball's flight around every contact
 /// with the woodwork.
 ///
@@ -11972,6 +11945,27 @@ fn run_gather(matches: usize, level: u8) {
     }
 }
 
+/// Runtime per-player trace of the two failure modes you can only see by
+/// watching, never by counting events: a player who twitches on the spot,
+/// and a player whose state flips back and forth every tick.
+///
+/// Unlike `paths`, this does NOT read the recorded 30 ms replay track —
+/// that track is deduped (samples under 0.3 u are dropped), so the very
+/// jitter we're hunting is partly filtered out of it. Instead the engine
+/// samples EVERY simulation tick as it runs (`MatchPlayer::trace_motion`)
+/// and rolls the result up per player.
+///
+/// Reported per player:
+///
+///   * **twitch%** — share of one-second windows where the player covered
+///     ≥1.5 m of ground but finished <0.30 m from where they started.
+///     That is the flicker, quantified: motion without displacement.
+///   * **rev/s** — velocity direction reversals per second. A purposeful
+///     run has ~0; a player fought over by two steering targets has many.
+///   * **flips/min** — state transitions per minute, and **pong%**, the
+///     share of them that bounce straight back to the state just left.
+///   * **inst%** — share of transitions that left a state after ≤1 AI
+///     tick, i.e. the state was entered and abandoned immediately.
 fn run_trace(matches: usize, level: u8) {
     use core::motion_diag;
     use std::collections::HashMap;
@@ -12018,7 +12012,7 @@ fn run_trace(matches: usize, level: u8) {
 
     println!();
     println!(
-        "  {:<5} {:<10} {:>6} {:>8} {:>8} {:>7} {:>8} {:>7} {:>9} {:>6} {:>6}  {}",
+        "  {:<5} {:<10} {:>6} {:>8} {:>8} {:>7} {:>8} {:>7} {:>9} {:>6} {:>6}  worst twitch window",
         "id",
         "player",
         "wins",
@@ -12030,7 +12024,6 @@ fn run_trace(matches: usize, level: u8) {
         "flips/min",
         "pong%",
         "inst%",
-        "worst twitch window",
     );
     for (id, p) in rows.iter().take(24) {
         let wins = p.windows.max(1) as f64;
@@ -12057,7 +12050,7 @@ fn run_trace(matches: usize, level: u8) {
             p.still_ticks as f64 / p.ticks.max(1) as f64 * 100.0,
             p.reversals as f64 / (p.windows as f64 * secs_per_window).max(1.0),
             p.reversals_in_state as f64 / p.reversals.max(1) as f64 * 100.0,
-            p.path_u as f64 * motion_diag::M_PER_UNIT as f64
+            p.path_u * motion_diag::M_PER_UNIT as f64
                 / (p.windows as f64 * secs_per_window).max(1.0),
             p.transitions as f64 / mins.max(0.001),
             p.ping_pongs as f64 / p.transitions.max(1) as f64 * 100.0,
@@ -12158,7 +12151,7 @@ fn run_trace(matches: usize, level: u8) {
                 (fast, *id)
             })
             .collect();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        ranked.sort_by_key(|r| Reverse(r.0));
 
         println!();
         println!("--- REVERSAL DUMPS (the ticks around a fast in-state reversal) ---");
@@ -12237,14 +12230,14 @@ fn run_trace(matches: usize, level: u8) {
     pong.sort_by_key(|(n, _, _, _)| std::cmp::Reverse(*n));
     println!();
     println!("--- STATE LOOPS (A -> B -> A, by return-leg source) ---");
-    println!("  {:>9}  {:<14}  {}", "count", "source", "loop");
+    println!("  {:>9}  {:<14}  loop", "count", "source");
     for (n, a, b, src) in pong.iter().take(18) {
         println!(
             "  {:>9}  {:<14}  {}  <->  {}",
             n,
             src.as_tag(),
-            a.to_string(),
-            b.to_string()
+            a,
+            b
         );
     }
 
@@ -12257,35 +12250,15 @@ fn run_trace(matches: usize, level: u8) {
     selfs.sort_by_key(|(n, _, _)| std::cmp::Reverse(*n));
     println!();
     println!("--- SELF-TRANSITIONS (A -> A: resets in_state_time, so A's timeouts never fire) ---");
-    println!("  {:>9}  {:<14}  {}", "count", "source", "state");
+    println!("  {:>9}  {:<14}  state", "count", "source");
     for (n, st, src) in selfs.iter().take(18) {
-        println!("  {:>9}  {:<14}  {}", n, src.as_tag(), st.to_string());
+        println!("  {:>9}  {:<14}  {}", n, src.as_tag(), st);
     }
     if selfs.is_empty() {
         println!("  none");
     }
 }
 
-/// Trace where players actually GO, as opposed to what they decide.
-///
-/// Every other diagnostic in this harness samples events — a shot, a pass,
-/// a tackle. None of them can see a player standing still in the six-yard
-/// box for a minute, drifting sideways for no reason, or shadowing a
-/// team-mate two metres away all match. Those are path properties, and
-/// they are what "the match does not look like football" usually means.
-///
-/// Reads the recorded position track (30 ms cadence, the same data the
-/// replay viewer renders) and reports, per line:
-///
-///   * **covered** — kilometres per match. Real: GK ~5, DEF ~10, MID ~11,
-///     FWD ~10. The single best sanity check on movement as a whole.
-///   * **to goal** — mean distance from the opposition goal, and the share
-///     of the match spent inside 6 m and 12 m of it. Camping check.
-///   * **mate / opp** — mean distance to the nearest team-mate and the
-///     nearest opponent. Spacing and whether anyone is ever in space.
-///   * **straight** — net displacement over path length in 3 s windows.
-///     1.0 is a purposeful run, near 0 is jitter on the spot.
-///   * **still** — share of samples under 0.5 m/s.
 /// Where the forwards go, and whether they ever get anywhere worth
 /// shooting from.
 ///
@@ -12570,6 +12543,26 @@ fn run_forward_paths(minutes: u64, level: u8) {
     }
 }
 
+/// Trace where players actually GO, as opposed to what they decide.
+///
+/// Every other diagnostic in this harness samples events — a shot, a pass,
+/// a tackle. None of them can see a player standing still in the six-yard
+/// box for a minute, drifting sideways for no reason, or shadowing a
+/// team-mate two metres away all match. Those are path properties, and
+/// they are what "the match does not look like football" usually means.
+///
+/// Reads the recorded position track (30 ms cadence, the same data the
+/// replay viewer renders) and reports, per line:
+///
+///   * **covered** — kilometres per match. Real: GK ~5, DEF ~10, MID ~11,
+///     FWD ~10. The single best sanity check on movement as a whole.
+///   * **to goal** — mean distance from the opposition goal, and the share
+///     of the match spent inside 6 m and 12 m of it. Camping check.
+///   * **mate / opp** — mean distance to the nearest team-mate and the
+///     nearest opponent. Spacing and whether anyone is ever in space.
+///   * **straight** — net displacement over path length in 3 s windows.
+///     1.0 is a purposeful run, near 0 is jitter on the spot.
+///   * **still** — share of samples under 0.5 m/s.
 fn run_paths(matches: usize, level: u8) {
     use std::collections::HashMap;
 
@@ -12910,19 +12903,17 @@ fn run_paths(matches: usize, level: u8) {
                 window_start.entry(*id).or_insert(*pos);
             }
 
-            if t > 0 && t % WINDOW_MS == 0 {
+            if t > 0 && t.is_multiple_of(WINDOW_MS) {
                 for (id, pos) in &snap {
                     if let (Some(start), Some(path)) =
                         (window_start.get(id), window_path.get(id).copied())
-                    {
-                        if path > 1.0 {
+                        && path > 1.0 {
                             let net = (((pos.0 - start.0).powi(2) + (pos.1 - start.1).powi(2))
                                 .sqrt()) as f64;
                             let s = &mut lines[line_of(*id)];
                             s.straightness += net / path;
                             s.straight_windows += 1;
                         }
-                    }
                 }
                 window_start.clear();
                 window_path.clear();
@@ -13515,8 +13506,7 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
 
     if VIEWER_WASM_GZ.is_empty() {
         println!(
-            "\nWARNING: the match viewer was not built — run `rustup target add {}` and rebuild",
-            "wasm32-unknown-unknown"
+            "\nWARNING: the match viewer was not built — run `rustup target add wasm32-unknown-unknown` and rebuild"
         );
     }
 
@@ -13799,8 +13789,8 @@ impl WaypointCensusRun {
         println!();
         println!("=== ROUTE GEOMETRY (as generated, pitch 840x545, goals at x=0 / x=840) ===");
         println!(
-            "  {:<28} {:<6} {:>7}  {}",
-            "position", "side", "end-x", "route (x,y) ..."
+            "  {:<28} {:<6} {:>7}  route (x,y) ...",
+            "position", "side", "end-x"
         );
         for (position, _, _) in core::r#match::POSITION_POSITIONING {
             for (side, label) in [(PlayerSide::Left, "home"), (PlayerSide::Right, "away")] {
@@ -13891,8 +13881,8 @@ impl WaypointCensusRun {
 
         println!();
         println!(
-            "  {:<12} {:>10} {:>10} {:>9} {:>9}   {}",
-            "group", "targeted", "followed", "at end%", "done%", "index histogram 0..7"
+            "  {:<12} {:>10} {:>10} {:>9} {:>9}   index histogram 0..7",
+            "group", "targeted", "followed", "at end%", "done%"
         );
         for group in Self::GROUPS {
             let row = WaypointCensus::by_group(group);
@@ -14246,8 +14236,8 @@ impl HeatCensusRun {
         println!();
         println!("--- IN POSSESSION vs OUT OF IT ---");
         println!(
-            "  {:<5} {:>9} {:>9} {:>9}   {}",
-            "slot", "x (ball)", "x (no b.)", "shift", "map cosine(in, out)"
+            "  {:<5} {:>9} {:>9} {:>9}   map cosine(in, out)",
+            "slot", "x (ball)", "x (no b.)", "shift"
         );
         for slot in &slots {
             let p = &report.positions[*slot];

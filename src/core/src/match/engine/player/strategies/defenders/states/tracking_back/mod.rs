@@ -49,12 +49,12 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         // run with a man assigned is a run at that man, and this state is
         // literally the hard sprint back into shape, so it is the last
         // place the assignment should be dropped.
-        if let Some(man) = ctx.team().my_mark() {
-            if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                ));
-            }
+        if let Some(man) = ctx.team().my_mark()
+            && (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Marking,
+            ));
         }
 
         // Check if the defender has reached their starting position

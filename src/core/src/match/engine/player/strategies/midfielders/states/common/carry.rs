@@ -278,8 +278,8 @@ mod tests {
         // The bug this whole module exists to fix: the old reads topped
         // out at 4.4 m, so the man a carrier actually runs at was never
         // visible to the decision.
-        assert!(LANE_SCAN / U_PER_M >= 20.0);
-        assert!(RUNNING_ROOM / U_PER_M >= 12.0);
+        const { assert!(LANE_SCAN / U_PER_M >= 20.0) };
+        const { assert!(RUNNING_ROOM / U_PER_M >= 12.0) };
     }
 
     #[test]

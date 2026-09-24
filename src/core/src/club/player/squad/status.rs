@@ -18,6 +18,12 @@ pub struct PlayerStatus {
     pub statuses: Vec<StatusData>,
 }
 
+impl Default for PlayerStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerStatus {
     pub fn new() -> Self {
         PlayerStatus {

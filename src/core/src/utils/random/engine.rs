@@ -20,7 +20,7 @@ static SEED_GENERATION: AtomicU64 = AtomicU64::new(0);
 static THREAD_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Starting point when no explicit seed has been pinned. Picked once per
 /// process and mixed with a per-thread id so threads don't share streams.
-const UNSEEDED_BASE: u64 = 0x4F5A455845_5F4F46_u64; // "ZOXEXO_OF" — stable
+const UNSEEDED_BASE: u64 = 0x4F5A_4558_455F_4F46_u64; // "ZOXEXO_OF" — stable
 /// Multiplicative mixer for combining seed with thread id.
 const GOLDEN_RATIO_ODD: u64 = 0x9E3779B97F4A7C15;
 

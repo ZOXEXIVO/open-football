@@ -275,7 +275,7 @@ impl SubMind for ProfessionalMind {
         // Written off by a man whose word he no longer believes. There is
         // nothing left to win here.
         let irreparable = word_is_worthless > 0.4
-            || (self.feels_rated() < Self::WRITTEN_OFF && standing < Self::WRITTEN_OFF as f32);
+            || (self.feels_rated() < Self::WRITTEN_OFF && standing < Self::WRITTEN_OFF);
 
         if irreparable {
             organs.goals.pursue(
@@ -336,6 +336,81 @@ impl SubMind for ProfessionalMind {
         // No manager, no view.
         let confidence = if self.manager.is_none() { 0.0 } else { 0.8 };
         MoodContribution::new(GoalDomain::Professional, value, confidence)
+    }
+}
+
+impl ProfessionalMind {
+    /// What his read of the manager says about a decision.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::JoinClub(club_id) => {
+                // He does not know the coach at a club he has never been
+                // to — but if he has, and that man broke his word, the
+                // move is close to unthinkable. This is the hard block
+                // the ten-year-return design turns on: a warm memory of
+                // a *place* does not survive the man who ruined it still
+                // being in the building.
+                let club = ActorRef::club(club_id);
+                let stood_by = organs.memory.believes(FactClaim::ClubStoodByMe, club);
+                let broke_word = organs.memory.believes(FactClaim::ClubBrokeItsWord, club);
+                if stood_by > 0.1 {
+                    reasons.push(GoalKind::WinTheManagersTrust, stood_by * 0.6);
+                }
+                if broke_word > 0.1 {
+                    reasons.push(GoalKind::BeAllowedToLeave, -broke_word);
+                }
+            }
+
+            MindOption::StayAndFight => {
+                // The ordinary case, and the reason most out-of-favour
+                // players stay: he still thinks he can win the man over.
+                let trust = organs.goals.pressure_of(GoalKind::WinTheManagersTrust);
+                if trust > 0.1 {
+                    reasons.push(GoalKind::WinTheManagersTrust, trust);
+                }
+                if self.feels_rated() < Self::WRITTEN_OFF {
+                    reasons.push(GoalKind::LeaveThisClub, self.feels_rated());
+                }
+                if self.lost_his_advocate {
+                    reasons.push(GoalKind::WinTheManagersTrust, -0.3);
+                }
+            }
+
+            MindOption::RequestTransfer => {
+                if self.feels_rated() < 0.0 {
+                    reasons.push(GoalKind::WinTheManagersTrust, -self.feels_rated() * 0.8);
+                }
+                if self.role_clarity() < -0.3 {
+                    reasons.push(GoalKind::PlayInMyBestRole, -self.role_clarity());
+                }
+                // A man who is rated does not ask to leave, whatever
+                // else is wrong.
+                if self.feels_rated() > 0.3 {
+                    reasons.push(GoalKind::WinTheManagersTrust, -self.feels_rated());
+                }
+            }
+
+            MindOption::SignContract => {
+                // Signing is an act of trust in the people asking. A
+                // broken promise is worth more here than any number on
+                // the paper.
+                let worthless = organs
+                    .memory
+                    .believes(FactClaim::HisWordIsWorthless, self.manager);
+                if worthless > 0.1 {
+                    reasons.push(GoalKind::SecureMyFuture, -worthless);
+                }
+                if self.feels_rated() > 0.2 {
+                    reasons.push(GoalKind::WinTheManagersTrust, self.feels_rated() * 0.7);
+                }
+            }
+
+            _ => {}
+        }
+
+        reasons
     }
 }
 
@@ -417,8 +492,10 @@ mod tests {
     #[test]
     fn a_new_manager_wipes_the_slate() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         for _ in 0..5 {
             mind.observe(
                 &episode(EpisodeKind::ManagerFrozenOut, ActorRef::staff(COACH)),
@@ -438,8 +515,10 @@ mod tests {
     #[test]
     fn a_grudge_never_follows_a_manager_onto_his_successor() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         for _ in 0..6 {
             mind.observe(
                 &episode(EpisodeKind::ManagerPromiseBroken, ActorRef::staff(COACH)),
@@ -453,8 +532,10 @@ mod tests {
     #[test]
     fn being_out_of_favour_makes_him_try_harder_first() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         mind.observe(
             &episode(EpisodeKind::ManagerPublicCriticism, ActorRef::staff(COACH)),
             &mut organs,
@@ -482,8 +563,10 @@ mod tests {
             .maybe_consolidate(&MemoryContext::neutral(140, 7));
         assert!(organs.memory.believes(FactClaim::HisWordIsWorthless, coach) > 0.4);
 
-        let mut mind = ProfessionalMind::default();
-        mind.manager = coach;
+        let mut mind = ProfessionalMind {
+            manager: coach,
+            ..Default::default()
+        };
         for _ in 0..3 {
             mind.observe(
                 &episode(EpisodeKind::ManagerPromiseBroken, coach),
@@ -506,8 +589,10 @@ mod tests {
     #[test]
     fn silence_is_its_own_grievance() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
 
         let benched = MindSituation {
             starter_ratio: 0.1,
@@ -531,8 +616,10 @@ mod tests {
     #[test]
     fn playing_again_resets_the_silence() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         reflect(
             &mut mind,
             &MindSituation {
@@ -551,8 +638,10 @@ mod tests {
     #[test]
     fn being_misused_is_a_separate_grievance_from_being_left_out() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         for _ in 0..8 {
             mind.observe(
                 &episode(EpisodeKind::SubbedOffEarly, ActorRef::staff(COACH)),
@@ -568,8 +657,10 @@ mod tests {
     #[test]
     fn being_trusted_answers_the_want() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         organs.goals.pursue(
             GoalKind::WinTheManagersTrust,
             GoalOrigin::SelfDrive,
@@ -602,8 +693,10 @@ mod tests {
     #[test]
     fn a_man_who_is_never_picked_never_wins_the_trust() {
         let mut organs = MindOrgans::new();
-        let mut mind = ProfessionalMind::default();
-        mind.manager = ActorRef::staff(COACH);
+        let mut mind = ProfessionalMind {
+            manager: ActorRef::staff(COACH),
+            ..Default::default()
+        };
         organs.goals.pursue(
             GoalKind::WinTheManagersTrust,
             GoalOrigin::SelfDrive,
@@ -664,8 +757,10 @@ mod tests {
             100,
         );
 
-        let mut mind = ProfessionalMind::default();
-        mind.manager = coach;
+        let mut mind = ProfessionalMind {
+            manager: coach,
+            ..Default::default()
+        };
         mind.observe(&episode(EpisodeKind::ManagerFrozenOut, coach), &mut organs);
 
         assert!(mind.feels_rated() < 0.0, "he does not feel rated");
@@ -673,80 +768,5 @@ mod tests {
             organs.memory.standing_with(coach, 100) > 0.0,
             "and still likes the man"
         );
-    }
-}
-
-impl ProfessionalMind {
-    /// What his read of the manager says about a decision.
-    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
-
-        match option {
-            MindOption::JoinClub(club_id) => {
-                // He does not know the coach at a club he has never been
-                // to — but if he has, and that man broke his word, the
-                // move is close to unthinkable. This is the hard block
-                // the ten-year-return design turns on: a warm memory of
-                // a *place* does not survive the man who ruined it still
-                // being in the building.
-                let club = ActorRef::club(club_id);
-                let stood_by = organs.memory.believes(FactClaim::ClubStoodByMe, club);
-                let broke_word = organs.memory.believes(FactClaim::ClubBrokeItsWord, club);
-                if stood_by > 0.1 {
-                    reasons.push(GoalKind::WinTheManagersTrust, stood_by * 0.6);
-                }
-                if broke_word > 0.1 {
-                    reasons.push(GoalKind::BeAllowedToLeave, -broke_word);
-                }
-            }
-
-            MindOption::StayAndFight => {
-                // The ordinary case, and the reason most out-of-favour
-                // players stay: he still thinks he can win the man over.
-                let trust = organs.goals.pressure_of(GoalKind::WinTheManagersTrust);
-                if trust > 0.1 {
-                    reasons.push(GoalKind::WinTheManagersTrust, trust);
-                }
-                if self.feels_rated() < Self::WRITTEN_OFF {
-                    reasons.push(GoalKind::LeaveThisClub, self.feels_rated());
-                }
-                if self.lost_his_advocate {
-                    reasons.push(GoalKind::WinTheManagersTrust, -0.3);
-                }
-            }
-
-            MindOption::RequestTransfer => {
-                if self.feels_rated() < 0.0 {
-                    reasons.push(GoalKind::WinTheManagersTrust, -self.feels_rated() * 0.8);
-                }
-                if self.role_clarity() < -0.3 {
-                    reasons.push(GoalKind::PlayInMyBestRole, -self.role_clarity());
-                }
-                // A man who is rated does not ask to leave, whatever
-                // else is wrong.
-                if self.feels_rated() > 0.3 {
-                    reasons.push(GoalKind::WinTheManagersTrust, -self.feels_rated());
-                }
-            }
-
-            MindOption::SignContract => {
-                // Signing is an act of trust in the people asking. A
-                // broken promise is worth more here than any number on
-                // the paper.
-                let worthless = organs
-                    .memory
-                    .believes(FactClaim::HisWordIsWorthless, self.manager);
-                if worthless > 0.1 {
-                    reasons.push(GoalKind::SecureMyFuture, -worthless);
-                }
-                if self.feels_rated() > 0.2 {
-                    reasons.push(GoalKind::WinTheManagersTrust, self.feels_rated() * 0.7);
-                }
-            }
-
-            _ => {}
-        }
-
-        reasons
     }
 }

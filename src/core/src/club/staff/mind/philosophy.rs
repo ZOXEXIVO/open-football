@@ -201,10 +201,8 @@ impl StaffSubMind for PhilosophyMind {
                 }
             }
 
-            MindOption::Resign => {
-                if self.is_compromised() {
-                    reasons.push(GoalKind::GetOutOfHere, -self.bent() * self.conviction());
-                }
+            MindOption::Resign if self.is_compromised() => {
+                reasons.push(GoalKind::GetOutOfHere, -self.bent() * self.conviction());
             }
 
             _ => {}

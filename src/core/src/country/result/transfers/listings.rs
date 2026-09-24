@@ -1120,15 +1120,15 @@ impl ListingPass {
         }
 
         // Club has formally labelled the player as core to the project.
-        if let Some(ref c) = player.contract {
-            if matches!(
+        if let Some(ref c) = player.contract
+            && matches!(
                 c.squad_status,
                 PlayerSquadStatus::KeyPlayer
                     | PlayerSquadStatus::FirstTeamRegular
                     | PlayerSquadStatus::HotProspectForTheFuture
-            ) {
-                return true;
-            }
+            )
+        {
+            return true;
         }
 
         // Highest-CA player in his position group on the main team — i.e.
@@ -1299,7 +1299,7 @@ impl ListingPass {
             let presence = MarketPresence::of(&country.transfer_market, player.id);
             match ListingPass::evaluate_player_listing(
                 player,
-                &squad_analysis,
+                squad_analysis,
                 club,
                 date,
                 current_window,
@@ -1613,14 +1613,13 @@ impl ListingPass {
             // The loan row and the pathway stage are the same decision,
             // so the one producer writes both and the purpose survives to
             // the borrower.
-            if let Some(purpose) = listing_data.loan_purpose {
-                if let Some(club) = country
+            if let Some(purpose) = listing_data.loan_purpose
+                && let Some(club) = country
                     .clubs
                     .iter_mut()
                     .find(|c| c.id == listing_data.club_id)
-                {
-                    club.on_pathway_loan_staged(listing_data.player_id, purpose, date);
-                }
+            {
+                club.on_pathway_loan_staged(listing_data.player_id, purpose, date);
             }
 
             for club in &mut country.clubs {
@@ -1770,10 +1769,10 @@ impl ListingPass {
         // Same-window protection: signed during this open window → can't be listed
         if let (Some(transfer_date), Some((window_start, window_end))) =
             (player.last_transfer_date, current_window)
+            && transfer_date >= window_start
+            && transfer_date <= window_end
         {
-            if transfer_date >= window_start && transfer_date <= window_end {
-                return Some(ListingDecision::Keep);
-            }
+            return Some(ListingDecision::Keep);
         }
 
         // Already on the market — read the market rows, not the badges.
@@ -2111,17 +2110,15 @@ impl ListingPass {
         // Surplus position and below average
         let player_group = player.position().position_group();
         for surplus_pos in &analysis.surplus_positions {
-            if surplus_pos.position_group() == player_group {
-                if ca_i < avg && !is_promising_youth {
-                    return Some(ListingPass::decide_listing_type(
-                        player,
-                        &rep_level,
-                        avg,
-                        date,
-                        parent_holds,
-                        "dec_reason_below_avg_surplus".to_string(),
-                    ));
-                }
+            if surplus_pos.position_group() == player_group && ca_i < avg && !is_promising_youth {
+                return Some(ListingPass::decide_listing_type(
+                    player,
+                    &rep_level,
+                    avg,
+                    date,
+                    parent_holds,
+                    "dec_reason_below_avg_surplus".to_string(),
+                ));
             }
         }
 
@@ -2310,9 +2307,11 @@ mod tests {
         }
 
         fn player(id: u32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 130;
-            attrs.potential_ability = 140;
+            let attrs = PlayerAttributes {
+                current_ability: 130,
+                potential_ability: 140,
+                ..Default::default()
+            };
             let mut contract = PlayerClubContract::new(50_000, Self::date(2026, 9, 1));
             contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
             PlayerBuilder::new()
@@ -3387,11 +3386,13 @@ mod tests {
         /// ability so the observable-level classifiers read him correctly;
         /// `current_ability` is stamped to match for the CA-based sweeps.
         fn player(id: u32, ca: u8, age: u8, position: PlayerPositionType) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca;
-            attrs.current_reputation = 3000;
-            attrs.home_reputation = 3000;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca,
+                current_reputation: 3000,
+                home_reputation: 3000,
+                ..Default::default()
+            };
             let mut contract = PlayerClubContract::new(500_000, Fixture::date(2029, 6, 30));
             contract.squad_status = PlayerSquadStatus::NotYetSet;
             contract.started = Some(Fixture::date(2025, 7, 1));
@@ -3460,8 +3461,10 @@ mod tests {
             let mut players = Self::roster();
             let mut regular = Self::player(99, ca, 24, PlayerPositionType::DefenderCenter);
             regular.contract.as_mut().unwrap().squad_status = status;
-            let mut stats = PlayerStatistics::default();
-            stats.played = 22;
+            let stats = PlayerStatistics {
+                played: 22,
+                ..Default::default()
+            };
             regular
                 .statistics_history
                 .items

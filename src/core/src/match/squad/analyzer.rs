@@ -15,7 +15,7 @@ impl TacticalSquadAnalyzer {
             .players()
             .iter()
             .filter(|&&p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
-            .map(|p| *p)
+            .copied()
             .collect();
 
         if available_players.len() < 11 {

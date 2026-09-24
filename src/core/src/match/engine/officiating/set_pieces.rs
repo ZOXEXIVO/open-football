@@ -797,10 +797,10 @@ pub fn pick_taker(
     on_field_ids: &[u32],
     candidates: &[TakerScore],
 ) -> Option<u32> {
-    if let Some(eid) = explicit_id {
-        if on_field_ids.iter().any(|&i| i == eid) {
-            return Some(eid);
-        }
+    if let Some(eid) = explicit_id
+        && on_field_ids.contains(&eid)
+    {
+        return Some(eid);
     }
     candidates
         .iter()

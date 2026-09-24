@@ -486,8 +486,8 @@ impl<'a> SquadReview<'a> {
         // Detection lives in `GroupNeedScan::needs` (pure function, unit
         // tested in helpers' test module).
         let group_needs = GroupNeedScan::needs(
-            &squad,
-            &position_coverage,
+            squad,
+            position_coverage,
             formation_positions,
             rep_score,
             quality_tolerance,
@@ -534,8 +534,8 @@ impl<'a> SquadReview<'a> {
         // and the shirt the club is promising.
         let brief = SquadPlanner::plan(&PlanInputs {
             club,
-            squad: &squad,
-            position_coverage: &position_coverage,
+            squad,
+            position_coverage,
             formation_positions,
             rep_score,
             available_budget,
@@ -624,32 +624,31 @@ impl<'a> SquadReview<'a> {
         // scout → meeting → shortlist → board → negotiation chain, and the
         // board still has to approve the fee.
         let appetite = InvestmentAppetite::of(club, rep_score, date);
-        if let Some(traced) = TransferTrace::target() {
-            if club
+        if let Some(traced) = TransferTrace::target()
+            && club
                 .transfer_plan
                 .known_players
                 .iter()
                 .any(|m| m.player_id == traced)
-            {
-                TransferTrace::line(
-                    traced,
-                    "need",
-                    format!(
-                        "club={} ({}) rep={:.2} investment_appetite={:.2} \
+        {
+            TransferTrace::line(
+                traced,
+                "need",
+                format!(
+                    "club={} ({}) rep={:.2} investment_appetite={:.2} \
                          available_budget={:.0} used={:.0} groups_needed={}",
-                        club.name,
-                        club.id,
-                        rep_score,
-                        appetite.score,
-                        available_budget,
-                        budget_used,
-                        group_needs.len(),
-                    ),
-                );
-            }
+                    club.name,
+                    club.id,
+                    rep_score,
+                    appetite.score,
+                    available_budget,
+                    budget_used,
+                    group_needs.len(),
+                ),
+            );
         }
         if appetite.is_active() && budget_used < available_budget {
-            let watch = InvestmentWatch::build(club, &squad, date);
+            let watch = InvestmentWatch::build(club, squad, date);
             for target in watch.targets() {
                 if budget_used >= available_budget {
                     break;
@@ -708,7 +707,7 @@ impl<'a> SquadReview<'a> {
 
     /// STEP 4 — succession planning for aging key players.
     fn succession_requests(&self, ledger: &mut ReviewLedger) {
-        let rep_level = self.rep_level.clone();
+        let rep_level = self.rep_level;
         let squad = self.squad.as_slice();
         let philosophy = &self.club.philosophy;
         let available_budget = ledger.available_budget;
@@ -760,7 +759,7 @@ impl<'a> SquadReview<'a> {
                 }
                 // The heir may already be in the building — don't shop
                 // for what the academy or an earlier window delivered.
-                if SuccessionAudit::heir_in_place(&squad, player_info) {
+                if SuccessionAudit::heir_in_place(squad, player_info) {
                     continue;
                 }
 
@@ -873,7 +872,7 @@ impl<'a> SquadReview<'a> {
             if player_info.current_ability + 4 < best_in_group {
                 continue;
             }
-            if SuccessionAudit::heir_in_place(&squad, player_info) {
+            if SuccessionAudit::heir_in_place(squad, player_info) {
                 continue;
             }
             if requests
@@ -910,7 +909,7 @@ impl<'a> SquadReview<'a> {
     fn youth_requests(&self, ledger: &mut ReviewLedger) {
         let club = self.club;
         let date = self.date;
-        let rep_level = self.rep_level.clone();
+        let rep_level = self.rep_level;
         let squad = self.squad.as_slice();
         let avg_ability = self.avg_ability;
         let philosophy = &self.club.philosophy;
@@ -1106,7 +1105,7 @@ impl<'a> SquadReview<'a> {
     /// STEP 5 — small-club squad padding and loan needs.
     fn padding_and_loan_requests(&self, ledger: &mut ReviewLedger) {
         let club = self.club;
-        let rep_level = self.rep_level.clone();
+        let rep_level = self.rep_level;
         let squad = self.squad.as_slice();
         let avg_ability = self.avg_ability;
         let available_budget = ledger.available_budget;
@@ -1255,7 +1254,7 @@ impl<'a> SquadReview<'a> {
         let mid_season_window = self.mid_season_window;
         let home = self.home;
         let players = self.players;
-        let rep_level = self.rep_level.clone();
+        let rep_level = self.rep_level;
         let rep_score = self.rep_score;
         let asset_ctx = &self.asset_ctx;
         let squad = self.squad.as_slice();
@@ -1274,7 +1273,7 @@ impl<'a> SquadReview<'a> {
 
         SquadReviewPass::identify_loan_outs(
             club,
-            &squad,
+            squad,
             &rep_level,
             avg_ability,
             date,
@@ -1292,14 +1291,14 @@ impl<'a> SquadReview<'a> {
         // worst, not wait for a deficit signal that never fires while
         // the surplus itself is dragging the average down.
         let mut force_transfer_list: Vec<u32> = Vec::new();
-        SquadReviewPass::identify_position_glut(&squad, players, &mut loan_outs);
+        SquadReviewPass::identify_position_glut(squad, players, &mut loan_outs);
 
         // Repeated-loan stagnation sweep: a player already farmed out
         // twice (the loan path refuses a third spell) who still sits
         // below his position-group level is no longer a development
         // asset — sell rather than hold.
         SquadReviewPass::identify_repeated_loan_stagnation(
-            &squad,
+            squad,
             players,
             &mut force_transfer_list,
         );
@@ -1315,7 +1314,7 @@ impl<'a> SquadReview<'a> {
         // average. Runs last and is purely additive — it skips anyone the
         // earlier, calibration-sensitive branches already planned for.
         SquadReviewPass::identify_stalled_prospects(
-            &squad,
+            squad,
             date,
             players,
             formation_positions,
@@ -1332,8 +1331,7 @@ impl<'a> SquadReview<'a> {
         // seller than the same club with its window already funded. Nothing
         // here lists anybody — an entry is a price and a readiness, and the
         // auto-listing sweeps keep every veto they had.
-        let sell_list =
-            SquadReviewPass::price_squad(club, players, &squad, &asset_ctx, &brief, date);
+        let sell_list = SquadReviewPass::price_squad(club, players, squad, asset_ctx, &brief, date);
 
         SquadEvaluation {
             club_id: club.id,

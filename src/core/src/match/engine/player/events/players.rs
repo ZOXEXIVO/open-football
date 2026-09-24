@@ -1505,10 +1505,8 @@ impl PlayerEventDispatcher {
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
                 field.ball.pending_pass_was_cross = was_cross;
-                if was_cross {
-                    if let Some(passer) = field.get_player_mut(passer_id) {
-                        passer.statistics.add_cross_attempt();
-                    }
+                if was_cross && let Some(passer) = field.get_player_mut(passer_id) {
+                    passer.statistics.add_cross_attempt();
                 }
                 field.ball.offside_snapshot = snapshot;
                 // After the kick, restart context decays back to OpenPlay —
@@ -1861,10 +1859,10 @@ impl PlayerEventDispatcher {
                                 == PlayerFieldPositionGroup::Goalkeeper
                     })
                     .map(|p| p.id);
-                if let Some(gk_id) = conceding_gk_id {
-                    if let Some(gk) = field.get_player_mut(gk_id) {
-                        gk.statistics.note_shot_faced(shot_xg, false);
-                    }
+                if let Some(gk_id) = conceding_gk_id
+                    && let Some(gk) = field.get_player_mut(gk_id)
+                {
+                    gk.statistics.note_shot_faced(shot_xg, false);
                 }
             }
             // Promote a pending error-to-shot into an error-to-goal.
@@ -1890,10 +1888,8 @@ impl PlayerEventDispatcher {
                 let conceding_side = scorer_team_id
                     .and_then(|t| field.get_player(gk_id).map(|p| p.team_id != t))
                     .unwrap_or(false);
-                if conceding_side {
-                    if let Some(gk) = field.get_player_mut(gk_id) {
-                        gk.statistics.note_gk_failed_claim_to_goal();
-                    }
+                if conceding_side && let Some(gk) = field.get_player_mut(gk_id) {
+                    gk.statistics.note_gk_failed_claim_to_goal();
                 }
             }
         }
@@ -2003,10 +1999,10 @@ impl PlayerEventDispatcher {
         // proxy. This also gives the rating helper a non-zero
         // attempted_dribbles signal for fullbacks / wingers who get
         // tackled while attacking.
-        if let Some(dispossessed) = dispossessed_id {
-            if let Some(p) = field.get_player_mut(dispossessed) {
-                p.statistics.add_failed_dribble();
-            }
+        if let Some(dispossessed) = dispossessed_id
+            && let Some(p) = field.get_player_mut(dispossessed)
+        {
+            p.statistics.add_failed_dribble();
         }
         Self::secure_ball_for(player_id, field);
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
@@ -3751,7 +3747,7 @@ impl PlayerEventDispatcher {
             .previous_owner
             .and_then(|pid| field.players.iter().find(|p| p.id == pid))
             .map(|p| p.team_id);
-        let switched = previous_team.map_or(true, |pt| pt != claimant_team);
+        let switched = previous_team != Some(claimant_team);
         if switched {
             let tick = context.current_tick();
             context
@@ -3806,13 +3802,12 @@ impl PlayerEventDispatcher {
         }
 
         // If there's a cooldown active and this player doesn't already own the ball
-        if field.ball.claim_cooldown > 0 {
-            if let Some(current_owner) = field.ball.current_owner {
-                if current_owner != player_id {
-                    // Ball was just claimed by someone else - reject this claim
-                    return;
-                }
-            }
+        if field.ball.claim_cooldown > 0
+            && let Some(current_owner) = field.ball.current_owner
+            && current_owner != player_id
+        {
+            // Ball was just claimed by someone else - reject this claim
+            return;
         }
 
         // If there's already an owner and they're different from the claimer
@@ -4025,13 +4020,13 @@ impl PlayerEventDispatcher {
         // not a rate, it is whether the action is physically possible,
         // and it applies on every path — see
         // [`PlayerReach::under_ceiling`].
-        if let Some(player) = field.players.iter().find(|p| p.id == player_id) {
-            if !PlayerReach::under_ceiling(&field.ball, player) {
-                #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::ownership::reception_diag::GRANT_OUT_OF_REACH
-                    .fetch_add(1, Ordering::Relaxed);
-                return;
-            }
+        if let Some(player) = field.players.iter().find(|p| p.id == player_id)
+            && !PlayerReach::under_ceiling(&field.ball, player)
+        {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::ownership::reception_diag::GRANT_OUT_OF_REACH
+                .fetch_add(1, Ordering::Relaxed);
+            return;
         }
         // You cannot take the ball out of a goalkeeper's gloves.
         //
@@ -4800,31 +4795,32 @@ impl PlayerEventDispatcher {
         let goal_dir = (goal_center - shooter_position).normalize();
         let shot_lane_distance = (goal_center - shooter_position).magnitude();
         let mut defenders_in_lane: u32 = 0;
-        if was_offtarget && shot_lane_distance > 10.0 {
-            if let Some(side) = shooter_side {
-                for other in field.players.iter() {
-                    if other.id == shoot_event_model.from_player_id {
-                        continue;
-                    }
-                    if other.side == Some(side) {
-                        continue;
-                    }
-                    let to_other = other.position - shooter_position;
-                    let along = to_other.dot(&goal_dir);
-                    if along < 3.0 || along > shot_lane_distance - 3.0 {
-                        continue;
-                    }
-                    let proj = shooter_position + goal_dir * along;
-                    let perp = (other.position - proj).magnitude();
-                    // Lane half-width 12u (~1.5m) — defenders within
-                    // sliding / outstretched-leg / chest-block range of
-                    // the shot path. Tightening below this and the
-                    // deflection rate collapsed because defenders rarely
-                    // stand RIGHT in the shot line — they're a couple of
-                    // metres either side.
-                    if perp < 12.0 {
-                        defenders_in_lane += 1;
-                    }
+        if was_offtarget
+            && shot_lane_distance > 10.0
+            && let Some(side) = shooter_side
+        {
+            for other in field.players.iter() {
+                if other.id == shoot_event_model.from_player_id {
+                    continue;
+                }
+                if other.side == Some(side) {
+                    continue;
+                }
+                let to_other = other.position - shooter_position;
+                let along = to_other.dot(&goal_dir);
+                if along < 3.0 || along > shot_lane_distance - 3.0 {
+                    continue;
+                }
+                let proj = shooter_position + goal_dir * along;
+                let perp = (other.position - proj).magnitude();
+                // Lane half-width 12u (~1.5m) — defenders within
+                // sliding / outstretched-leg / chest-block range of
+                // the shot path. Tightening below this and the
+                // deflection rate collapsed because defenders rarely
+                // stand RIGHT in the shot line — they're a couple of
+                // metres either side.
+                if perp < 12.0 {
+                    defenders_in_lane += 1;
                 }
             }
         }
@@ -5083,7 +5079,7 @@ impl PlayerEventDispatcher {
         // Clamp velocity magnitude to maximum realistic shot speed
         let velocity_magnitude = final_velocity.norm();
         if velocity_magnitude > MAX_SHOT_VELOCITY {
-            final_velocity = final_velocity * (MAX_SHOT_VELOCITY / velocity_magnitude);
+            final_velocity *= MAX_SHOT_VELOCITY / velocity_magnitude;
         }
 
         // Record shot in player memory. A shot counts as "on target" only
@@ -5814,11 +5810,11 @@ impl PlayerEventDispatcher {
         // touching a shot that reached the goal frame. Without this,
         // saves > on-target shots, an impossible ratio.
         let mut shooter_found = false;
-        if let Some(sid) = shooter_id {
-            if let Some(shooter) = field.get_player_mut(sid) {
-                shooter.memory.credit_shot_on_target();
-                shooter_found = true;
-            }
+        if let Some(sid) = shooter_id
+            && let Some(shooter) = field.get_player_mut(sid)
+        {
+            shooter.memory.credit_shot_on_target();
+            shooter_found = true;
         }
         #[cfg(feature = "match-logs")]
         Self::dbg_save_credit(0, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
@@ -5946,11 +5942,11 @@ impl PlayerEventDispatcher {
                     player.statistics.note_shot_faced(shot_xg, true);
                 }
                 let mut shooter_found = false;
-                if let Some(sid) = shooter_id {
-                    if let Some(shooter) = field.get_player_mut(sid) {
-                        shooter.memory.credit_shot_on_target();
-                        shooter_found = true;
-                    }
+                if let Some(sid) = shooter_id
+                    && let Some(shooter) = field.get_player_mut(sid)
+                {
+                    shooter.memory.credit_shot_on_target();
+                    shooter_found = true;
                 }
                 #[cfg(feature = "match-logs")]
                 Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
@@ -6268,31 +6264,31 @@ impl PlayerEventDispatcher {
         };
         let (fouled_team_id, attack_value, possession_retained) =
             Self::estimate_advantage_inputs(fouler_id, field);
-        if let Some(fouled_team_id) = fouled_team_id {
-            if context.referee.should_play_advantage(
+        if let Some(fouled_team_id) = fouled_team_id
+            && context.referee.should_play_advantage(
                 attack_value,
                 possession_retained,
                 severity_score,
-            ) {
-                let start_tick = context.current_tick();
-                let window = context.referee.advantage_window_ticks() as u64;
-                context.pending_advantage = Some(PendingAdvantage {
-                    fouler_id,
-                    start_tick,
-                    expire_tick: start_tick + window,
-                    fouled_team_id,
-                    severity,
-                    yellow_prob: card_yellow_prob,
-                    red_prob: card_red_prob,
-                });
-                // Foul still counts for the player's fouls_committed
-                // tally even though play continues.
-                if let Some(p) = field.get_player_mut(fouler_id) {
-                    p.fouls_committed = p.fouls_committed.saturating_add(1);
-                    p.statistics.add_foul(match_second);
-                }
-                return;
+            )
+        {
+            let start_tick = context.current_tick();
+            let window = context.referee.advantage_window_ticks() as u64;
+            context.pending_advantage = Some(PendingAdvantage {
+                fouler_id,
+                start_tick,
+                expire_tick: start_tick + window,
+                fouled_team_id,
+                severity,
+                yellow_prob: card_yellow_prob,
+                red_prob: card_red_prob,
+            });
+            // Foul still counts for the player's fouls_committed
+            // tally even though play continues.
+            if let Some(p) = field.get_player_mut(fouler_id) {
+                p.fouls_committed = p.fouls_committed.saturating_add(1);
+                p.statistics.add_foul(match_second);
             }
+            return;
         }
 
         // No advantage — proceed to the immediate restart / card path.
@@ -6874,11 +6870,11 @@ impl PlayerEventDispatcher {
                 gk.statistics.shots_faced += 1;
             }
             let mut shooter_found = false;
-            if let Some(sid) = shooter_id {
-                if let Some(shooter) = field.get_player_mut(sid) {
-                    shooter.memory.credit_shot_on_target();
-                    shooter_found = true;
-                }
+            if let Some(sid) = shooter_id
+                && let Some(shooter) = field.get_player_mut(sid)
+            {
+                shooter.memory.credit_shot_on_target();
+                shooter_found = true;
             }
             #[cfg(feature = "match-logs")]
             Self::dbg_save_credit(2, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
@@ -6907,24 +6903,23 @@ impl PlayerEventDispatcher {
         // A clearance should always go AWAY from own goal, never toward it
         {
             use crate::r#match::PlayerSide;
-            if let Some(clearer_id) = field.ball.current_owner {
-                if let Some(clearer) = field.get_player(clearer_id) {
-                    match clearer.side {
+            if let Some(clearer_id) = field.ball.current_owner
+                && let Some(clearer) = field.get_player(clearer_id)
+            {
+                match clearer.side {
                         Some(PlayerSide::Left) => {
                             // Own goal at x ≈ 0 — clearance must go forward (positive x)
                             if capped_velocity.x < 0.0 {
                                 capped_velocity.x = capped_velocity.x.abs();
                             }
                         }
-                        Some(PlayerSide::Right) => {
+                        Some(PlayerSide::Right)
                             // Own goal at x ≈ field_width — clearance must go backward (negative x)
-                            if capped_velocity.x > 0.0 {
+                            if capped_velocity.x > 0.0 => {
                                 capped_velocity.x = -capped_velocity.x.abs();
                             }
-                        }
                         _ => {}
                     }
-                }
             }
         }
 
@@ -6958,31 +6953,32 @@ impl PlayerEventDispatcher {
         // so the shot-save branch is excluded here. Outfielders and a
         // GK doing routine sweeper work both get clearance credit + the
         // zone classification.
-        if !is_gk_shot_save && !from_the_gloves {
-            if let Some(clearer_id) = field.ball.current_owner {
-                let ball_pos = field.ball.position;
-                if let Some(clearer) = field.get_player_mut(clearer_id) {
-                    clearer.statistics.add_clearance();
-                    let zone = Self::zone_for_player(clearer, ball_pos, context);
-                    if let Some(zone) = zone {
-                        clearer.statistics.note_clearance_zone(zone);
-                    }
-                    // Sweeper credit: a keeper who clears the ball from
-                    // OUTSIDE his own box has come out to sweep, which is
-                    // command of the area. A clearance from inside the box
-                    // is not — that is a keeper using his feet, and it was
-                    // the dominant producer of `gk_command_actions`
-                    // (~12/match against a real-football 1-3). It mattered
-                    // well beyond its own small credit: `>= 3` promotes the
-                    // keeper to the `GkBusy` evidence tier and `>= 2` to the
-                    // top clean-sheet tier, so every keeper cleared both
-                    // bars every week no matter how he played.
-                    if zone.map_or(false, |z| !z.is_own_box())
-                        && clearer.tactical_position.current_position.position_group()
-                            == PlayerFieldPositionGroup::Goalkeeper
-                    {
-                        clearer.statistics.note_gk_command_action();
-                    }
+        if !is_gk_shot_save
+            && !from_the_gloves
+            && let Some(clearer_id) = field.ball.current_owner
+        {
+            let ball_pos = field.ball.position;
+            if let Some(clearer) = field.get_player_mut(clearer_id) {
+                clearer.statistics.add_clearance();
+                let zone = Self::zone_for_player(clearer, ball_pos, context);
+                if let Some(zone) = zone {
+                    clearer.statistics.note_clearance_zone(zone);
+                }
+                // Sweeper credit: a keeper who clears the ball from
+                // OUTSIDE his own box has come out to sweep, which is
+                // command of the area. A clearance from inside the box
+                // is not — that is a keeper using his feet, and it was
+                // the dominant producer of `gk_command_actions`
+                // (~12/match against a real-football 1-3). It mattered
+                // well beyond its own small credit: `>= 3` promotes the
+                // keeper to the `GkBusy` evidence tier and `>= 2` to the
+                // top clean-sheet tier, so every keeper cleared both
+                // bars every week no matter how he played.
+                if zone.is_some_and(|z| !z.is_own_box())
+                    && clearer.tactical_position.current_position.position_group()
+                        == PlayerFieldPositionGroup::Goalkeeper
+                {
+                    clearer.statistics.note_gk_command_action();
                 }
             }
         }
@@ -7574,7 +7570,7 @@ mod xg_distribution_tests {
         // Buildup must credit only P1 — P2 is the direct assister.
         let recent = vec![1, 2];
         let credits = PlayerEventDispatcher::distribute_xg_credit(
-            recent.into_iter(),
+            recent,
             99,      // shooter
             Some(2), // assister
             0.40,
@@ -7590,8 +7586,7 @@ mod xg_distribution_tests {
         // Shooter appearing in recent_passers (e.g. they kicked it earlier
         // in the chain) gets chain credit but not buildup.
         let recent = vec![1, 2, 99];
-        let credits =
-            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, Some(2), 0.50);
+        let credits = PlayerEventDispatcher::distribute_xg_credit(recent, 99, Some(2), 0.50);
         let s = credit_for(&credits, 99).expect("shooter chain credit");
         assert!(s.1.is_none(), "shooter must not get buildup credit");
     }
@@ -7601,8 +7596,7 @@ mod xg_distribution_tests {
         // Passer P1 (deeper in chain), P2 assister, S shooter — P1 still
         // earns buildup even though P2/S are excluded.
         let recent = vec![1, 2];
-        let credits =
-            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, Some(2), 0.40);
+        let credits = PlayerEventDispatcher::distribute_xg_credit(recent, 99, Some(2), 0.40);
         let p1 = credit_for(&credits, 1).expect("P1 in chain");
         assert!(p1.1.is_some(), "third-player buildup must be present");
         // Pool is xg * 0.20 = 0.08, split across 1 eligible player.
@@ -7619,8 +7613,7 @@ mod xg_distribution_tests {
         // Same passer appears 3 times in the ring; chain credit and
         // buildup credit must each fire ONCE for that player.
         let recent = vec![1, 1, 1];
-        let credits =
-            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, None, 0.40);
+        let credits = PlayerEventDispatcher::distribute_xg_credit(recent, 99, None, 0.40);
         assert_eq!(credits.len(), 1, "dedupe — one entry per unique id");
         let (pid, chain, buildup) = credits[0];
         assert_eq!(pid, 1);
@@ -7635,14 +7628,10 @@ mod xg_distribution_tests {
         // Same chain ([1, 1, 2, 2, 1]) once and a deduped equivalent
         // ([1, 2]) must produce the same TOTAL credit per player —
         // duplicates can't inflate buildup.
-        let dup_credits = PlayerEventDispatcher::distribute_xg_credit(
-            vec![1u32, 1, 2, 2, 1].into_iter(),
-            99,
-            None,
-            0.40,
-        );
+        let dup_credits =
+            PlayerEventDispatcher::distribute_xg_credit(vec![1u32, 1, 2, 2, 1], 99, None, 0.40);
         let unique_credits =
-            PlayerEventDispatcher::distribute_xg_credit(vec![1u32, 2].into_iter(), 99, None, 0.40);
+            PlayerEventDispatcher::distribute_xg_credit(vec![1u32, 2], 99, None, 0.40);
         // Both must be length 2 and credit the same per-player amounts.
         assert_eq!(dup_credits.len(), 2);
         assert_eq!(unique_credits.len(), 2);
@@ -7669,8 +7658,7 @@ mod xg_distribution_tests {
         // must equal the pool — 0.40 * 0.20 = 0.08 — regardless of
         // how many participants there are.
         let recent = vec![1, 2, 3, 4]; // 4 unique participants
-        let credits =
-            PlayerEventDispatcher::distribute_xg_credit(recent.into_iter(), 99, None, 0.40);
+        let credits = PlayerEventDispatcher::distribute_xg_credit(recent, 99, None, 0.40);
         let total_buildup: f32 = credits.iter().map(|(_, _, b)| b.unwrap_or(0.0)).sum();
         assert!(
             (total_buildup - 0.08).abs() < 1e-4,

@@ -1279,15 +1279,17 @@ mod tests {
 
     #[test]
     fn a_move_resolves_the_arc_it_was_about() {
-        let mut mind = CareerMind::default();
-        mind.plan = Some(CareerPlan::new(
-            CareerArc::ClaimMyPlace,
-            GoalOrigin::SelfDrive,
-            0.6,
-            100,
-            CareerPlan::CLAIM_REVIEW_DAYS,
-            0.8,
-        ));
+        let mut mind = CareerMind {
+            plan: Some(CareerPlan::new(
+                CareerArc::ClaimMyPlace,
+                GoalOrigin::SelfDrive,
+                0.6,
+                100,
+                CareerPlan::CLAIM_REVIEW_DAYS,
+                0.8,
+            )),
+            ..Default::default()
+        };
         mind.on_club_change();
         assert!(
             mind.plan.is_none(),

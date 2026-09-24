@@ -22,6 +22,7 @@
 //!   * residency / family-line eligibility predicates,
 //!   * player refusal (a player can decline a call-up),
 //!   * youth-to-senior switching windows.
+//!
 //! All of those would gate inside `is_eligible_for_country` and the
 //! scoring layer, not in the data pipeline above it.
 
@@ -1269,7 +1270,7 @@ impl NationalTeam {
     /// dropped for a marginal role fit.
     fn apply_role_coverage(
         candidates: &[CallUpCandidate],
-        selected: &mut Vec<(usize, bool, bool, f32)>,
+        selected: &mut [(usize, bool, bool, f32)],
         taken: &mut HashSet<usize>,
         scored: &[(usize, f32)],
         ctx: &CallUpContext,

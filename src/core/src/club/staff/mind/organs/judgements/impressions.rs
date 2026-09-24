@@ -207,7 +207,7 @@ impl CoachDecisionState {
                 (impression.bias.quality_offset - 0.4 * negativity_bias).clamp(-3.0, 3.0);
             impression.bias.disappointments = impression.bias.disappointments.saturating_add(1);
             impression.bias.overreaction_timer = (2.0 + volatility * 2.0) as u8;
-            impression.bias.overreaction_magnitude = -1.0 * volatility;
+            impression.bias.overreaction_magnitude = -volatility;
             heat_delta += 0.10 * volatility;
         }
 
@@ -339,16 +339,15 @@ impl CoachDecisionState {
 
     /// Check if a player has a recent move providing protection from reversal
     pub fn is_protected(&self, player_id: u32, protecting_moves: &[RecentMoveType]) -> bool {
-        if let Some(impression) = self.impressions.get(&player_id) {
-            if let Some(ref mv) = impression.recent_move {
-                if protecting_moves.contains(&mv.move_type) {
-                    let weeks_since = self.current_week.saturating_sub(mv.week);
-                    let base_protection = (4.0 * self.profile.stubbornness).max(2.0) as u32;
-                    let sunk_cost_extension = (impression.bias.sunk_cost * 0.5) as u32;
-                    let protection_weeks = base_protection + sunk_cost_extension;
-                    return weeks_since <= protection_weeks;
-                }
-            }
+        if let Some(impression) = self.impressions.get(&player_id)
+            && let Some(ref mv) = impression.recent_move
+            && protecting_moves.contains(&mv.move_type)
+        {
+            let weeks_since = self.current_week.saturating_sub(mv.week);
+            let base_protection = (4.0 * self.profile.stubbornness).max(2.0) as u32;
+            let sunk_cost_extension = (impression.bias.sunk_cost * 0.5) as u32;
+            let protection_weeks = base_protection + sunk_cost_extension;
+            return weeks_since <= protection_weeks;
         }
         false
     }

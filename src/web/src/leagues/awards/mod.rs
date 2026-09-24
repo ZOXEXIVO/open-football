@@ -200,7 +200,7 @@ pub async fn league_awards_action(
         ApiError::NotFound(format!("Country with ID {} not found", league.country_id))
     })?;
 
-    let league_title = views::league_display_name(&league, &i18n, simulator_data);
+    let league_title = views::league_display_name(league, &i18n, simulator_data);
 
     let hero_player = league
         .player_of_week
@@ -327,7 +327,7 @@ pub async fn league_awards_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
@@ -341,7 +341,7 @@ pub async fn league_awards_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("/{}/leagues/{}/awards", &route_params.lang, &league.slug);
+            let current_path = format!("/{}/leagues/{}/awards", route_params.lang, league.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,

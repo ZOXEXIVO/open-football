@@ -279,19 +279,10 @@ impl Relations {
                 continue;
             }
 
-            let conflict_type = if is_rivalry {
-                ConflictType::PersonalRivalry
-            } else if rel.level <= -50.0 {
-                ConflictType::PersonalRivalry
-            } else {
-                // Disliked-but-not-hostile — default to rivalry type.
-                ConflictType::PersonalRivalry
-            };
-
             conflicts.push(ConflictInfo {
                 party_a: subject_id,
                 party_b: *target_id,
-                conflict_type,
+                conflict_type: ConflictType::PersonalRivalry,
                 severity: ConflictSeverity::from_relationship_level(rel.level),
             });
         }
@@ -937,15 +928,15 @@ impl GroupDynamics {
         let mut conflicts = Vec::new();
 
         for group in self.groups.values() {
-            if let Some(rival_group) = group.rival_group {
-                if let Some(rival) = self.groups.get(&rival_group) {
-                    conflicts.push(ConflictInfo {
-                        party_a: group.id,
-                        party_b: rival.id,
-                        conflict_type: ConflictType::GroupRivalry,
-                        severity: ConflictSeverity::Medium,
-                    });
-                }
+            if let Some(rival_group) = group.rival_group
+                && let Some(rival) = self.groups.get(&rival_group)
+            {
+                conflicts.push(ConflictInfo {
+                    party_a: group.id,
+                    party_b: rival.id,
+                    conflict_type: ConflictType::GroupRivalry,
+                    severity: ConflictSeverity::Medium,
+                });
             }
         }
 

@@ -150,13 +150,13 @@ fn static_reachability() {
 
     let mut unreachable = Vec::new();
     for state in PlayerState::all() {
-        if reserved.iter().any(|r| *r == state) {
+        if reserved.contains(&state) {
             continue;
         }
         // Entry states are reached via `set_default_state`, not a named
         // transition, but they ARE named there — so they need no
         // exemption. Kept explicit so the intent survives a refactor.
-        let is_entry = entry.iter().any(|e| *e == state);
+        let is_entry = entry.contains(&state);
         let Some(key) = scanner_key(state) else {
             // `Injured` — reached through `PlayerState::Injured` in the
             // substitution layer's injury roll, which the enum-keyed scan

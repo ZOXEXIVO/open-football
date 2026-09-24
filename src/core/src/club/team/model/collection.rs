@@ -1,8 +1,8 @@
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::mind::{ActorRef, EpisodeKind};
-use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::coach::standing::EvidenceLens;
+use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::perception::{CoachProfile, date_to_week};
 use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
@@ -40,7 +40,7 @@ impl TeamCollection {
         self.teams
             .par_iter_mut()
             .map(|team| {
-                let message = &format!("simulate team: {}", &team.name);
+                let message = &format!("simulate team: {}", team.name);
                 Logging::estimate_result(|| team.simulate(ctx.with_team(team.id)), message)
             })
             .collect()
@@ -50,7 +50,7 @@ impl TeamCollection {
         self.teams
             .iter()
             .find(|t| t.id == id)
-            .expect(format!("no team with id = {}", id).as_str())
+            .unwrap_or_else(|| panic!("no team with id = {}", id))
     }
 
     /// Borrow a team by id. Unlike `by_id`, returns `None` for missing ids
@@ -473,7 +473,10 @@ impl TeamCollection {
             .impressions
             .iter()
             .map(|(player_id, impression)| {
-                (*player_id, (impression.training_impression / 20.0).clamp(0.0, 1.0))
+                (
+                    *player_id,
+                    (impression.training_impression / 20.0).clamp(0.0, 1.0),
+                )
             })
             .collect();
 
@@ -531,10 +534,10 @@ impl TeamCollection {
         // passes draw down ONE club-level wage budget — a single
         // `run_for_squads` call keeps the shared bill honest across them.
         let mut squad_indexes = vec![main_idx];
-        if let Some(reserve_idx) = self.reserve_index() {
-            if reserve_idx != main_idx {
-                squad_indexes.push(reserve_idx);
-            }
+        if let Some(reserve_idx) = self.reserve_index()
+            && reserve_idx != main_idx
+        {
+            squad_indexes.push(reserve_idx);
         }
         ContractRenewalManager::run_for_squads(
             &mut self.teams,
@@ -622,7 +625,7 @@ mod coach_change_tests {
     use chrono::NaiveTime;
 
     fn coach(id: u32) -> crate::Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = id;
         staff.contract = Some(StaffClubContract::new(
             50_000,

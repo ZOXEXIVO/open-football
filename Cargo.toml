@@ -30,11 +30,21 @@ version = "1.7.950"
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
 
+# Style lints whose "fix" is a layout or API change, not a code fix: the tree
+# nests `ball/ball.rs`-style modules on purpose, and the simulation's context
+# passing is wide by nature.
+[workspace.lints.clippy]
+module_inception = "allow"
+too_many_arguments = "allow"
+
 [package]
 name = "open_football"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 # Pass-throughs for the match engine features defined in `core` and

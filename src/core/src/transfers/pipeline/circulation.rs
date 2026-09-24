@@ -421,7 +421,7 @@ impl MarketCirculation {
             )
             .score;
 
-        let view = ListedTargetView {
+        ListedTargetView {
             ability,
             nationality_country_id: player.country_id,
             estimated_potential,
@@ -450,9 +450,7 @@ impl MarketCirculation {
             last_block: player
                 .availability_market_state()
                 .and_then(|s| s.last_block.map(|(_, reason)| reason)),
-        };
-
-        view
+        }
     }
 
     /// Scan the plausible domestic buyers. One that clears both the cheap
@@ -480,7 +478,7 @@ impl MarketCirculation {
                 continue;
             };
             let bctx = scan.buyer_context(group, false);
-            match ListedTargetScreen::evaluate(&view, &bctx) {
+            match ListedTargetScreen::evaluate(view, &bctx) {
                 ListedTargetVerdict::Reject(reason) => {
                     reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));
                 }

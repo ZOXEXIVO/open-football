@@ -245,7 +245,7 @@ fn late_goal_cameo_can_rate_high() {
     s.shots_on_target = 1;
     let r = RatingContext::new(&s, 2, 1).calculate();
     assert!(
-        r >= 7.1 && r <= 7.8,
+        (7.1..=7.8).contains(&r),
         "late-goal cameo rated {} — should be in 7.1..=7.8",
         r
     );
@@ -270,7 +270,7 @@ fn one_goal_low_volume_forward_does_not_exceed_7_7() {
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 2, 1).calculate();
     assert!(
-        r >= 7.0 && r <= 7.85,
+        (7.0..=7.85).contains(&r),
         "single-goal low-volume FWD rated {} — should be 7.0..=7.85 \
          (upper bound lifted in 2026-06 round 3 after goal scoring \
          coefficient raise 2.55 → 2.80)",
@@ -566,7 +566,7 @@ fn rating_stays_in_one_to_ten_range() {
     great.carry_distance = 3000;
     great.xg_buildup = 1.5;
     let r = RatingContext::new(&great, 6, 0).calculate();
-    assert!(r >= RATING_MIN && r <= RATING_MAX, "great rating {}", r);
+    assert!((RATING_MIN..=RATING_MAX).contains(&r), "great rating {}", r);
 
     let mut bad = anonymous(PlayerFieldPositionGroup::Goalkeeper);
     bad.minutes_played = 90;
@@ -575,7 +575,7 @@ fn rating_stays_in_one_to_ten_range() {
     bad.own_goals = 1;
     bad.zone_stats.errors_to_goal_own_box = 3;
     let r = RatingContext::new(&bad, 0, 8).calculate();
-    assert!(r >= RATING_MIN && r <= RATING_MAX, "bad rating {}", r);
+    assert!((RATING_MIN..=RATING_MAX).contains(&r), "bad rating {}", r);
 }
 
 #[test]
@@ -1344,7 +1344,7 @@ fn good_creator_lands_in_seven_to_seven_four_band() {
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 1, 0).calculate();
     assert!(
-        r >= 7.0 && r <= 7.6,
+        (7.0..=7.6).contains(&r),
         "good creator MID rated {} — should land 7.0..7.6",
         r
     );
@@ -2080,7 +2080,7 @@ fn quiet_clean_sheet_gk_not_overrewarded() {
     let gk = make_gk(1, 1);
     let r = RatingContext::new(&gk, 1, 0).calculate();
     assert!(
-        r >= 6.0 && r < 7.2,
+        (6.0..7.2).contains(&r),
         "quiet CS GK rated {} — should sit around the high-six band, not the good-performer band",
         r
     );
@@ -2492,7 +2492,7 @@ fn good_creator_without_assist_can_reach_high_sixes() {
     s.minutes_played = 90;
     let r = RatingContext::new(&s, 1, 0).calculate();
     assert!(
-        r >= 6.7 && r <= 7.4,
+        (6.7..=7.4).contains(&r),
         "good creator MID rated {} — should land high-six / low-seven",
         r
     );

@@ -19,7 +19,7 @@ pub fn generate_round_robin_fixtures(
     }
 
     // For circle method, we need an even number of slots
-    let n = if team_count % 2 == 0 {
+    let n = if team_count.is_multiple_of(2) {
         team_count
     } else {
         team_count + 1

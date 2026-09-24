@@ -1206,9 +1206,9 @@ impl Portraits {
                         }
                         count += 1;
                     }
-                    if count > 0 {
-                        for channel in 0..3 {
-                            pixels[at + channel] = (colour[channel] / count) as u8;
+                    for channel in 0..3 {
+                        if let Some(mean) = colour[channel].checked_div(count) {
+                            pixels[at + channel] = mean as u8;
                         }
                     }
                 }

@@ -30,80 +30,57 @@
 //! before a run and the named market arm is disarmed:
 //!
 //!   * `OF_HOME_REACH_OFF`       — a club sees only what its own scouts
-//!                                 cover; no compatriot reach.
+//!     cover; no compatriot reach.
 //!   * `OF_COMPATRIOT_SWEEP_OFF` — no Elite / Continental posted-
-//!                                 compatriot sweep.
+//!     compatriot sweep.
 //!   * `OF_OWNER_MONEY_OFF`      — every owner cheque is zero: wage
-//!                                 subsidy, tier envelopes, fee headroom.
+//!     subsidy, tier envelopes, fee headroom.
 //!   * `OF_GEOGRAPHY_OFF`        — the whole transfer GEOGRAPHY: corridor
-//!                                 affinity on the buy side, the free-agent
-//!                                 visibility layer, the scouting reach
-//!                                 prefilter, the loan market's source
-//!                                 weighting and the player's own place
-//!                                 familiarity. The baseline arm for the
-//!                                 corridor census.
+//!     affinity on the buy side, the free-agent visibility layer, the scouting
+//!     reach prefilter, the loan market's source weighting and the player's own
+//!     place familiarity. The baseline arm for the corridor census.
 //!   * `OF_LOAN_GUARD_OFF`      — the LOAN ASSET guard and every gate it
-//!                                 re-shaped: destination pricing (weight /
-//!                                 carry), the readiness-continuous level
-//!                                 floors, the overqualified-minutes bound,
-//!                                 the renown band on a loan, the seller's
-//!                                 refusal and the broadcast cascade floor.
-//!                                 Squad placement, the promotion rules and
-//!                                 the label / asset-class fixes are data
-//!                                 identity and stay ON in both arms — a
-//!                                 world where a first-teamer is registered
-//!                                 in the U20 is a different world, not a
-//!                                 different policy. The baseline arm for
-//!                                 the loan asset census.
+//!     re-shaped: destination pricing (weight / carry), the
+//!     readiness-continuous level floors, the overqualified-minutes bound, the
+//!     renown band on a loan, the seller's refusal and the broadcast cascade
+//!     floor. Squad placement, the promotion rules and the label / asset-class
+//!     fixes are data identity and stay ON in both arms — a world where a
+//!     first-teamer is registered in the U20 is a different world, not a
+//!     different policy. The baseline arm for the loan asset census.
 //!   * `OF_LOAN_AGREEMENT_OFF`   — the LOAN AGREEMENT: the four continuous
-//!                                 terms (parent willingness, borrower
-//!                                 appetite, player consent, affordability)
-//!                                 that replaced the conjunctive gate stack.
-//!                                 Disarmed, the destination funnel is the
-//!                                 HEAD cluster again — room, minutes, the
-//!                                 level floors and the guard's verdict, each
-//!                                 a hard `continue`. The baseline arm for
-//!                                 every loan volume table.
+//!     terms (parent willingness, borrower appetite, player consent,
+//!     affordability) that replaced the conjunctive gate stack. Disarmed, the
+//!     destination funnel is the HEAD cluster again — room, minutes, the
+//!     level floors and the guard's verdict, each a hard `continue`. The
+//!     baseline arm for every loan volume table.
 //!   * `OF_LOAN_ROUTE_OFF`      — the ROUTE half of a loan's geography: the
-//!                                 corridor between the lending league and
-//!                                 the borrowing one. Disarmed, a loan is
-//!                                 priced on the player's passport alone, and
-//!                                 a J-League club borrows a Brazilian from
-//!                                 Russia as readily as from Brazil. The
-//!                                 baseline arm for the LOAN routes table.
+//!     corridor between the lending league and the borrowing one. Disarmed, a
+//!     loan is priced on the player's passport alone, and a J-League club
+//!     borrows a Brazilian from Russia as readily as from Brazil. The baseline
+//!     arm for the LOAN routes table.
 //!   * `OF_LOAN_SLOTS_OFF`       — the borrower's REGISTRATION quota. Disarmed,
-//!                                 a league that counts passports says nothing
-//!                                 about how badly a club wants a loanee, and
-//!                                 loans land at clubs already over quota.
-//!                                 The baseline arm for the quota row.
+//!     a league that counts passports says nothing about how badly a club wants
+//!     a loanee, and loans land at clubs already over quota. The baseline arm
+//!     for the quota row.
 //!   * `OF_LOAN_REACH_OFF`       — the borrower's REACH. Disarmed, the
-//!                                 cross-border scan hands the staged
-//!                                 plausibility model no market reach and
-//!                                 `MARKET_REACH_FLOOR` is dead on the loan
-//!                                 path, which is what let a club borrow out
-//!                                 of a league it has never dealt with.
+//!     cross-border scan hands the staged plausibility model no market reach
+//!     and `MARKET_REACH_FLOOR` is dead on the loan path, which is what let a
+//!     club borrow out of a league it has never dealt with.
 //!   * `OF_LOAN_PLACEMENT_OFF`   — the LENDER's half of the geography: the
-//!                                 placement ledger, its day-0 bootstrap and
-//!                                 the trust term it puts on the parent's
-//!                                 willingness. Disarmed, a parent is
-//!                                 destination-blind. The baseline arm for the
-//!                                 lender-concentration row.
+//!     placement ledger, its day-0 bootstrap and the trust term it puts on the
+//!     parent's willingness. Disarmed, a parent is destination-blind. The
+//!     baseline arm for the lender-concentration row.
 //!   * `OF_LOAN_FAMILIARITY_OFF` — what the PLAYER knows of the place: his
-//!                                 country's export corridor, his diaspora and
-//!                                 the language. Disarmed, a year in a league
-//!                                 whose language he does not speak scores
-//!                                 exactly what a year next door scores.
+//!     country's export corridor, his diaspora and the language. Disarmed, a
+//!     year in a league whose language he does not speak scores exactly what a
+//!     year next door scores.
 //!   * `OF_CORRIDOR_FLOOR_OFF`   — the corridor FLOOR: a pair a card names
-//!                                 never reads below its own derived prior.
-//!                                 Disarmed, a card weight replaces the prior,
-//!                                 and since every weight is normalised by its
-//!                                 list's maximum that inverts the model on
-//!                                 two thirds of the pairs any card names.
-//!                                 Moves the PERMANENT market and the
-//!                                 free-agent and scouting layers, not just
-//!                                 loans — read `corridor_overlap`, the
-//!                                 foreign-share table and free-agent
-//!                                 visibility across it.
+//!     never reads below its own derived prior. Disarmed, a card weight
+//!     replaces the prior, and since every weight is normalised by its list's
+//!     maximum that inverts the model on two thirds of the pairs any card
+//!     names. Moves the PERMANENT market and the free-agent and scouting
+//!     layers, not just loans — read `corridor_overlap`, the foreign-share
+//!     table and free-agent visibility across it.
 //!
 //! `OF_TRACE_PLAYER=<id>` prints one funnel line per stage for that
 //! player, to stderr.
@@ -161,7 +138,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use chrono::{Datelike, Duration, NaiveDate};
 use env_logger::Env;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
@@ -517,14 +494,13 @@ impl PathwayCensus {
         if let Some(to) = to {
             *self.in_by_band.entry(to.band()).or_insert(0) += 1;
         }
-        if let (Some(from), Some(to)) = (from, to) {
-            if from.league_reputation > 0 && to.league_reputation > 0 {
+        if let (Some(from), Some(to)) = (from, to)
+            && from.league_reputation > 0 && to.league_reputation > 0 {
                 self.loans_with_leagues += 1;
                 if from.league_reputation as f32 > to.league_reputation as f32 * Self::DEEP_DROP {
                     self.deep_drops += 1;
                 }
             }
-        }
         if let Some(age) = age {
             self.loanees_aged += 1;
             if age <= Self::YOUNG {
@@ -808,6 +784,13 @@ struct MarketReport {
 // Collection
 // ---------------------------------------------------------------------
 
+/// Every club resolved once, birth dates by player, and watchers by player.
+type WorldIndex = (
+    HashMap<u32, ClubFacts>,
+    HashMap<u32, NaiveDate>,
+    HashMap<u32, HashSet<u32>>,
+);
+
 struct MarketCensus;
 
 impl MarketCensus {
@@ -870,14 +853,7 @@ impl MarketCensus {
     /// Without a world-wide index, "did this move go up a band?" and "what
     /// was the fee worth to the seller?" are unanswerable — which is why
     /// the report could count moves and say nothing about direction.
-    fn world_index(
-        data: &SimulatorData,
-        date: NaiveDate,
-    ) -> (
-        HashMap<u32, ClubFacts>,
-        HashMap<u32, NaiveDate>,
-        HashMap<u32, HashSet<u32>>,
-    ) {
+    fn world_index(data: &SimulatorData, date: NaiveDate) -> WorldIndex {
         let mut clubs: HashMap<u32, ClubFacts> = HashMap::new();
         let mut birth_dates: HashMap<u32, NaiveDate> = HashMap::new();
         // player_id → the country ids of clubs carrying him on their books.
@@ -949,8 +925,10 @@ impl MarketCensus {
     /// Walk the whole world and build the report.
     fn collect(data: &SimulatorData) -> MarketReport {
         let date = data.date.date();
-        let mut report = MarketReport::default();
-        report.free_agents = data.free_agents.len();
+        let mut report = MarketReport {
+            free_agents: data.free_agents.len(),
+            ..Default::default()
+        };
         let (club_facts, birth_dates, watchers) = Self::world_index(data, date);
         // Gross spend per buying club in the most recent recorded season —
         // the "does the money actually leave the building?" half of the
@@ -1002,8 +980,8 @@ impl MarketCensus {
                             // Gross spend belongs to the BUYER's league —
                             // that is the market whose price level and
                             // budgets it reflects.
-                            if let Some(buyer) = to {
-                                if let Some(league_id) = buyer.league_id {
+                            if let Some(buyer) = to
+                                && let Some(league_id) = buyer.league_id {
                                     let row = report
                                         .live
                                         .gross_spend_by_league
@@ -1011,19 +989,17 @@ impl MarketCensus {
                                         .or_insert_with(|| (buyer.league_name.clone(), 0.0));
                                     row.1 += t.fee.amount;
                                 }
-                            }
                             // The headline band: real markets put its
                             // median age at about 24, with 90 % between 19
                             // and 29. A drift upward means clubs are buying
                             // the finished article instead of an asset.
-                            if t.fee.amount >= LiveMarketCensus::BIG_MOVE_FEE {
-                                if let Some(age) = birth_dates
+                            if t.fee.amount >= LiveMarketCensus::BIG_MOVE_FEE
+                                && let Some(age) = birth_dates
                                     .get(&t.player_id)
                                     .map(|b| DateUtils::age(*b, t.transfer_date))
                                 {
                                     report.live.big_move_ages.push(age);
                                 }
-                            }
                             report.flow.record(FlowMove {
                                 season: t.season_year,
                                 from_band: from.map(|c| c.band()).unwrap_or("unknown"),
@@ -1164,11 +1140,9 @@ impl MarketCensus {
                         main.players.iter().filter(|p| !p.is_on_loan()).collect();
                     report.live.squad_sizes.push(senior.len());
                     if let Some(cap) = club.board.season_targets.as_ref().map(|t| t.max_squad_size)
-                    {
-                        if cap > 0 && senior.len() > cap as usize {
+                        && cap > 0 && senior.len() > cap as usize {
                             report.live.squads_over_cap += 1;
                         }
-                    }
                     if !country
                         .regulations
                         .omitted_for_foreign_limit(&senior, country.id)
@@ -1434,7 +1408,7 @@ impl MarketCensus {
         // whose balance is several years of income while its budget is a
         // fraction of one is not rich — it is a leak.
         let mut by_balance: Vec<(&u32, &ClubFacts)> = club_facts.iter().collect();
-        by_balance.sort_by(|a, b| b.1.balance.cmp(&a.1.balance));
+        by_balance.sort_by_key(|b| Reverse(b.1.balance));
         report.hoard = by_balance
             .into_iter()
             .take(HOARD_ROWS)
@@ -1579,7 +1553,7 @@ impl ReportPrinter {
         out
     }
 
-    fn median(values: &mut Vec<f64>) -> f64 {
+    fn median(values: &mut [f64]) -> f64 {
         if values.is_empty() {
             return 0.0;
         }
@@ -1587,7 +1561,7 @@ impl ReportPrinter {
         values[values.len() / 2]
     }
 
-    fn median_i64(values: &mut Vec<i64>) -> i64 {
+    fn median_i64(values: &mut [i64]) -> i64 {
         if values.is_empty() {
             return 0;
         }
@@ -1840,7 +1814,7 @@ impl ReportPrinter {
             }
         }
         let mut drains: Vec<(&u32, &(String, usize))> = sold_up_per_league.iter().collect();
-        drains.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        drains.sort_by_key(|d| Reverse(d.1.1));
         if drains.is_empty() {
             println!("  none");
         }
@@ -2763,17 +2737,15 @@ impl PlayerSideCensus {
                                 .refused
                                 .entry(CensusFacts::refusal_label(cause))
                                 .or_insert(0) += 1;
-                            if let (Some(reservation), Some(offered)) = (reservation, offered) {
-                                if offered > 0 {
+                            if let (Some(reservation), Some(offered)) = (reservation, offered)
+                                && offered > 0 {
                                     cell.demand_ratios.push(reservation as f64 / offered as f64);
                                 }
-                            }
-                            if let (Some(reservation), Some(level)) = (reservation, level) {
-                                if level > 0 {
+                            if let (Some(reservation), Some(level)) = (reservation, level)
+                                && level > 0 {
                                     cell.reservation_over_level
                                         .push(reservation as f64 / level as f64);
                                 }
-                            }
                         }
                     } else if matches!(
                         negotiation.phase,
@@ -2859,8 +2831,8 @@ impl PlayerSideCensus {
         if player.home_pull.wanted || has_preference {
             funnel.posted += 1;
         }
-        if let Some(candidate) = candidate {
-            if matches!(candidate.reason, LoanOutReason::UnsettledAbroad) {
+        if let Some(candidate) = candidate
+            && matches!(candidate.reason, LoanOutReason::UnsettledAbroad) {
                 funnel.candidates += 1;
                 match candidate.preferred_destination {
                     LoanDestinationPreference::HomeCountry => funnel.prefers_country += 1,
@@ -2868,7 +2840,6 @@ impl PlayerSideCensus {
                     LoanDestinationPreference::Any => funnel.prefers_any += 1,
                 }
             }
-        }
     }
 
     /// Compare a player against yesterday, and bank whatever the
@@ -3187,7 +3158,7 @@ impl PlayerSidePrinter {
         };
 
         let mut by_balance: Vec<&OwnerInputRow> = census.owner_inputs.iter().collect();
-        by_balance.sort_by(|a, b| b.balance.cmp(&a.balance));
+        by_balance.sort_by_key(|b| Reverse(b.balance));
         println!("  owner inputs — top 40 balances:");
         header();
         for r in by_balance.iter().take(40) {
@@ -4222,7 +4193,7 @@ impl LoanAssetPrinter {
             LoanAssetPrinter::share(overage, census.trap.len())
         );
         let mut rows: Vec<&TrapRow> = census.trap.iter().collect();
-        rows.sort_by(|a, b| b.days_clear.cmp(&a.days_clear));
+        rows.sort_by_key(|r| Reverse(r.days_clear));
         for row in rows.into_iter().take(Self::TOP_ROWS) {
             println!(
                 "  {:<24} {:<22} {:<5} {:>2}y level {:>3} vs floor {:>3}  clear {:>4}d                   lst={} loa={}",
@@ -4346,7 +4317,7 @@ impl PlacementCensus {
             clubs_offending,
             clubs_with_youth,
         );
-        offenders.sort_by(|a, b| b.3.cmp(&a.3));
+        offenders.sort_by_key(|o| Reverse(o.3));
         for (player, club, squad, ca, floor) in offenders.into_iter().take(Self::TOP_ROWS) {
             println!("  {player:<32} {club:<24} {squad:<48} ca {ca:>3} vs senior floor {floor:>3}");
         }
@@ -4567,7 +4538,7 @@ impl MandateCensus {
 
     fn observe(&mut self, data: &SimulatorData, day: u32) {
         let date = data.date.date();
-        let sample_values = day % Self::VALUE_SAMPLE_DAYS == 0;
+        let sample_values = day.is_multiple_of(Self::VALUE_SAMPLE_DAYS);
 
         for continent in &data.continents {
             for country in &continent.countries {
@@ -4849,8 +4820,8 @@ impl MandatePrinter {
             let cell = by_exit.entry(row.exit.unwrap_or("—")).or_insert((0, 0.0));
             cell.0 += 1;
             cell.1 += row.loss_share.unwrap_or(0.0);
-            if let Some((promised, delivered)) = row.promised_24 {
-                if promised > 0.0 && delivered < promised * MandateOutcome::DELIVERED_BAR {
+            if let Some((promised, delivered)) = row.promised_24
+                && promised > 0.0 && delivered < promised * MandateOutcome::DELIVERED_BAR {
                     unrealised += 1;
                     match row.exit {
                         Some("loaned") => unrealised_loaned += 1,
@@ -4860,7 +4831,6 @@ impl MandatePrinter {
                         _ => {}
                     }
                 }
-            }
         }
         println!("\n  exits");
         for (exit, (n, loss)) in &by_exit {
@@ -5991,7 +5961,7 @@ impl CorridorCensus {
     /// so.
     fn print_import_capacity(data: &SimulatorData, countries: &HashMap<u32, CensusCountry>) {
         let mut rows: Vec<(u32, f32, f32, u32)> = Vec::new();
-        for (id, _) in countries.iter() {
+        for id in countries.keys() {
             let capacity = data.market_map.import_capacity(*id);
             if capacity <= 0.0 {
                 continue;
@@ -6427,12 +6397,11 @@ impl CorridorCensus {
                     if elapsed > 365 {
                         break;
                     }
-                    if let Some(next_rep) = reputations.get(out_to) {
-                        if to_rep - next_rep >= Self::DUMP_DOWN {
+                    if let Some(next_rep) = reputations.get(out_to)
+                        && to_rep - next_rep >= Self::DUMP_DOWN {
                             dumped += 1;
                             days.push(elapsed);
                         }
-                    }
                     break;
                 }
             }

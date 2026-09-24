@@ -613,10 +613,10 @@ impl LoanPipeline {
             }
 
             for team in &mut club.teams.teams {
-                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                    if !player.statuses.has(PlayerStatusType::Loa) {
-                        player.statuses.add(date, PlayerStatusType::Loa);
-                    }
+                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id)
+                    && !player.statuses.has(PlayerStatusType::Loa)
+                {
+                    player.statuses.add(date, PlayerStatusType::Loa);
                 }
             }
         }

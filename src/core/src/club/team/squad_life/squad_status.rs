@@ -187,10 +187,9 @@ impl SquadStatusUpdater {
                 // only with enough match evidence.
                 if let (Some(ca_rank), Some(ceiling)) =
                     (Self::senior_rank(&new_status), involvement_ceiling.as_ref())
+                    && Self::senior_rank(ceiling).unwrap_or(u8::MAX) < ca_rank
                 {
-                    if Self::senior_rank(ceiling).unwrap_or(u8::MAX) < ca_rank {
-                        new_status = ceiling.clone();
-                    }
+                    new_status = ceiling.clone();
                 }
                 // Bidirectional: a player whose actual minutes still justify
                 // his role isn't demoted just because a pricier signing now
@@ -263,10 +262,10 @@ impl SquadStatusUpdater {
                 }
                 contract.squad_status = new_status;
                 let new_rank = Self::senior_rank(&contract.squad_status);
-                if let (Some(old), Some(new)) = (old_rank, new_rank) {
-                    if old != new {
-                        transition = Some((old, new));
-                    }
+                if let (Some(old), Some(new)) = (old_rank, new_rank)
+                    && old != new
+                {
+                    transition = Some((old, new));
                 }
             }
 
@@ -503,8 +502,10 @@ mod development_squad_tests {
     }
 
     fn keeper(id: u32, birth_year: i32, ca: u8, status: PlayerSquadStatus) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            ..Default::default()
+        };
         let mut contract =
             PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
         contract.squad_status = status;
@@ -731,8 +732,10 @@ mod club_level_tests {
     }
 
     fn forward(id: u32, birth_year: i32, ca: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            ..Default::default()
+        };
         let mut contract =
             PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
         contract.squad_status = PlayerSquadStatus::NotYetSet;

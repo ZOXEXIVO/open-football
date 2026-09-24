@@ -3,8 +3,9 @@ use nalgebra::Vector3;
 /// Origin of the most recent live pass / restart. Read by the offside
 /// resolver: only goal kicks, throw-ins, and corners are exempt from
 /// offside; free kicks (direct/indirect) and penalties are not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PassOriginRestart {
+    #[default]
     OpenPlay,
     GoalKick,
     Corner,
@@ -20,12 +21,6 @@ pub enum PassOriginRestart {
     IndirectFreeKick,
     /// Foul inside defending penalty area: ball at penalty spot.
     Penalty,
-}
-
-impl Default for PassOriginRestart {
-    fn default() -> Self {
-        PassOriginRestart::OpenPlay
-    }
 }
 
 impl PassOriginRestart {

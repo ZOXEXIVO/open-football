@@ -5,6 +5,12 @@ pub struct ScheduleResult {
     pub scheduled_matches: Vec<LeagueMatch>,
 }
 
+impl Default for ScheduleResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScheduleResult {
     pub fn new() -> Self {
         ScheduleResult {

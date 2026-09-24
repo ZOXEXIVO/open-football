@@ -18,6 +18,12 @@ pub struct LeagueStatistics {
     pub longest_unbeaten_run: Option<(u32, u8)>,
 }
 
+impl Default for LeagueStatistics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeagueStatistics {
     pub fn new() -> Self {
         LeagueStatistics {
@@ -60,7 +66,7 @@ impl LeagueStatistics {
             ));
         }
 
-        let goal_diff = (home_goals as i8 - away_goals as i8).abs() as u8;
+        let goal_diff = (home_goals as i8 - away_goals as i8).unsigned_abs();
         if goal_diff > 0 {
             if let Some((_, _, current_biggest)) = self.biggest_win {
                 if goal_diff > current_biggest {

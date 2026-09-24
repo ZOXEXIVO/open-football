@@ -207,10 +207,12 @@ mod tests {
     /// floor and the agreement's fit are measuring two different men.
     #[test]
     fn the_band_and_the_hidden_ability_are_not_the_same_number() {
-        let mut attrs = PlayerAttributes::default();
-        // A well-regarded academy boy: a real hidden ability, and skills
-        // nobody watching would read that high.
-        attrs.current_ability = 160;
+        let attrs = PlayerAttributes {
+            // A well-regarded academy boy: a real hidden ability, and skills
+            // nobody watching would read that high.
+            current_ability: 160,
+            ..Default::default()
+        };
         let player = PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("B".into(), "Band".into()))

@@ -28,14 +28,14 @@ impl<'a> RatingContext<'a> {
             PlayerFieldPositionGroup::Goalkeeper => 0.0,
             PlayerFieldPositionGroup::Defender => {
                 let z = self.stats.zone_stats;
-                let high_value = (z.tackles_own_box
+                let high_value = z.tackles_own_box
                     + z.tackles_own_six_yard
                     + z.interceptions_own_box
                     + z.interceptions_own_six_yard
                     + z.blocks_own_box
                     + z.blocks_own_six_yard
                     + z.clearances_own_box
-                    + z.clearances_own_six_yard) as u16;
+                    + z.clearances_own_six_yard;
                 let routine = self
                     .stats
                     .tackles

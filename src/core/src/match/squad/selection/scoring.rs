@@ -668,10 +668,10 @@ impl ScoringEngine {
 
         // Floor for severe same-unit dislike — even if every other pair is
         // cordial, two CBs at -50 should pull at least -0.4.
-        if let Some(worst) = worst_same_unit_rel {
-            if worst <= -0.5 {
-                score = score.min(-0.4);
-            }
+        if let Some(worst) = worst_same_unit_rel
+            && worst <= -0.5
+        {
+            score = score.min(-0.4);
         }
 
         score.clamp(-1.2, 1.2)
@@ -718,21 +718,18 @@ impl ScoringEngine {
         selected_players: &[&Player],
     ) -> (f32, SlotScoreBreakdown) {
         let p = &self.profile;
-        let mut b = SlotScoreBreakdown::default();
-
-        b.position_fit = helpers::position_fit_score(player, slot_position)
-            * (0.20 * (1.0 - p.tactical_blindness * 0.3));
-
-        b.perceived_quality = self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05);
-
-        b.match_readiness = self.match_readiness(player) * (0.15 + p.conservatism * 0.05);
-
-        b.condition_floor = -self.condition_floor_penalty(player, is_friendly);
-
-        b.tactical_style = helpers::tactical_style_bonus(player, slot_position, tactics)
-            * (0.05 * (1.0 - p.tactical_blindness * 0.5));
-        b.side_foot = helpers::side_foot_bonus(player, slot_position)
-            * (0.6 * (1.0 - p.tactical_blindness * 0.3));
+        let mut b = SlotScoreBreakdown {
+            position_fit: helpers::position_fit_score(player, slot_position)
+                * (0.20 * (1.0 - p.tactical_blindness * 0.3)),
+            perceived_quality: self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05),
+            match_readiness: self.match_readiness(player) * (0.15 + p.conservatism * 0.05),
+            condition_floor: -self.condition_floor_penalty(player, is_friendly),
+            tactical_style: helpers::tactical_style_bonus(player, slot_position, tactics)
+                * (0.05 * (1.0 - p.tactical_blindness * 0.5)),
+            side_foot: helpers::side_foot_bonus(player, slot_position)
+                * (0.6 * (1.0 - p.tactical_blindness * 0.3)),
+            ..Default::default()
+        };
 
         let rep = self.reputation_score(player);
         let rel = self.relationship_score(player, staff, date);
@@ -1435,13 +1432,13 @@ impl ScoringEngine {
     ) -> f32 {
         // A player the club has frozen out is not on a development pathway,
         // regardless of age or potential.
-        if let Some(status) = self.squad_status(player) {
-            if matches!(
+        if let Some(status) = self.squad_status(player)
+            && matches!(
                 status,
                 PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
-            ) {
-                return 0.0;
-            }
+            )
+        {
+            return 0.0;
         }
 
         let age = DateUtils::age(player.birth_date, date);
@@ -1917,7 +1914,7 @@ mod loan_match_fee_pull_tests {
 
     impl Fixture {
         fn engine() -> ScoringEngine {
-            let mut s = StaffStub::default();
+            let mut s = StaffStub::build();
             s.id = 7;
             ScoringEngine::from_staff(&s)
         }
@@ -2057,7 +2054,7 @@ mod relationship_score_tests {
         }
 
         fn build_staff(id: u32) -> Staff {
-            let mut s = StaffStub::default();
+            let mut s = StaffStub::build();
             s.id = id;
             s
         }

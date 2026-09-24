@@ -70,13 +70,13 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // long way from his line, and that state owns the whole question —
         // the smother, `KeeperShotDive`, the aerial claim, and the hand-off
         // to `Catching` once he is inside the space he defends. One owner.
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
-            if Some(target.defending_side) == ctx.player.side {
-                Self::note_exit(ctx, 4);
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::PreparingForSave,
-                ));
-            }
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target
+            && Some(target.defending_side) == ctx.player.side
+        {
+            Self::note_exit(ctx, 4);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
         }
 
         // He has chased it down and a man has got there first, with the
@@ -217,23 +217,23 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // him he walks to it and stands on it — the ball is placed and is
         // going nowhere. Once the mark is gone he is running in, and the
         // chase steering below is exactly the run. See `KeeperGoalKick`.
-        if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
-            if let Some(mark) = ctx.tick_context.ball.restart_mark {
-                if ctx.tick_context.ball.restart_set
-                    || (ctx.player.position - mark).magnitude() < KeeperGoalKick::MARK_REACH * 0.5
-                {
-                    return Some(Vector3::zeros());
-                }
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target: mark,
-                        slowing_distance: 6.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        * KeeperGoalKick::BACKING_PACE,
-                );
+        if ctx.tick_context.ball.restart_taker == Some(ctx.player.id)
+            && let Some(mark) = ctx.tick_context.ball.restart_mark
+        {
+            if ctx.tick_context.ball.restart_set
+                || (ctx.player.position - mark).magnitude() < KeeperGoalKick::MARK_REACH * 0.5
+            {
+                return Some(Vector3::zeros());
             }
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: mark,
+                    slowing_distance: 6.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * KeeperGoalKick::BACKING_PACE,
+            );
         }
         let target = LooseBallChase::meeting_point(
             ctx,
@@ -318,7 +318,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
 
         if neighbor_count > 0 {
             // Average and scale the separation force
-            separation_force = separation_force / (neighbor_count as f32);
+            separation_force /= neighbor_count as f32;
             separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
 
             // ⚠ SEPARATION MUST NEVER SLOW THE RACE — see `LooseBallChase`.
@@ -329,7 +329,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
                 LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
 
             // Blend arrive and separation velocities
-            arrive_velocity = arrive_velocity + separation_force;
+            arrive_velocity += separation_force;
 
             // Limit to the keeper's own chase ceiling — NOT the outfield
             // base, which would undo the urgency scaling above the moment

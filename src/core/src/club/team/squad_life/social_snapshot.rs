@@ -1519,7 +1519,7 @@ mod tests {
         use crate::{Staff, StaffClubContract, StaffPosition};
 
         fn build_manager(id: u32) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = id;
             staff.contract = Some(StaffClubContract::new(
                 50_000,
@@ -1590,7 +1590,7 @@ mod tests {
         use crate::{Staff, StaffClubContract, StaffPosition};
 
         fn caretaker(id: u32) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = id;
             staff.contract = Some(StaffClubContract::new(
                 30_000,

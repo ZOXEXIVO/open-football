@@ -73,7 +73,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                     return Some(StateChangeResult::with_goalkeeper_state_and_event(
                         GoalkeeperState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(2.5) // Gentle pass
@@ -88,7 +88,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                     return Some(StateChangeResult::with_goalkeeper_state_and_event(
                         GoalkeeperState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(4.5) // Medium power
@@ -111,7 +111,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                     return Some(StateChangeResult::with_goalkeeper_state_and_event(
                         GoalkeeperState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(3.5) // Throw power
@@ -422,7 +422,7 @@ impl GoalkeeperPassingState {
             let kick_force = 4.5 + (kicking_power * 1.5); // 4.5-6.0 range
 
             Some(Event::PlayerEvent(PlayerEvent::PassTo(
-                PassingEventContext::new()
+                PassingEventContext::builder()
                     .with_from_player_id(ctx.player.id)
                     .with_to_player_id(target.id)
                     .with_pass_force(kick_force)

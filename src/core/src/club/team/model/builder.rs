@@ -113,13 +113,13 @@ impl TeamBuilder {
             tactics: self.tactics.unwrap_or(None),
             players: self.players.ok_or("players is required")?,
             staffs: self.staffs.ok_or("staffs is required")?,
-            behaviour: self.behaviour.unwrap_or_else(TeamBehaviour::new),
+            behaviour: self.behaviour.unwrap_or_default(),
             reputation: self.reputation.ok_or("reputation is required")?,
             training_schedule: self
                 .training_schedule
                 .ok_or("training_schedule is required")?,
-            transfer_list: self.transfer_list.unwrap_or_else(Transfers::new),
-            match_history: self.match_history.unwrap_or_else(MatchHistory::new),
+            transfer_list: self.transfer_list.unwrap_or_default(),
+            match_history: self.match_history.unwrap_or_default(),
             fixture_window: TeamFixtureWindow::default(),
             captain_id: None,
             vice_captain_id: None,

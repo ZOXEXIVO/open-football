@@ -75,17 +75,16 @@ impl Club {
                     {
                         contract.signing_bonus_paid = true;
                     }
-                    if let Some(started) = contract.started {
-                        if year > started.year()
-                            && contract.last_loyalty_paid_year != Some(year)
-                            && ContractAnniversary::reached(date, started)
-                            && contract
-                                .bonuses
-                                .iter()
-                                .any(|b| matches!(b.bonus_type, ContractBonusType::LoyaltyBonus))
-                        {
-                            contract.last_loyalty_paid_year = Some(year);
-                        }
+                    if let Some(started) = contract.started
+                        && year > started.year()
+                        && contract.last_loyalty_paid_year != Some(year)
+                        && ContractAnniversary::reached(date, started)
+                        && contract
+                            .bonuses
+                            .iter()
+                            .any(|b| matches!(b.bonus_type, ContractBonusType::LoyaltyBonus))
+                    {
+                        contract.last_loyalty_paid_year = Some(year);
                     }
                 }
                 // Update international-caps baseline on the player so the next

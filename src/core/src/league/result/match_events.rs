@@ -485,7 +485,7 @@ impl LeagueResult {
             .collect();
         let unused_sub_ids: Vec<u32> = unused_subs_left
             .into_iter()
-            .chain(unused_subs_right.into_iter())
+            .chain(unused_subs_right)
             .collect();
 
         // Which GKs started on which team + did they keep a clean sheet?
@@ -819,25 +819,25 @@ impl LeagueResult {
                 );
             }
 
-            if !is_friendly {
-                if let Some(tone) = TeamTalkMoments::half_time_tone(
+            if !is_friendly
+                && let Some(tone) = TeamTalkMoments::half_time_tone(
                     side.ht_delta,
                     side.rep_edge,
                     manager_clone.as_ref(),
-                ) {
-                    Self::deliver_team_talk(
-                        data,
-                        &side.player_ids,
-                        manager_clone.as_ref(),
-                        tone,
-                        TeamTalkContext {
-                            phase: MatchPhase::HalfTime,
-                            score_delta: side.ht_delta,
-                            big_match,
-                        },
-                        now,
-                    );
-                }
+                )
+            {
+                Self::deliver_team_talk(
+                    data,
+                    &side.player_ids,
+                    manager_clone.as_ref(),
+                    tone,
+                    TeamTalkContext {
+                        phase: MatchPhase::HalfTime,
+                        score_delta: side.ht_delta,
+                        big_match,
+                    },
+                    now,
+                );
             }
 
             let tone = tone_for(side.delta);
@@ -1288,37 +1288,37 @@ impl LeagueResult {
             }
 
             // ── Player of the match: admiration vs envy ────────────
-            if let Some(motm) = best_player_id {
-                if appeared.contains(&motm) {
-                    let motm_controversy = players
-                        .iter()
-                        .find(|p| p.id == motm)
-                        .map(|p| p.controversy)
-                        .unwrap_or(10.0);
-                    for p in players.iter().filter(|p| p.id != motm) {
-                        let same_group = p.group
-                            == players
-                                .iter()
-                                .find(|q| q.id == motm)
-                                .map(|q| q.group)
-                                .unwrap_or(p.group);
-                        if p.controversy <= 11.0 {
-                            updates.push(Update {
-                                from: p.id,
-                                to: motm,
-                                change_type: ChangeType::ReputationAdmiration,
-                                magnitude: 0.10,
-                                event: None,
-                            });
-                        } else if p.controversy >= 14.0 && motm_controversy >= 11.0 && same_group {
-                            updates.push(Update {
-                                from: p.id,
-                                to: motm,
-                                change_type: ChangeType::ReputationTension,
-                                magnitude: 0.10,
-                                event: None,
-                            });
-                        }
+            if let Some(motm) = best_player_id
+                && appeared.contains(&motm)
+            {
+                let motm_controversy = players
+                    .iter()
+                    .find(|p| p.id == motm)
+                    .map(|p| p.controversy)
+                    .unwrap_or(10.0);
+                for p in players.iter().filter(|p| p.id != motm) {
+                    let same_group = p.group
+                        == players
+                            .iter()
+                            .find(|q| q.id == motm)
+                            .map(|q| q.group)
+                            .unwrap_or(p.group);
+                    if p.controversy <= 11.0 {
+                        updates.push(Update {
+                            from: p.id,
+                            to: motm,
+                            change_type: ChangeType::ReputationAdmiration,
+                            magnitude: 0.10,
+                            event: None,
+                        });
+                    } else if p.controversy >= 14.0 && motm_controversy >= 11.0 && same_group {
+                        updates.push(Update {
+                            from: p.id,
+                            to: motm,
+                            change_type: ChangeType::ReputationTension,
+                            magnitude: 0.10,
+                            event: None,
+                        });
                     }
                 }
             }
@@ -1484,15 +1484,14 @@ impl LeagueResult {
             // pairing updates so a winning XI does ~11 lookups instead
             // of ~110.
             if team_won {
-                let n = players.len();
-                for i in 0..n {
-                    if let Some(player) = data.player_mut(players[i].id) {
-                        for j in 0..n {
+                for (i, outer) in players.iter().enumerate() {
+                    if let Some(player) = data.player_mut(outer.id) {
+                        for (j, teammate) in players.iter().enumerate() {
                             if i == j {
                                 continue;
                             }
                             player.relations.update_with_type(
-                                players[j].id,
+                                teammate.id,
                                 0.05,
                                 ChangeType::MatchCooperation,
                                 now,
@@ -1631,16 +1630,15 @@ impl LeagueResult {
             );
 
         for (player_id, started) in appearances {
-            if let Some(player) = data.player(player_id) {
-                if let Some(ref loan) = player.contract_loan {
-                    let fee = loan.loan_fee_for_appearance(started);
-                    if fee > 0 {
-                        if let (Some(parent_id), Some(borrowing_id)) =
-                            (loan.loan_from_club_id, loan.loan_to_club_id)
-                        {
-                            fee_transfers.push((parent_id, borrowing_id, fee));
-                        }
-                    }
+            if let Some(player) = data.player(player_id)
+                && let Some(ref loan) = player.contract_loan
+            {
+                let fee = loan.loan_fee_for_appearance(started);
+                if fee > 0
+                    && let (Some(parent_id), Some(borrowing_id)) =
+                        (loan.loan_from_club_id, loan.loan_to_club_id)
+                {
+                    fee_transfers.push((parent_id, borrowing_id, fee));
                 }
             }
         }
@@ -2182,8 +2180,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     is_continental: bool,
     opponent_team_id: Option<u32>,
 ) {
-    let starter_ids: Vec<u32> = side.main.iter().copied().collect();
-    let sub_ids: Vec<u32> = side.substitutes_used.iter().copied().collect();
+    let starter_ids: Vec<u32> = side.main.to_vec();
+    let sub_ids: Vec<u32> = side.substitutes_used.to_vec();
     let all_ids: Vec<(u32, MatchParticipation)> = starter_ids
         .iter()
         .map(|id| (*id, MatchParticipation::Starter))
@@ -2328,10 +2326,11 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     // the player borrows above. Memory updates are friendly-safe:
     // friendlies contribute small signals so a pre-season cameo
     // doesn't reshape the manager's trust profile.
-    if !coach_observations.is_empty() && !is_friendly {
-        if let Some(team) = data.team_mut(side.team_id) {
-            CoachObservationBuilder::apply(team, &coach_observations);
-        }
+    if !coach_observations.is_empty()
+        && !is_friendly
+        && let Some(team) = data.team_mut(side.team_id)
+    {
+        CoachObservationBuilder::apply(team, &coach_observations);
     }
 
     // Substitution-frustration pass. Walk the match's recorded
@@ -2546,7 +2545,7 @@ impl CoachObservationBuilder {
         CoachMatchObservation {
             player_id,
             effective_rating,
-            minutes_played: stats.minutes_played as u16,
+            minutes_played: stats.minutes_played,
             is_starter,
             match_importance,
             is_cup,
@@ -2604,7 +2603,11 @@ impl CoachObservationBuilder {
             Some(date) => observations
                 .iter()
                 .filter_map(|obs| {
-                    let player = team.players.players.iter().find(|p| p.id == obs.player_id)?;
+                    let player = team
+                        .players
+                        .players
+                        .iter()
+                        .find(|p| p.id == obs.player_id)?;
                     Some((
                         obs.player_id,
                         PotentialEstimator::observable_ceiling(player, date) as f32 / 200.0,

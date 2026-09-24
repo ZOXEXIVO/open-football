@@ -46,7 +46,7 @@ pub async fn about_page_action(
     Path(route_params): Path<AboutPageRequest>,
 ) -> impl IntoResponse {
     let i18n = state.i18n.for_lang(&route_params.lang);
-    let current_path = format!("/{}/about", &route_params.lang);
+    let current_path = format!("/{}/about", route_params.lang);
     let menu_sections = views::about_menu(&i18n, &route_params.lang, &current_path);
     let title = i18n.t("about").to_string();
 

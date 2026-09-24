@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -355,7 +355,7 @@ pub async fn team_newspaper_action(
         .collect();
 
     let (country_name, country_slug) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/newspaper", &route_params.lang, &team.slug);
+    let current_path = format!("/{}/teams/{}/newspaper", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
         i18n: &i18n,
         lang: &route_params.lang,
@@ -383,7 +383,7 @@ pub async fn team_newspaper_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: club.colors.background.clone(),
@@ -1245,14 +1245,13 @@ impl ManagerName {
             return String::new();
         }
 
-        if let Some(club) = data.club(club_id) {
-            if let Some(staff) = club
+        if let Some(club) = data.club(club_id)
+            && let Some(staff) = club
                 .teams
                 .iter()
                 .find_map(|team| team.staffs.find(staff_id))
-            {
-                return PlayerName::display(&staff.full_name);
-            }
+        {
+            return PlayerName::display(&staff.full_name);
         }
 
         if let Some(staff) = data
@@ -1318,7 +1317,7 @@ impl NewspaperPage {
         club_id: u32,
         data: &SimulatorData,
         i18n: &I18n,
-    ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+    ) -> Result<NeighborMenus, ApiError> {
         let club = data.club(club_id).ok_or_else(|| {
             ApiError::InternalError(format!("Club with ID {} not found", club_id))
         })?;
@@ -2884,10 +2883,10 @@ mod render_tests {
         ] {
             html = html.replace(link, "");
         }
-        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
-            if let Some(end) = html[start..].find('>') {
-                html.replace_range(start..start + end + 1, "");
-            }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+            && let Some(end) = html[start..].find('>')
+        {
+            html.replace_range(start..start + end + 1, "");
         }
         html = html.replace(
             "</head>",

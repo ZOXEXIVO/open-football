@@ -80,15 +80,19 @@ fn make_player_with_history(
     last_season_apps: u16,
     ability: u8,
 ) -> Player {
-    let mut current_stats = PlayerStatistics::default();
-    current_stats.played = current_apps;
-    current_stats.average_rating = if current_apps > 0 { 7.0 } else { 0.0 };
+    let current_stats = PlayerStatistics {
+        played: current_apps,
+        average_rating: if current_apps > 0 { 7.0 } else { 0.0 },
+        ..Default::default()
+    };
 
     let last_season = Season::new(2025);
-    let mut hist_stats = PlayerStatistics::default();
-    hist_stats.played = last_season_apps;
-    hist_stats.goals = 8;
-    hist_stats.average_rating = 7.4;
+    let hist_stats = PlayerStatistics {
+        played: last_season_apps,
+        goals: 8,
+        average_rating: 7.4,
+        ..Default::default()
+    };
 
     let history = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
         season: last_season,
@@ -602,14 +606,18 @@ fn derive_reasons_picks_tournament_experience_for_capped_veteran() {
 #[test]
 fn summarise_last_season_aggregates_multiple_items() {
     let season = Season::new(2025);
-    let mut a = PlayerStatistics::default();
-    a.played = 10;
-    a.goals = 4;
-    a.average_rating = 7.0;
-    let mut b = PlayerStatistics::default();
-    b.played = 20;
-    b.goals = 8;
-    b.average_rating = 8.0;
+    let a = PlayerStatistics {
+        played: 10,
+        goals: 4,
+        average_rating: 7.0,
+        ..Default::default()
+    };
+    let b = PlayerStatistics {
+        played: 20,
+        goals: 8,
+        average_rating: 8.0,
+        ..Default::default()
+    };
 
     let history = PlayerStatisticsHistory::from_items(vec![
         PlayerStatisticsHistoryItem {

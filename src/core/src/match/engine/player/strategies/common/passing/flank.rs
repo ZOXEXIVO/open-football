@@ -165,10 +165,10 @@ impl FlankPlay {
         //    ball to a team-mate in more space is right at any height of
         //    the pitch, and refusing it is how possession dies on a
         //    touchline.
-        if progress >= Self::DRIVE_PROGRESS {
-            if let Some(runner) = Self::man_outside(ctx) {
-                return Some(FlankAction::ReleaseOutside { target: runner.id });
-            }
+        if progress >= Self::DRIVE_PROGRESS
+            && let Some(runner) = Self::man_outside(ctx)
+        {
+            return Some(FlankAction::ReleaseOutside { target: runner.id });
         }
 
         // 2. The delivery, once he is deep enough for HIS delivery and
@@ -342,10 +342,12 @@ mod tests {
     /// reached. Their ORDER is the design, not their values.
     #[test]
     fn a_wide_player_may_drive_from_deeper_than_he_may_cross() {
-        assert!(
-            FlankPlay::DRIVE_PROGRESS < FlankPlay::DELIVERY_PROGRESS,
-            "the drive that creates the crossing position is gated behind the cross"
-        );
+        const {
+            assert!(
+                FlankPlay::DRIVE_PROGRESS < FlankPlay::DELIVERY_PROGRESS,
+                "the drive that creates the crossing position is gated behind the cross"
+            )
+        };
     }
 
     /// Even the worst crosser in the game must be able to deliver from
@@ -370,18 +372,24 @@ mod tests {
         const SIX_YARD_HALF: f32 = 73.0;
         /// …and of the penalty area.
         const BOX_HALF: f32 = 161.0;
-        assert!(
-            FlankPlay::BYLINE_LATERAL > SIX_YARD_HALF,
-            "the byline aim is inside the six-yard box"
-        );
-        assert!(
-            FlankPlay::BYLINE_LATERAL > BOX_HALF,
-            "the byline aim is inside the penalty area rather than at its corner"
-        );
-        assert!(
-            FlankPlay::BYLINE_DEPTH > 0.0 && FlankPlay::BYLINE_DEPTH < 100.0,
-            "the byline aim is not near the byline"
-        );
+        const {
+            assert!(
+                FlankPlay::BYLINE_LATERAL > SIX_YARD_HALF,
+                "the byline aim is inside the six-yard box"
+            )
+        };
+        const {
+            assert!(
+                FlankPlay::BYLINE_LATERAL > BOX_HALF,
+                "the byline aim is inside the penalty area rather than at its corner"
+            )
+        };
+        const {
+            assert!(
+                FlankPlay::BYLINE_DEPTH > 0.0 && FlankPlay::BYLINE_DEPTH < 100.0,
+                "the byline aim is not near the byline"
+            )
+        };
     }
 
     /// One man in the middle is enough only from the byline. If the two
@@ -389,6 +397,6 @@ mod tests {
     /// being a rule about where he is standing.
     #[test]
     fn the_byline_asks_for_fewer_bodies_than_the_wide_area() {
-        assert!(FlankPlay::BOX_BODIES_AT_BYLINE < FlankPlay::BOX_BODIES);
+        const { assert!(FlankPlay::BOX_BODIES_AT_BYLINE < FlankPlay::BOX_BODIES) };
     }
 }

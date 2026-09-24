@@ -623,7 +623,7 @@ impl ApproachBuilder {
         );
 
         OfferClauses::attach_loan_duration(&mut offer, is_loan);
-        OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, &asking_price);
+        OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, asking_price);
         OfferClauses::attach_loan_appearance_fee(
             &mut offer,
             is_loan && drift.loan_appearance_fee,
@@ -687,7 +687,7 @@ impl ApproachBuilder {
             reason,
             player_name: player.full_name.to_string(),
             selling_club_name: selling_club.name.clone(),
-            player_sold_from: player.sold_from.clone(),
+            player_sold_from: player.sold_from,
             offered_annual_wage,
             buying_league_reputation,
             selling_league_reputation,
@@ -1054,10 +1054,11 @@ impl ApproachPass {
         // fourth centre-back when the loan market is open. Only cover
         // switches — the tiers that buy fall through to the affordability
         // and reason logic below exactly as before.
-        if let Some(req) = request {
-            if req.tier.prefers_loan() && !matches!(req.reason, TransferNeedReason::FormationGap) {
-                return TransferApproach::Loan;
-            }
+        if let Some(req) = request
+            && req.tier.prefers_loan()
+            && !matches!(req.reason, TransferNeedReason::FormationGap)
+        {
+            return TransferApproach::Loan;
         }
 
         // Reason-driven approaches
@@ -1087,12 +1088,11 @@ impl ApproachPass {
                 | TransferNeedReason::SquadPadding => {
                     return TransferApproach::Loan;
                 }
-                TransferNeedReason::ExperiencedHead | TransferNeedReason::CheapReinforcement => {
+                TransferNeedReason::ExperiencedHead | TransferNeedReason::CheapReinforcement
                     // Prefer loan, but allow cheap buy if very affordable
-                    if estimated_fee > 50_000.0 || buying_club_balance < 0 {
+                    if (estimated_fee > 50_000.0 || buying_club_balance < 0) => {
                         return TransferApproach::Loan;
                     }
-                }
                 _ => {}
             }
         }
@@ -1235,10 +1235,10 @@ impl ApproachPass {
 
         // Wage discipline: the board's wage mandate must absorb the new
         // contract too, not just the fee.
-        if let Some(headroom) = prospect.wage_headroom {
-            if prospect.expected_wage as f64 > headroom {
-                return false;
-            }
+        if let Some(headroom) = prospect.wage_headroom
+            && prospect.expected_wage as f64 > headroom
+        {
+            return false;
         }
 
         // Development purchases target teenagers / early-twenties only.
@@ -1356,21 +1356,19 @@ impl ApproachPass {
             // completed loan — i.e. a loan-scan signing. Mark the open
             // request in that position group fulfilled so it stops re-firing
             // and stacking further loans on an already-covered position.
-            if !shortlist_matched {
-                if let Some(group) = loan_filled_group {
-                    plan.clear_unmet_need(group);
-                    for request in plan.transfer_requests.iter_mut() {
-                        if request.position.position_group() != group {
-                            continue;
-                        }
-                        if matches!(
-                            request.status,
-                            TransferRequestStatus::Fulfilled | TransferRequestStatus::Abandoned
-                        ) {
-                            continue;
-                        }
-                        request.status = TransferRequestStatus::Fulfilled;
+            if !shortlist_matched && let Some(group) = loan_filled_group {
+                plan.clear_unmet_need(group);
+                for request in plan.transfer_requests.iter_mut() {
+                    if request.position.position_group() != group {
+                        continue;
                     }
+                    if matches!(
+                        request.status,
+                        TransferRequestStatus::Fulfilled | TransferRequestStatus::Abandoned
+                    ) {
+                        continue;
+                    }
+                    request.status = TransferRequestStatus::Fulfilled;
                 }
             }
 
@@ -1379,16 +1377,14 @@ impl ApproachPass {
             // Push the aggregated delta into the manager's job_satisfaction
             // so a run of failed bids visibly erodes morale. Scoped inside
             // the same `if let Some(club)` so the borrow is still alive.
-            if manager_satisfaction_hit.abs() > 0.01 {
-                if let Some(main_team) = club.teams.main_mut() {
-                    if let Some(mgr) = main_team
-                        .staffs
-                        .find_mut_by_position(StaffPosition::Manager)
-                    {
-                        mgr.job_satisfaction =
-                            (mgr.job_satisfaction + manager_satisfaction_hit).clamp(0.0, 100.0);
-                    }
-                }
+            if manager_satisfaction_hit.abs() > 0.01
+                && let Some(main_team) = club.teams.main_mut()
+                && let Some(mgr) = main_team
+                    .staffs
+                    .find_mut_by_position(StaffPosition::Manager)
+            {
+                mgr.job_satisfaction =
+                    (mgr.job_satisfaction + manager_satisfaction_hit).clamp(0.0, 100.0);
             }
         }
     }
@@ -1806,30 +1802,28 @@ impl ApproachPass {
             .indexes
             .as_ref()
             .and_then(|idx| idx.get_player_location(player_id))
+            && loc_country_id != buyer_country_id
+            && let Some(country) = data.country(loc_country_id)
         {
-            if loc_country_id != buyer_country_id {
-                if let Some(country) = data.country(loc_country_id) {
-                    // Verify the player really is at this club — the
-                    // index may be one tick stale after an intra-tick
-                    // move; on a stale hit fall through to the scan.
-                    let present = country
-                        .club(loc_club_id)
-                        .map(|c| c.teams.contains_player(player_id))
-                        .unwrap_or(false);
-                    if present {
-                        return Some((
-                            country.id,
-                            loc_club_id,
-                            country.settings.pricing.price_level,
-                            country.continent_id,
-                            country.code.clone(),
-                        ));
-                    }
-                }
+            // Verify the player really is at this club — the
+            // index may be one tick stale after an intra-tick
+            // move; on a stale hit fall through to the scan.
+            let present = country
+                .club(loc_club_id)
+                .map(|c| c.teams.contains_player(player_id))
+                .unwrap_or(false);
+            if present {
+                return Some((
+                    country.id,
+                    loc_club_id,
+                    country.settings.pricing.price_level,
+                    country.continent_id,
+                    country.code.clone(),
+                ));
             }
-            // Index hit pointed at the buyer's own country or was stale —
-            // fall through to the authoritative scan below.
         }
+        // Index hit pointed at the buyer's own country or was stale —
+        // fall through to the authoritative scan below.
 
         // Slow path: full world scan, foreign-only (skips the buyer's
         // country). Reached only on an index miss or a stale entry.
@@ -1955,14 +1949,13 @@ impl ApproachPass {
                                 };
                             }
                         }
-                    } else if request_live {
-                        if let Some(req) = plan
+                    } else if request_live
+                        && let Some(req) = plan
                             .transfer_requests
                             .iter_mut()
                             .find(|r| r.id == shortlist.transfer_request_id)
-                        {
-                            req.status = TransferRequestStatus::Shortlisted;
-                        }
+                    {
+                        req.status = TransferRequestStatus::Shortlisted;
                     }
                 }
 

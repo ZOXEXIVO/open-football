@@ -650,9 +650,11 @@ mod tests {
             played: u16,
             idle: u16,
         ) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = pa;
+            let mut attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: pa,
+                ..Default::default()
+            };
             attrs.condition = 10_000; // fully fit -> is_ready_for_match()
             attrs.days_since_last_match = idle;
             let mut contract =
@@ -682,10 +684,12 @@ mod tests {
         /// A full-time youth goalkeeper (the case the user hit: U19 keepers
         /// on full contracts, so the youth-contract skip doesn't apply).
         fn gk(id: u32, ca: u8, age: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca.saturating_add(30);
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca.saturating_add(30),
+                condition: 10_000,
+                ..Default::default()
+            };
             let mut contract =
                 PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::NotYetSet;

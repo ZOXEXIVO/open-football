@@ -128,8 +128,10 @@ mod tests {
     }
 
     fn make_player(id: u32, country_id: u32, ability: u8) -> crate::Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ability;
+        let attrs = PlayerAttributes {
+            current_ability: ability,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
@@ -155,7 +157,7 @@ mod tests {
     fn omitted_for_foreign_limit_picks_weakest_excess() {
         let mut regs = CountryRegulations::new();
         regs.foreign_player_limit = Some(1);
-        let players = vec![
+        let players = [
             make_player(1, 1, 100),  // domestic — keeps slot
             make_player(2, 99, 70),  // foreign weak — drop
             make_player(3, 99, 150), // foreign strong — keep

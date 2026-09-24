@@ -126,8 +126,10 @@ mod tests {
     use chrono::NaiveDate;
 
     fn make(composure: f32, condition: i16) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
+        let attrs = PlayerAttributes {
+            condition,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.mental.composure = composure;
         skills.physical.stamina = 14.0;

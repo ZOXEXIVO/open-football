@@ -161,7 +161,7 @@ impl PlayerSkills {
     /// Skills are 1-based so normalize from 1-20 range before scaling.
     fn skill_to_ability(avg: f32) -> u8 {
         let normalized = ((avg - 1.0) / 19.0).clamp(0.0, 1.0);
-        (normalized * 199.0 + 1.0).round().min(200.0).max(1.0) as u8
+        (normalized * 199.0 + 1.0).round().clamp(1.0, 200.0) as u8
     }
 
     /// Build a flat skill set (every attribute equal) whose visible ability —
@@ -586,8 +586,6 @@ mod tests {
             technique: 140.0,
         };
         technical.rest();
-        // Since the rest method doesn't modify any fields, we'll just assert true to indicate it ran successfully
-        assert!(true);
     }
 
     #[test]
@@ -631,8 +629,6 @@ mod tests {
             work_rate: 140.0,
         };
         mental.rest();
-        // Since the rest method doesn't modify any fields, we'll just assert true to indicate it ran successfully
-        assert!(true);
     }
 
     #[test]
@@ -665,7 +661,5 @@ mod tests {
             match_readiness: 90.0,
         };
         physical.rest();
-        // Since the rest method doesn't modify any fields, we'll just assert true to indicate it ran successfully
-        assert!(true);
     }
 }

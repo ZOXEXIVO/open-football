@@ -74,7 +74,7 @@ impl SquadStandingViewBuilder {
                 group_index: p.position().position_group().index(),
                 is_keeper: p.position() == PlayerPositionType::Goalkeeper,
                 level: AbilityEstimator::observable_level(p),
-                age: DateUtils::age(p.birth_date, today) as u8,
+                age: DateUtils::age(p.birth_date, today),
                 salary: p.contract.as_ref().map(|c| c.salary).unwrap_or(0),
             })
             .collect();
@@ -190,7 +190,7 @@ mod tests {
             .unwrap()
     }
 
-    fn refresh(players: &mut Vec<Player>) {
+    fn refresh(players: &mut [Player]) {
         SquadStandingViewBuilder::refresh(
             players,
             &StaffCollection::new(Vec::new()),

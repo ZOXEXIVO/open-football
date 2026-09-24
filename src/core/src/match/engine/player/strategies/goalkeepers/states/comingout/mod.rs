@@ -84,14 +84,14 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Shot in flight at our goal — abandon the rush and prepare
         // for the save. Staying in ComingOut leaves the goal wide open.
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
-            if Some(target.defending_side) == ctx.player.side {
-                #[cfg(feature = "match-logs")]
-                KeeperSweepDiag::note_exit(10);
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::PreparingForSave,
-                ));
-            }
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target
+            && Some(target.defending_side) == ctx.player.side
+        {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(10);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
         }
 
         // Coming for a ball in the air is the same act as coming for one

@@ -6,6 +6,12 @@ pub struct PlayerTrainingHistory {
     records: Vec<TrainingRecord>,
 }
 
+impl Default for PlayerTrainingHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerTrainingHistory {
     pub fn new() -> Self {
         PlayerTrainingHistory {

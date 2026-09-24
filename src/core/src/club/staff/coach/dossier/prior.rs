@@ -63,8 +63,8 @@ impl ReunionPrior {
     /// record — however well the coach remembers that one.
     pub fn age(dossier: &PlayerDossier, age_now: u8) -> f32 {
         let was = dossier.age_at_parting;
-        let crossed_the_hill = age_now >= DossierTuning::AGE_BAND_OLD
-            && was < DossierTuning::AGE_BAND_OLD;
+        let crossed_the_hill =
+            age_now >= DossierTuning::AGE_BAND_OLD && was < DossierTuning::AGE_BAND_OLD;
         let grew_up =
             was <= DossierTuning::AGE_BAND_BOY && age_now >= DossierTuning::AGE_BAND_GROWN;
         if crossed_the_hill || grew_up {
@@ -85,10 +85,10 @@ impl ReunionPrior {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::record::SeparationCause;
-    use crate::club::staff::StaffStub;
+    use super::*;
     use crate::Staff;
+    use crate::club::staff::StaffStub;
 
     const TODAY: EpochDay = 10_000;
     const YEAR: EpochDay = 365;
@@ -106,7 +106,7 @@ mod tests {
         }
 
         fn coach(judging: u8) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.staff_attributes.knowledge.judging_player_ability = judging;
             staff
         }

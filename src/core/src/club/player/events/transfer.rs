@@ -183,13 +183,14 @@ impl Player {
             t.personal_terms.as_ref(),
         );
         self.install_mandate(t.mandate, t.fee, t.to.reputation, t.date);
-        if let Some(pct) = t.record_sell_on {
-            if pct > 0.0 && self.sell_on_obligations.len() < 3 {
-                self.sell_on_obligations.push(SellOnObligation {
-                    beneficiary_club_id: t.selling_club_id,
-                    percentage: pct,
-                });
-            }
+        if let Some(pct) = t.record_sell_on
+            && pct > 0.0
+            && self.sell_on_obligations.len() < 3
+        {
+            self.sell_on_obligations.push(SellOnObligation {
+                beneficiary_club_id: t.selling_club_id,
+                percentage: pct,
+            });
         }
         self.pending_signing = Some(PendingSigning {
             previous_salary,
@@ -546,19 +547,17 @@ impl Player {
         personal_terms: Option<&PersonalTermsOffer>,
     ) {
         let age = self.age(date);
-        let years = personal_terms
-            .and_then(|t| t.contract_years)
-            .unwrap_or_else(|| {
-                if age < 24 {
-                    5
-                } else if age < 28 {
-                    4
-                } else if age < 32 {
-                    3
-                } else {
-                    2
-                }
-            });
+        let years = personal_terms.and_then(|t| t.contract_years).unwrap_or({
+            if age < 24 {
+                5
+            } else if age < 28 {
+                4
+            } else if age < 32 {
+                3
+            } else {
+                2
+            }
+        });
         let expiry = date
             .checked_add_signed(Duration::days(years as i64 * 365))
             .unwrap_or(date);
@@ -667,10 +666,10 @@ impl Player {
         let min_expiry = loan_end
             .checked_add_signed(Duration::days(365))
             .unwrap_or(loan_end);
-        if let Some(ref mut contract) = self.contract {
-            if contract.expiration < min_expiry {
-                contract.expiration = min_expiry;
-            }
+        if let Some(ref mut contract) = self.contract
+            && contract.expiration < min_expiry
+        {
+            contract.expiration = min_expiry;
         }
     }
 }
@@ -872,11 +871,13 @@ mod free_agent_source_aware_tests {
         }
 
         fn player(age: u8, ambition: f32, world_rep: i16) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.world_reputation = world_rep;
-            attrs.current_reputation = world_rep;
-            attrs.current_ability = 130;
-            attrs.potential_ability = 140;
+            let attrs = PlayerAttributes {
+                world_reputation: world_rep,
+                current_reputation: world_rep,
+                current_ability: 130,
+                potential_ability: 140,
+                ..Default::default()
+            };
             let today = Self::d(2026, 4, 26);
             let birth = today
                 .checked_sub_signed(chrono::Duration::days(age as i64 * 365))

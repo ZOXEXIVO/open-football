@@ -18,6 +18,12 @@ pub struct ClubFinanceResult {
     pub is_month_start: bool,
 }
 
+impl Default for ClubFinanceResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClubFinanceResult {
     pub fn new() -> Self {
         ClubFinanceResult {
@@ -114,15 +120,15 @@ impl ClubFinanceResult {
                 // book is shrinking toward a smaller target. That is a
                 // dated fact and the only place it is visible, so it is
                 // filed here rather than inferred from a shorter list.
-                if self.expired_sponsorships > 0 {
-                    if let Some(club) = data.club_mut(self.club_id) {
-                        club.affairs.record(
-                            ClubAffair::SponsorshipLost {
-                                count: self.expired_sponsorships,
-                            },
-                            date,
-                        );
-                    }
+                if self.expired_sponsorships > 0
+                    && let Some(club) = data.club_mut(self.club_id)
+                {
+                    club.affairs.record(
+                        ClubAffair::SponsorshipLost {
+                            count: self.expired_sponsorships,
+                        },
+                        date,
+                    );
                 }
                 return;
             }

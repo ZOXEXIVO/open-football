@@ -48,8 +48,8 @@ fn pitch() -> (MatchField, MatchContext) {
 /// condition is a two-cycle by construction.
 #[test]
 fn the_engagement_distances_are_ordered() {
-    assert!(TackleEngagement::CONTACT < TackleEngagement::COMMIT);
-    assert!(TackleEngagement::COMMIT < TackleEngagement::DISENGAGE);
+    const { assert!(TackleEngagement::CONTACT < TackleEngagement::COMMIT) };
+    const { assert!(TackleEngagement::COMMIT < TackleEngagement::DISENGAGE) };
 }
 
 // ── The doors ─────────────────────────────────────────────────────────

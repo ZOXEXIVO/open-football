@@ -133,7 +133,7 @@ impl StuckCareerScan {
         // his standing here. Homegrown players have no floor.
         let join_year_floor = Self::club_tenure_days(player, today)
             .map(|d| (today - Duration::days(d)).year() as u16);
-        let at_club = |year: u16| join_year_floor.map_or(true, |floor| year >= floor);
+        let at_club = |year: u16| join_year_floor.is_none_or(|floor| year >= floor);
 
         // The anchor deliberately still considers every league row,
         // including the parked squad's: a player who has spent two years

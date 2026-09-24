@@ -52,7 +52,7 @@ impl StateProcessingHandler for DefenderPassingState {
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
+                    PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(target.id)
                         .with_reason("DEF_COUNTER_ATTACK")
@@ -84,7 +84,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(safe_option.id)
                             .with_reason("DEF_PASSING_UNDER_PRESSURE")
@@ -101,25 +101,24 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // If teammates are tired, prefer a safe short pass
-        if self.are_teammates_tired(ctx) {
-            if let Some(safe_target) = ctx
+        if self.are_teammates_tired(ctx)
+            && let Some(safe_target) = ctx
                 .player()
                 .passing()
                 .find_safe_pass_option_with_distance(100.0)
-            {
-                let dist = (safe_target.position - ctx.player.position).magnitude();
-                if dist >= 20.0 {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(safe_target.id)
-                                .with_reason("DEF_PASSING_TIRED_SHORT")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+        {
+            let dist = (safe_target.position - ctx.player.position).magnitude();
+            if dist >= 20.0 {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe_target.id)
+                            .with_reason("DEF_PASSING_TIRED_SHORT")
+                            .build(ctx),
+                    )),
+                ));
             }
         }
 
@@ -144,7 +143,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(best_target.id)
                             .with_reason("DEF_PASSING_NORMAL")
@@ -171,7 +170,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(safe.id)
                             .with_reason("DEF_DANGEROUS_SAFE_PASS")
@@ -208,7 +207,7 @@ impl StateProcessingHandler for DefenderPassingState {
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(safe_target.id)
                                 .with_reason("DEF_PASSING_TIMEOUT")

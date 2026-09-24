@@ -3,7 +3,7 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, player_from_slug, resolve_player_page};
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, EventI18n, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -46,7 +46,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
@@ -238,7 +238,7 @@ pub async fn player_events_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -257,7 +257,7 @@ pub async fn player_events_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -787,7 +787,7 @@ fn build_events(
     // Stable sort, so a decision, a happiness event and a note stamped the
     // same day keep the feed's own order: what the player felt, then what
     // the club put on paper, then what he made of it.
-    events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
+    events.sort_by_key(|a| a.days_ago);
     events
 }
 
@@ -1396,16 +1396,16 @@ impl SelectionRender {
         events_i18n: &EventI18n,
         lang: &str,
     ) -> DescriptionRender {
-        if let Some(comp) = ctx.comparison.as_ref() {
-            if let Some((name, slug)) = resolve_partner(data, comp.selected_player_id) {
-                let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
-                let raw = events_i18n.t(Self::headline_key_for(ctx, true));
-                let html = raw.replace("{rival}", &link);
-                return DescriptionRender {
-                    html,
-                    partner_in_headline: true,
-                };
-            }
+        if let Some(comp) = ctx.comparison.as_ref()
+            && let Some((name, slug)) = resolve_partner(data, comp.selected_player_id)
+        {
+            let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
+            let raw = events_i18n.t(Self::headline_key_for(ctx, true));
+            let html = raw.replace("{rival}", &link);
+            return DescriptionRender {
+                html,
+                partner_in_headline: true,
+            };
         }
         let html = events_i18n
             .t(Self::headline_key_for(ctx, false))
@@ -1726,8 +1726,7 @@ impl TransferInterestRender {
     ) -> (String, bool) {
         let club_link = ctx
             .interested_club_id
-            .and_then(|cid| Self::resolve_club(data, cid))
-            .map(|(name, slug)| (name, slug));
+            .and_then(|cid| Self::resolve_club(data, cid));
 
         let key = Self::headline_key(event_type, ctx, club_link.is_some());
         let raw = events_i18n.t(key);
@@ -2059,13 +2058,13 @@ impl ManagerInteractionRender {
         // family (event_manager_criticism_<reason>) — that's where the
         // football-specific copy lives ("Criticised over his pressing
         // work") and where the user reads the *what specifically*.
-        if matches!(event_type, HappinessEventType::ManagerCriticism) {
-            if let Some(reason) = ctx.criticism_reason {
-                let key = format!("event_manager_criticism_{}", reason.as_headline_token());
-                let raw = events_i18n.t(&key);
-                if raw != key {
-                    return raw.to_string();
-                }
+        if matches!(event_type, HappinessEventType::ManagerCriticism)
+            && let Some(reason) = ctx.criticism_reason
+        {
+            let key = format!("event_manager_criticism_{}", reason.as_headline_token());
+            let raw = events_i18n.t(&key);
+            if raw != key {
+                return raw.to_string();
             }
         }
         let key = format!(
@@ -2134,13 +2133,13 @@ impl ManagerInteractionRender {
                 return Some(raw.to_string());
             }
         }
-        if let Some(rating) = ctx.match_rating {
-            if rating < 6.3 {
-                let key = "manager_evidence_low_match_rating";
-                let raw = events_i18n.t(key);
-                if raw != key {
-                    return Some(raw.replace("{rating}", &format!("{:.1}", rating)));
-                }
+        if let Some(rating) = ctx.match_rating
+            && rating < 6.3
+        {
+            let key = "manager_evidence_low_match_rating";
+            let raw = events_i18n.t(key);
+            if raw != key {
+                return Some(raw.replace("{rating}", &format!("{:.1}", rating)));
             }
         }
         None
@@ -2984,21 +2983,21 @@ impl LoanRender {
                 (0, _) => Some("loan_spell_assists"),
                 _ => Some("loan_spell_goals_assists"),
             };
-            if let Some(key) = contribution_key {
-                if let Some(template) = translated(events_i18n, key) {
-                    parts.push(
-                        template
-                            .replace("{goals}", &spell.goals.to_string())
-                            .replace("{assists}", &spell.assists.to_string()),
-                    );
-                }
+            if let Some(key) = contribution_key
+                && let Some(template) = translated(events_i18n, key)
+            {
+                parts.push(
+                    template
+                        .replace("{goals}", &spell.goals.to_string())
+                        .replace("{assists}", &spell.assists.to_string()),
+                );
             }
         }
 
-        if let Some(rating) = spell.average_rating {
-            if let Some(template) = translated(events_i18n, "loan_spell_rating") {
-                parts.push(template.replace("{rating}", &format!("{:.2}", rating)));
-            }
+        if let Some(rating) = spell.average_rating
+            && let Some(template) = translated(events_i18n, "loan_spell_rating")
+        {
+            parts.push(template.replace("{rating}", &format!("{:.2}", rating)));
         }
 
         if parts.is_empty() {
@@ -3220,10 +3219,10 @@ impl PrivateTalkRender {
                 parts.push(raw.to_string());
             }
         }
-        if ctx.repeated_request {
-            if let Some(raw) = translated(events_i18n, "private_talk_repeat_note") {
-                parts.push(raw.to_string());
-            }
+        if ctx.repeated_request
+            && let Some(raw) = translated(events_i18n, "private_talk_repeat_note")
+        {
+            parts.push(raw.to_string());
         }
         if parts.is_empty() {
             return None;
@@ -3323,23 +3322,22 @@ impl BigMatchRender {
             (None, Some(k)) => parts.push(k.to_string()),
             _ => {}
         }
-        if ctx.was_captain {
-            if let Some(raw) = translated(events_i18n, "big_match_amplifier_captain") {
-                parts.push(raw.to_string());
-            }
+        if ctx.was_captain
+            && let Some(raw) = translated(events_i18n, "big_match_amplifier_captain")
+        {
+            parts.push(raw.to_string());
         }
         if ctx.recent_hot_form
             && matches!(ctx.decision, core::BigMatchDecision::BenchedUnexpectedly)
+            && let Some(raw) = translated(events_i18n, "big_match_amplifier_hot_form_dropped")
         {
-            if let Some(raw) = translated(events_i18n, "big_match_amplifier_hot_form_dropped") {
-                parts.push(raw.to_string());
-            }
+            parts.push(raw.to_string());
         }
-        if ctx.is_young_or_fringe && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
+        if ctx.is_young_or_fringe
+            && matches!(ctx.decision, core::BigMatchDecision::StartedTrusted)
+            && let Some(raw) = translated(events_i18n, "big_match_amplifier_young_or_fringe")
         {
-            if let Some(raw) = translated(events_i18n, "big_match_amplifier_young_or_fringe") {
-                parts.push(raw.to_string());
-            }
+            parts.push(raw.to_string());
         }
         if parts.is_empty() {
             return None;
@@ -3396,10 +3394,10 @@ impl SubFrustrationRender {
             }
             _ => {}
         }
-        if ctx.recent_early_hooks >= 3 {
-            if let Some(raw) = translated(events_i18n, "sub_frustration_repeat_note") {
-                parts.push(raw.to_string());
-            }
+        if ctx.recent_early_hooks >= 3
+            && let Some(raw) = translated(events_i18n, "sub_frustration_repeat_note")
+        {
+            parts.push(raw.to_string());
         }
         if parts.is_empty() {
             return None;
@@ -3468,158 +3466,154 @@ impl<'a> HeadlineDispatcher<'a> {
         // Selection comes first: MatchDropped's selection_context is the
         // primary signal, but the event-type predicate is narrow so it
         // wouldn't accidentally catch other dropped-from-squad cousins.
-        if matches!(ev, HappinessEventType::MatchDropped) {
-            if let Some(sel) = ctx.selection_context.as_ref() {
-                let h = SelectionRender::headline(
-                    sel,
-                    self.simulator_data,
-                    self.events_i18n,
-                    self.lang,
-                );
-                return Some((h.html, h.partner_in_headline));
+        if matches!(ev, HappinessEventType::MatchDropped)
+            && let Some(sel) = ctx.selection_context.as_ref()
+        {
+            let h =
+                SelectionRender::headline(sel, self.simulator_data, self.events_i18n, self.lang);
+            return Some((h.html, h.partner_in_headline));
+        }
+        if SupportRender::handles(ev)
+            && let Some(s) = ctx.support_context.as_ref()
+        {
+            return Some((SupportRender::headline(ev, s, self.events_i18n), false));
+        }
+        if TransferInterestRender::handles(ev)
+            && let Some(tic) = ctx.transfer_interest_context.as_ref()
+        {
+            let (html, _named) = TransferInterestRender::headline(
+                ev,
+                tic,
+                self.simulator_data,
+                self.events_i18n,
+                self.lang,
+            );
+            return Some((html, false));
+        }
+        if TrainingRender::handles(ev)
+            && let Some(tc) = ctx.training_context.as_ref()
+        {
+            return Some((TrainingRender::headline(tc, self.events_i18n), false));
+        }
+        if ManagerInteractionRender::handles(ev)
+            && let Some(mc) = ctx.manager_interaction_context.as_ref()
+        {
+            return Some((
+                ManagerInteractionRender::headline(ev, mc, self.events_i18n),
+                false,
+            ));
+        }
+        if ContractRender::handles(ev)
+            && let Some(cc) = ctx.contract_context.as_ref()
+        {
+            return Some((ContractRender::headline(cc, self.events_i18n), false));
+        }
+        if InjuryRecoveryRender::handles(ev)
+            && let Some(ic) = ctx.injury_context.as_ref()
+        {
+            return Some((InjuryRecoveryRender::headline(ic, self.events_i18n), false));
+        }
+        if MatchPerformanceRender::handles(ev)
+            && let Some(mp) = ctx.match_performance_context.as_ref()
+        {
+            return Some((
+                MatchPerformanceRender::headline(ev, mp, self.events_i18n),
+                false,
+            ));
+        }
+        if RoleStatusRender::handles(ev)
+            && let Some(rc) = ctx.role_status_context.as_ref()
+        {
+            return Some((RoleStatusRender::headline(rc, self.events_i18n), false));
+        }
+        if NationalTeamRender::handles(ev)
+            && let Some(nt) = ctx.national_team_context.as_ref()
+        {
+            return Some((NationalTeamRender::headline(nt, self.events_i18n), false));
+        }
+        if LeadershipRender::handles(ev)
+            && let Some(lc) = ctx.leadership_context.as_ref()
+        {
+            return Some((LeadershipRender::headline(lc, self.events_i18n), false));
+        }
+        if MediaFanRender::handles(ev)
+            && let Some(mf) = ctx.media_fan_context.as_ref()
+        {
+            return Some((MediaFanRender::headline(mf, self.events_i18n), false));
+        }
+        if PersonalAdaptationRender::handles(ev)
+            && let Some(pa) = ctx.personal_adaptation_context.as_ref()
+        {
+            return Some((
+                PersonalAdaptationRender::headline(pa, self.events_i18n),
+                false,
+            ));
+        }
+        if CareerDesireRender::handles(ev)
+            && let Some(cd) = ctx.career_desire_context.as_ref()
+        {
+            return Some((CareerDesireRender::headline(cd, self.events_i18n), false));
+        }
+        if CareerStageRender::handles(ev)
+            && let Some(cs) = ctx.career_stage_context.as_ref()
+        {
+            return Some((CareerStageRender::headline(cs, self.events_i18n), false));
+        }
+        if LifeSimulationRender::handles(ev)
+            && let Some(ls) = ctx.life_simulation_desire_context.as_ref()
+        {
+            return Some((LifeSimulationRender::headline(ls, self.events_i18n), false));
+        }
+        if LoanRender::handles(ev)
+            && let Some(lc) = ctx.loan_context.as_ref()
+        {
+            return Some((LoanRender::headline(lc, self.events_i18n), false));
+        }
+        if RecognitionRender::handles(ev)
+            && let Some(rc) = ctx.recognition_context.as_ref()
+        {
+            return Some((RecognitionRender::headline(ev, rc, self.events_i18n), false));
+        }
+        if SeasonOutcomeRender::handles(ev)
+            && let Some(sc) = ctx.season_outcome_context.as_ref()
+        {
+            let h = SeasonOutcomeRender::headline(sc, self.events_i18n);
+            if !h.is_empty() {
+                return Some((h, false));
             }
         }
-        if SupportRender::handles(ev) {
-            if let Some(s) = ctx.support_context.as_ref() {
-                return Some((SupportRender::headline(ev, s, self.events_i18n), false));
-            }
+        if RegulationRender::handles(ev)
+            && let Some(rc) = ctx.regulation_context.as_ref()
+        {
+            return Some((RegulationRender::headline(rc, self.events_i18n), false));
         }
-        if TransferInterestRender::handles(ev) {
-            if let Some(tic) = ctx.transfer_interest_context.as_ref() {
-                let (html, _named) = TransferInterestRender::headline(
-                    ev,
-                    tic,
-                    self.simulator_data,
-                    self.events_i18n,
-                    self.lang,
-                );
-                return Some((html, false));
-            }
+        if PrivateTalkRender::handles(ev)
+            && let Some(pt) = ctx.private_talk_context.as_ref()
+        {
+            return Some((PrivateTalkRender::headline(pt, self.events_i18n), false));
         }
-        if TrainingRender::handles(ev) {
-            if let Some(tc) = ctx.training_context.as_ref() {
-                return Some((TrainingRender::headline(tc, self.events_i18n), false));
-            }
+        if ClubDirectionRender::handles(ev)
+            && let Some(cd) = ctx.club_direction_context.as_ref()
+        {
+            return Some((ClubDirectionRender::headline(cd, self.events_i18n), false));
         }
-        if ManagerInteractionRender::handles(ev) {
-            if let Some(mc) = ctx.manager_interaction_context.as_ref() {
-                return Some((
-                    ManagerInteractionRender::headline(ev, mc, self.events_i18n),
-                    false,
-                ));
-            }
+        if BigMatchRender::handles(ev)
+            && let Some(bm) = ctx.big_match_selection_context.as_ref()
+        {
+            return Some((BigMatchRender::headline(ev, bm, self.events_i18n), false));
         }
-        if ContractRender::handles(ev) {
-            if let Some(cc) = ctx.contract_context.as_ref() {
-                return Some((ContractRender::headline(cc, self.events_i18n), false));
-            }
+        if SubFrustrationRender::handles(ev)
+            && let Some(sf) = ctx.substitution_frustration_context.as_ref()
+        {
+            return Some((SubFrustrationRender::headline(sf, self.events_i18n), false));
         }
-        if InjuryRecoveryRender::handles(ev) {
-            if let Some(ic) = ctx.injury_context.as_ref() {
-                return Some((InjuryRecoveryRender::headline(ic, self.events_i18n), false));
-            }
-        }
-        if MatchPerformanceRender::handles(ev) {
-            if let Some(mp) = ctx.match_performance_context.as_ref() {
-                return Some((
-                    MatchPerformanceRender::headline(ev, mp, self.events_i18n),
-                    false,
-                ));
-            }
-        }
-        if RoleStatusRender::handles(ev) {
-            if let Some(rc) = ctx.role_status_context.as_ref() {
-                return Some((RoleStatusRender::headline(rc, self.events_i18n), false));
-            }
-        }
-        if NationalTeamRender::handles(ev) {
-            if let Some(nt) = ctx.national_team_context.as_ref() {
-                return Some((NationalTeamRender::headline(nt, self.events_i18n), false));
-            }
-        }
-        if LeadershipRender::handles(ev) {
-            if let Some(lc) = ctx.leadership_context.as_ref() {
-                return Some((LeadershipRender::headline(lc, self.events_i18n), false));
-            }
-        }
-        if MediaFanRender::handles(ev) {
-            if let Some(mf) = ctx.media_fan_context.as_ref() {
-                return Some((MediaFanRender::headline(mf, self.events_i18n), false));
-            }
-        }
-        if PersonalAdaptationRender::handles(ev) {
-            if let Some(pa) = ctx.personal_adaptation_context.as_ref() {
-                return Some((
-                    PersonalAdaptationRender::headline(pa, self.events_i18n),
-                    false,
-                ));
-            }
-        }
-        if CareerDesireRender::handles(ev) {
-            if let Some(cd) = ctx.career_desire_context.as_ref() {
-                return Some((CareerDesireRender::headline(cd, self.events_i18n), false));
-            }
-        }
-        if CareerStageRender::handles(ev) {
-            if let Some(cs) = ctx.career_stage_context.as_ref() {
-                return Some((CareerStageRender::headline(cs, self.events_i18n), false));
-            }
-        }
-        if LifeSimulationRender::handles(ev) {
-            if let Some(ls) = ctx.life_simulation_desire_context.as_ref() {
-                return Some((LifeSimulationRender::headline(ls, self.events_i18n), false));
-            }
-        }
-        if LoanRender::handles(ev) {
-            if let Some(lc) = ctx.loan_context.as_ref() {
-                return Some((LoanRender::headline(lc, self.events_i18n), false));
-            }
-        }
-        if RecognitionRender::handles(ev) {
-            if let Some(rc) = ctx.recognition_context.as_ref() {
-                return Some((RecognitionRender::headline(ev, rc, self.events_i18n), false));
-            }
-        }
-        if SeasonOutcomeRender::handles(ev) {
-            if let Some(sc) = ctx.season_outcome_context.as_ref() {
-                let h = SeasonOutcomeRender::headline(sc, self.events_i18n);
-                if !h.is_empty() {
-                    return Some((h, false));
-                }
-            }
-        }
-        if RegulationRender::handles(ev) {
-            if let Some(rc) = ctx.regulation_context.as_ref() {
-                return Some((RegulationRender::headline(rc, self.events_i18n), false));
-            }
-        }
-        if PrivateTalkRender::handles(ev) {
-            if let Some(pt) = ctx.private_talk_context.as_ref() {
-                return Some((PrivateTalkRender::headline(pt, self.events_i18n), false));
-            }
-        }
-        if ClubDirectionRender::handles(ev) {
-            if let Some(cd) = ctx.club_direction_context.as_ref() {
-                return Some((ClubDirectionRender::headline(cd, self.events_i18n), false));
-            }
-        }
-        if BigMatchRender::handles(ev) {
-            if let Some(bm) = ctx.big_match_selection_context.as_ref() {
-                return Some((BigMatchRender::headline(ev, bm, self.events_i18n), false));
-            }
-        }
-        if SubFrustrationRender::handles(ev) {
-            if let Some(sf) = ctx.substitution_frustration_context.as_ref() {
-                return Some((SubFrustrationRender::headline(sf, self.events_i18n), false));
-            }
-        }
-        if NewSigningThreatRender::handles(ev) {
-            if let Some(nt) = ctx.new_signing_threat_context.as_ref() {
-                return Some((
-                    NewSigningThreatRender::headline(nt, self.events_i18n),
-                    false,
-                ));
-            }
+        if NewSigningThreatRender::handles(ev)
+            && let Some(nt) = ctx.new_signing_threat_context.as_ref()
+        {
+            return Some((
+                NewSigningThreatRender::headline(nt, self.events_i18n),
+                false,
+            ));
         }
         None
     }
@@ -3683,21 +3677,20 @@ fn build_description(
         // Conflict event with a concrete reason → reach for the specific
         // partner-aware key family ("Clashed with {partner} over training
         // standards") before the legacy generic line.
-        if matches!(event.event_type, HappinessEventType::ConflictWithTeammate) {
-            if let Some(reason_key) = event
+        if matches!(event.event_type, HappinessEventType::ConflictWithTeammate)
+            && let Some(reason_key) = event
                 .context
                 .as_ref()
                 .and_then(|c| c.teammate_conflict_context.as_ref())
                 .and_then(TeammateConflictRender::partner_named_key)
-            {
-                let raw = events_i18n.t(&reason_key);
-                if raw != reason_key {
-                    let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
-                    return DescriptionRender {
-                        html: raw.replace("{partner}", &link),
-                        partner_in_headline: true,
-                    };
-                }
+        {
+            let raw = events_i18n.t(&reason_key);
+            if raw != reason_key {
+                let link = format!(r#"<a href="/{}/players/{}">{}</a>"#, lang, slug, name);
+                return DescriptionRender {
+                    html: raw.replace("{partner}", &link),
+                    partner_in_headline: true,
+                };
             }
         }
         if let Some(named_key) = partner_named_key(&event.event_type) {

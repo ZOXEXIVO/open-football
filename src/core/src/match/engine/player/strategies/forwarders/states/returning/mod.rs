@@ -68,12 +68,12 @@ impl StateProcessingHandler for ForwardReturningState {
         // Narrower check first — the old order put the 200u Intercepting
         // branch above this one, so the close-range Tackling branch was
         // unreachable.
-        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Tackling,
-                ));
-            }
+        if let Some(carrier) = ctx.players().opponents().with_ball().next()
+            && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+        {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Tackling,
+            ));
         }
 
         // Commit at the INNER band — `Intercepting` gives up at the outer

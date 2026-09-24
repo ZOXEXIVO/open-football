@@ -296,6 +296,58 @@ impl FinancialMind {
     }
 }
 
+impl FinancialMind {
+    /// What money says about a decision. Almost never the loudest voice,
+    /// and almost never silent.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::SignContract => {
+                // The decision that looks like doing nothing. A man who
+                // has decided to run it down is not weighing the offer —
+                // he has already answered it.
+                let running_down = organs.goals.pressure_of(GoalKind::RunDownMyContract);
+                if running_down > 0.1 {
+                    reasons.push(GoalKind::RunDownMyContract, -running_down);
+                }
+                if self.fairness() < Self::AGGRIEVED {
+                    reasons.push(GoalKind::BePaidWhatImWorth, self.fairness());
+                }
+                let security = organs.goals.pressure_of(GoalKind::SecureMyFuture);
+                if security > 0.1 {
+                    reasons.push(GoalKind::SecureMyFuture, security);
+                }
+            }
+
+            MindOption::JoinClub(club_id) => {
+                let broke_word = organs
+                    .memory
+                    .believes(FactClaim::ClubBrokeItsWord, ActorRef::club(club_id));
+                if broke_word > 0.1 {
+                    reasons.push(GoalKind::BePaidWhatImWorth, -broke_word * 0.8);
+                }
+                if self.grievance() > 0.2 {
+                    // Being underpaid where he is makes anywhere else
+                    // more attractive, whatever the new club offers.
+                    reasons.push(GoalKind::BePaidWhatImWorth, self.grievance() * 0.6);
+                }
+            }
+
+            MindOption::RequestTransfer if self.refusals >= 2 => {
+                reasons.push(
+                    GoalKind::BeAllowedToLeave,
+                    (self.refusals as f32 / 4.0).min(1.0),
+                );
+            }
+
+            _ => {}
+        }
+
+        reasons
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::MindTickContext;
@@ -521,59 +573,5 @@ mod tests {
         betrayed.observe(&episode(EpisodeKind::ClubBrokeWagePromise), &mut organs);
 
         assert!(betrayed.grievance() > refused.grievance());
-    }
-}
-
-impl FinancialMind {
-    /// What money says about a decision. Almost never the loudest voice,
-    /// and almost never silent.
-    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
-
-        match option {
-            MindOption::SignContract => {
-                // The decision that looks like doing nothing. A man who
-                // has decided to run it down is not weighing the offer —
-                // he has already answered it.
-                let running_down = organs.goals.pressure_of(GoalKind::RunDownMyContract);
-                if running_down > 0.1 {
-                    reasons.push(GoalKind::RunDownMyContract, -running_down);
-                }
-                if self.fairness() < Self::AGGRIEVED {
-                    reasons.push(GoalKind::BePaidWhatImWorth, self.fairness());
-                }
-                let security = organs.goals.pressure_of(GoalKind::SecureMyFuture);
-                if security > 0.1 {
-                    reasons.push(GoalKind::SecureMyFuture, security);
-                }
-            }
-
-            MindOption::JoinClub(club_id) => {
-                let broke_word = organs
-                    .memory
-                    .believes(FactClaim::ClubBrokeItsWord, ActorRef::club(club_id));
-                if broke_word > 0.1 {
-                    reasons.push(GoalKind::BePaidWhatImWorth, -broke_word * 0.8);
-                }
-                if self.grievance() > 0.2 {
-                    // Being underpaid where he is makes anywhere else
-                    // more attractive, whatever the new club offers.
-                    reasons.push(GoalKind::BePaidWhatImWorth, self.grievance() * 0.6);
-                }
-            }
-
-            MindOption::RequestTransfer => {
-                if self.refusals >= 2 {
-                    reasons.push(
-                        GoalKind::BeAllowedToLeave,
-                        (self.refusals as f32 / 4.0).min(1.0),
-                    );
-                }
-            }
-
-            _ => {}
-        }
-
-        reasons
     }
 }

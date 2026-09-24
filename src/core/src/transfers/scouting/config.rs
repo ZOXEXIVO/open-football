@@ -675,6 +675,7 @@ impl ScoutingConfig {
     ///       3. a fringe playing-time profile (few career games);
     ///       4. a young development prospect not yet individually prominent;
     ///       5. a contract running down (free-transfer pickup).
+    ///
     /// A first-team regular or key player the bigger club is keeping is out of
     /// reach regardless of budget.
     ///

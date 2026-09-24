@@ -103,10 +103,10 @@ impl LeagueResult {
         // crowds for the model, so they're skipped.
         if !result.friendly {
             let home_club_id = data.team(home_team_id).map(|t| t.club_id);
-            if let Some(club_id) = home_club_id {
-                if let Some(home_club) = data.club_mut(club_id) {
-                    home_club.finance.record_home_match();
-                }
+            if let Some(club_id) = home_club_id
+                && let Some(home_club) = data.club_mut(club_id)
+            {
+                home_club.finance.record_home_match();
             }
         }
         // Pull the per-side final tactic the engine recorded — captures
@@ -135,7 +135,7 @@ impl LeagueResult {
 
         let home_team = data
             .team_mut(home_team_id)
-            .expect(&format!("home team not found: {}", home_team_id));
+            .unwrap_or_else(|| panic!("home team not found: {}", home_team_id));
         let mut home_item = MatchHistoryItem::new(
             now,
             // rival is the OPPONENT, not us. The legacy code stored the
@@ -158,7 +158,7 @@ impl LeagueResult {
 
         let away_team = data
             .team_mut(away_team_id)
-            .expect(&format!("away team not found: {}", away_team_id));
+            .unwrap_or_else(|| panic!("away team not found: {}", away_team_id));
         let mut away_item = MatchHistoryItem::new(
             now,
             home_team_id,

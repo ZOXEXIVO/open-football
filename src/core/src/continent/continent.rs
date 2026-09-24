@@ -249,7 +249,7 @@ impl Continent {
             .zip(state.country_pending.into_par_iter())
             .zip(per_country_results.into_par_iter())
             .map(|(((country, country_ctx), pending), results)| {
-                let message = format!("simulate country: {}", &country.name);
+                let message = format!("simulate country: {}", country.name);
                 let stage = PerformanceProfiler::stage_scope("country_process", 1)
                     .labelled(|| country.name.clone());
                 let output = Logging::estimate_result(

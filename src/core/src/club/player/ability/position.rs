@@ -580,9 +580,9 @@ impl PlayerPositions {
         let mut result: Vec<String> = Vec::new();
 
         for group in GROUPS {
-            let has_center = !group.center.is_empty() && names.iter().any(|n| *n == group.center);
-            let has_left = names.iter().any(|n| *n == group.left);
-            let has_right = names.iter().any(|n| *n == group.right);
+            let has_center = !group.center.is_empty() && names.contains(&group.center);
+            let has_left = names.contains(&group.left);
+            let has_right = names.contains(&group.right);
 
             let count = has_center as u8 + has_left as u8 + has_right as u8;
             if count < 2 {
@@ -614,9 +614,9 @@ impl PlayerPositions {
                 sides.push('R');
             }
 
-            if sides.is_empty() {
-                result.push(group.base.to_string());
-            } else if has_center && group.center == group.base && !has_left && !has_right {
+            if sides.is_empty()
+                || (has_center && group.center == group.base && !has_left && !has_right)
+            {
                 result.push(group.base.to_string());
             } else {
                 result.push(format!("{}({})", group.base, sides));

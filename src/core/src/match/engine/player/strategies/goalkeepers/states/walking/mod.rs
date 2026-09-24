@@ -18,12 +18,12 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Shot in flight at our goal — break off walking and commit
         // to the save.
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
-            if Some(target.defending_side) == ctx.player.side {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::PreparingForSave,
-                ));
-            }
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target
+            && Some(target.defending_side) == ctx.player.side
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
         }
 
         // **The ball is at a man's feet inside his own spread — take it.**

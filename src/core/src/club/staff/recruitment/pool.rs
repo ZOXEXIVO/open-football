@@ -176,7 +176,7 @@ mod tests {
     use chrono::{Datelike, NaiveDate};
 
     fn make_staff(id: u32, age: u8, today: NaiveDate) -> Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = id;
         staff.birth_date = NaiveDate::from_ymd_opt(today.year() - age as i32, 1, 1).unwrap();
         staff

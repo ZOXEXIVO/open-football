@@ -173,26 +173,27 @@ impl FansDesk {
         // from the table. Both halves need the ground to agree with the
         // standings — a top-two side whose crowd is not enjoying it is
         // not a promotion-fever story, it is a different one entirely.
-        if let Some(standing) = mood.standing {
-            if standing.teams > 0 && standing.progress() >= Self::LATE_SEASON {
-                if standing.position <= 2 && pulse.is_widespread(pulse.fan_praise) {
-                    out.push(
-                        NewsStory::new(NewsStoryKind::PromotionFever, date)
-                            .with_numbers(standing.position as i32, standing.points as i32)
-                            .weighted((standing.progress() * 60.0) as i32),
-                    );
-                    return;
-                }
+        if let Some(standing) = mood.standing
+            && standing.teams > 0
+            && standing.progress() >= Self::LATE_SEASON
+        {
+            if standing.position <= 2 && pulse.is_widespread(pulse.fan_praise) {
+                out.push(
+                    NewsStory::new(NewsStoryKind::PromotionFever, date)
+                        .with_numbers(standing.position as i32, standing.points as i32)
+                        .weighted((standing.progress() * 60.0) as i32),
+                );
+                return;
+            }
 
-                let drop_edge = standing.teams.saturating_sub(3);
-                if standing.position > drop_edge && pulse.is_widespread(pulse.fan_criticism) {
-                    out.push(
-                        NewsStory::new(NewsStoryKind::RelegationDread, date)
-                            .with_numbers(standing.position as i32, standing.points as i32)
-                            .weighted((standing.progress() * 70.0) as i32),
-                    );
-                    return;
-                }
+            let drop_edge = standing.teams.saturating_sub(3);
+            if standing.position > drop_edge && pulse.is_widespread(pulse.fan_criticism) {
+                out.push(
+                    NewsStory::new(NewsStoryKind::RelegationDread, date)
+                        .with_numbers(standing.position as i32, standing.points as i32)
+                        .weighted((standing.progress() * 70.0) as i32),
+                );
+                return;
             }
         }
 

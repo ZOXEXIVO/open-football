@@ -137,12 +137,11 @@ impl GoalkeeperClearingState {
         // the highest ball in football — 20 m at the top of the arc is
         // normal, and a better striker of the ball gets it higher.
         let apex_metres = 16.0 + kicking_power * 8.0; // 16 - 24 m
-        let launch_height = ctx
-            .tick_context
-            .ball
-            .held_in_hands
-            .then_some(1.15)
-            .unwrap_or(0.0);
+        let launch_height = if ctx.tick_context.ball.held_in_hands {
+            1.15
+        } else {
+            0.0
+        };
         let ball_velocity = Ball::ballistic_launch(keeper_pos, target, apex_metres, launch_height)?;
 
         #[cfg(feature = "match-logs")]

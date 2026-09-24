@@ -20,11 +20,7 @@ pub(crate) struct MondayAwardCache {
 
 impl MondayAwardCache {
     pub(crate) fn build(data: &SimulatorData, week_start: NaiveDate, week_end: NaiveDate) -> Self {
-        let entries: Vec<(
-            u32,
-            HashMap<u32, WeeklyAggregate>,
-            HashMap<u32, CandidateAggregate>,
-        )> = data
+        let entries: Vec<_> = data
             .continents
             .par_iter()
             .flat_map(|c| c.countries.par_iter())

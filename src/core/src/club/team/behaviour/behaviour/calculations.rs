@@ -226,25 +226,22 @@ impl TeamBehaviour {
     ) -> bool {
         use PlayerPositionType::*;
 
-        match (pos_a, pos_b) {
+        matches!(
+            (pos_a, pos_b),
             (
                 DefenderCenter | DefenderLeft | DefenderRight,
                 MidfielderCenter | MidfielderLeft | MidfielderRight | DefensiveMidfielder,
-            ) => true,
-            (
+            ) | (
                 MidfielderCenter | MidfielderLeft | MidfielderRight | AttackingMidfielderCenter,
                 Striker | ForwardLeft | ForwardRight | ForwardCenter,
-            ) => true,
-            (
+            ) | (
                 MidfielderCenter | MidfielderLeft | MidfielderRight | DefensiveMidfielder,
                 DefenderCenter | DefenderLeft | DefenderRight,
-            ) => true,
-            (
+            ) | (
                 Striker | ForwardLeft | ForwardRight | ForwardCenter,
                 MidfielderCenter | MidfielderLeft | MidfielderRight | AttackingMidfielderCenter,
-            ) => true,
-            _ => false,
-        }
+            )
+        )
     }
 
     pub(super) fn calculate_age_relationship_factor(age_a: u8, age_b: u8, age_diff: i32) -> f32 {
@@ -376,7 +373,7 @@ impl TeamBehaviour {
             (leader.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
         let effective_leadership = leadership_strength * (1.0 + rep_boost * 0.5);
 
-        let influence = match player.behaviour.state {
+        match player.behaviour.state {
             PersonBehaviourState::Good => effective_leadership * 0.15,
             PersonBehaviourState::Normal => effective_leadership * 0.08,
             PersonBehaviourState::Poor => {
@@ -386,9 +383,7 @@ impl TeamBehaviour {
                     -effective_leadership * 0.08
                 }
             }
-        };
-
-        influence
+        }
     }
 
     pub(super) fn calculate_playing_time_jealousy(

@@ -34,10 +34,9 @@ impl ManagerSeat {
         if let Some(caretaker) = team
             .staffs
             .find_mut_by_position(StaffPosition::CaretakerManager)
+            && let Some(c) = caretaker.contract.as_mut()
         {
-            if let Some(c) = caretaker.contract.as_mut() {
-                c.position = StaffPosition::Coach;
-            }
+            c.position = StaffPosition::Coach;
         }
     }
 
@@ -152,10 +151,8 @@ impl ManagerSeat {
                 .map(|c| matches!(c.position, StaffPosition::Manager))
                 .unwrap_or(false)
                 && staff.id != keep_id;
-            if is_extra_manager {
-                if let Some(c) = staff.contract.as_mut() {
-                    c.position = StaffPosition::Coach;
-                }
+            if is_extra_manager && let Some(c) = staff.contract.as_mut() {
+                c.position = StaffPosition::Coach;
             }
         }
     }
@@ -169,7 +166,7 @@ impl ManagerSeat {
     pub fn install_emergency_caretaker(team: &mut Team, club_id: u32, today: NaiveDate) {
         let caretaker_id = Self::EMERGENCY_CARETAKER_ID_BASE.saturating_add(club_id);
 
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = caretaker_id;
         staff.full_name = FullName::new("Interim".to_string(), "Coach".to_string());
         staff.job_satisfaction = 50.0;

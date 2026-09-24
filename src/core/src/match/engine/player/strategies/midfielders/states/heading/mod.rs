@@ -149,7 +149,7 @@ impl StateProcessingHandler for MidfielderHeadingState {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::new()
+                    ShootingEventContext::builder()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().shooting_direction())
                         .with_reason("MID_HEADER_ON_GOAL")
@@ -163,7 +163,7 @@ impl StateProcessingHandler for MidfielderHeadingState {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::new()
+                    ShootingEventContext::builder()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().clearing_direction())
                         .with_reason("MID_HEADED_CLEARANCE")

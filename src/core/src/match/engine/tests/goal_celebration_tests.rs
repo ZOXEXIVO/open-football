@@ -58,9 +58,11 @@ pub(super) fn squad(team_id: u32, base_id: u32) -> MatchSquad {
         .iter()
         .enumerate()
         .map(|(index, position)| {
-            let mut attributes = PlayerAttributes::default();
-            attributes.condition = 9000;
-            attributes.current_ability = 150;
+            let attributes = PlayerAttributes {
+                condition: 9000,
+                current_ability: 150,
+                ..Default::default()
+            };
             // A footballer, not a default-constructed struct: every
             // physical attribute the movement model reads is on the 1..20
             // scale it is specified on. `PlayerSkills::default()` leaves

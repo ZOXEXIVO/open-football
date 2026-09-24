@@ -52,12 +52,12 @@ impl StateProcessingHandler for DefenderReturningState {
         // jogging back to his kickoff slot while the man he has been
         // given runs past him is the whole of "attackers in our third
         // with nobody within three metres".
-        if let Some(man) = ctx.team().my_mark() {
-            if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                ));
-            }
+        if let Some(man) = ctx.team().my_mark()
+            && (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Marking,
+            ));
         }
 
         if ctx.team().distance_from_anchor() < 10.0 {

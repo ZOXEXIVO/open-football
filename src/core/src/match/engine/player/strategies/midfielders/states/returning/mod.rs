@@ -84,14 +84,14 @@ impl StateProcessingHandler for MidfielderReturningState {
         // plan from fifteen metres was left alone while his marker jogged
         // back to a slot. Measured: 30% of every marking duty in the game
         // was held by somebody in a recovery state, acting on none of it.
-        if ctx.in_state_time > 30 && !ctx.team().is_control_ball() {
-            if let Some(man) = ctx.team().my_mark() {
-                if (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Guarding,
-                    ));
-                }
-            }
+        if ctx.in_state_time > 30
+            && !ctx.team().is_control_ball()
+            && let Some(man) = ctx.team().my_mark()
+            && (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Guarding,
+            ));
         }
         if ctx.in_state_time > 30
             && !ctx.team().is_control_ball()

@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -16,6 +16,7 @@ use core::transfers::{
 use core::utils::FormattingUtils;
 use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
+use std::cmp::Reverse;
 
 #[derive(Deserialize)]
 pub struct PlayerTransfersRequest {
@@ -279,7 +280,7 @@ pub async fn player_transfers_action(
         asking_price: player
             .contract
             .as_ref()
-            .filter(|_| transfer_related.iter().any(|s| *s == PlayerStatusType::Lst))
+            .filter(|_| transfer_related.contains(&PlayerStatusType::Lst))
             .map(|_| FormattingUtils::format_money(player.value(now, league_rep, club_rep) * 1.2))
             .unwrap_or_default(),
         status_keys: transfer_related
@@ -428,7 +429,7 @@ pub async fn player_transfers_action(
                 )
             })
             .collect();
-        transfers.sort_by(|a, b| b.0.cmp(&a.0));
+        transfers.sort_by_key(|t| Reverse(t.0));
         // Deduplicate cross-country transfers (stored in both countries' histories)
         transfers.dedup_by(|a, b| {
             a.0 == b.0
@@ -460,7 +461,7 @@ pub async fn player_transfers_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -479,7 +480,7 @@ pub async fn player_transfers_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -520,7 +521,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;

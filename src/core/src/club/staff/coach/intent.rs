@@ -125,17 +125,17 @@ impl PlayerMatchIntent {
 
         // The borrower is accountable for the spell's agreed appearances,
         // even when no separate conversation promise has been recorded.
-        if let Some(loan) = player.contract_loan.as_ref() {
-            if let (Some(start), Some(target)) = (loan.started, loan.loan_min_appearances) {
-                if date >= start && date <= loan.expiration && usage.appearances < target {
-                    let span = (loan.expiration - start).num_days().max(1) as f32;
-                    let elapsed = (date - start).num_days().max(0) as f32;
-                    let due = (f32::from(target) * ((elapsed + 7.0) / span).min(1.0))
-                        .min(f32::from(usage.eligible.saturating_add(1)));
-                    intent.loan_opportunity =
-                        ((due - f32::from(usage.appearances)) / 3.0).clamp(0.0, 0.8);
-                }
-            }
+        if let Some(loan) = player.contract_loan.as_ref()
+            && let (Some(start), Some(target)) = (loan.started, loan.loan_min_appearances)
+            && date >= start
+            && date <= loan.expiration
+            && usage.appearances < target
+        {
+            let span = (loan.expiration - start).num_days().max(1) as f32;
+            let elapsed = (date - start).num_days().max(0) as f32;
+            let due = (f32::from(target) * ((elapsed + 7.0) / span).min(1.0))
+                .min(f32::from(usage.eligible.saturating_add(1)));
+            intent.loan_opportunity = ((due - f32::from(usage.appearances)) / 3.0).clamp(0.0, 0.8);
         }
         // Exit decisions suspend discretionary development, while formal
         // commitments retain their own bounded pressure and consequences.
@@ -214,7 +214,7 @@ mod tests {
             .unwrap()
     }
     fn coach() -> Staff {
-        let mut c = StaffStub::default();
+        let mut c = StaffStub::build();
         c.id = 7;
         c
     }

@@ -19,6 +19,12 @@ pub struct MatchTime {
     pub time: u64,
 }
 
+impl Default for MatchTime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchTime {
     pub fn new() -> Self {
         MatchTime { time: 0 }

@@ -82,7 +82,7 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::AttackingCorner,
                     Event::PlayerEvent(PlayerEvent::Shoot(
-                        ShootingEventContext::new()
+                        ShootingEventContext::builder()
                             .with_player_id(ctx.player.id)
                             .with_target(ctx.player().shooting_direction())
                             .with_reason("DEF_CORNER_HEADER")

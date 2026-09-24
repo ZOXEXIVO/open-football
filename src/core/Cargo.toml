@@ -44,3 +44,6 @@ deunicode = "1.6"
 # (player/team resolution, per-player relations) don't need that and the
 # world is iteration-order-independent, so FxHash is a safe drop-in.
 rustc-hash = "2.1.3"
+
+[lints]
+workspace = true

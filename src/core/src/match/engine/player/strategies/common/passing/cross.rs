@@ -384,7 +384,7 @@ impl CrossModel {
                 lane_quality,
             };
 
-            if best.as_ref().map_or(true, |(_, bs)| score > *bs) {
+            if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
                 best = Some((candidate, score));
             }
         }
@@ -583,12 +583,11 @@ impl CrossModel {
     ) -> Option<MatchPlayerLite> {
         let mut best: Option<(MatchPlayerLite, f32)> = None;
         for opp in ctx.players().opponents().all() {
-            if let Some(full) = ctx.context.players.by_id(opp.id) {
-                if full.tactical_position.current_position.position_group()
+            if let Some(full) = ctx.context.players.by_id(opp.id)
+                && full.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper
-                {
-                    continue;
-                }
+            {
+                continue;
             }
             let dist = (opp.position - target_pos).magnitude();
             if dist > radius {

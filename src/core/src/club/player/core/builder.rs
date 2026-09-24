@@ -228,8 +228,8 @@ impl PlayerBuilder {
             home_pull: HomePull::default(),
             behaviour: self.behaviour.unwrap_or_default(),
             attributes: self.attributes.ok_or("attributes is required")?,
-            happiness: self.happiness.unwrap_or_else(PlayerHappiness::new),
-            statuses: self.statuses.unwrap_or_else(PlayerStatus::new),
+            happiness: self.happiness.unwrap_or_default(),
+            statuses: self.statuses.unwrap_or_default(),
             skills,
             contract: self.contract.unwrap_or(None),
             contract_loan: self.contract_loan.unwrap_or(None),
@@ -238,24 +238,18 @@ impl PlayerBuilder {
             preferred_foot,
             foots,
             player_attributes,
-            mailbox: self.mailbox.unwrap_or_else(PlayerMailbox::new),
-            training: self.training.unwrap_or_else(PlayerTraining::new),
-            training_history: self
-                .training_history
-                .unwrap_or_else(PlayerTrainingHistory::new),
-            relations: self.relations.unwrap_or_else(Relations::new),
+            mailbox: self.mailbox.unwrap_or_default(),
+            training: self.training.unwrap_or_default(),
+            training_history: self.training_history.unwrap_or_default(),
+            relations: self.relations.unwrap_or_default(),
             statistics: self.statistics.unwrap_or_default(),
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             international_statistics: Vec::new(),
             friendly_source_slug: None,
             cup_statistics: self.cup_statistics.unwrap_or_default(),
             cup_statistics_by_competition: Vec::new(),
-            statistics_history: self
-                .statistics_history
-                .unwrap_or_else(PlayerStatisticsHistory::new),
-            decision_history: self
-                .decision_history
-                .unwrap_or_else(PlayerDecisionHistory::new),
+            statistics_history: self.statistics_history.unwrap_or_default(),
+            decision_history: self.decision_history.unwrap_or_default(),
             mind: PlayerMind::new(),
             languages: self.languages.unwrap_or_default(),
             last_transfer_date: self.last_transfer_date,

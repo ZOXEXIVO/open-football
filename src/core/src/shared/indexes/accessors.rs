@@ -14,6 +14,10 @@ use crate::{
     Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team,
 };
 use chrono::NaiveDate;
+use std::cmp::Reverse;
+
+/// `(competition_i18n_key, home_club_id, away_club_id, date, match_id, result)`.
+pub type ContinentalMatchRow<'a> = (&'a str, u32, u32, NaiveDate, &'a str, Option<(u8, u8)>);
 
 /// One row in the player-transfers UI showing who is watching a player.
 /// Cheap to clone (small fixed fields plus a couple of strings) — built
@@ -323,10 +327,9 @@ impl SimulatorData {
                 .get(ci)
                 .and_then(|c| c.countries.get(coi))
                 .and_then(|c| c.leagues.leagues.get(li))
+                && league.id == id
             {
-                if league.id == id {
-                    return Some(league);
-                }
+                return Some(league);
             }
         }
 
@@ -461,11 +464,7 @@ impl SimulatorData {
 
     /// Get all continental competition matches (CL, EL, Conference, Copa
     /// Libertadores) for a club.
-    /// Returns (competition_i18n_key, home_club_id, away_club_id, date, match_id, result).
-    pub fn continental_matches_for_club(
-        &self,
-        club_id: u32,
-    ) -> Vec<(&str, u32, u32, NaiveDate, &str, Option<(u8, u8)>)> {
+    pub fn continental_matches_for_club(&self, club_id: u32) -> Vec<ContinentalMatchRow<'_>> {
         let Some(continent) = self.continent_by_club(club_id) else {
             return Vec::new();
         };
@@ -537,10 +536,9 @@ impl SimulatorData {
                 .get(ci)
                 .and_then(|c| c.countries.get(coi))
                 .and_then(|c| c.clubs.get(cli))
+                && club.id == id
             {
-                if club.id == id {
-                    return Some(club);
-                }
+                return Some(club);
             }
         }
 
@@ -604,10 +602,9 @@ impl SimulatorData {
                 .and_then(|c| c.countries.get(coi))
                 .and_then(|c| c.clubs.get(cli))
                 .and_then(|c| c.teams.teams.get(ti))
+                && team.id == id
             {
-                if team.id == id {
-                    return Some(team);
-                }
+                return Some(team);
             }
         }
 
@@ -709,10 +706,9 @@ impl SimulatorData {
                 .and_then(|c| c.countries.get(coi))
                 .and_then(|c| c.clubs.get(cli))
                 .and_then(|c| c.teams.teams.get(ti))
+                && let Some(player) = team.players.find(player_id)
             {
-                if let Some(player) = team.players.find(player_id) {
-                    return Some((player, team));
-                }
+                return Some((player, team));
             }
         }
 
@@ -807,10 +803,9 @@ impl SimulatorData {
                 .and_then(|c| c.countries.get(coi))
                 .and_then(|c| c.clubs.get(cli))
                 .and_then(|c| c.teams.teams.get(ti))
+                && team.players.contains(id)
             {
-                if team.players.contains(id) {
-                    return Some((ci, coi, cli, ti));
-                }
+                return Some((ci, coi, cli, ti));
             }
         }
 
@@ -1026,33 +1021,31 @@ impl SimulatorData {
                     // Drop out-of-reach watchers (e.g. a 4th-tier side tracking
                     // a top-club first-teamer) — unless a real negotiation is
                     // already underway, which is always shown.
-                    if !in_negotiation {
-                        if let Some(rt) = &player_realism {
-                            let buyer_world_rep = club
-                                .teams
-                                .teams
-                                .iter()
-                                .find(|t| matches!(t.team_type, TeamType::Main))
-                                .map(|t| t.reputation.world as i16)
-                                .unwrap_or(0);
-                            // Real fee headroom (transfer budget × the
-                            // negotiation fee-gate multiplier) so a well-funded
-                            // watcher isn't dropped merely for out-ranking the
-                            // seller on reputation — matches the negotiation's
-                            // budget-based fee gate.
-                            let buyer_fee_capacity = club
-                                .finance
-                                .transfer_budget
-                                .as_ref()
-                                .map(|b| b.amount * 1.40)
-                                .unwrap_or(0.0);
-                            if !scouting_cfg.is_target_realistic_fields(
-                                buyer_world_rep,
-                                rt,
-                                buyer_fee_capacity,
-                            ) {
-                                continue;
-                            }
+                    if !in_negotiation && let Some(rt) = &player_realism {
+                        let buyer_world_rep = club
+                            .teams
+                            .teams
+                            .iter()
+                            .find(|t| matches!(t.team_type, TeamType::Main))
+                            .map(|t| t.reputation.world as i16)
+                            .unwrap_or(0);
+                        // Real fee headroom (transfer budget × the
+                        // negotiation fee-gate multiplier) so a well-funded
+                        // watcher isn't dropped merely for out-ranking the
+                        // seller on reputation — matches the negotiation's
+                        // budget-based fee gate.
+                        let buyer_fee_capacity = club
+                            .finance
+                            .transfer_budget
+                            .as_ref()
+                            .map(|b| b.amount * 1.40)
+                            .unwrap_or(0.0);
+                        if !scouting_cfg.is_target_realistic_fields(
+                            buyer_world_rep,
+                            rt,
+                            buyer_fee_capacity,
+                        ) {
+                            continue;
                         }
                     }
 
@@ -1151,7 +1144,7 @@ impl SimulatorData {
                     if rows.is_empty() {
                         continue;
                     }
-                    rows.sort_by(|a, b| b.last_observed.cmp(&a.last_observed));
+                    rows.sort_by_key(|r| Reverse(r.last_observed));
                     for m in rows {
                         let player = self.player(m.player_id);
                         let player_name = player
@@ -1614,10 +1607,10 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
             scout_set.insert(m.scout_staff_id);
         }
         for a in &plan.scouting_assignments {
-            if !a.completed {
-                if let Some(id) = a.scout_staff_id {
-                    scout_set.insert(id);
-                }
+            if !a.completed
+                && let Some(id) = a.scout_staff_id
+            {
+                scout_set.insert(id);
             }
         }
         ScoutingSummary {
@@ -1954,7 +1947,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                 }
             })
             .collect();
-        match_assignments.sort_by(|a, b| b.last_attended.cmp(&a.last_attended));
+        match_assignments.sort_by_key(|r| Reverse(r.last_attended));
 
         (scouting_assignments, match_assignments)
     }
@@ -2023,7 +2016,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                 }
             })
             .collect();
-        rows.sort_by(|a, b| b.date.cmp(&a.date));
+        rows.sort_by_key(|r| Reverse(r.date));
         rows
     }
 
@@ -2067,7 +2060,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                 }
             })
             .collect();
-        rows.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
+        rows.sort_by_key(|r| Reverse(r.last_seen));
         rows
     }
 
@@ -2104,7 +2097,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                 }
             })
             .collect();
-        rows.sort_by(|a, b| b.recorded_on.cmp(&a.recorded_on));
+        rows.sort_by_key(|r| Reverse(r.recorded_on));
         rows
     }
 
@@ -2211,12 +2204,14 @@ mod interested_clubs_tests {
         }
 
         fn maximenko_with_expiry(expiration: NaiveDate) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 165;
-            attrs.potential_ability = 170;
-            attrs.world_reputation = 3000;
-            attrs.current_reputation = 6000;
-            attrs.home_reputation = 6500;
+            let attrs = PlayerAttributes {
+                current_ability: 165,
+                potential_ability: 170,
+                world_reputation: 3000,
+                current_reputation: 6000,
+                home_reputation: 6500,
+                ..Default::default()
+            };
             let mut contract = PlayerClubContract::new(700_000, expiration);
             contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
             PlayerBuilder::new()

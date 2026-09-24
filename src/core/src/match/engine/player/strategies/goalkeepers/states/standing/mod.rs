@@ -31,12 +31,12 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         // ball→keeper can be ~30°, cosine < 0.6). The cached target is
         // set precisely so the keeper has a deterministic intercept
         // line; honour it.
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
-            if Some(target.defending_side) == ctx.player.side {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::PreparingForSave,
-                ));
-            }
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target
+            && Some(target.defending_side) == ctx.player.side
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
         }
 
         // Close slow ball. A keeper who can legally use their hands does

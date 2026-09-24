@@ -272,10 +272,10 @@ impl ThroughBall {
         // may not already be beyond it. Rejecting here rather than
         // shortening the ball is deliberate — a man who has strayed
         // offside is not an option, he is a problem for him to solve.
-        if let Some(line_x) = offside_line {
-            if OffsideLine::is_beyond(side, runner_pos.x, ball_x, line_x) {
-                return None;
-            }
+        if let Some(line_x) = offside_line
+            && OffsideLine::is_beyond(side, runner_pos.x, ball_x, line_x)
+        {
+            return None;
         }
 
         // He must be ahead of the passer to begin with. A through ball
@@ -339,10 +339,10 @@ impl ThroughBall {
         }
 
         // A ball into the keeper's arms is not a through ball.
-        if let Some(gk) = keeper {
-            if (aim - gk).magnitude() < Self::KEEPER_KEEPOUT {
-                return None;
-            }
+        if let Some(gk) = keeper
+            && (aim - gk).magnitude() < Self::KEEPER_KEEPOUT
+        {
+            return None;
         }
 
         // ── The race ─────────────────────────────────────────────────
@@ -488,8 +488,8 @@ mod tests {
     /// Rails: a through ball is neither a square ball nor a punt.
     #[test]
     fn the_range_is_a_footballing_one() {
-        assert!(ThroughBall::MIN_RANGE / U_PER_M >= 6.0);
-        assert!(ThroughBall::MAX_RANGE / U_PER_M <= 55.0);
-        assert!(ThroughBall::MIN_LEAD < ThroughBall::MAX_LEAD);
+        const { assert!(ThroughBall::MIN_RANGE / U_PER_M >= 6.0) };
+        const { assert!(ThroughBall::MAX_RANGE / U_PER_M <= 55.0) };
+        const { assert!(ThroughBall::MIN_LEAD < ThroughBall::MAX_LEAD) };
     }
 }

@@ -816,12 +816,12 @@ impl Sward {
         let turned = upkeep.mow();
         let rolled = Pass::rolled();
         let stripe = Field::LENGTH / Pitch::STRIPES as f32;
-        for line in 0..Pitch::STRIPES {
+        for (line, &roll) in rolled.iter().enumerate() {
             let from = -Field::HALF_LENGTH + stripe * line as f32;
             sward.block(
                 from,
                 from + stripe,
-                Pass::mown(line, turned, rolled[line]),
+                Pass::mown(line, turned, roll),
                 tile,
             );
         }
@@ -1195,7 +1195,7 @@ impl Sward {
         // increasing V in green, so retain that sign when passes are mirrored.
         let mut axes = vec![Vec3::ZERO; self.positions.len()];
         let mut signs = vec![0.0; self.positions.len()];
-        for triangle in self.indices.chunks_exact(3) {
+        for triangle in self.indices.as_chunks::<3>().0 {
             let [a, b, c] = [
                 triangle[0] as usize,
                 triangle[1] as usize,
@@ -2429,8 +2429,8 @@ mod tests {
         let rolled = Pass::rolled();
         let mut stripes = Vec3::ZERO;
         let mut passes = 0.0;
-        for line in 0..Pitch::STRIPES {
-            let pass = Pass::mown(line, turned(), rolled[line]);
+        for (line, &roll) in rolled.iter().enumerate() {
+            let pass = Pass::mown(line, turned(), roll);
             let back = line % 2 == 1;
             assert_eq!(
                 pass.facing,
@@ -2710,7 +2710,7 @@ mod tests {
             )
         };
 
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let corner: Vec<usize> = triangle.iter().map(|index| *index as usize).collect();
             let plan: Vec<Vec2> = corner
                 .iter()

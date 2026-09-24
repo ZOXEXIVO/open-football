@@ -57,7 +57,7 @@ impl DatabaseGenerator {
         let mut all_configs: Vec<NationalCompetitionConfig> = data
             .national_competitions
             .iter()
-            .map(|e| convert_national_competition(e))
+            .map(convert_national_competition)
             .collect();
         all_configs.push(uefa_u21_championship_config());
 

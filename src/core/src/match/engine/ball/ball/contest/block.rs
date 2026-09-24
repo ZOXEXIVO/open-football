@@ -89,6 +89,7 @@ impl Ball {
     /// Distinct from `try_intercept`:
     /// - Intercept: pass-targeted; one roll per man at his closest approach
     /// - Block:     shot-targeted; one roll per shot, a deflection
+    ///
     /// Both are scoped to unowned balls with `in_flight_state > 0`.
     pub fn try_block_shot(
         &mut self,

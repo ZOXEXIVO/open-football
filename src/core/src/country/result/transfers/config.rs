@@ -277,7 +277,7 @@ impl TransferConfig {
     /// most free-agent business is concluded. Static — depends only on the
     /// calendar month, not on any tuning value.
     pub fn is_peak_free_agent_window(date: NaiveDate) -> bool {
-        matches!(date.month(), 6 | 7 | 8)
+        matches!(date.month(), 6..=8)
     }
 
     /// Per-day request-driven free-agent signing cap, lifted during the
@@ -313,11 +313,9 @@ impl TransferConfig {
     }
 
     fn scaled_clearing_cap(&self, base: usize, club_count: usize, date: NaiveDate) -> usize {
-        let scaled = if self.clearing_cap_clubs_per_signing > 0 {
-            club_count / self.clearing_cap_clubs_per_signing
-        } else {
-            0
-        };
+        let scaled = club_count
+            .checked_div(self.clearing_cap_clubs_per_signing)
+            .unwrap_or(0);
         let mut cap = base.max(scaled);
         if Self::is_peak_free_agent_window(date) {
             cap += 1;

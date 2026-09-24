@@ -281,31 +281,6 @@ impl Playback {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// **Full time is the end of the rail and nowhere else.** The card the
-    /// replay finishes on hangs off this, and a document that claims no
-    /// duration would otherwise be at full time from the first frame — which
-    /// is a card over the whole of a match rather than after it.
-    #[test]
-    fn the_playhead_is_only_at_full_time_at_the_end_of_a_match_that_has_one() {
-        let mut playback = Playback::new(5_400_000.0);
-        assert!(!playback.at_full_time());
-        playback.seek_to(0.999);
-        assert!(!playback.at_full_time());
-        playback.seek_to(1.0);
-        assert!(playback.at_full_time());
-
-        let nothing = Playback::new(0.0);
-        assert!(
-            !nothing.at_full_time(),
-            "a document with no duration was over before it started"
-        );
-    }
-}
-
 /// Mirrors the recorded engine events into the browser console as the playhead
 /// passes them. This is the only view into the engine's own commentary, and the
 /// pixi viewer had it — keep it.
@@ -346,5 +321,30 @@ impl EventLog {
             );
             tracks.next_event += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **Full time is the end of the rail and nowhere else.** The card the
+    /// replay finishes on hangs off this, and a document that claims no
+    /// duration would otherwise be at full time from the first frame — which
+    /// is a card over the whole of a match rather than after it.
+    #[test]
+    fn the_playhead_is_only_at_full_time_at_the_end_of_a_match_that_has_one() {
+        let mut playback = Playback::new(5_400_000.0);
+        assert!(!playback.at_full_time());
+        playback.seek_to(0.999);
+        assert!(!playback.at_full_time());
+        playback.seek_to(1.0);
+        assert!(playback.at_full_time());
+
+        let nothing = Playback::new(0.0);
+        assert!(
+            !nothing.at_full_time(),
+            "a document with no duration was over before it started"
+        );
     }
 }

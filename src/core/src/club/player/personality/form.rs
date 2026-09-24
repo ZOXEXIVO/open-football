@@ -181,9 +181,11 @@ mod tests {
     }
 
     fn player(id: u32, born: (i32, u32, u32), consistency: f32, concentration: f32) -> Player {
-        let mut attributes = PersonAttributes::default();
-        attributes.consistency = consistency;
-        attributes.professionalism = consistency;
+        let attributes = PersonAttributes {
+            consistency,
+            professionalism: consistency,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.mental.concentration = concentration;
         skills.mental.composure = concentration;

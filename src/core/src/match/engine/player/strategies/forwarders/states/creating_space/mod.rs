@@ -250,7 +250,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // instead of a volatile width rank, so a rank swap inside the
         // shortlist moves a forward to an adjacent gap at most, and
         // usually not at all.
-        let shortlist = gaps_len.min(4).max(1);
+        let shortlist = gaps_len.clamp(1, 4);
         gaps[..shortlist].sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
 
         // Rank THIS forward among our forwards by id so each one picks
@@ -517,8 +517,8 @@ impl ForwardCreatingSpaceState {
         if let Some(holder) = ball_holder {
             let holder_distance = (position - holder.position).magnitude();
 
-            if holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN
-                && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX
+            if (OPTIMAL_PASSING_DISTANCE_MIN..=OPTIMAL_PASSING_DISTANCE_MAX)
+                .contains(&holder_distance)
             {
                 score += 25.0;
             } else if holder_distance < OPTIMAL_PASSING_DISTANCE_MIN {
@@ -617,8 +617,8 @@ impl ForwardCreatingSpaceState {
             let holder_distance = (position - ball_holder.position).magnitude();
 
             // MAJOR BONUS for optimal passing distance (20-45m)
-            if holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN
-                && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX
+            if (OPTIMAL_PASSING_DISTANCE_MIN..=OPTIMAL_PASSING_DISTANCE_MAX)
+                .contains(&holder_distance)
             {
                 score += 25.0; // STRONG incentive to be in passing range
             } else if holder_distance < OPTIMAL_PASSING_DISTANCE_MIN {
@@ -717,7 +717,7 @@ impl ForwardCreatingSpaceState {
         // NEW: Check if we're in good passing range
         let in_passing_range = if let Some(holder) = self.get_ball_holder(ctx) {
             let distance = (ctx.player.position - holder.position).magnitude();
-            distance >= OPTIMAL_PASSING_DISTANCE_MIN && distance <= OPTIMAL_PASSING_DISTANCE_MAX
+            (OPTIMAL_PASSING_DISTANCE_MIN..=OPTIMAL_PASSING_DISTANCE_MAX).contains(&distance)
         } else {
             false
         };
@@ -1290,10 +1290,10 @@ impl ForwardCreatingSpaceState {
         }
 
         // Check if ball holder is looking for a pass
-        if let Some(holder) = self.get_ball_holder(ctx) {
-            if self.is_ball_holder_under_pressure(ctx, holder.id) {
-                return true; // Need to offer option
-            }
+        if let Some(holder) = self.get_ball_holder(ctx)
+            && self.is_ball_holder_under_pressure(ctx, holder.id)
+        {
+            return true; // Need to offer option
         }
 
         false
@@ -1397,16 +1397,15 @@ impl ForwardCreatingSpaceState {
         }
 
         // Also check passing lane: runner must be ahead of the passer
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    let passer_pos = ctx.tick_context.positions.players.position(owner_id);
-                    let to_goal_from_passer = (goal_pos - passer_pos).normalize();
-                    let to_runner = (player_pos - passer_pos).normalize();
-                    if to_runner.dot(&to_goal_from_passer) <= 0.0 {
-                        return false; // Behind the passer — run wouldn't be viable
-                    }
-                }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            let passer_pos = ctx.tick_context.positions.players.position(owner_id);
+            let to_goal_from_passer = (goal_pos - passer_pos).normalize();
+            let to_runner = (player_pos - passer_pos).normalize();
+            if to_runner.dot(&to_goal_from_passer) <= 0.0 {
+                return false; // Behind the passer — run wouldn't be viable
             }
         }
 
@@ -1419,7 +1418,7 @@ impl ForwardCreatingSpaceState {
 
         // Standard support position check
         let in_normal_range =
-            ball_distance >= MIN_DISTANCE_FROM_BALL && ball_distance <= MAX_DISTANCE_FROM_BALL;
+            (MIN_DISTANCE_FROM_BALL..=MAX_DISTANCE_FROM_BALL).contains(&ball_distance);
 
         // Also good if in dangerous position close to goal
         let in_dangerous_area =
@@ -1428,8 +1427,7 @@ impl ForwardCreatingSpaceState {
         // Good if in passing range from ball holder
         let in_passing_range = if let Some(holder) = self.get_ball_holder(ctx) {
             let holder_distance = (ctx.player.position - holder.position).magnitude();
-            holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN
-                && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX
+            (OPTIMAL_PASSING_DISTANCE_MIN..=OPTIMAL_PASSING_DISTANCE_MAX).contains(&holder_distance)
         } else {
             false
         };
@@ -1504,7 +1502,8 @@ impl ForwardCreatingSpaceState {
 
         // Ideal angle is diagonal-forward (not straight ahead, not directly sideways)
         // Best: 45-degree diagonal forward (forward_alignment ~0.7, lateral ~0.7)
-        let angle_quality = if forward_alignment > 0.3 {
+
+        if forward_alignment > 0.3 {
             // Forward or diagonal-forward
             if lateral_component > 0.3 && lateral_component < 0.8 {
                 // Good diagonal angle
@@ -1522,9 +1521,7 @@ impl ForwardCreatingSpaceState {
         } else {
             // Backwards - poor receiving angle
             0.1
-        };
-
-        angle_quality
+        }
     }
 
     /// Check if ball holder is under defensive pressure

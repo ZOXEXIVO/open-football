@@ -464,7 +464,7 @@ impl TeamOfTheWeekSelector {
         let pos = agg
             .primary_position
             .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-        let rating_term = (avg - 6.0).max(0.0).min(4.0) * 2.0;
+        let rating_term = (avg - 6.0).clamp(0.0, 4.0) * 2.0;
 
         let (goal_w, assist_w) = match pos {
             PlayerFieldPositionGroup::Forward => (1.4, 1.0),
@@ -754,15 +754,16 @@ mod tests {
         avg_rating: f32,
         wins: u8,
     ) -> CandidateAggregate {
-        let mut a = CandidateAggregate::default();
-        a.matches_played = played;
-        a.goals = goals;
-        a.assists = assists;
-        a.team_wins = wins;
-        a.rating_sum = avg_rating * played as f32;
-        a.best_rating = avg_rating;
-        a.primary_position = Some(pos);
-        a
+        CandidateAggregate {
+            matches_played: played,
+            goals,
+            assists,
+            team_wins: wins,
+            rating_sum: avg_rating * played as f32,
+            best_rating: avg_rating,
+            primary_position: Some(pos),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -832,10 +833,12 @@ mod tests {
     #[test]
     fn realistic_aggregate_regresses_small_sample() {
         // 9 apps at raw 8.2 → regressed should sit near 7.25, not 8.20.
-        let mut agg = CandidateAggregate::default();
-        agg.matches_played = 9;
-        agg.rating_sum = 8.2 * 9.0;
-        agg.primary_position = Some(PlayerFieldPositionGroup::Forward);
+        let agg = CandidateAggregate {
+            matches_played: 9,
+            rating_sum: 8.2 * 9.0,
+            primary_position: Some(PlayerFieldPositionGroup::Forward),
+            ..Default::default()
+        };
         let regressed = agg.realistic_average_rating();
         assert!(
             regressed > 7.0 && regressed < 7.6,

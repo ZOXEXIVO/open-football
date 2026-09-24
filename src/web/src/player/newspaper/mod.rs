@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::teams::newspaper::{IssueView, Paper, PaperFor, PressDesk, PressFocus, PressTeam};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -83,10 +83,10 @@ impl PlayerPress {
     /// also the last club in his history — and an edition printed twice
     /// on one page reads as a bug in the presses.
     fn add<'a>(papers: &mut Vec<&'a Team>, paper: Option<&'a Team>) {
-        if let Some(paper) = paper {
-            if !papers.iter().any(|held| held.id == paper.id) {
-                papers.push(paper);
-            }
+        if let Some(paper) = paper
+            && !papers.iter().any(|held| held.id == paper.id)
+        {
+            papers.push(paper);
         }
     }
 
@@ -234,7 +234,7 @@ pub async fn player_newspaper_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -253,7 +253,7 @@ pub async fn player_newspaper_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -360,6 +360,40 @@ impl PressCuttings {
 
         dated.into_iter().map(|(_, view)| view).collect()
     }
+}
+
+fn get_neighbor_teams(
+    club_id: u32,
+    data: &SimulatorData,
+    i18n: &I18n,
+) -> Result<NeighborMenus, ApiError> {
+    let club = data
+        .club(club_id)
+        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+
+    let teams = views::neighbor_teams(club, i18n);
+
+    let mut country_leagues: Vec<(u32, String, String)> = data
+        .country_by_club(club_id)
+        .map(|country| {
+            country
+                .leagues
+                .leagues
+                .iter()
+                .filter(|l| !l.friendly)
+                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    country_leagues.sort_by_key(|(id, _, _)| *id);
+
+    Ok((
+        teams,
+        country_leagues
+            .into_iter()
+            .map(|(_, name, slug)| (name, slug))
+            .collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -723,10 +757,10 @@ mod tests {
         ] {
             html = html.replace(link, "");
         }
-        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
-            if let Some(end) = html[start..].find('>') {
-                html.replace_range(start..start + end + 1, "");
-            }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+            && let Some(end) = html[start..].find('>')
+        {
+            html.replace_range(start..start + end + 1, "");
         }
         html = html.replace(
             "</head>",
@@ -765,38 +799,4 @@ mod tests {
         assert!(PlayerPress::mentions(&about_him, 17));
         assert!(!PlayerPress::mentions(&about_the_club, 17));
     }
-}
-
-fn get_neighbor_teams(
-    club_id: u32,
-    data: &SimulatorData,
-    i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
-    let club = data
-        .club(club_id)
-        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
-
-    let teams = views::neighbor_teams(club, i18n);
-
-    let mut country_leagues: Vec<(u32, String, String)> = data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .leagues
-                .leagues
-                .iter()
-                .filter(|l| !l.friendly)
-                .map(|l| (l.id, l.name.clone(), l.slug.clone()))
-                .collect()
-        })
-        .unwrap_or_default();
-    country_leagues.sort_by_key(|(id, _, _)| *id);
-
-    Ok((
-        teams,
-        country_leagues
-            .into_iter()
-            .map(|(_, name, slug)| (name, slug))
-            .collect(),
-    ))
 }

@@ -27,6 +27,7 @@ use crate::{
 };
 use chrono::{Duration, NaiveDate};
 use log::debug;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 impl TeamBehaviour {
@@ -86,16 +87,15 @@ impl TeamBehaviour {
             // (a Req player's conversation is already the transfer
             // discussion). Priority ≥ 90 also bypasses the topic-
             // cooldown gate, so the knock on the door gets answered.
-            if let Some(date) = today {
-                if !player.statuses.has(PlayerStatusType::Req) {
-                    if let Some(reason) = PrivateTalkInbox::pending_reason(player, date) {
-                        talk_candidates.push((
-                            player.id,
-                            PrivateTalkInbox::talk_type_for(reason, player),
-                            95,
-                        ));
-                    }
-                }
+            if let Some(date) = today
+                && !player.statuses.has(PlayerStatusType::Req)
+                && let Some(reason) = PrivateTalkInbox::pending_reason(player, date)
+            {
+                talk_candidates.push((
+                    player.id,
+                    PrivateTalkInbox::talk_type_for(reason, player),
+                    95,
+                ));
             }
 
             // Proactive: coach talks to high-ability players showing early playing time
@@ -132,14 +132,14 @@ impl TeamBehaviour {
             // point to decides whether the conversation happens at all and
             // what it is about — a run of form, or the way he has been
             // training. Nothing to point to, no praise.
-            if let Some(grounds) = PraiseGrounds::read(player) {
-                if player.happiness.morale < grounds.morale_ceiling() {
-                    talk_candidates.push((
-                        player.id,
-                        ManagerTalkType::Praise,
-                        grounds.talk_priority(mgr_motivating),
-                    ));
-                }
+            if let Some(grounds) = PraiseGrounds::read(player)
+                && player.happiness.morale < grounds.morale_ceiling()
+            {
+                talk_candidates.push((
+                    player.id,
+                    ManagerTalkType::Praise,
+                    grounds.talk_priority(mgr_motivating),
+                ));
             }
 
             // Form-driven discipline — gate on the manager's personality.
@@ -149,14 +149,13 @@ impl TeamBehaviour {
             let pos = player.position().position_group();
             let form = player.statistics.average_rating_realistic(pos);
             let apps = player.statistics.played + player.statistics.played_subs;
-            if apps >= 3 {
-                if mgr_discipline >= 14
-                    && form > 0.0
-                    && form < 5.5
-                    && player.player_attributes.current_ability >= 70
-                {
-                    talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
-                }
+            if apps >= 3
+                && mgr_discipline >= 14
+                && form > 0.0
+                && form < 5.5
+                && player.player_attributes.current_ability >= 70
+            {
+                talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
             }
 
             // Polish task #5: conflict-risk gated preventive talks. The
@@ -177,7 +176,7 @@ impl TeamBehaviour {
         }
 
         // Sort by priority (highest first)
-        talk_candidates.sort_by(|a, b| b.2.cmp(&a.2));
+        talk_candidates.sort_by_key(|c| Reverse(c.2));
 
         // Cooldown gate — drop a candidate if the same topic for the
         // same player is still on cooldown from a previous talk. We
@@ -218,11 +217,7 @@ impl TeamBehaviour {
         });
 
         // Max 4 talks per week, +1 emergency slot for influential players
-        let max_talks = 5.min(talk_candidates.len());
-
-        for i in 0..max_talks {
-            let (player_id, talk_type, _) = &talk_candidates[i];
-
+        for (player_id, talk_type, _) in talk_candidates.iter().take(5) {
             if let Some(player) = players.find(*player_id) {
                 let talk_result = Self::conduct_manager_talk(manager, player, talk_type.clone());
                 result.manager_talks.push(talk_result);
@@ -546,14 +541,10 @@ impl TeamBehaviour {
         }
 
         // Sort by priority descending (most urgent first)
-        candidates.sort_by(|a, b| b.2.cmp(&a.2));
+        candidates.sort_by_key(|c| Reverse(c.2));
 
         // Max 2 complaints per week
-        let max_complaints = 2.min(candidates.len());
-
-        for i in 0..max_complaints {
-            let (player_id, talk_type, _) = &candidates[i];
-
+        for (player_id, talk_type, _) in candidates.iter().take(2) {
             if let Some(player) = players.find(*player_id) {
                 let talk_result =
                     Self::conduct_loan_or_playing_time_talk(manager, player, talk_type.clone());
@@ -970,12 +961,7 @@ impl PlayerForcedTerminationReview {
         let cfg = PlayingTimeFrustrationConfig::default();
         let opp = player.playing_time_opportunity(date);
         let status = &contract.squad_status;
-        if opp
-            .can_judge(Some(status), &cfg, contract.loan_min_appearances)
-            .is_none()
-        {
-            return None;
-        }
+        opp.can_judge(Some(status), &cfg, contract.loan_min_appearances)?;
         // Involvement as a fraction of what his (now honest) squad status
         // expects, off the same expected-share ladder the complaint model
         // uses so the two systems agree on what "frozen out" means.
@@ -1464,9 +1450,11 @@ mod coach_termination_tests {
             contract: Option<PlayerClubContract>,
         ) -> Player {
             let birth_year = Self::date().year() - age as i32;
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Test".to_string(), "Player".to_string()))
@@ -1489,7 +1477,7 @@ mod coach_termination_tests {
         /// A staff collection holding only a head coach (Manager seat) — the
         /// minimum `process_coach_contract_terminations` needs to run.
         fn head_coach_only() -> StaffCollection {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.contract = Some(StaffClubContract::new(
                 50_000,
@@ -1805,7 +1793,7 @@ mod plan_escalation_tests {
         }
 
         fn head_coach_only() -> StaffCollection {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.contract = Some(StaffClubContract::new(
                 50_000,
@@ -1820,16 +1808,20 @@ mod plan_escalation_tests {
         /// is the arc he is living out and the rung it has reached.
         fn player(age: u8, plan: Option<(CareerArc, PlanStage, f32)>) -> Player {
             let birth_year = Self::date().year() - age as i32;
-            let mut attrs = PersonAttributes::default();
-            attrs.ambition = 14.0;
-            attrs.loyalty = 10.0;
+            let attrs = PersonAttributes {
+                ambition: 14.0,
+                loyalty: 10.0,
+                ..Default::default()
+            };
             let mut skills = PlayerSkills::default();
             skills.mental.determination = 12.0;
             let mut contract =
                 PlayerClubContract::new(30_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
-            let mut pa = PlayerAttributes::default();
-            pa.current_ability = 90;
+            let pa = PlayerAttributes {
+                current_ability: 90,
+                ..Default::default()
+            };
             let mut player = PlayerBuilder::new()
                 .id(7)
                 .full_name(FullName::new("Stuck".to_string(), "Reserve".to_string()))
@@ -1985,9 +1977,11 @@ mod player_forced_termination_tests {
         /// eligible matches, zero involvement) and has carried a transfer
         /// request for `req_days`. Ambition/determination make him push.
         fn frozen_out_backup(req_days: i64) -> Player {
-            let mut attrs = PersonAttributes::default();
-            attrs.ambition = 14.0;
-            attrs.loyalty = 10.0;
+            let attrs = PersonAttributes {
+                ambition: 14.0,
+                loyalty: 10.0,
+                ..Default::default()
+            };
             let mut skills = PlayerSkills::default();
             skills.mental.determination = 12.0;
 
@@ -1995,8 +1989,10 @@ mod player_forced_termination_tests {
                 PlayerClubContract::new(30_000, NaiveDate::from_ymd_opt(2028, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
 
-            let mut pa = PlayerAttributes::default();
-            pa.current_ability = 120;
+            let pa = PlayerAttributes {
+                current_ability: 120,
+                ..Default::default()
+            };
 
             let mut player = PlayerBuilder::new()
                 .id(9)
@@ -2099,7 +2095,7 @@ mod moving_on_talk_tests {
         }
 
         fn head_coach_only() -> StaffCollection {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = 1;
             staff.contract = Some(StaffClubContract::new(
                 50_000,

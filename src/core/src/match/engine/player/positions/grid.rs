@@ -77,6 +77,12 @@ pub struct SpatialGrid {
     layout_valid: bool,
 }
 
+impl Default for SpatialGrid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SpatialGrid {
     pub fn new() -> Self {
         SpatialGrid {

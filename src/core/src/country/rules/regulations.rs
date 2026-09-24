@@ -18,6 +18,12 @@ pub struct CountryRegulations {
     pub ffp_enabled: bool, // Financial Fair Play
 }
 
+impl Default for CountryRegulations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CountryRegulations {
     pub fn new() -> Self {
         CountryRegulations {
@@ -147,8 +153,10 @@ mod tests {
     use chrono::NaiveDate;
 
     fn make_player(id: u32, country_id: u32, ability: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ability;
+        let attrs = PlayerAttributes {
+            current_ability: ability,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
@@ -178,7 +186,7 @@ mod tests {
         regs.foreign_player_limit = Some(2);
         // 4 foreigners with abilities 50, 80, 120, 160. Limit 2 → drop
         // the bottom 2 (50 and 80).
-        let players = vec![
+        let players = [
             make_player(10, 99, 50),
             make_player(11, 99, 80),
             make_player(12, 99, 120),
@@ -198,7 +206,7 @@ mod tests {
     fn limit_does_not_drop_anyone_when_under_quota() {
         let mut regs = CountryRegulations::new();
         regs.foreign_player_limit = Some(5);
-        let players = vec![make_player(1, 99, 100), make_player(2, 99, 110)];
+        let players = [make_player(1, 99, 100), make_player(2, 99, 110)];
         let refs: Vec<&Player> = players.iter().collect();
         assert!(regs.omitted_for_foreign_limit(&refs, 1).is_empty());
     }
@@ -206,7 +214,7 @@ mod tests {
     #[test]
     fn homegrown_count_matches_country_id() {
         let regs = CountryRegulations::new();
-        let players = vec![
+        let players = [
             make_player(1, 1, 100),  // domestic
             make_player(2, 99, 100), // foreign
             make_player(3, 1, 100),  // domestic

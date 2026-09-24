@@ -525,12 +525,12 @@ mod tests {
     /// run-out ends in the backstop teleport.
     #[test]
     fn a_player_held_short_of_the_boards_can_still_reach_the_ball() {
-        assert!(
-            RunOff::PLAYER_INSET < AwaitedRestart::REACH,
-            "a player stopped {}u short of a ball cannot pick it up at {}u",
-            RunOff::PLAYER_INSET,
-            AwaitedRestart::REACH
-        );
+        const {
+            assert!(
+                RunOff::PLAYER_INSET < AwaitedRestart::REACH,
+                "a player stopped PLAYER_INSET short of a ball cannot pick it up at REACH"
+            )
+        };
     }
 
     #[test]

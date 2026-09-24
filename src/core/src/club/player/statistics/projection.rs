@@ -547,25 +547,25 @@ impl PlayerStatisticsProjection {
             }
 
             // ── 5. Domestic-cup override (records-sourced) ────────
-            if let Some(dc) = domestic_cup {
-                if dc.statistics.total_games() > 0 {
-                    ledger.push(PlayerStatLedgerEntry {
-                        seq_id: *active_seq,
-                        season_start_year: *season_year,
-                        team_slug: team_slug.clone(),
-                        team_name: team_slug.clone(),
-                        team_reputation: 0,
-                        league_slug: league_slug.clone(),
-                        league_name: league_name.clone(),
-                        competition_kind: PlayerStatCompetitionKind::DomesticCup,
-                        competition_slug: dc.competition_slug.clone(),
-                        is_loan: false,
-                        transfer_fee: None,
-                        coverage_days: None,
-                        spell_end: None,
-                        statistics: dc.statistics.clone(),
-                    });
-                }
+            if let Some(dc) = domestic_cup
+                && dc.statistics.total_games() > 0
+            {
+                ledger.push(PlayerStatLedgerEntry {
+                    seq_id: *active_seq,
+                    season_start_year: *season_year,
+                    team_slug: team_slug.clone(),
+                    team_name: team_slug.clone(),
+                    team_reputation: 0,
+                    league_slug: league_slug.clone(),
+                    league_name: league_name.clone(),
+                    competition_kind: PlayerStatCompetitionKind::DomesticCup,
+                    competition_slug: dc.competition_slug.clone(),
+                    is_loan: false,
+                    transfer_fee: None,
+                    coverage_days: None,
+                    spell_end: None,
+                    statistics: dc.statistics.clone(),
+                });
             }
 
             // ── 6. Live friendly slice ───────────────────────────
@@ -1604,10 +1604,10 @@ impl PlayerStatisticsProjection {
         live: &PlayerLiveStatsInput<'_>,
         domestic_cup: Option<&DomesticCupOverride>,
     ) -> String {
-        if let Some(dc) = domestic_cup {
-            if dc.competition_slug == slug {
-                return dc.competition_name.clone();
-            }
+        if let Some(dc) = domestic_cup
+            && dc.competition_slug == slug
+        {
+            return dc.competition_name.clone();
         }
         for slice in live.cups {
             if slice.competition_slug == slug {
@@ -1682,10 +1682,11 @@ mod tests {
     }
 
     fn stats(played: u16, goals: u16) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.goals = goals;
-        s
+        PlayerStatistics {
+            played,
+            goals,
+            ..Default::default()
+        }
     }
 
     fn stats_with_subs(played: u16, played_subs: u16, goals: u16) -> PlayerStatistics {
@@ -3598,10 +3599,14 @@ mod tests {
         // Spartak in 2025/26, on loan to Other in 2026/27, back at
         // Spartak in 2027/28. The loan row already accounts for the
         // middle year — no synthetic Spartak row may shadow it.
-        let mut a = PlayerStatistics::default();
-        a.played = 22;
-        let mut c = PlayerStatistics::default();
-        c.played = 14;
+        let a = PlayerStatistics {
+            played: 22,
+            ..Default::default()
+        };
+        let c = PlayerStatistics {
+            played: 14,
+            ..Default::default()
+        };
         let hist = PlayerStatisticsHistory::from_items(vec![
             PlayerStatisticsHistoryItem {
                 season: Season::new(2025),
@@ -3720,10 +3725,14 @@ mod tests {
             league_slug: "premier-league".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let mut s1 = PlayerStatistics::default();
-        s1.played = 10;
-        let mut s2 = PlayerStatistics::default();
-        s2.played = 5;
+        let s1 = PlayerStatistics {
+            played: 10,
+            ..Default::default()
+        };
+        let s2 = PlayerStatistics {
+            played: 5,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2026,
             &team_info,
@@ -3769,9 +3778,11 @@ mod tests {
             league_slug: "serie-a".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let mut league = PlayerStatistics::default();
-        league.played = 28;
-        league.goals = 6;
+        let league = PlayerStatistics {
+            played: 28,
+            goals: 6,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2024,
             &team_info,
@@ -3782,9 +3793,11 @@ mod tests {
             None,
             league,
         );
-        let mut cont = PlayerStatistics::default();
-        cont.played = 10;
-        cont.goals = 5;
+        let cont = PlayerStatistics {
+            played: 10,
+            goals: 5,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2024,
             &team_info,
@@ -3839,8 +3852,10 @@ mod tests {
             league_slug: "russian-premier-league".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let mut spartak_played = PlayerStatistics::default();
-        spartak_played.played = 36;
+        let spartak_played = PlayerStatistics {
+            played: 36,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2025,
             &spartak,
@@ -3908,8 +3923,10 @@ mod tests {
             league_slug: "russian-second-league".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let mut parent_played = PlayerStatistics::default();
-        parent_played.played = 28;
+        let parent_played = PlayerStatistics {
+            played: 28,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2025,
             &parent,
@@ -3968,8 +3985,10 @@ mod tests {
             league_slug: "russian-second-league".to_string(),
         };
         let mut hist = PlayerStatisticsHistory::new();
-        let mut parent_played = PlayerStatistics::default();
-        parent_played.played = 28;
+        let parent_played = PlayerStatistics {
+            played: 28,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2025,
             &parent,
@@ -4133,8 +4152,10 @@ mod tests {
             );
         }
         for (slug, year, games) in loan_clubs {
-            let mut s = PlayerStatistics::default();
-            s.played = games;
+            let s = PlayerStatistics {
+                played: games,
+                ..Default::default()
+            };
             let club = TeamInfo {
                 name: slug.to_string(),
                 slug: slug.to_string(),
@@ -4216,9 +4237,11 @@ mod tests {
             PlayerStatistics::default(),
         );
         // Loan-out spell with real games.
-        let mut zenit_played = PlayerStatistics::default();
-        zenit_played.played = 20;
-        zenit_played.goals = 3;
+        let zenit_played = PlayerStatistics {
+            played: 20,
+            goals: 3,
+            ..Default::default()
+        };
         hist.append_to_ledger(
             2026,
             &zenit,
@@ -4362,10 +4385,11 @@ mod projection_invariants_tests {
     }
 
     fn stats(played: u16, goals: u16) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.goals = goals;
-        s
+        PlayerStatistics {
+            played,
+            goals,
+            ..Default::default()
+        }
     }
 
     fn team(slug: &str, league_slug: &str) -> TeamInfo {

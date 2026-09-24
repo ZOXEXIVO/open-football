@@ -1038,15 +1038,14 @@ impl PlayerStatisticsHistory {
         date: NaiveDate,
     ) {
         self.flush_stale_entries(date);
-        if last_stats.total_games() > 0 {
-            if let Some(entry) = self
+        if last_stats.total_games() > 0
+            && let Some(entry) = self
                 .current
                 .iter_mut()
                 .rev()
                 .find(|e| e.statistics.total_games() == 0)
-            {
-                entry.statistics = last_stats;
-            }
+        {
+            entry.statistics = last_stats;
         }
         self.push_new_entry(to, PlayerStatistics::default(), false, Some(0.0), date);
     }
@@ -1239,27 +1238,27 @@ impl PlayerStatisticsHistory {
             }
 
             if already_frozen {
-                if games > 0 {
-                    if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                if games > 0
+                    && let Some(existing) = self.items.iter_mut().rev().find(|i| {
                         i.season.start_year == entry_year
                             && i.team_slug == entry.team_slug
                             && i.is_loan == entry.is_loan
-                    }) {
-                        let mut remaining = entry.statistics.clone();
-                        remaining.played += remaining.played_subs;
-                        remaining.played_subs = 0;
-                        existing.statistics.merge_from(&remaining);
-                    }
+                    })
+                {
+                    let mut remaining = entry.statistics.clone();
+                    remaining.played += remaining.played_subs;
+                    remaining.played_subs = 0;
+                    existing.statistics.merge_from(&remaining);
                 }
-                if entry.transfer_fee.is_some() {
-                    if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                if entry.transfer_fee.is_some()
+                    && let Some(existing) = self.items.iter_mut().rev().find(|i| {
                         i.season.start_year == entry_year
                             && i.team_slug == entry.team_slug
                             && i.is_loan == entry.is_loan
                             && i.transfer_fee.is_none()
-                    }) {
-                        existing.transfer_fee = entry.transfer_fee;
-                    }
+                    })
+                {
+                    existing.transfer_fee = entry.transfer_fee;
                 }
             } else {
                 let mut stats = entry.statistics.clone();
@@ -1591,17 +1590,17 @@ impl PlayerStatisticsHistory {
             .any(|i| i.season.start_year == season.start_year)
         {
             // Merge remaining stats (games played between first and second snapshot)
-            if current_stats.total_games() > 0 {
-                if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+            if current_stats.total_games() > 0
+                && let Some(existing) = self.items.iter_mut().rev().find(|i| {
                     i.season.start_year == season.start_year
                         && i.team_slug == team.slug
                         && i.is_loan == is_loan
-                }) {
-                    let mut remaining = current_stats;
-                    remaining.played += remaining.played_subs;
-                    remaining.played_subs = 0;
-                    existing.statistics.merge_from(&remaining);
-                }
+                })
+            {
+                let mut remaining = current_stats;
+                remaining.played += remaining.played_subs;
+                remaining.played_subs = 0;
+                existing.statistics.merge_from(&remaining);
             }
             // Before clearing, freeze any current entries that carry meaningful
             // data (transfer fees or games) but don't yet exist in frozen items.
@@ -1618,27 +1617,27 @@ impl PlayerStatisticsHistory {
                         && i.is_loan == entry.is_loan
                 });
                 if dominated_by_frozen {
-                    if entry.statistics.total_games() > 0 {
-                        if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                    if entry.statistics.total_games() > 0
+                        && let Some(existing) = self.items.iter_mut().rev().find(|i| {
                             i.season.start_year == season.start_year
                                 && i.team_slug == entry.team_slug
                                 && i.is_loan == entry.is_loan
-                        }) {
-                            let mut remaining = entry.statistics;
-                            remaining.played += remaining.played_subs;
-                            remaining.played_subs = 0;
-                            existing.statistics.merge_from(&remaining);
-                        }
+                        })
+                    {
+                        let mut remaining = entry.statistics;
+                        remaining.played += remaining.played_subs;
+                        remaining.played_subs = 0;
+                        existing.statistics.merge_from(&remaining);
                     }
-                    if entry.transfer_fee.is_some() {
-                        if let Some(existing) = self.items.iter_mut().rev().find(|i| {
+                    if entry.transfer_fee.is_some()
+                        && let Some(existing) = self.items.iter_mut().rev().find(|i| {
                             i.season.start_year == season.start_year
                                 && i.team_slug == entry.team_slug
                                 && i.is_loan == entry.is_loan
                                 && i.transfer_fee.is_none()
-                        }) {
-                            existing.transfer_fee = entry.transfer_fee;
-                        }
+                        })
+                    {
+                        existing.transfer_fee = entry.transfer_fee;
                     }
                     continue;
                 }
@@ -2547,9 +2546,11 @@ mod club_career_apps_tests {
         played: u16,
         played_subs: u16,
     ) -> PlayerStatisticsHistoryItem {
-        let mut stats = PlayerStatistics::default();
-        stats.played = played;
-        stats.played_subs = played_subs;
+        let stats = PlayerStatistics {
+            played,
+            played_subs,
+            ..Default::default()
+        };
         PlayerStatisticsHistoryItem {
             season: Season::new(season_start),
             team_name: slug.to_string(),
@@ -2565,8 +2566,10 @@ mod club_career_apps_tests {
     }
 
     fn current(slug: &str, played: u16) -> CurrentSeasonEntry {
-        let mut stats = PlayerStatistics::default();
-        stats.played = played;
+        let stats = PlayerStatistics {
+            played,
+            ..Default::default()
+        };
         CurrentSeasonEntry {
             team_name: slug.to_string(),
             team_slug: slug.to_string(),
@@ -2852,8 +2855,10 @@ mod club_career_apps_tests {
             seq_id: 99,
         });
 
-        let mut live = PlayerStatistics::default();
-        live.played = 18;
+        let live = PlayerStatistics {
+            played: 18,
+            ..Default::default()
+        };
 
         let view = hist.view_items(Some(&live), d(2028, 5, 14));
 
@@ -2888,8 +2893,10 @@ mod club_career_apps_tests {
         // otherwise both spells would collapse into one row.
         let mut hist = PlayerStatisticsHistory::from_items(vec![frozen(2025, "spartak", 28, 0)]);
 
-        let mut spartak_stats = PlayerStatistics::default();
-        spartak_stats.played = 22;
+        let spartak_stats = PlayerStatistics {
+            played: 22,
+            ..Default::default()
+        };
         hist.current.push(CurrentSeasonEntry {
             team_name: "spartak".to_string(),
             team_slug: "spartak".to_string(),
@@ -2917,8 +2924,10 @@ mod club_career_apps_tests {
             seq_id: 11,
         });
 
-        let mut live = PlayerStatistics::default();
-        live.played = 5;
+        let live = PlayerStatistics {
+            played: 5,
+            ..Default::default()
+        };
         let view = hist.view_items(Some(&live), d(2028, 5, 14));
 
         let spartak_row = view
@@ -2935,8 +2944,10 @@ mod club_career_apps_tests {
 
     #[test]
     fn duplicate_season_guard_merges_dominated_current_loan_stats() {
-        let mut frozen_stats = PlayerStatistics::default();
-        frozen_stats.played = 0;
+        let frozen_stats = PlayerStatistics {
+            played: 0,
+            ..Default::default()
+        };
 
         let mut hist = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
             season: Season::new(2026),
@@ -2951,8 +2962,10 @@ mod club_career_apps_tests {
             seq_id: 1,
         }]);
 
-        let mut current_stats = PlayerStatistics::default();
-        current_stats.played = 12;
+        let current_stats = PlayerStatistics {
+            played: 12,
+            ..Default::default()
+        };
         hist.current.push(CurrentSeasonEntry {
             team_name: "zabbar".to_string(),
             team_slug: "zabbar".to_string(),
@@ -3276,9 +3289,11 @@ mod club_career_apps_tests {
         hist.seed_initial_team(&main, d(2025, 8, 1), false);
 
         // Pre-demotion stats accumulated at Main.
-        let mut pre_demotion = PlayerStatistics::default();
-        pre_demotion.played = 10;
-        pre_demotion.goals = 2;
+        let pre_demotion = PlayerStatistics {
+            played: 10,
+            goals: 2,
+            ..Default::default()
+        };
 
         // Mid-season demotion to U21 (from_senior=true, to_senior=false).
         hist.record_intra_club_move(
@@ -3353,8 +3368,10 @@ mod club_career_apps_tests {
         hist.seed_initial_team(&main, d(2025, 8, 1), false);
 
         // First Main spell: 10 apps.
-        let mut spell_one = PlayerStatistics::default();
-        spell_one.played = 10;
+        let spell_one = PlayerStatistics {
+            played: 10,
+            ..Default::default()
+        };
         hist.record_intra_club_move(spell_one, &main, &u21, true, false, false, d(2025, 12, 15));
 
         // Promotion back to Main, then more games (8 apps in spell two).
@@ -3368,8 +3385,10 @@ mod club_career_apps_tests {
             d(2026, 2, 1),
         );
 
-        let mut spell_two = PlayerStatistics::default();
-        spell_two.played = 8;
+        let spell_two = PlayerStatistics {
+            played: 8,
+            ..Default::default()
+        };
         hist.record_season_end(Season::new(2025), spell_two, &main, false, None);
 
         let main_rows_2025: Vec<&PlayerStatisticsHistoryItem> = hist
@@ -3399,8 +3418,10 @@ mod club_career_apps_tests {
 
         hist.seed_initial_team(&main, d(2025, 8, 1), false);
 
-        let mut spell_one = PlayerStatistics::default();
-        spell_one.played = 10;
+        let spell_one = PlayerStatistics {
+            played: 10,
+            ..Default::default()
+        };
         hist.record_intra_club_move(spell_one, &main, &b, true, true, false, d(2025, 11, 1));
 
         // Player joined B but never played a match before going back.
@@ -3414,8 +3435,10 @@ mod club_career_apps_tests {
             d(2025, 12, 1),
         );
 
-        let mut spell_two = PlayerStatistics::default();
-        spell_two.played = 8;
+        let spell_two = PlayerStatistics {
+            played: 8,
+            ..Default::default()
+        };
         hist.record_season_end(Season::new(2025), spell_two, &main, false, None);
 
         let rows: Vec<&PlayerStatisticsHistoryItem> = hist
@@ -3476,9 +3499,11 @@ mod club_career_apps_tests {
 
         // Stats from the Main spell get committed via the intra-club
         // move (from_senior=true).
-        let mut main_stats = PlayerStatistics::default();
-        main_stats.played = 14;
-        main_stats.goals = 4;
+        let main_stats = PlayerStatistics {
+            played: 14,
+            goals: 4,
+            ..Default::default()
+        };
         hist.record_intra_club_move(
             main_stats,
             &main,
@@ -3546,8 +3571,10 @@ mod club_career_apps_tests {
         );
 
         // 2027/28 — one senior callup (6 apps).
-        let mut callups = PlayerStatistics::default();
-        callups.played = 6;
+        let callups = PlayerStatistics {
+            played: 6,
+            ..Default::default()
+        };
         hist.record_season_end(Season::new(2027), callups, &main, false, None);
 
         let main_rows: Vec<&PlayerStatisticsHistoryItem> = hist
@@ -3787,8 +3814,10 @@ mod club_career_apps_tests {
         // Main rows (one with games, two with zero games) must keep all
         // three at render time. The legacy view merge dropped any 0-game
         // row that wasn't the career-first one.
-        let mut games_only = PlayerStatistics::default();
-        games_only.played = 6;
+        let games_only = PlayerStatistics {
+            played: 6,
+            ..Default::default()
+        };
         let hist = PlayerStatisticsHistory::from_items(vec![
             PlayerStatisticsHistoryItem {
                 season: Season::new(2025),
@@ -3895,8 +3924,10 @@ mod club_career_apps_tests {
         // should NOT keep an empty 0-game origin stub for the current
         // season — only the destination row (the user said that's fine
         // when other records are present).
-        let mut prior = PlayerStatistics::default();
-        prior.played = 30;
+        let prior = PlayerStatistics {
+            played: 30,
+            ..Default::default()
+        };
         let mut hist = PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
             season: Season::new(2024),
             team_name: "CSKA Moscow".to_string(),
@@ -4004,8 +4035,10 @@ mod club_career_apps_tests {
         let second = season_team("spartak-moscow-2");
         hist.seed_initial_team(&main, d(2026, 8, 1), false);
 
-        let mut played = PlayerStatistics::default();
-        played.played = 6;
+        let played = PlayerStatistics {
+            played: 6,
+            ..Default::default()
+        };
         hist.record_intra_club_move(played, &main, &second, true, true, false, d(2026, 11, 1));
 
         let main_entry = hist
@@ -4072,10 +4105,14 @@ mod club_career_apps_tests {
         // aliasing. The view-time merge collapses them at render so
         // existing player pages render cleanly without a data
         // migration.
-        let mut frozen_a = PlayerStatistics::default();
-        frozen_a.played = 12;
-        let mut frozen_b = PlayerStatistics::default();
-        frozen_b.played = 6;
+        let frozen_a = PlayerStatistics {
+            played: 12,
+            ..Default::default()
+        };
+        let frozen_b = PlayerStatistics {
+            played: 6,
+            ..Default::default()
+        };
 
         let hist = PlayerStatisticsHistory::from_items(vec![
             PlayerStatisticsHistoryItem {
@@ -4127,10 +4164,11 @@ mod continental_tests {
     }
 
     fn stats(played: u16, goals: u16) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.goals = goals;
-        s
+        PlayerStatistics {
+            played,
+            goals,
+            ..Default::default()
+        }
     }
 
     fn team(slug: &str) -> TeamInfo {

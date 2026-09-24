@@ -21,16 +21,19 @@ use crate::{
     PlayerStatisticsHistoryItem, PlayerStatusType, TeamInfo,
 };
 use chrono::NaiveDate;
+use std::cmp::Reverse;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
 }
 
 fn build_player(pos: PlayerPositionType, person: PersonAttributes) -> Player {
-    let mut attrs = PlayerAttributes::default();
-    attrs.current_reputation = 5_000;
-    attrs.home_reputation = 6_000;
-    attrs.world_reputation = 4_000;
+    let attrs = PlayerAttributes {
+        current_reputation: 5_000,
+        home_reputation: 6_000,
+        world_reputation: 4_000,
+        ..Default::default()
+    };
     PlayerBuilder::new()
         .id(1)
         .full_name(FullName::new("Test".to_string(), "Player".to_string()))
@@ -1298,10 +1301,14 @@ fn fringe_player_feels_trophy_less_than_starter() {
 
 #[test]
 fn ambitious_player_hurts_more_on_relegation() {
-    let mut ambitious_pa = PersonAttributes::default();
-    ambitious_pa.ambition = 20.0;
-    let mut content_pa = PersonAttributes::default();
-    content_pa.ambition = 1.0;
+    let ambitious_pa = PersonAttributes {
+        ambition: 20.0,
+        ..Default::default()
+    };
+    let content_pa = PersonAttributes {
+        ambition: 1.0,
+        ..Default::default()
+    };
     let mut ambitious = build_player(PlayerPositionType::Striker, ambitious_pa);
     let mut content = build_player(PlayerPositionType::Striker, content_pa);
     ambitious.statistics.played = 30;
@@ -1982,8 +1989,9 @@ fn drive_season(p: &mut Player) {
     // 38 league + ~6 cup matches = 44, similar to an English season.
     // Shape: ~50% wins, ~25% draws, ~25% losses, mixed ratings.
     // Two derbies, half cup matches, occasional reds.
-    let pattern: &[(f32, u16, u16, u16, bool, bool, bool, u8, u8)] = &[
-        // (rating, goals, assists, reds, is_cup, is_motm, is_derby, gf, ga)
+    // (rating, goals, assists, reds, is_cup, is_motm, is_derby, gf, ga)
+    type SeasonMatch = (f32, u16, u16, u16, bool, bool, bool, u8, u8);
+    let pattern: &[SeasonMatch] = &[
         (7.2, 1, 0, 0, false, false, false, 2, 1),
         (6.8, 0, 1, 0, false, false, false, 1, 0),
         (6.5, 0, 0, 0, false, false, false, 0, 1),
@@ -3693,10 +3701,12 @@ fn transfer_interest_speculation_pressure_emits_for_low_professionalism() {
 // ── Award reputation pipeline ─────────────────────────────────
 
 fn build_award_player(birth: NaiveDate, cur: i16, home: i16, world: i16) -> Player {
-    let mut attrs = PlayerAttributes::default();
-    attrs.current_reputation = cur;
-    attrs.home_reputation = home;
-    attrs.world_reputation = world;
+    let attrs = PlayerAttributes {
+        current_reputation: cur,
+        home_reputation: home,
+        world_reputation: world,
+        ..Default::default()
+    };
     PlayerBuilder::new()
         .id(1)
         .full_name(FullName::new("Test".to_string(), "Player".to_string()))
@@ -4527,7 +4537,7 @@ use chrono::NaiveDateTime;
 use chrono::NaiveTime;
 
 fn make_test_coach() -> Staff {
-    let mut staff = StaffStub::default();
+    let mut staff = StaffStub::build();
     staff.id = 900;
     staff.birth_date = d(1970, 1, 1);
     staff
@@ -5630,7 +5640,7 @@ fn four_week_calibration_spread_across_positions_and_profiles() {
             (elite_mid.id, elite_c),
             (overload_fwd.id, overload_c),
         ];
-        ranked.sort_by(|a, b| b.1.cmp(&a.1));
+        ranked.sort_by_key(|&(_, c)| Reverse(c));
         let top_two_ids: Vec<u32> = ranked.iter().take(2).map(|(id, _)| *id).collect();
         assert!(
             top_two_ids.contains(&gk.id),

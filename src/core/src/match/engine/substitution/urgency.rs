@@ -766,6 +766,6 @@ mod tests {
 
     #[test]
     fn half_time_bar_sits_below_the_first_open_play_bar() {
-        assert!(BenchPressure::HALF_TIME_BAR < BenchPressure::FIRST_BAR);
+        const { assert!(BenchPressure::HALF_TIME_BAR < BenchPressure::FIRST_BAR) };
     }
 }

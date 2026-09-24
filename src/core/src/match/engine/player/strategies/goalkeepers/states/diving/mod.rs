@@ -404,10 +404,10 @@ impl GoalkeeperDivingState {
         // line; the redirected ball arrives on a trajectory their
         // outstretched arm wasn't shaped for. ~50% reduction matches
         // real PL's deflected-goal share.
-        if let Some(t) = &ctx.tick_context.ball.cached_shot_target {
-            if t.deflected {
-                catch_prob *= 0.50;
-            }
+        if let Some(t) = &ctx.tick_context.ball.cached_shot_target
+            && t.deflected
+        {
+            catch_prob *= 0.50;
         }
         // ONE DIVE, ONE OPPORTUNITY. This is rolled every tick the keeper
         // is within reach, so taken as a per-event probability it compounds

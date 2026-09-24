@@ -201,7 +201,7 @@ impl Corpus {
     /// point of the census is that the memory is *loaded*, because an
     /// empty store would make the two sides of the move trivially agree.
     fn coach() -> Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = 900;
         staff.contract = Some(StaffClubContract::new(
             250_000,
@@ -402,7 +402,7 @@ fn composition_census() {
 fn a_coach_who_has_watched_nobody_picks_the_same_side_as_before() {
     let team = Corpus::team(Corpus::squad());
 
-    let mut blank = StaffStub::default();
+    let mut blank = StaffStub::build();
     blank.id = 901;
     blank.contract = Some(StaffClubContract::new(
         250_000,

@@ -145,8 +145,8 @@ pub async fn cup_history_action(
     let editions = rows.len();
     let distinct_winners = winners.len();
 
-    let title = views::league_display_name(&league, &i18n, simulator_data);
-    let current_path = format!("/{}/cups/{}", &route_params.lang, &league.slug);
+    let title = views::league_display_name(league, &i18n, simulator_data);
+    let current_path = format!("/{}/cups/{}", route_params.lang, league.slug);
     let country_leagues: Vec<(&str, &str)> = country
         .leagues
         .leagues
@@ -186,7 +186,7 @@ pub async fn cup_history_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),

@@ -94,7 +94,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
 
         if neighbor_count > 0 {
             // Average and scale the separation force
-            separation_force = separation_force / (neighbor_count as f32);
+            separation_force /= neighbor_count as f32;
             separation_force = separation_force
                 * ctx.player.max_speed_with_condition_cached()
                 * SEPARATION_WEIGHT
@@ -108,13 +108,12 @@ impl StateProcessingHandler for ForwardTakeBallState {
                 LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
 
             // Blend arrive and separation velocities
-            arrive_velocity = arrive_velocity + separation_force;
+            arrive_velocity += separation_force;
 
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
             if magnitude > ctx.player.max_speed_with_condition_cached() {
-                arrive_velocity =
-                    arrive_velocity * (ctx.player.max_speed_with_condition_cached() / magnitude);
+                arrive_velocity *= ctx.player.max_speed_with_condition_cached() / magnitude;
             }
         }
 

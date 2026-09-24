@@ -297,7 +297,6 @@ impl ScoutMarketDesk {
         if let Some(country_id) = Self::exploration_draw(club, reputation, world_exporters) {
             want(country_id, EXPLORATION_WEIGHT);
         }
-        drop(want);
 
         let candidates: Vec<(u32, f32)> = wanted.into_iter().collect();
         Self::rank_markets(club.id, year, reputation, &candidates)

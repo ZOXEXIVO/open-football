@@ -112,7 +112,7 @@ fn a_through_ball_about_to_be_flagged(
 #[test]
 fn the_free_kick_is_where_the_offence_was_and_the_ball_does_not_travel_to_it() {
     let (mut field, mut context) = kickoff();
-    let (receiver, reception) = a_through_ball_about_to_be_flagged(&mut field, &mut context);
+    let (receiver, reception) = a_through_ball_about_to_be_flagged(&mut field, &context);
 
     let players = field.players.clone();
     let mut events = EventCollection::with_capacity(8);
@@ -147,7 +147,7 @@ fn the_free_kick_is_where_the_offence_was_and_the_ball_does_not_travel_to_it() {
 #[test]
 fn the_taker_walks_to_the_offside_free_kick() {
     let (mut field, mut context) = kickoff();
-    a_through_ball_about_to_be_flagged(&mut field, &mut context);
+    a_through_ball_about_to_be_flagged(&mut field, &context);
 
     let players = field.players.clone();
     let mut events = EventCollection::with_capacity(8);

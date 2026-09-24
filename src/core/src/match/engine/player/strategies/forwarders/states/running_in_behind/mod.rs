@@ -75,18 +75,16 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
 
         // SMART RUN TIMING: Only continue run if passer has stable possession
         // Delay run if teammate is under heavy pressure (they can't deliver the pass)
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    // Passer under heavy pressure — abort run, they can't deliver
-                    let opponents_near_passer =
-                        ctx.tick_context.grid.opponents(owner_id, 10.0).count();
-                    if opponents_near_passer >= 3 {
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::CreatingSpace,
-                        ));
-                    }
-                }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            // Passer under heavy pressure — abort run, they can't deliver
+            let opponents_near_passer = ctx.tick_context.grid.opponents(owner_id, 10.0).count();
+            if opponents_near_passer >= 3 {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::CreatingSpace,
+                ));
             }
         }
 
@@ -178,39 +176,37 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         // Reading the line through [`OffsideLine`] is the point: a forward
         // holding a line one unit away from the one the referee uses is
         // still offside, and would look like he was holding nothing.
-        if !ball_coming {
-            if let Some(side) = ctx.player.side {
-                let line = OffsideLine::second_last(
-                    ctx.players().opponents().all().map(|o| o.position.x),
-                    side,
-                );
-                if let Some(line) = line {
-                    // …but he is not a laser. Timing a run is
-                    // `off_the_ball` and `anticipation`, and a forward who
-                    // holds the last line PERFECTLY is both unrealistic and
-                    // the most dangerous position on the pitch: clamped
-                    // exactly, offsides fell to 9 a match and goals rose
-                    // 5.1 → 6.0, because every flagged run became a clean
-                    // one instead. A good runner sits on the shoulder; a
-                    // poor one strays past it and gets flagged, which is
-                    // where the real four-to-six a match come from.
-                    let timing = ((ctx.player.skills.mental.off_the_ball
-                        + ctx.player.skills.mental.anticipation)
-                        / 40.0)
-                        .clamp(0.0, 1.0);
-                    let stray = Self::STRAY * (1.0 - timing);
-                    // Held a stride BEHIND the line rather than level with
-                    // it, for the same reason: a man permanently on the
-                    // shoulder is played in every time the ball is worked
-                    // wide.
-                    let hold = line + side.forward_dir_x() * (stray - Self::LINE_MARGIN);
-                    let beyond = match side {
-                        PlayerSide::Left => aim.x > hold,
-                        PlayerSide::Right => aim.x < hold,
-                    };
-                    if beyond {
-                        aim.x = hold;
-                    }
+        if !ball_coming && let Some(side) = ctx.player.side {
+            let line = OffsideLine::second_last(
+                ctx.players().opponents().all().map(|o| o.position.x),
+                side,
+            );
+            if let Some(line) = line {
+                // …but he is not a laser. Timing a run is
+                // `off_the_ball` and `anticipation`, and a forward who
+                // holds the last line PERFECTLY is both unrealistic and
+                // the most dangerous position on the pitch: clamped
+                // exactly, offsides fell to 9 a match and goals rose
+                // 5.1 → 6.0, because every flagged run became a clean
+                // one instead. A good runner sits on the shoulder; a
+                // poor one strays past it and gets flagged, which is
+                // where the real four-to-six a match come from.
+                let timing = ((ctx.player.skills.mental.off_the_ball
+                    + ctx.player.skills.mental.anticipation)
+                    / 40.0)
+                    .clamp(0.0, 1.0);
+                let stray = Self::STRAY * (1.0 - timing);
+                // Held a stride BEHIND the line rather than level with
+                // it, for the same reason: a man permanently on the
+                // shoulder is played in every time the ball is worked
+                // wide.
+                let hold = line + side.forward_dir_x() * (stray - Self::LINE_MARGIN);
+                let beyond = match side {
+                    PlayerSide::Left => aim.x > hold,
+                    PlayerSide::Right => aim.x < hold,
+                };
+                if beyond {
+                    aim.x = hold;
                 }
             }
         }
@@ -248,15 +244,14 @@ impl ForwardRunningInBehindState {
 
     /// Check if the teammate with ball can deliver a pass
     fn is_passer_capable(&self, ctx: &StateProcessingContext) -> bool {
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    let vision = owner.skills.mental.vision / 20.0;
-                    let passing = owner.skills.technical.passing / 20.0;
-                    // Low skill passers can't deliver through-balls
-                    return (vision + passing) / 2.0 > 0.3;
-                }
-            }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            let vision = owner.skills.mental.vision / 20.0;
+            let passing = owner.skills.technical.passing / 20.0;
+            // Low skill passers can't deliver through-balls
+            return (vision + passing) / 2.0 > 0.3;
         }
         // No teammate has ball — run is still viable (ball might be loose)
         true
@@ -306,18 +301,17 @@ impl ForwardRunningInBehindState {
     fn in_passing_lane(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player is ahead of the ball holder (toward opponent goal)
         // Diagonal runs are valid — only reject if player is behind the passer
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    let passer_pos = ctx.tick_context.positions.players.position(owner_id);
-                    let goal_pos = ctx.player().opponent_goal_position();
-                    let to_goal = (goal_pos - passer_pos).normalize();
-                    let to_runner = (ctx.player.position - passer_pos).normalize();
-                    // Runner must be at least somewhat ahead of passer (dot > 0.0)
-                    // This allows wide diagonal runs while rejecting backward positions
-                    return to_runner.dot(&to_goal) > 0.0;
-                }
-            }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            let passer_pos = ctx.tick_context.positions.players.position(owner_id);
+            let goal_pos = ctx.player().opponent_goal_position();
+            let to_goal = (goal_pos - passer_pos).normalize();
+            let to_runner = (ctx.player.position - passer_pos).normalize();
+            // Runner must be at least somewhat ahead of passer (dot > 0.0)
+            // This allows wide diagonal runs while rejecting backward positions
+            return to_runner.dot(&to_goal) > 0.0;
         }
         true
     }

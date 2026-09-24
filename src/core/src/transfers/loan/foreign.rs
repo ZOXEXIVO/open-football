@@ -262,7 +262,7 @@ impl ForeignBorrower<'_> {
             borrower_rep: self.team_rep,
             borrower_league_rep: self.borrower_league_rep,
             depth: &self.borrower_position_depth,
-            borrower: self.foreign_borrower_profile.clone().map(|profile| {
+            borrower: self.foreign_borrower_profile.map(|profile| {
                 profile.with_best_in_group(
                     self.borrower_position_depth.best_in_group(p.position_group),
                 )
@@ -1366,16 +1366,16 @@ impl ForeignLoanScan {
                     negotiation.open_salary_at(action.player.salary);
                 }
 
-                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                    if action.from_compatriot_sweep {
-                        // One homecoming per window. The sweep is a door
-                        // for the boy a league produced, not a licence to
-                        // shop abroad.
-                        buyer.transfer_plan.compatriot_sweeps_this_window = buyer
-                            .transfer_plan
-                            .compatriot_sweeps_this_window
-                            .saturating_add(1);
-                    }
+                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id)
+                    && action.from_compatriot_sweep
+                {
+                    // One homecoming per window. The sweep is a door
+                    // for the boy a league produced, not a licence to
+                    // shop abroad.
+                    buyer.transfer_plan.compatriot_sweeps_this_window = buyer
+                        .transfer_plan
+                        .compatriot_sweeps_this_window
+                        .saturating_add(1);
                 }
 
                 debug!(

@@ -717,9 +717,11 @@ mod tests {
     use chrono::NaiveDate;
 
     fn build_player(fill: f32, condition: i16) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = condition;
-        attrs.jadedness = 0;
+        let attrs = PlayerAttributes {
+            condition,
+            jadedness: 0,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         let s = &mut skills;
         s.technical.tackling = fill;

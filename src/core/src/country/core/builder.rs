@@ -188,14 +188,14 @@ impl CountryBuilder {
             generator_data,
             national_team,
             u21_national_team,
-            transfer_market: self.transfer_market.unwrap_or_else(TransferMarket::new),
+            transfer_market: self.transfer_market.unwrap_or_default(),
             economic_factors: self.economic_factors.unwrap_or_else(|| {
                 let rep = self.reputation.unwrap_or(500);
                 CountryEconomicFactors::from_reputation(rep)
             }),
             international_competitions: self.international_competitions.unwrap_or_default(),
-            media_coverage: self.media_coverage.unwrap_or_else(MediaCoverage::new),
-            regulations: self.regulations.unwrap_or_else(CountryRegulations::new),
+            media_coverage: self.media_coverage.unwrap_or_default(),
+            regulations: self.regulations.unwrap_or_default(),
             transfer_profile: self.transfer_profile.unwrap_or_default(),
             retired_players: Vec::new(),
             last_snapshotted_season_year: None,

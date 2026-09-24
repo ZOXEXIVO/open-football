@@ -317,7 +317,7 @@ impl Player {
         let position = self.position();
         let pa_u8 = self.player_attributes.potential_ability;
         let ca_of = |arr: &[f32; SKILL_COUNT]| -> u8 {
-            let mut probe = self.skills.clone();
+            let mut probe = self.skills;
             write_array_into(&mut probe, arr);
             probe.calculate_ability_for_position(position)
         };

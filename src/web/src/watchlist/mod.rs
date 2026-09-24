@@ -88,7 +88,7 @@ pub async fn watchlist_page_action(
     let i18n = state.i18n.for_lang(&route_params.lang);
 
     let now = simulator_data.date.date();
-    let current_path = format!("/{}/watchlist", &route_params.lang);
+    let current_path = format!("/{}/watchlist", route_params.lang);
 
     let mut players: Vec<WatchlistPlayerDto> = simulator_data
         .watchlist
@@ -125,20 +125,15 @@ pub async fn watchlist_page_action(
                     retired: true,
                     ..base_watchlist_dto(player, simulator_data, now)
                 })
-            } else if let Some(player) = simulator_data
-                .free_agents
-                .iter()
-                .find(|p| p.id == player_id)
-            {
-                // Player was released to the global free-agent pool (via the
-                // "move to free agent" action) — no team, not retired. Without
-                // this branch the watchlist silently drops him on next render.
-                Some(WatchlistPlayerDto {
-                    team_name: i18n.t("free_agent").to_string(),
-                    ..base_watchlist_dto(player, simulator_data, now)
-                })
             } else {
-                None
+                simulator_data
+                    .free_agents
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map(|player| WatchlistPlayerDto {
+                        team_name: i18n.t("free_agent").to_string(),
+                        ..base_watchlist_dto(player, simulator_data, now)
+                    })
             }
         })
         .collect();

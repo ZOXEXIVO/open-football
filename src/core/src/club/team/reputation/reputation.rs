@@ -153,7 +153,7 @@ impl TeamReputation {
     pub fn process_player_signing(&mut self, player_reputation: u16, is_star_player: bool) {
         if is_star_player && player_reputation > self.world {
             // Signing a star player boosts reputation
-            let boost = ((player_reputation - self.world) / 10) as u16;
+            let boost = (player_reputation - self.world) / 10;
             self.world = (self.world + boost).min(10000);
             self.national = (self.national + boost / 2).min(10000);
 
@@ -165,7 +165,7 @@ impl TeamReputation {
     /// Process manager change
     pub fn process_manager_change(&mut self, manager_reputation: u16) {
         if manager_reputation > self.national {
-            let boost = ((manager_reputation - self.national) / 8) as u16;
+            let boost = (manager_reputation - self.national) / 8;
             self.national = (self.national + boost).min(10000);
             self.world = (self.world + boost / 2).min(10000);
 
@@ -955,7 +955,7 @@ mod tests {
         for _season in 0..10 {
             for week in 0..38 {
                 let outcome = match week % 5 {
-                    0 | 1 | 2 => MatchOutcome::Win,
+                    0..=2 => MatchOutcome::Win,
                     3 => MatchOutcome::Draw,
                     _ => MatchOutcome::Loss,
                 };

@@ -125,7 +125,7 @@ impl PlayerOfTheWeekSelector {
         is_starter: bool,
         team_goals_against: u8,
     ) -> f32 {
-        let rating_term = (stats.match_rating - 6.0).max(0.0).min(4.0);
+        let rating_term = (stats.match_rating - 6.0).clamp(0.0, 4.0);
         let goal_term = stats.goals as f32 * 1.5;
         let assist_term = stats.assists as f32 * 0.8;
         let motm_term = if is_motm { 1.5 } else { 0.0 };

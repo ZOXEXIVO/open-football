@@ -21,7 +21,7 @@ pub struct PassingEventContext {
 }
 
 impl PassingEventContext {
-    pub fn new() -> PassingEventBuilder {
+    pub fn builder() -> PassingEventBuilder {
         PassingEventBuilder::new()
     }
 }

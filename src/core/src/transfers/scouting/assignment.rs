@@ -324,7 +324,7 @@ impl<'a> ClubScan<'a> {
             // question is whether the club will say so out loud.
             if let Some(TransferPlausibilityVerdict::HardReject(_)) =
                 TransferPlausibilityBuilder::evaluate_summary(
-                    &buyer_plausibility_ctx,
+                    buyer_plausibility_ctx,
                     p,
                     false,
                     true,
@@ -569,9 +569,7 @@ impl<'a> ClubScan<'a> {
             .map(|o| o.player_id)
             .collect();
 
-        let target = if !already_observed_ids.is_empty()
-            && IntegerUtils::random(0, 100) < re_observe_chance
-        {
+        (if !already_observed_ids.is_empty() && IntegerUtils::random(0, 100) < re_observe_chance {
             // Go back to a player already on the watch list —
             // preferring the one seen LEAST. This used to take the
             // first match in prefilter order, which is a fixed
@@ -626,9 +624,7 @@ impl<'a> ClubScan<'a> {
             } else {
                 ScoutingPass::pick_reputation_weighted(&matching.iter().collect::<Vec<_>>())
             }
-        };
-
-        target
+        }) as _
     }
 
     /// The observation, the monitoring row, and — when the scout rates him and
@@ -681,10 +677,10 @@ impl<'a> ClubScan<'a> {
             is_new,
         });
 
-        if let Some(scout_id) = assignment.scout_staff_id {
-            if target.country_id != country_id {
-                familiarity_events.push((club.id, scout_id, target_region, target.country_id));
-            }
+        if let Some(scout_id) = assignment.scout_staff_id
+            && target.country_id != country_id
+        {
+            familiarity_events.push((club.id, scout_id, target_region, target.country_id));
         }
 
         let final_obs_count = obs_count + 1;
@@ -758,7 +754,7 @@ impl<'a> ClubScan<'a> {
                 ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
             );
             let assessment = TransferPlausibilityBuilder::assess_summary(
-                &buyer_plausibility_ctx,
+                buyer_plausibility_ctx,
                 target,
                 false,
                 true,

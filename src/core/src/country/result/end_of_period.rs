@@ -28,6 +28,7 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use rayon::prelude::*;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 struct LoanReturnEvent {
@@ -73,7 +74,7 @@ impl WarehousedLoans {
                 .filter(|p| p.position().position_group() == group)
                 .map(|p| (p.id, p.player_attributes.current_ability))
                 .collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            ranked.sort_by_key(|r| Reverse(r.1));
             for (id, _) in ranked.into_iter().take(group.ideal_squad_depth()) {
                 kept_ids.insert(id);
             }
@@ -205,10 +206,7 @@ impl CountryResult {
         // the body is read-only against shared league state. The two
         // per-league vecs are folded into a single tuple to keep the
         // rayon collect simple, then flattened serially below.
-        let per_league: Vec<(
-            Vec<(u32, AchievementType)>,
-            Vec<(u32, HappinessEventType, f32)>,
-        )> = country
+        let per_league: Vec<_> = country
             .leagues
             .leagues
             .par_iter()
@@ -337,27 +335,24 @@ impl CountryResult {
                         let cur = club.board.chairman.manager_loyalty as u16;
                         club.board.chairman.manager_loyalty =
                             (cur + loyalty_lift as u16).min(100) as u8;
-                        if let Some(main_team) = club.teams.main_mut() {
-                            if let Some(mgr) = main_team
+                        if let Some(main_team) = club.teams.main_mut()
+                            && let Some(mgr) = main_team
                                 .staffs
                                 .find_mut_by_position(StaffPosition::Manager)
-                            {
-                                if let Some(contract) = mgr.contract.as_mut() {
-                                    contract.salary =
-                                        ((contract.salary as f32) * (1.0 + salary_bump_pct)) as u32;
-                                    if extension_years > 0 {
-                                        let new_exp = contract
-                                            .expired
-                                            .with_year(contract.expired.year() + extension_years)
-                                            .unwrap_or(contract.expired);
-                                        if new_exp > contract.expired {
-                                            contract.expired = new_exp;
-                                        }
-                                    }
-                                    mgr.job_satisfaction =
-                                        (mgr.job_satisfaction + 12.0).clamp(0.0, 100.0);
+                            && let Some(contract) = mgr.contract.as_mut()
+                        {
+                            contract.salary =
+                                ((contract.salary as f32) * (1.0 + salary_bump_pct)) as u32;
+                            if extension_years > 0 {
+                                let new_exp = contract
+                                    .expired
+                                    .with_year(contract.expired.year() + extension_years)
+                                    .unwrap_or(contract.expired);
+                                if new_exp > contract.expired {
+                                    contract.expired = new_exp;
                                 }
                             }
+                            mgr.job_satisfaction = (mgr.job_satisfaction + 12.0).clamp(0.0, 100.0);
                         }
                     }
                     break;
@@ -551,28 +546,25 @@ impl CountryResult {
             // retention), the set is empty — the bonus is just skipped,
             // not a hard error.
             let mut final_ids = std::collections::HashSet::new();
-            if let Some((home_id, away_id)) = cup.champion_final_pairing(&country.clubs) {
-                if let Some(last_tour) = cup.league.schedule.tours.last() {
-                    if let Some(item) = last_tour.items.first() {
-                        if let Some(mr) = cup.league.matches.get(&item.id) {
-                            if let Some(details) = mr.details.as_ref() {
-                                let winning_squad = if winner_team_id == home_id {
-                                    Some(&details.left_team_players)
-                                } else if winner_team_id == away_id {
-                                    Some(&details.right_team_players)
-                                } else {
-                                    None
-                                };
-                                if let Some(squad) = winning_squad {
-                                    for id in &squad.main {
-                                        final_ids.insert(*id);
-                                    }
-                                    for id in &squad.substitutes_used {
-                                        final_ids.insert(*id);
-                                    }
-                                }
-                            }
-                        }
+            if let Some((home_id, away_id)) = cup.champion_final_pairing(&country.clubs)
+                && let Some(last_tour) = cup.league.schedule.tours.last()
+                && let Some(item) = last_tour.items.first()
+                && let Some(mr) = cup.league.matches.get(&item.id)
+                && let Some(details) = mr.details.as_ref()
+            {
+                let winning_squad = if winner_team_id == home_id {
+                    Some(&details.left_team_players)
+                } else if winner_team_id == away_id {
+                    Some(&details.right_team_players)
+                } else {
+                    None
+                };
+                if let Some(squad) = winning_squad {
+                    for id in &squad.main {
+                        final_ids.insert(*id);
+                    }
+                    for id in &squad.substitutes_used {
+                        final_ids.insert(*id);
                     }
                 }
             }
@@ -1631,11 +1623,11 @@ impl CountryResult {
     /// `scan_expired_loans` does — career history only owns senior slugs.
     fn loan_team_info(country: &Country, club: &Club, team: &Team) -> TeamInfo {
         let main_team = club.teams.main();
-        let (name, slug, reputation) = if team.team_type == TeamType::Main || main_team.is_none() {
-            (team.name.clone(), team.slug.clone(), team.reputation.world)
-        } else {
-            let m = main_team.unwrap();
-            (m.name.clone(), m.slug.clone(), m.reputation.world)
+        let (name, slug, reputation) = match main_team {
+            Some(m) if team.team_type != TeamType::Main => {
+                (m.name.clone(), m.slug.clone(), m.reputation.world)
+            }
+            _ => (team.name.clone(), team.slug.clone(), team.reputation.world),
         };
         let (league_name, league_slug) = main_team
             .and_then(|t| t.league_id)
@@ -1766,20 +1758,19 @@ impl CountryResult {
             Self::execute_loan_return(data, event, date, false);
             // Stamp the recall on the player's decision history so the
             // early return reads as a club decision, not a mystery.
-            if let Some((ci, coi, cli, ti)) = data.find_player_position(player_id) {
-                if let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
+            if let Some((ci, coi, cli, ti)) = data.find_player_position(player_id)
+                && let Some(player) = data.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
                     .players
                     .players
                     .iter_mut()
                     .find(|p| p.id == player_id)
-                {
-                    player.decision_history.add(
-                        date,
-                        String::new(),
-                        "dec_loan_recalled".to_string(),
-                        String::new(),
-                    );
-                }
+            {
+                player.decision_history.add(
+                    date,
+                    String::new(),
+                    "dec_loan_recalled".to_string(),
+                    String::new(),
+                );
             }
         }
     }
@@ -2118,10 +2109,10 @@ impl CountryResult {
                     club_id, points, league_id
                 );
             }
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                if let Some(state) = club.finance.debt.administration.as_mut() {
-                    state.deduction_applied = true;
-                }
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id)
+                && let Some(state) = club.finance.debt.administration.as_mut()
+            {
+                state.deduction_applied = true;
             }
         }
     }
@@ -2188,12 +2179,11 @@ impl CountryResult {
             // Find the paired lower league — group-aware, so a two-zone top
             // flight maps each zone to its own second-division group instead
             // of every zone piling into the first one.
-            let (tier2_id, promotion_spots) = match LeagueLadder::new(&country.leagues.leagues)
-                .lower_partner(tier1_id)
-            {
-                Some(l) => (l.id, l.settings.promotion_spots),
-                None => continue,
-            };
+            let (tier2_id, promotion_spots) =
+                match LeagueLadder::new(&country.leagues.leagues).lower_partner(tier1_id) {
+                    Some(l) => (l.id, l.settings.promotion_spots),
+                    None => continue,
+                };
 
             let nominal_swap = relegation_spots.min(promotion_spots) as usize;
 
@@ -2995,11 +2985,15 @@ mod tests {
         ];
         // zone 0 → group 0, zone 1 → group 1 (ordered by id).
         assert_eq!(
-            LeagueLadder::new(&leagues).lower_partner(100).map(|l| (l.id, l.settings.promotion_spots)),
+            LeagueLadder::new(&leagues)
+                .lower_partner(100)
+                .map(|l| (l.id, l.settings.promotion_spots)),
             Some((200, 1))
         );
         assert_eq!(
-            LeagueLadder::new(&leagues).lower_partner(101).map(|l| (l.id, l.settings.promotion_spots)),
+            LeagueLadder::new(&leagues)
+                .lower_partner(101)
+                .map(|l| (l.id, l.settings.promotion_spots)),
             Some((201, 1))
         );
     }
@@ -3012,7 +3006,9 @@ mod tests {
             league_with_group(20, 2, 2, 0, None, ""),
         ];
         assert_eq!(
-            LeagueLadder::new(&leagues).lower_partner(10).map(|l| (l.id, l.settings.promotion_spots)),
+            LeagueLadder::new(&leagues)
+                .lower_partner(10)
+                .map(|l| (l.id, l.settings.promotion_spots)),
             Some((20, 2))
         );
     }
@@ -3032,7 +3028,10 @@ mod tests {
     #[test]
     fn ladder_relegates_nobody_without_a_division_below() {
         let leagues = vec![league_with_group(10, 1, 0, 3, None, "")];
-        assert_eq!(LeagueLadder::new(&leagues).relegated_from_table(&leagues[0]), 0);
+        assert_eq!(
+            LeagueLadder::new(&leagues).relegated_from_table(&leagues[0]),
+            0
+        );
     }
 
     fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {

@@ -76,9 +76,8 @@ fn squad_status_applies_only_in_the_owning_roster() {
         visitor.domestic_cup_opportunity_bonus(&player, &cup, true) < baseline.0,
         "a frozen-out visitor gets no fresh-name cup pull"
     );
-    let intent = crate::club::staff::PlayerMatchIntent::assess(
-        &player, &staff, date, 0.3, false, false,
-    );
+    let intent =
+        crate::club::staff::PlayerMatchIntent::assess(&player, &staff, date, 0.3, false, false);
     assert!(!intent.development);
 }
 
@@ -958,7 +957,7 @@ fn generate_test_team() -> Team {
 }
 
 fn generate_test_staff() -> Staff {
-    StaffStub::default()
+    StaffStub::build()
 }
 
 fn generate_test_players() -> Vec<Player> {
@@ -1682,8 +1681,7 @@ impl ForceFixture {
             PlayerPositionType::ForwardRight,
         ];
         let mut players = Vec::new();
-        let mut id = 1u32;
-        for &pos in slots.iter() {
+        for (id, &pos) in (1u32..).zip(slots.iter()) {
             players.push(DevPlayer::with_skill(
                 make_cup_player(
                     id,
@@ -1697,7 +1695,6 @@ impl ForceFixture {
                 ),
                 16.0,
             ));
-            id += 1;
         }
         players
     }
@@ -1778,8 +1775,7 @@ fn force_selected_reserve_player_starts_for_main_team() {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 1u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (1u32..).zip(slots.iter()) {
         players.push(make_cup_player(
             id,
             pos,
@@ -1790,7 +1786,6 @@ fn force_selected_reserve_player_starts_for_main_team() {
             12,
             100.0,
         ));
-        id += 1;
     }
     let team = cup_team(players);
 
@@ -1911,8 +1906,7 @@ fn force_selection_overflow_no_duplicates_and_deterministic() {
         PlayerPositionType::MidfielderCenter,
         PlayerPositionType::Striker,
     ];
-    let mut id = 100u32;
-    for &pos in forced_slots.iter() {
+    for (id, &pos) in (100u32..).zip(forced_slots.iter()) {
         let mut p = make_cup_player(
             id,
             pos,
@@ -1925,7 +1919,6 @@ fn force_selection_overflow_no_duplicates_and_deterministic() {
         );
         p.is_force_match_selection = true;
         players.push(p);
-        id += 1;
     }
     // Four ordinary outfielders who must yield to the pins.
     for ord_id in 200..204u32 {
@@ -2011,8 +2004,7 @@ fn friendly_rotation_ignores_force_selection() {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 1u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (1u32..).zip(slots.iter()) {
         let mut regular = make_cup_player(
             id,
             pos,
@@ -2027,7 +2019,6 @@ fn friendly_rotation_ignores_force_selection() {
         // strength gap must live in the skills, not just the CA digit.
         FixtureSkills::stamp(&mut regular, 16.0);
         players.push(regular);
-        id += 1;
     }
     // A weak pinned midfielder: forced in a competitive match, ignored here.
     let mut weak = make_cup_player(
@@ -2083,8 +2074,7 @@ fn non_main_team_ignores_force_selection() {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 1u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (1u32..).zip(slots.iter()) {
         players.push(make_cup_player(
             id,
             pos,
@@ -2095,7 +2085,6 @@ fn non_main_team_ignores_force_selection() {
             8,
             80.0,
         ));
-        id += 1;
     }
     // A strong striker pinned for the senior side.
     let mut pinned = make_cup_player(
@@ -2204,7 +2193,7 @@ impl TestCoach {
         determination: u8,
         discipline: u8,
     ) -> Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         let coaching = &mut staff.staff_attributes.coaching;
         coaching.working_with_youngsters = working_with_youngsters;
         // Give a credible fitness/mental read so match-readiness noise stays
@@ -2494,7 +2483,7 @@ fn important_match_keeps_strongest_xi_over_youth_pathway() {
 
 #[test]
 fn develop_and_sell_early_cup_starts_credible_young_player() {
-    let staff = StaffStub::default();
+    let staff = StaffStub::build();
     let (senior, youth) = Contest::contest_pair();
     let team = cup_team(Contest::roster(senior, youth));
     let ctx = Contest::ctx(
@@ -2733,7 +2722,7 @@ fn low_judging_potential_requires_more_current_ability() {
 
 #[test]
 fn dead_rubber_league_gives_underused_prospect_minutes() {
-    let staff = StaffStub::default();
+    let staff = StaffStub::build();
 
     let (senior_a, youth_a) = Contest::contest_pair();
     let dead_rubber = cup_team(Contest::roster(senior_a, youth_a));
@@ -3023,8 +3012,7 @@ fn gk_outfield(extra_bench: usize) -> Vec<Player> {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 300u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (300u32..).zip(slots.iter()) {
         players.push(make_cup_player(
             id,
             pos,
@@ -3035,10 +3023,8 @@ fn gk_outfield(extra_bench: usize) -> Vec<Player> {
             12,
             100.0,
         ));
-        id += 1;
     }
-    let mut extra_id = 400u32;
-    for _ in 0..extra_bench {
+    for extra_id in (400u32..).take(extra_bench) {
         players.push(make_cup_player(
             extra_id,
             PlayerPositionType::MidfielderCenter,
@@ -3049,7 +3035,6 @@ fn gk_outfield(extra_bench: usize) -> Vec<Player> {
             5,
             60.0,
         ));
-        extra_id += 1;
     }
     players
 }
@@ -4371,8 +4356,7 @@ fn development_league_minutes_deficit_rotates_the_squad() {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 100u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (100u32..).zip(slots.iter()) {
         let first = make_cup_player(
             id,
             pos,
@@ -4387,7 +4371,6 @@ fn development_league_minutes_deficit_rotates_the_squad() {
         twin.id = id + 50;
         players.push(first);
         players.push(twin);
-        id += 1;
     }
     let keeper = make_cup_player(
         1,
@@ -4513,8 +4496,7 @@ fn guest_test_roster(outfield_played: u16, keeper_played: u16) -> Vec<Player> {
         PlayerPositionType::ForwardRight,
     ];
     let mut players = Vec::new();
-    let mut id = 100u32;
-    for &pos in slots.iter() {
+    for (id, &pos) in (100u32..).zip(slots.iter()) {
         for twin in 0..2u32 {
             let mut p = make_cup_player(
                 id + twin * 50,
@@ -4533,7 +4515,6 @@ fn guest_test_roster(outfield_played: u16, keeper_played: u16) -> Vec<Player> {
             p.friendly_statistics.played = outfield_played;
             players.push(p);
         }
-        id += 1;
     }
     for (gk_id, idle) in [(1u32, 5u16), (2u32, 12u16)] {
         let mut gk = make_cup_player(

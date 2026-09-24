@@ -208,26 +208,24 @@ impl ProcessContractHandler {
         if let (Some(promised), Some(current)) = (
             proposal.squad_status_promise.clone(),
             player.contract.as_ref().map(|c| c.squad_status.clone()),
-        ) {
-            if promised.seniority_rank() < current.seniority_rank()
-                && player.attributes.ambition >= 12.0
-            {
-                result.contract.contract_rejected = true;
-                record_counter_offer(
-                    player,
-                    &proposal,
-                    now,
-                    min_acceptable_years,
-                    RejectionReason::StatusBelowExpectation,
-                );
-                Self::emit_rejected_contract_offer(
-                    player,
-                    &proposal,
-                    RejectionReason::StatusBelowExpectation,
-                );
-                log_rejection(player, &proposal, now);
-                return;
-            }
+        ) && promised.seniority_rank() < current.seniority_rank()
+            && player.attributes.ambition >= 12.0
+        {
+            result.contract.contract_rejected = true;
+            record_counter_offer(
+                player,
+                &proposal,
+                now,
+                min_acceptable_years,
+                RejectionReason::StatusBelowExpectation,
+            );
+            Self::emit_rejected_contract_offer(
+                player,
+                &proposal,
+                RejectionReason::StatusBelowExpectation,
+            );
+            log_rejection(player, &proposal, now);
+            return;
         }
 
         // The mind's own verdict on putting pen to paper. A man who has
@@ -880,10 +878,12 @@ mod tests {
             important_matches: 12.0,
             dirtiness: 5.0,
         };
-        let mut pa = PlayerAttributes::default();
-        pa.world_reputation = world_rep;
-        pa.current_reputation = world_rep;
-        pa.current_ability = 140;
+        let pa = PlayerAttributes {
+            world_reputation: world_rep,
+            current_reputation: world_rep,
+            current_ability: 140,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("Test".into(), "Player".into()))

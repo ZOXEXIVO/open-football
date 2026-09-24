@@ -139,9 +139,9 @@ pub struct ScheduleError {
 }
 
 impl ScheduleError {
-    pub fn from_str(str: &'static str) -> Self {
+    pub fn new(message: &'static str) -> Self {
         ScheduleError {
-            message: str.to_owned(),
+            message: message.to_owned(),
         }
     }
 }
@@ -160,7 +160,7 @@ impl ScheduleItem {
         ScheduleItem {
             id,
             league_id,
-            league_slug: String::from(league_slug),
+            league_slug,
             date,
             result,
             home_team_id,
@@ -251,9 +251,7 @@ mod tests {
                 away_shootout: 0,
             }),
         };
-        let mut items_with_results = Vec::new();
-        items_with_results.push(item1.clone());
-        items_with_results.push(item2.clone());
+        let items_with_results = vec![item1.clone(), item2.clone()];
 
         let schedule_tour_with_results = ScheduleTour {
             num: 1,
@@ -273,9 +271,7 @@ mod tests {
             away_team_id: 0,
             result: None,
         };
-        let mut items_without_results = Vec::new();
-        items_without_results.push(item1);
-        items_without_results.push(item3);
+        let items_without_results = vec![item1, item3];
 
         let schedule_tour_without_results = ScheduleTour {
             num: 1,

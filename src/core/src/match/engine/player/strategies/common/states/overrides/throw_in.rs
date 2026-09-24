@@ -140,11 +140,7 @@ impl ThrowInDelivery {
         // throw-ins ended with the thrower still holding the ball,
         // because a scan bounded to `ThrowIn::range` can come up empty
         // when the ten team-mates are all beyond his arms.
-        let target = match picked.or_else(|| out_of_patience.then(|| Self::nearest(ctx)).flatten())
-        {
-            Some(target) => target,
-            None => return None,
-        };
+        let target = picked.or_else(|| out_of_patience.then(|| Self::nearest(ctx)).flatten())?;
 
         // …and it never goes further than he can throw it. The scan is
         // bounded by his range, so this only bites on the backstop above:
@@ -154,7 +150,7 @@ impl ThrowInDelivery {
         let (_, max_range) = ThrowIn::range(ctx.player.skills.technical.long_throws);
         let to = target.position - ctx.player.position;
         let distance = to.norm();
-        let mut pass = PassingEventContext::new()
+        let mut pass = PassingEventContext::builder()
             .with_from_player_id(ctx.player.id)
             .with_to_player_id(target.id)
             .with_reason("THROW_IN");
@@ -241,7 +237,7 @@ impl ThrowInDelivery {
             let progression = (0.5 + 0.5 * (to.x * forward) / max_range).clamp(0.0, 1.0);
 
             let score = openness * 0.50 + lane * 0.22 + comfort * 0.18 + progression * 0.10;
-            if best.map_or(true, |(_, b)| score > b) {
+            if best.is_none_or(|(_, b)| score > b) {
                 best = Some((mate, score));
             }
         }

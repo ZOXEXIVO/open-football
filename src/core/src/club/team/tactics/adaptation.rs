@@ -85,21 +85,21 @@ impl Team {
         let decisions = TacticalDecisionEngine::make_tactical_decisions(self);
 
         // Apply formation change if recommended with high confidence
-        if let Some(ref change) = decisions.formation_change {
-            if change.confidence > 0.75 {
-                info!(
-                    "Implementing formation change: {} -> {} ({})",
-                    change.from.map(|f| f.display_name()).unwrap_or("None"),
-                    change.to.display_name(),
-                    change.reason
-                );
+        if let Some(ref change) = decisions.formation_change
+            && change.confidence > 0.75
+        {
+            info!(
+                "Implementing formation change: {} -> {} ({})",
+                change.from.map(|f| f.display_name()).unwrap_or("None"),
+                change.to.display_name(),
+                change.reason
+            );
 
-                self.tactics = Some(Tactics::with_reason(
-                    change.to,
-                    TacticSelectionReason::TeamComposition,
-                    change.confidence,
-                ));
-            }
+            self.tactics = Some(Tactics::with_reason(
+                change.to,
+                TacticSelectionReason::TeamComposition,
+                change.confidence,
+            ));
         }
 
         // Log important recommendations
@@ -107,22 +107,20 @@ impl Team {
             match rec.priority {
                 RecommendationPriority::High | RecommendationPriority::Critical => {
                     log::warn!(
-                        "[{}] {}: {}",
+                        "[{}] {:?}: {}",
                         if rec.priority == RecommendationPriority::Critical {
                             "CRITICAL"
                         } else {
                             "HIGH"
                         },
-                        format!("{:?}", rec.category),
+                        rec.category,
                         rec.description
                     );
                 }
                 _ => {
                     debug!(
-                        "[{:?}] {}: {}",
-                        rec.priority,
-                        format!("{:?}", rec.category),
-                        rec.description
+                        "[{:?}] {:?}: {}",
+                        rec.priority, rec.category, rec.description
                     );
                 }
             }

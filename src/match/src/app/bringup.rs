@@ -201,7 +201,7 @@ impl Bringup {
     fn raises_a_bank(course: usize) -> bool {
         course > Self::STRUCTURE
             && course <= Self::COURSES
-            && (course - Self::STRUCTURE - 1) % Self::PER_BANK == 0
+            && (course - Self::STRUCTURE - 1).is_multiple_of(Self::PER_BANK)
     }
 
     /// The run condition behind [`Self::raises_a_bank`].

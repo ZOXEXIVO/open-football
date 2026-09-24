@@ -5,14 +5,14 @@
 //! reunion years later.
 
 use super::*;
+use crate::Staff;
 use crate::club::mind::organs::memory::EpochDay;
-use crate::club::staff::{DossierTuning, StaffStub};
+use crate::club::mind::organs::memory::MindClock;
 use crate::club::staff::coach::memory::{CoachMatchObservation, CoachMemoryFlags};
 use crate::club::staff::coach::plan::PlannedRole;
 use crate::club::staff::coach::standing::{GrievanceFlags, StandingEvidence};
 use crate::club::staff::perception::CoachProfile;
-use crate::Staff;
-use crate::club::mind::organs::memory::MindClock;
+use crate::club::staff::{DossierTuning, StaffStub};
 
 const TODAY: EpochDay = 10_000;
 const YEAR: EpochDay = 365;
@@ -55,9 +55,12 @@ fn the_years_together_survive_every_parting_and_reunion() {
     let mut store = Fx::store();
     Dossiers::open(&mut store, 11, 3, TODAY - 6 * YEAR);
     Dossiers::of_mut(&mut store, 11).unwrap().add_matches(40);
-    Dossiers::of_mut(&mut store, 11)
-        .unwrap()
-        .close(SeparationCause::SoldByBoard, 3, 25, TODAY - 4 * YEAR);
+    Dossiers::of_mut(&mut store, 11).unwrap().close(
+        SeparationCause::SoldByBoard,
+        3,
+        25,
+        TODAY - 4 * YEAR,
+    );
 
     Dossiers::open(&mut store, 11, 9, TODAY - 2 * YEAR);
     Dossiers::of_mut(&mut store, 11).unwrap().add_matches(30);
@@ -93,7 +96,7 @@ impl Spell {
     }
 
     fn coach() -> Staff {
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = 77;
         staff.staff_attributes.mental.man_management = 12;
         staff.staff_attributes.knowledge.judging_player_ability = 13;
@@ -161,7 +164,9 @@ fn selling_a_player_closes_the_spell_and_opens_a_dossier() {
 #[test]
 fn hot_memory_is_gone_once_the_dossier_is_written() {
     let mut coach = Spell::worked_with(9, 12, 6.8);
-    coach.squad_plan.force_role(9, PlannedRole::Starter, Spell::today());
+    coach
+        .squad_plan
+        .force_role(9, PlannedRole::Starter, Spell::today());
     assert!(coach.squad_plan.role_of(9).is_some());
 
     let report = PartingReport::bare(9, 3, 27);

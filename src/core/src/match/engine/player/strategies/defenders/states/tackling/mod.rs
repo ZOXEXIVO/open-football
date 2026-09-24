@@ -196,12 +196,12 @@ impl StateProcessingHandler for DefenderTacklingState {
             }
 
             // If opponent is near the player but doesn't have the ball, maybe it's better to transition to pressing
-            if let Some(close_opponent) = ctx.players().opponents().nearby(15.0).next() {
-                if close_opponent.distance(ctx) < 10.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
+            if let Some(close_opponent) = ctx.players().opponents().nearby(15.0).next()
+                && close_opponent.distance(ctx) < 10.0
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
             }
         }
 
@@ -533,8 +533,10 @@ mod tests {
     use chrono::NaiveDate;
 
     fn defender(tackling: f32, marking: f32, positioning: f32) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 9000;
+        let attrs = PlayerAttributes {
+            condition: 9000,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.technical.tackling = tackling;
         skills.technical.marking = marking;
@@ -567,8 +569,10 @@ mod tests {
     }
 
     fn attacker(dribbling: f32, technique: f32, agility: f32) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 9000;
+        let attrs = PlayerAttributes {
+            condition: 9000,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.technical.dribbling = dribbling;
         skills.technical.technique = technique;
@@ -622,9 +626,11 @@ mod tests {
     /// Every attribute at `level`, so the two sides of the duel are
     /// matched by construction.
     fn uniform(id: u32, level: f32, position: PlayerPositionType) -> MatchPlayer {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 10000;
-        attrs.jadedness = 0;
+        let attrs = PlayerAttributes {
+            condition: 10000,
+            jadedness: 0,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         let s = &mut skills;
         s.technical.tackling = level;

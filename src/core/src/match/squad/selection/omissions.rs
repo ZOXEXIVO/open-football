@@ -356,41 +356,41 @@ impl<'a> OmissionBuilder<'a> {
         if let Some(reason) = self.coach_memory_reason(omitted) {
             return reason;
         }
-        if let Some(c) = comparison {
-            if let Some(top) = c.top_factors.first() {
-                use crate::SelectionScoreFactor as F;
-                return match top {
-                    F::ManagerPlan => SelectionOmissionReason::SquadStatusMismatch,
-                    F::PlayingTimeCommitment | F::LoanAgreement => {
-                        SelectionOmissionReason::LowMatchImportanceRotation
-                    }
-                    F::PerceivedQuality => SelectionOmissionReason::TeammatePreferredOnAbility,
-                    F::MatchReadiness => SelectionOmissionReason::TeammatePreferredOnFitness,
-                    F::Fatigue => SelectionOmissionReason::TeammatePreferredOnFitness,
-                    F::PositionFit => SelectionOmissionReason::PositionFitIssue,
-                    F::TacticalFit | F::SideFootFit => {
-                        SelectionOmissionReason::TeammatePreferredForTacticalBalance
-                    }
-                    F::CoachRelationship => SelectionOmissionReason::TeammatePreferredOnTrust,
-                    F::Newcomer => SelectionOmissionReason::NewcomerStillIntegrating,
-                    F::SquadStatus => SelectionOmissionReason::SquadStatusMismatch,
-                    F::ForceSelection => SelectionOmissionReason::ManagerDoesNotTrustPlayer,
-                    F::TrainingImpression => SelectionOmissionReason::PoorRecentForm,
-                    F::Cohesion => SelectionOmissionReason::TacticalMismatch,
-                    F::Reputation => SelectionOmissionReason::TeammatePreferredOnAbility,
-                    F::YouthPreference => SelectionOmissionReason::YouthDevelopmentRotation,
-                    F::ClubPhilosophy => SelectionOmissionReason::TacticalMismatch,
-                    F::DevelopmentMinutes => SelectionOmissionReason::LowMatchImportanceRotation,
-                    F::CupOpportunity => SelectionOmissionReason::CupRotation,
-                    F::InjuryRisk => SelectionOmissionReason::FitnessProtection,
-                    F::OpponentMatchup => SelectionOmissionReason::OpponentMatchupMismatch,
-                    F::RoleDutyFit => SelectionOmissionReason::PositionFitIssue,
-                    F::LineupBalance => SelectionOmissionReason::LineupBalanceCall,
-                    F::BenchScenario => SelectionOmissionReason::BenchScenarioCoverage,
-                    F::MedicalRisk => SelectionOmissionReason::MedicalRecurrenceRisk,
-                    F::EligibilityRule => SelectionOmissionReason::EligibilityRuleBlock,
-                };
-            }
+        if let Some(c) = comparison
+            && let Some(top) = c.top_factors.first()
+        {
+            use crate::SelectionScoreFactor as F;
+            return match top {
+                F::ManagerPlan => SelectionOmissionReason::SquadStatusMismatch,
+                F::PlayingTimeCommitment | F::LoanAgreement => {
+                    SelectionOmissionReason::LowMatchImportanceRotation
+                }
+                F::PerceivedQuality => SelectionOmissionReason::TeammatePreferredOnAbility,
+                F::MatchReadiness => SelectionOmissionReason::TeammatePreferredOnFitness,
+                F::Fatigue => SelectionOmissionReason::TeammatePreferredOnFitness,
+                F::PositionFit => SelectionOmissionReason::PositionFitIssue,
+                F::TacticalFit | F::SideFootFit => {
+                    SelectionOmissionReason::TeammatePreferredForTacticalBalance
+                }
+                F::CoachRelationship => SelectionOmissionReason::TeammatePreferredOnTrust,
+                F::Newcomer => SelectionOmissionReason::NewcomerStillIntegrating,
+                F::SquadStatus => SelectionOmissionReason::SquadStatusMismatch,
+                F::ForceSelection => SelectionOmissionReason::ManagerDoesNotTrustPlayer,
+                F::TrainingImpression => SelectionOmissionReason::PoorRecentForm,
+                F::Cohesion => SelectionOmissionReason::TacticalMismatch,
+                F::Reputation => SelectionOmissionReason::TeammatePreferredOnAbility,
+                F::YouthPreference => SelectionOmissionReason::YouthDevelopmentRotation,
+                F::ClubPhilosophy => SelectionOmissionReason::TacticalMismatch,
+                F::DevelopmentMinutes => SelectionOmissionReason::LowMatchImportanceRotation,
+                F::CupOpportunity => SelectionOmissionReason::CupRotation,
+                F::InjuryRisk => SelectionOmissionReason::FitnessProtection,
+                F::OpponentMatchup => SelectionOmissionReason::OpponentMatchupMismatch,
+                F::RoleDutyFit => SelectionOmissionReason::PositionFitIssue,
+                F::LineupBalance => SelectionOmissionReason::LineupBalanceCall,
+                F::BenchScenario => SelectionOmissionReason::BenchScenarioCoverage,
+                F::MedicalRisk => SelectionOmissionReason::MedicalRecurrenceRisk,
+                F::EligibilityRule => SelectionOmissionReason::EligibilityRuleBlock,
+            };
         }
 
         let load = omitted

@@ -14,6 +14,12 @@ pub struct PlayerDecision {
     pub decided_by: String,
 }
 
+impl Default for PlayerDecisionHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerDecisionHistory {
     pub fn new() -> Self {
         PlayerDecisionHistory { items: Vec::new() }

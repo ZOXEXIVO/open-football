@@ -9,6 +9,12 @@ pub struct LeagueMilestones {
     pub historic_champions: Vec<(u16, u32)>,
 }
 
+impl Default for LeagueMilestones {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeagueMilestones {
     pub fn new() -> Self {
         LeagueMilestones {
@@ -37,14 +43,14 @@ impl LeagueMilestones {
             }
         }
 
-        if let Some((player_id, goals)) = stats.top_scorer {
-            if goals > self.all_time_records.most_goals_by_player.1 {
-                debug!(
-                    "🎯 NEW RECORD! Player {} has scored {} goals!",
-                    player_id, goals
-                );
-                self.all_time_records.most_goals_by_player = (player_id, goals);
-            }
+        if let Some((player_id, goals)) = stats.top_scorer
+            && goals > self.all_time_records.most_goals_by_player.1
+        {
+            debug!(
+                "🎯 NEW RECORD! Player {} has scored {} goals!",
+                player_id, goals
+            );
+            self.all_time_records.most_goals_by_player = (player_id, goals);
         }
     }
 

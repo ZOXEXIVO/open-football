@@ -257,7 +257,7 @@ impl CareerStageDetector {
         }
 
         let world_rep = player.player_attributes.world_reputation.max(0) as u16;
-        let apps = (player.statistics.played + player.statistics.played_subs) as u16;
+        let apps = player.statistics.played + player.statistics.played_subs;
         let mut stage = CareerStageEventContext::new(CareerStageEventKind::RetirementConsidering)
             .with_age(age)
             .with_world_reputation(world_rep)

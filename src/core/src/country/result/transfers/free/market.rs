@@ -719,7 +719,7 @@ impl FreeAgentMarketPass {
             country_reputation: buyer_country_reputation,
             continent_id: buyer_continent_id,
             region_prestige: buyer_region_prestige,
-            visibility: &visibility,
+            visibility,
             foreign_slots: buyer_foreign_slots,
             benefactor: buyer_benefactor,
         };
@@ -965,10 +965,10 @@ impl FreeAgentMarketPass {
         // pressure-decayed threshold. Skipped for in-country
         // expiring contracts (no career pressure; pre-decay
         // behaviour keeps the existing balance).
-        if best.is_global_pool {
-            if let Some(outcome) = Self::global_pool_answer(buyer, brief, best, market, state) {
-                return outcome;
-            }
+        if best.is_global_pool
+            && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, market, state)
+        {
+            return outcome;
         }
 
         let reason = TransferReason::key(request.reason.as_signing_reason_key());
@@ -1000,10 +1000,8 @@ impl FreeAgentMarketPass {
             terms: Some(terms),
             fills_group: Some(group),
         });
-        return CandidateOutcome::Filled;
+        CandidateOutcome::Filled
     }
-
-    /// Pass 3 — execute every staged signing as a free transfer, with the
 
     /// A name from the pool the rest of the world is letting go. He is priced
     /// and rolled against here, and every roll counts as an offer received.

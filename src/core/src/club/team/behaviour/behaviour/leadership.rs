@@ -21,12 +21,12 @@ impl TeamBehaviour {
     /// no qualifying figure — the best qualifying leader by a fully
     /// deterministic score (compound score, then lower id, so the pick
     /// never depends on roster order).
-    fn acting_captain<'p>(
-        players: &'p PlayerCollection,
+    fn acting_captain(
+        players: &PlayerCollection,
         official_captain: Option<u32>,
         official_vice: Option<u32>,
         bar: fn(&Player) -> bool,
-    ) -> Option<&'p Player> {
+    ) -> Option<&Player> {
         let official = |id: Option<u32>| {
             id.and_then(|id| players.players.iter().find(|p| p.id == id))
                 .filter(|p| bar(p))

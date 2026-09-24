@@ -48,12 +48,12 @@ impl StateProcessingHandler for ForwardInterceptingState {
             ));
         }
 
-        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Tackling,
-                ));
-            }
+        if let Some(carrier) = ctx.players().opponents().with_ball().next()
+            && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+        {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Tackling,
+            ));
         }
 
         // 2. Check if the player can reach the interception point before any opponent

@@ -34,6 +34,79 @@ impl Actors {
     }
 }
 
+impl PlayerActor {
+    /// Landing ends flight even while the recovery envelope is decaying.
+    /// Using `1 - settling()` here revives the flight pose during recovery,
+    /// because settling includes that same decaying envelope.
+    pub(super) fn flight_blend(&self) -> f32 {
+        let landing = if self.flat < 0.2 {
+            0.08
+        } else {
+            Actors::GROUNDING
+        };
+        1.0 - Actors::ease(self.down / landing)
+    }
+
+    /// Ballistic progress: knees drive up during ascent, then unfold before
+    /// touchdown. The height gate handles short, low flights as well.
+    pub(super) fn jump_progress(&self) -> f32 {
+        if self.vertical_speed < 0.0 {
+            0.5 + 0.5 * Actors::ease(1.0 - self.height / 0.28)
+        } else if self.climb > 0.1 {
+            0.5 * (1.0 - self.vertical_speed / self.climb).clamp(0.0, 1.0)
+        } else {
+            0.5
+        }
+    }
+
+    /// A short give in the elbows and chest after contact. Suppressed once
+    /// another action owns the hands. Never anticipates impact.
+    pub(super) fn save_recoil(&self) -> f32 {
+        let Some(contact) = self.save_time else {
+            return 0.0;
+        };
+        let since = self.clock - contact;
+        if !(0.0..0.32).contains(&since) {
+            return 0.0;
+        }
+        let pulse = Actors::ease(since / 0.07) * (1.0 - Actors::ease((since - 0.07) / 0.25));
+        pulse * self.reaction * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation))
+    }
+
+    /// Disbelief, a held gesture, then arms dropping as he exhales. The
+    /// individual reaction stays the same; its timing is no longer a statue.
+    pub(super) fn keeper_gesture(&self) -> f32 {
+        let Some(since) = self.goal_since.filter(|_| self.is_goalkeeper) else {
+            return 1.0;
+        };
+        let delay = 0.25 + 0.15 * Complexion::carriage(self.id);
+        Actors::ease((since - delay) / 0.7) * (1.0 - Actors::ease((since - 3.8 - delay) / 2.0))
+    }
+
+    /// Release the kneeling hold before the restart, even when the engine
+    /// leaves his position unchanged through the celebration.
+    pub(super) fn keeper_grief(&self) -> f32 {
+        self.goal_since
+            .map_or(1.0, |since| 1.0 - Actors::ease((since - 4.0) / 2.5))
+    }
+
+    pub(super) fn keeper_head_shake(&self) -> f32 {
+        let Some(since) = self.goal_since.filter(|_| self.is_goalkeeper) else {
+            return 0.0;
+        };
+        let t = since - 1.0;
+        if !(0.0..1.8).contains(&t) {
+            return 0.0;
+        }
+        0.22 * (t * TAU / 0.9).sin()
+            * (PI * t / 1.8).sin().powi(2)
+            * self.despair
+            * (1.0 - self.carry)
+            * (1.0 - self.dive)
+            * (1.0 - Actors::ease(self.speed / Actors::MOVING))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,78 +473,5 @@ mod tests {
             "Rendered 91 frames, {W}x{H}; strip {}x{H}",
             W * captures.len()
         );
-    }
-}
-
-impl PlayerActor {
-    /// Landing ends flight even while the recovery envelope is decaying.
-    /// Using `1 - settling()` here revives the flight pose during recovery,
-    /// because settling includes that same decaying envelope.
-    pub(super) fn flight_blend(&self) -> f32 {
-        let landing = if self.flat < 0.2 {
-            0.08
-        } else {
-            Actors::GROUNDING
-        };
-        1.0 - Actors::ease(self.down / landing)
-    }
-
-    /// Ballistic progress: knees drive up during ascent, then unfold before
-    /// touchdown. The height gate handles short, low flights as well.
-    pub(super) fn jump_progress(&self) -> f32 {
-        if self.vertical_speed < 0.0 {
-            0.5 + 0.5 * Actors::ease(1.0 - self.height / 0.28)
-        } else if self.climb > 0.1 {
-            0.5 * (1.0 - self.vertical_speed / self.climb).clamp(0.0, 1.0)
-        } else {
-            0.5
-        }
-    }
-
-    /// A short give in the elbows and chest after contact. Suppressed once
-    /// another action owns the hands. Never anticipates impact.
-    pub(super) fn save_recoil(&self) -> f32 {
-        let Some(contact) = self.save_time else {
-            return 0.0;
-        };
-        let since = self.clock - contact;
-        if !(0.0..0.32).contains(&since) {
-            return 0.0;
-        }
-        let pulse = Actors::ease(since / 0.07) * (1.0 - Actors::ease((since - 0.07) / 0.25));
-        pulse * self.reaction * (1.0 - self.carry) * (1.0 - self.despair.max(self.elation))
-    }
-
-    /// Disbelief, a held gesture, then arms dropping as he exhales. The
-    /// individual reaction stays the same; its timing is no longer a statue.
-    pub(super) fn keeper_gesture(&self) -> f32 {
-        let Some(since) = self.goal_since.filter(|_| self.is_goalkeeper) else {
-            return 1.0;
-        };
-        let delay = 0.25 + 0.15 * Complexion::carriage(self.id);
-        Actors::ease((since - delay) / 0.7) * (1.0 - Actors::ease((since - 3.8 - delay) / 2.0))
-    }
-
-    /// Release the kneeling hold before the restart, even when the engine
-    /// leaves his position unchanged through the celebration.
-    pub(super) fn keeper_grief(&self) -> f32 {
-        self.goal_since
-            .map_or(1.0, |since| 1.0 - Actors::ease((since - 4.0) / 2.5))
-    }
-
-    pub(super) fn keeper_head_shake(&self) -> f32 {
-        let Some(since) = self.goal_since.filter(|_| self.is_goalkeeper) else {
-            return 0.0;
-        };
-        let t = since - 1.0;
-        if !(0.0..1.8).contains(&t) {
-            return 0.0;
-        }
-        0.22 * (t * TAU / 0.9).sin()
-            * (PI * t / 1.8).sin().powi(2)
-            * self.despair
-            * (1.0 - self.carry)
-            * (1.0 - self.dive)
-            * (1.0 - Actors::ease(self.speed / Actors::MOVING))
     }
 }

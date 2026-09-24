@@ -300,10 +300,10 @@ fn the_keeper_fetches_it_from_behind_the_goal_and_restarts_on_the_pitch() {
     let mut resolved = None;
     for elapsed in 1..=3000 {
         m.tick();
-        if let Some(keeper) = m.field.players.iter().find(|p| p.id == taker) {
-            if keeper.position.x < 0.0 {
-                went_off_the_pitch = true;
-            }
+        if let Some(keeper) = m.field.players.iter().find(|p| p.id == taker)
+            && keeper.position.x < 0.0
+        {
+            went_off_the_pitch = true;
         }
         if m.field.ball.awaiting_restart.is_none() {
             resolved = Some(elapsed);

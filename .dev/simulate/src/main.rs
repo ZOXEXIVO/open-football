@@ -43,6 +43,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 use env_logger::Env;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
@@ -604,7 +605,7 @@ impl WorldMatchCensus {
             .iter()
             .filter(|(_, t)| t.team_matches >= Self::MIN_BUCKET)
             .collect();
-        shapes.sort_by(|a, b| b.1.team_matches.cmp(&a.1.team_matches));
+        shapes.sort_by_key(|s| Reverse(s.1.team_matches));
         for (name, totals) in shapes {
             totals.print_row(name);
         }
@@ -671,8 +672,10 @@ impl YouthSquadCensus {
     const WORKING: usize = 14;
 
     fn take(data: &SimulatorData) -> Self {
-        let mut c = YouthSquadCensus::default();
-        c.world_players = data.free_agents.len();
+        let mut c = YouthSquadCensus {
+            world_players: data.free_agents.len(),
+            ..Default::default()
+        };
         for continent in &data.continents {
             for country in &continent.countries {
                 for club in &country.clubs {

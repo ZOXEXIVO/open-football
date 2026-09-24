@@ -7,9 +7,10 @@
 //! decides WHICH instruction is held; this decides what holding it does.
 
 /// High-level tempo instruction from the coach
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CoachInstruction {
     /// Normal play - balanced attack/defense
+    #[default]
     Normal,
     /// Slow tempo - keep possession, pass back, let team rest
     SlowDown,
@@ -21,12 +22,6 @@ pub enum CoachInstruction {
     WasteTime,
     /// Park the bus - deep defensive block, clear ball, counter only
     ParkTheBus,
-}
-
-impl Default for CoachInstruction {
-    fn default() -> Self {
-        CoachInstruction::Normal
-    }
 }
 
 impl CoachInstruction {

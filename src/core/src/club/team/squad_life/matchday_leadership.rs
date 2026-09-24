@@ -18,6 +18,7 @@
 //!      MIN_LEADERSHIP_FOR_FALLBACK && (age >= MATURITY_AGE ||
 //!      young_exception)`), then from the full leadership-floor pool, then
 //!      from the entire XI if no starter clears the floor at all.
+//!
 //! The vice slot is filled by the same priority over the remaining XI,
 //! excluding whoever took the captaincy.
 //!
@@ -841,7 +842,7 @@ mod tests {
         let mut tired = Fixture::cand(1, 15.0);
         tired.condition_pct = 30.0;
         let fresh = Fixture::cand(2, 15.0);
-        let r = MatchdayLeadership::resolve(None, None, &vec![tired, fresh]);
+        let r = MatchdayLeadership::resolve(None, None, &[tired, fresh]);
         assert_eq!(r.captain_id, Some(2));
     }
 
@@ -852,7 +853,7 @@ mod tests {
         let mut flogged = Fixture::cand(1, 15.0);
         flogged.jadedness = 9000.0;
         let fresh = Fixture::cand(2, 15.0);
-        let r = MatchdayLeadership::resolve(None, None, &vec![flogged, fresh]);
+        let r = MatchdayLeadership::resolve(None, None, &[flogged, fresh]);
         assert_eq!(r.captain_id, Some(2));
     }
 
@@ -865,7 +866,7 @@ mod tests {
         cb.position = PlayerPositionType::DefenderCenter;
         let mut wide = Fixture::cand(2, 14.0);
         wide.position = PlayerPositionType::ForwardLeft;
-        let r = MatchdayLeadership::resolve(None, None, &vec![cb, wide]);
+        let r = MatchdayLeadership::resolve(None, None, &[cb, wide]);
         assert_eq!(r.captain_id, Some(1));
     }
 
@@ -881,7 +882,7 @@ mod tests {
         young.age = 20;
         young.reputation = 5000.0;
         let mature = Fixture::cand(2, 14.0);
-        let r = MatchdayLeadership::resolve(None, None, &vec![young, mature]);
+        let r = MatchdayLeadership::resolve(None, None, &[young, mature]);
         assert_eq!(r.captain_id, Some(2));
     }
 
@@ -897,7 +898,7 @@ mod tests {
         prodigy.determination = 15.0;
         prodigy.reputation = 8000.0;
         let older = Fixture::cand(2, 12.0);
-        let r = MatchdayLeadership::resolve(None, None, &vec![prodigy, older]);
+        let r = MatchdayLeadership::resolve(None, None, &[prodigy, older]);
         assert_eq!(r.captain_id, Some(1));
     }
 
@@ -909,7 +910,7 @@ mod tests {
         let mut official_young = Fixture::cand(1, 8.0);
         official_young.age = 21;
         let mature_alt = Fixture::cand(2, 17.0);
-        let r = MatchdayLeadership::resolve(Some(1), None, &vec![official_young, mature_alt]);
+        let r = MatchdayLeadership::resolve(Some(1), None, &[official_young, mature_alt]);
         assert_eq!(r.captain_id, Some(1));
     }
 
@@ -923,7 +924,7 @@ mod tests {
         youngish.age = 23; // youngest still in primary pool, peak block barely engaged
         let mut senior = Fixture::cand(2, 14.0);
         senior.age = 28;
-        let r = MatchdayLeadership::resolve(None, None, &vec![youngish, senior]);
+        let r = MatchdayLeadership::resolve(None, None, &[youngish, senior]);
         assert_eq!(r.captain_id, Some(2));
     }
 
@@ -938,7 +939,7 @@ mod tests {
         b.age = 20;
         let mut c = Fixture::cand(3, 8.0);
         c.age = 18;
-        let r = MatchdayLeadership::resolve(None, None, &vec![a, b, c]);
+        let r = MatchdayLeadership::resolve(None, None, &[a, b, c]);
         assert!(matches!(r.captain_id, Some(1) | Some(2) | Some(3)));
         // Most-leadership young player wins, since they all carry similar
         // age penalties.

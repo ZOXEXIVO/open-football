@@ -5,7 +5,7 @@ use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::teams::relations::{RelNode, RelationsGraph, RelationsGroup};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -135,7 +135,7 @@ pub async fn player_relations_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -154,7 +154,7 @@ pub async fn player_relations_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -195,7 +195,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;

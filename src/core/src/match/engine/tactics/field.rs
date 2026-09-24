@@ -195,10 +195,10 @@ mod tests {
 
         fn home_of(position: PlayerPositionType) -> (i16, i16) {
             for (pos, home, _) in POSITION_POSITIONING {
-                if *pos == position {
-                    if let PositionType::Home(x, y) = home {
-                        return (*x, *y);
-                    }
+                if *pos == position
+                    && let PositionType::Home(x, y) = home
+                {
+                    return (*x, *y);
                 }
             }
             panic!("{position:?} has no home row");

@@ -34,18 +34,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(in crate::r#match::engine::engine) fn apply_pending_set_piece_teleport(
         field: &mut MatchField,
     ) {
-        if let Some((player_id, ball_pos)) = field.ball.pending_set_piece_teleport.take() {
-            if let Some(idx) = field.player_index(player_id) {
-                let p = &mut field.players[idx];
-                #[cfg(feature = "match-logs")]
-                {
-                    tc::PlayerTeleportCensus::note_firing(tc::PSITE_SET_PIECE);
-                    tc::PlayerTeleportCensus::note(tc::PSITE_SET_PIECE, p.position, ball_pos);
-                }
-                p.position = ball_pos;
-                p.velocity = Vector3::zeros();
-                p.in_state_time = 0;
+        if let Some((player_id, ball_pos)) = field.ball.pending_set_piece_teleport.take()
+            && let Some(idx) = field.player_index(player_id)
+        {
+            let p = &mut field.players[idx];
+            #[cfg(feature = "match-logs")]
+            {
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_SET_PIECE);
+                tc::PlayerTeleportCensus::note(tc::PSITE_SET_PIECE, p.position, ball_pos);
             }
+            p.position = ball_pos;
+            p.velocity = Vector3::zeros();
+            p.in_state_time = 0;
         }
 
         // A delivery has reached the man who won the duel for it: put him
@@ -56,38 +56,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // immutably — the same reason as the set-piece teleport above.
         // See `AerialDelivery::force_heading` for why this happens on
         // arrival rather than at the strike.
-        if let Some(player_id) = field.ball.pending_aerial_strike.take() {
-            if let Some(idx) = field.player_index(player_id) {
-                let attacking_corner =
-                    field.ball.pass_origin_restart == crate::r#match::PassOriginRestart::Corner;
-                let p = &mut field.players[idx];
-                let next = if p.tactical_position.current_position.is_forward() {
-                    PlayerState::Forward(ForwardState::Heading)
-                } else if p.tactical_position.current_position.is_midfielder() {
-                    PlayerState::Midfielder(MidfielderState::Heading)
-                } else if attacking_corner {
-                    // A defender who won the ATTACKING corner header goes
-                    // to the state that shoots, not the one that clears.
-                    PlayerState::Defender(DefenderState::AttackingCorner)
-                } else {
-                    PlayerState::Defender(DefenderState::Heading)
-                };
-                // `AttackingCorner` owns its own header — it has a
-                // reach and a shot path of its own, and it is what the
-                // corner contest's winners are usually in. Overriding it
-                // here would take the corner's own heading route away.
-                if p.state != PlayerState::Defender(DefenderState::AttackingCorner) {
-                    p.transition_to(next, TransitionSource::EventHandler);
-                }
+        if let Some(player_id) = field.ball.pending_aerial_strike.take()
+            && let Some(idx) = field.player_index(player_id)
+        {
+            let attacking_corner =
+                field.ball.pass_origin_restart == crate::r#match::PassOriginRestart::Corner;
+            let p = &mut field.players[idx];
+            let next = if p.tactical_position.current_position.is_forward() {
+                PlayerState::Forward(ForwardState::Heading)
+            } else if p.tactical_position.current_position.is_midfielder() {
+                PlayerState::Midfielder(MidfielderState::Heading)
+            } else if attacking_corner {
+                // A defender who won the ATTACKING corner header goes
+                // to the state that shoots, not the one that clears.
+                PlayerState::Defender(DefenderState::AttackingCorner)
+            } else {
+                PlayerState::Defender(DefenderState::Heading)
+            };
+            // `AttackingCorner` owns its own header — it has a
+            // reach and a shot path of its own, and it is what the
+            // corner contest's winners are usually in. Overriding it
+            // here would take the corner's own heading route away.
+            if p.state != PlayerState::Defender(DefenderState::AttackingCorner) {
+                p.transition_to(next, TransitionSource::EventHandler);
             }
         }
 
         // The corner taker's own station: where he has to stand to take the
         // kick, while he walks the ball there. See `Ball::pending_restart_station`.
-        if let Some((player_id, station)) = field.ball.pending_restart_station.take() {
-            if let Some(idx) = field.player_index(player_id) {
-                field.players[idx].set_piece_station = Some(station);
-            }
+        if let Some((player_id, station)) = field.ball.pending_restart_station.take()
+            && let Some(idx) = field.player_index(player_id)
+        {
+            field.players[idx].set_piece_station = Some(station);
         }
 
         // Corner dead-ball set-up: put both sides into the shape a corner

@@ -118,6 +118,7 @@ impl ActivityIntensityConfig for GoalkeeperConfig {
 ///   * ball in midfield — 12-18 m;
 ///   * ball entering our final third — 6-10 m;
 ///   * ball in the box — 2-5 m, on the angle.
+///
 /// Diagnostic switch: with `OF_KEEPER_CALM_OFF` set, the keeper goes back
 /// to tracking the ball continuously — the resting tolerance stops opening
 /// out with distance, `PreparingForSave` stands down on a one-tick
@@ -1763,10 +1764,9 @@ impl KeeperSmother {
         let to_keeper = ctx.player.position - carrier.position;
         if let (Some(lane), Some(toward)) =
             (to_goal.try_normalize(1e-3), to_keeper.try_normalize(1e-3))
+            && lane.dot(&toward) < Self::IN_FRONT
         {
-            if lane.dot(&toward) < Self::IN_FRONT {
-                return None;
-            }
+            return None;
         }
 
         Some(SmotherAttempt {
@@ -3125,6 +3125,9 @@ impl KeeperShotSave {
 /// Goalkeeper condition processor (type alias for clarity)
 pub type GoalkeeperCondition = ConditionProcessor<GoalkeeperConfig>;
 
+// Re-export for convenience
+pub use crate::r#match::engine::player::strategies::common::ActivityIntensity;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3252,10 +3255,12 @@ mod tests {
     /// out of position and call it set.
     #[test]
     fn the_set_tolerance_is_tight_across_the_goal_and_slack_in_depth() {
-        assert!(
-            KeeperRestPosition::LATERAL_DEADZONE * 3.0 < KeeperRestPosition::SET_DEADZONE,
-            "the two axes must not share a scale"
-        );
+        const {
+            assert!(
+                KeeperRestPosition::LATERAL_DEADZONE * 3.0 < KeeperRestPosition::SET_DEADZONE,
+                "the two axes must not share a scale"
+            )
+        };
         let target = Vector3::new(20.0, 270.0, 0.0);
         assert!(
             KeeperRestPosition::is_set(Vector3::new(40.0, 270.0, 0.0), target),
@@ -3473,14 +3478,14 @@ mod tests {
     /// commits at all.
     #[test]
     fn every_keeper_reads_the_shot_before_it_arrives() {
-        assert!(KeeperShotReaction::SLOW_READ < 0.85);
-        assert!(KeeperShotReaction::SHARP_READ < KeeperShotReaction::SLOW_READ);
-        assert!(KeeperShotReaction::SHARP_READ > 0.0);
+        const { assert!(KeeperShotReaction::SLOW_READ < 0.85) };
+        const { assert!(KeeperShotReaction::SHARP_READ < KeeperShotReaction::SLOW_READ) };
+        const { assert!(KeeperShotReaction::SHARP_READ > 0.0) };
         // …and reading it cannot happen before he has reacted to it, or the
         // two models disagree about what he is doing with the first tenth
         // of a second.
-        assert!(KeeperShotReaction::FAST_REACTION < KeeperShotReaction::SLOW_REACTION);
-        assert!(KeeperShotReaction::FAST_REACTION > 0.0);
+        const { assert!(KeeperShotReaction::FAST_REACTION < KeeperShotReaction::SLOW_REACTION) };
+        const { assert!(KeeperShotReaction::FAST_REACTION > 0.0) };
     }
 
     /// Degenerate geometry must not produce a dive into the corner flag. A
@@ -3606,6 +3611,3 @@ mod tests {
         }
     }
 }
-
-// Re-export for convenience
-pub use crate::r#match::engine::player::strategies::common::ActivityIntensity;

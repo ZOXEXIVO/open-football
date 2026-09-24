@@ -22,9 +22,11 @@ impl Fx {
     /// A contracted central midfielder. `with_contract = false` leaves
     /// him contract-less (a returning loanee / free agent on the books).
     fn player(with_contract: bool) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = 95;
-        attrs.potential_ability = 150;
+        let attrs = PlayerAttributes {
+            current_ability: 95,
+            potential_ability: 150,
+            ..Default::default()
+        };
         let mut builder = PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("Y".into(), "P".into()))

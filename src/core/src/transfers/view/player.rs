@@ -14,6 +14,7 @@ use crate::club::staff::perception::AbilityEstimator;
 use crate::{TransferInterestSource, TransferInterestStage};
 use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
+use std::cmp::Reverse;
 
 use crate::club::player::language::LanguageProfile;
 use crate::club::player::mind::{GoalKind, MindClock};
@@ -37,10 +38,10 @@ use crate::{
 pub(crate) struct PlayerView;
 
 impl PlayerView {
-    pub(in crate::transfers) fn find_player_in_country<'a>(
-        country: &'a Country,
+    pub(in crate::transfers) fn find_player_in_country(
+        country: &Country,
         player_id: u32,
-    ) -> Option<&'a Player> {
+    ) -> Option<&Player> {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.find(player_id) {
@@ -75,10 +76,10 @@ impl PlayerView {
         (player_name, club_name)
     }
 
-    pub(in crate::transfers) fn find_player_in_club<'a>(
-        club: &'a Club,
+    pub(in crate::transfers) fn find_player_in_club(
+        club: &Club,
         player_id: u32,
-    ) -> Option<&'a Player> {
+    ) -> Option<&Player> {
         for team in &club.teams.teams {
             if let Some(player) = team.players.find(player_id) {
                 return Some(player);
@@ -357,7 +358,7 @@ impl PlayerView {
         if peers.is_empty() {
             return u8::MAX;
         }
-        peers.sort_by(|a, b| b.1.cmp(&a.1));
+        peers.sort_by_key(|p| Reverse(p.1));
         peers
             .iter()
             .position(|(pid, _)| *pid == player_id)
@@ -515,18 +516,17 @@ impl CountryPlayerLookup {
         player_id: u32,
         date: NaiveDate,
     ) -> Option<PlayerSummary> {
-        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
-            if let Some(club) = country.clubs.get(club_idx as usize) {
-                if let Some(player) = PlayerView::find_player_in_club(club, player_id) {
-                    return Some(PlayerView::build_player_summary_ranked(
-                        country,
-                        club,
-                        player,
-                        date,
-                        self.ranks_by_club.get(club_idx as usize),
-                    ));
-                }
-            }
+        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id)
+            && let Some(club) = country.clubs.get(club_idx as usize)
+            && let Some(player) = PlayerView::find_player_in_club(club, player_id)
+        {
+            return Some(PlayerView::build_player_summary_ranked(
+                country,
+                club,
+                player,
+                date,
+                self.ranks_by_club.get(club_idx as usize),
+            ));
         }
         PlayerView::find_player_summary_in_country(country, player_id, date)
     }
@@ -539,12 +539,11 @@ impl CountryPlayerLookup {
         country: &'a Country,
         player_id: u32,
     ) -> Option<&'a Player> {
-        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id) {
-            if let Some(club) = country.clubs.get(club_idx as usize) {
-                if let Some(player) = PlayerView::find_player_in_club(club, player_id) {
-                    return Some(player);
-                }
-            }
+        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id)
+            && let Some(club) = country.clubs.get(club_idx as usize)
+            && let Some(player) = PlayerView::find_player_in_club(club, player_id)
+        {
+            return Some(player);
         }
         PlayerView::find_player_in_country(country, player_id)
     }
@@ -590,7 +589,7 @@ impl ClubGroupRanks {
                 peers_by_group[group.index()].push((p.id, AbilityEstimator::observable_level(p)));
             }
             for (group_idx, peers) in peers_by_group.iter_mut().enumerate() {
-                peers.sort_by(|a, b| b.1.cmp(&a.1));
+                peers.sort_by_key(|p| Reverse(p.1));
                 best_by_group[group_idx] = peers.first().map(|(_, ca)| *ca).unwrap_or(0);
                 size_by_group[group_idx] = peers.len().min(u8::MAX as usize) as u8;
                 for (rank, (pid, _)) in peers.iter().enumerate() {

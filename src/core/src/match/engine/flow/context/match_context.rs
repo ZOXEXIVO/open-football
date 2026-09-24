@@ -264,6 +264,7 @@ pub struct MatchContext {
     ///     the original foul,
     ///   * the window expires without either → play continues, card
     ///     decision still applies (delayed booking).
+    ///
     /// `None` whenever no advantage is in play.
     pub pending_advantage: Option<PendingAdvantage>,
 }

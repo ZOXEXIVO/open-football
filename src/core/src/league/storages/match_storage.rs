@@ -190,11 +190,8 @@ mod tests {
         let match_result = mk("match_1");
         match_storage.push(match_result.clone(), day(2024, 1, 1));
 
-        assert_eq!(
-            match_storage.get("match_1".to_string()),
-            Some(&match_result)
-        );
-        assert_eq!(match_storage.get("nonexistent_id".to_string()), None);
+        assert_eq!(match_storage.get("match_1"), Some(&match_result));
+        assert_eq!(match_storage.get("nonexistent_id"), None);
     }
 
     #[test]

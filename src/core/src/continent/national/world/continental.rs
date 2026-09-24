@@ -12,6 +12,7 @@
 
 use chrono::NaiveDate;
 use log::info;
+use std::cmp::Reverse;
 
 use super::lookups::{world_country_name, world_country_reputation};
 use super::squad::NationalSquadBuilder;
@@ -196,7 +197,7 @@ impl WorldNationalCompetitions {
                 .iter()
                 .map(|c| (c.id, c.reputation))
                 .collect();
-            country_ids_by_rep.sort_by(|a, b| b.1.cmp(&a.1));
+            country_ids_by_rep.sort_by_key(|c| Reverse(c.1));
             let sorted_ids: Vec<u32> = country_ids_by_rep.iter().map(|(id, _)| *id).collect();
             continent
                 .national_team_competitions

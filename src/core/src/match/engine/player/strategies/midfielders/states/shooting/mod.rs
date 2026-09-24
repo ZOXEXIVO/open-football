@@ -63,7 +63,7 @@ impl StateProcessingHandler for MidfielderShootingState {
         // the forward Shooting pattern + the pass-reason convention).
         // Falls back to distance bucket only when the transition came
         // from a path that didn't tag.
-        let reason = ctx.player.pending_shot_reason.unwrap_or_else(|| {
+        let reason = ctx.player.pending_shot_reason.unwrap_or({
             if distance_to_goal <= 30.0 {
                 "MID_SHOOTING_CLOSE"
             } else if distance_to_goal <= 60.0 {
@@ -76,7 +76,7 @@ impl StateProcessingHandler for MidfielderShootingState {
         Some(StateChangeResult::with_midfielder_state_and_event(
             MidfielderState::Standing,
             Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::new()
+                ShootingEventContext::builder()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
                     .with_reason(reason)

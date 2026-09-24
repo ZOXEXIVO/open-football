@@ -7,6 +7,12 @@ pub struct ClubFinancialBalanceHistory {
     history: LinkedList<(NaiveDate, ClubFinancialBalance)>,
 }
 
+impl Default for ClubFinancialBalanceHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClubFinancialBalanceHistory {
     pub fn new() -> Self {
         ClubFinancialBalanceHistory {

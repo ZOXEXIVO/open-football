@@ -140,7 +140,7 @@ pub async fn team_relations_get_action(
         .collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/relations", &route_params.lang, &team.slug);
+    let current_path = format!("/{}/teams/{}/relations", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
         i18n: &i18n,
         lang: &route_params.lang,
@@ -166,7 +166,7 @@ pub async fn team_relations_get_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: simulator_data
@@ -509,11 +509,11 @@ impl RelationsGraph {
         let mut nodes: Vec<RelNode> = Vec::new();
 
         // Root first so it lands at node 0 and the client can pin it on top.
-        if let Some(rid) = root_id {
-            if let Some(player) = players.iter().find(|p| p.id == rid) {
-                index_of.insert(rid, nodes.len());
-                nodes.push(Self::node_for(player, true));
-            }
+        if let Some(rid) = root_id
+            && let Some(player) = players.iter().find(|p| p.id == rid)
+        {
+            index_of.insert(rid, nodes.len());
+            nodes.push(Self::node_for(player, true));
         }
         for player in players {
             if Some(player.id) == root_id || !keep.contains(&player.id) {

@@ -94,7 +94,7 @@ pub async fn league_newspaper_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
@@ -108,8 +108,7 @@ pub async fn league_newspaper_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path =
-                format!("/{}/leagues/{}/newspaper", &route_params.lang, &league.slug);
+            let current_path = format!("/{}/leagues/{}/newspaper", route_params.lang, league.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -515,10 +514,10 @@ mod tests {
         ] {
             html = html.replace(link, "");
         }
-        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
-            if let Some(end) = html[start..].find('>') {
-                html.replace_range(start..start + end + 1, "");
-            }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+            && let Some(end) = html[start..].find('>')
+        {
+            html.replace_range(start..start + end + 1, "");
         }
         html = html.replace(
             "</head>",

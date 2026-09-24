@@ -4,6 +4,7 @@ use crate::club::staff::perception::PotentialEstimator;
 use crate::{Person, Player, PlayerClubContract, PlayerStatusType};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use std::cmp::Reverse;
 
 impl ClubAcademy {
     /// Graduate up to `count` academy players into the youth-team
@@ -118,7 +119,7 @@ impl ClubAcademy {
             .filter(|p| p.age(date) >= min_age)
             .map(|p| (p.id, self.pathway_readiness_score(p, date)))
             .collect();
-        overdue.sort_by(|a, b| b.1.cmp(&a.1));
+        overdue.sort_by_key(|o| Reverse(o.1));
         overdue.truncate(max_count);
         let ids: Vec<u32> = overdue.into_iter().map(|(id, _)| id).collect();
 
@@ -267,6 +268,7 @@ impl ClubAcademy {
     ///   * minimum   3  (graduate all eligible if fewer than 3 exist)
     ///   * preferred 5
     ///   * maximum   8
+    ///
     /// always capped by the room left under the youth soft-max of 30.
     pub fn recommended_graduates(&self, youth_count: usize, eligible_count: usize) -> usize {
         const MIN: usize = 3;

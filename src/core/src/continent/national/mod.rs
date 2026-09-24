@@ -140,52 +140,52 @@ impl NationalTeamCompetitions {
             match comp.phase {
                 CompetitionPhase::Qualifying => {
                     for (group_idx, fix_idx) in comp.get_todays_qualifying_fixtures(date) {
-                        if let Some(group) = comp.qualifying_groups.get(group_idx as usize) {
-                            if let Some(fixture) = group.fixtures.get(fix_idx) {
-                                matches.push(NationalCompetitionFixture {
-                                    home_country_id: fixture.home_country_id,
-                                    away_country_id: fixture.away_country_id,
-                                    competition_idx: comp_idx,
-                                    phase: NationalCompetitionPhase::Qualifying,
-                                    group_idx: group_idx as usize,
-                                    fixture_idx: fix_idx,
-                                    level: comp.config.team_level,
-                                });
-                            }
+                        if let Some(group) = comp.qualifying_groups.get(group_idx as usize)
+                            && let Some(fixture) = group.fixtures.get(fix_idx)
+                        {
+                            matches.push(NationalCompetitionFixture {
+                                home_country_id: fixture.home_country_id,
+                                away_country_id: fixture.away_country_id,
+                                competition_idx: comp_idx,
+                                phase: NationalCompetitionPhase::Qualifying,
+                                group_idx: group_idx as usize,
+                                fixture_idx: fix_idx,
+                                level: comp.config.team_level,
+                            });
                         }
                     }
                 }
                 CompetitionPhase::GroupStage => {
                     for (group_idx, fix_idx) in comp.get_todays_tournament_group_fixtures(date) {
-                        if let Some(group) = comp.tournament_groups.get(group_idx as usize) {
-                            if let Some(fixture) = group.fixtures.get(fix_idx) {
-                                matches.push(NationalCompetitionFixture {
-                                    home_country_id: fixture.home_country_id,
-                                    away_country_id: fixture.away_country_id,
-                                    competition_idx: comp_idx,
-                                    phase: NationalCompetitionPhase::GroupStage,
-                                    group_idx: group_idx as usize,
-                                    fixture_idx: fix_idx,
-                                    level: comp.config.team_level,
-                                });
-                            }
+                        if let Some(group) = comp.tournament_groups.get(group_idx as usize)
+                            && let Some(fixture) = group.fixtures.get(fix_idx)
+                        {
+                            matches.push(NationalCompetitionFixture {
+                                home_country_id: fixture.home_country_id,
+                                away_country_id: fixture.away_country_id,
+                                competition_idx: comp_idx,
+                                phase: NationalCompetitionPhase::GroupStage,
+                                group_idx: group_idx as usize,
+                                fixture_idx: fix_idx,
+                                level: comp.config.team_level,
+                            });
                         }
                     }
                 }
                 CompetitionPhase::Knockout => {
                     for (bracket_idx, fix_idx) in comp.get_todays_knockout_fixtures(date) {
-                        if let Some(bracket) = comp.knockout.get(bracket_idx) {
-                            if let Some(fixture) = bracket.fixtures.get(fix_idx) {
-                                matches.push(NationalCompetitionFixture {
-                                    home_country_id: fixture.home_country_id,
-                                    away_country_id: fixture.away_country_id,
-                                    competition_idx: comp_idx,
-                                    phase: NationalCompetitionPhase::Knockout,
-                                    group_idx: bracket_idx,
-                                    fixture_idx: fix_idx,
-                                    level: comp.config.team_level,
-                                });
-                            }
+                        if let Some(bracket) = comp.knockout.get(bracket_idx)
+                            && let Some(fixture) = bracket.fixtures.get(fix_idx)
+                        {
+                            matches.push(NationalCompetitionFixture {
+                                home_country_id: fixture.home_country_id,
+                                away_country_id: fixture.away_country_id,
+                                competition_idx: comp_idx,
+                                phase: NationalCompetitionPhase::Knockout,
+                                group_idx: bracket_idx,
+                                fixture_idx: fix_idx,
+                                level: comp.config.team_level,
+                            });
                         }
                     }
                 }

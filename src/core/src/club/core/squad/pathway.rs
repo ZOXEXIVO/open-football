@@ -453,11 +453,10 @@ impl Club {
         );
         if self.philosophy == ClubPhilosophy::DevelopAndSell
             && next != ClubPhilosophy::DevelopAndSell
+            && !self.philosophy_under_review
         {
-            if !self.philosophy_under_review {
-                self.philosophy_under_review = true;
-                return;
-            }
+            self.philosophy_under_review = true;
+            return;
         }
         self.philosophy_under_review = false;
         self.philosophy = next;
@@ -1045,10 +1044,12 @@ mod tests {
         }
 
         fn player(id: u32, ca: u8, age: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca.saturating_add(20);
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca.saturating_add(20),
+                condition: 10_000,
+                ..Default::default()
+            };
             let mut contract =
                 PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2031, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
@@ -1111,7 +1112,7 @@ mod tests {
         let mut club = Fx::club(vec![Fx::player(1, 130, 30)]);
         club.philosophy = ClubPhilosophy::DevelopAndSell;
         club.review_pathways(Fx::date());
-        club.review_pathways(Fx::date() + chrono::Duration::days(PlayerPlan::REVIEW_DAYS as i64));
+        club.review_pathways(Fx::date() + chrono::Duration::days(PlayerPlan::REVIEW_DAYS));
 
         let player = club.teams.teams[0].players.find(1).unwrap();
         assert_eq!(

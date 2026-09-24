@@ -3,8 +3,8 @@ pub struct BoardMood {
     pub state: BoardMoodState,
 }
 
-impl BoardMood {
-    pub fn default() -> Self {
+impl Default for BoardMood {
+    fn default() -> Self {
         BoardMood {
             state: BoardMoodState::Normal,
         }

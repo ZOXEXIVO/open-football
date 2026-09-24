@@ -901,7 +901,7 @@ mod tests {
     #[test]
     fn poor_rating_produces_no_showcase() {
         // 6.9 is below the candidate gate entirely.
-        assert!(6.9 < MIN_SHOWCASE_RATING);
+        const { assert!(6.9 < MIN_SHOWCASE_RATING) };
         // And even a 6.9 line in a giant-killing win stays below the floor.
         let underdog = Showcase::underdog_bonus(300.0, 1000.0);
         let line = ShowcaseStatLine {
@@ -947,7 +947,7 @@ mod tests {
     fn recipient_probability_is_clamped_and_layered() {
         // Floor.
         let low = RecipientSelection::probability(0.0, 0.0, false, false, 30);
-        assert!(low >= 0.05 && low <= 0.65);
+        assert!((0.05..=0.65).contains(&low));
         // Ceiling — a huge elite score with every bonus saturates at 0.65.
         let high = RecipientSelection::probability(6.0, 1.20, true, true, 20);
         assert!((high - 0.65).abs() < 1e-6, "got {high}");

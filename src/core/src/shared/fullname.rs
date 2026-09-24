@@ -131,7 +131,7 @@ impl Display for FullName {
         }
         let mut name = format!("{} {}", self.last_name, self.first_name);
         if let Some(middle_name) = self.middle_name.as_ref() {
-            name.push_str(" ");
+            name.push(' ');
             name.push_str(middle_name);
         }
         write!(f, "{}", name)

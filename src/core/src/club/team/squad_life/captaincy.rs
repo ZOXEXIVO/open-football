@@ -238,45 +238,45 @@ impl CaptaincyAssigner {
         // event applied to their morale at their next club; the transfer
         // pipeline handles the move itself, and pinning a "stripped of
         // armband" event on a departed player would be doubly wrong.
-        if let Some(old_id) = old_captain {
-            if let Some(p) = team.players.players.iter_mut().find(|p| p.id == old_id) {
-                let mag = CaptaincyMagnitude::removed(p);
-                let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
-                    .with_leadership_attribute(p.skills.mental.leadership);
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::Other,
-                    HappinessEventSeverity::from_magnitude(mag),
-                    HappinessEventScope::DressingRoom,
-                )
-                .with_leadership_context(lctx);
-                p.happiness.add_event_with_context_and_cooldown(
-                    HappinessEventType::CaptaincyRemoved,
-                    mag,
-                    None,
-                    happiness_ctx,
-                    CAPTAINCY_EVENT_COOLDOWN_DAYS,
-                );
-            }
+        if let Some(old_id) = old_captain
+            && let Some(p) = team.players.players.iter_mut().find(|p| p.id == old_id)
+        {
+            let mag = CaptaincyMagnitude::removed(p);
+            let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
+                .with_leadership_attribute(p.skills.mental.leadership);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_leadership_context(lctx);
+            p.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::CaptaincyRemoved,
+                mag,
+                None,
+                happiness_ctx,
+                CAPTAINCY_EVENT_COOLDOWN_DAYS,
+            );
         }
-        if let Some(new_id) = new_captain {
-            if let Some(p) = team.players.players.iter_mut().find(|p| p.id == new_id) {
-                let mag = CaptaincyMagnitude::awarded(p);
-                let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
-                    .with_leadership_attribute(p.skills.mental.leadership);
-                let happiness_ctx = HappinessEventContext::new(
-                    HappinessEventCause::Other,
-                    HappinessEventSeverity::from_magnitude(mag),
-                    HappinessEventScope::DressingRoom,
-                )
-                .with_leadership_context(lctx);
-                p.happiness.add_event_with_context_and_cooldown(
-                    HappinessEventType::CaptaincyAwarded,
-                    mag,
-                    None,
-                    happiness_ctx,
-                    CAPTAINCY_EVENT_COOLDOWN_DAYS,
-                );
-            }
+        if let Some(new_id) = new_captain
+            && let Some(p) = team.players.players.iter_mut().find(|p| p.id == new_id)
+        {
+            let mag = CaptaincyMagnitude::awarded(p);
+            let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
+                .with_leadership_attribute(p.skills.mental.leadership);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_leadership_context(lctx);
+            p.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::CaptaincyAwarded,
+                mag,
+                None,
+                happiness_ctx,
+                CAPTAINCY_EVENT_COOLDOWN_DAYS,
+            );
         }
     }
 
@@ -298,49 +298,47 @@ impl CaptaincyAssigner {
         new_captain: Option<u32>,
     ) {
         let old_captain = team.captain_id;
-        if let Some(old_id) = old_vice {
-            if Some(old_id) != new_captain {
-                if let Some(p) = team.players.players.iter_mut().find(|p| p.id == old_id) {
-                    let mag = CaptaincyMagnitude::removed(p) * Self::VICE_MAGNITUDE_SCALE;
-                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
-                        .with_leadership_attribute(p.skills.mental.leadership);
-                    let happiness_ctx = HappinessEventContext::new(
-                        HappinessEventCause::Other,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::DressingRoom,
-                    )
-                    .with_leadership_context(lctx);
-                    p.happiness.add_event_with_context_and_cooldown(
-                        HappinessEventType::CaptaincyRemoved,
-                        mag,
-                        None,
-                        happiness_ctx,
-                        CAPTAINCY_EVENT_COOLDOWN_DAYS,
-                    );
-                }
-            }
+        if let Some(old_id) = old_vice
+            && Some(old_id) != new_captain
+            && let Some(p) = team.players.players.iter_mut().find(|p| p.id == old_id)
+        {
+            let mag = CaptaincyMagnitude::removed(p) * Self::VICE_MAGNITUDE_SCALE;
+            let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyRemoved)
+                .with_leadership_attribute(p.skills.mental.leadership);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_leadership_context(lctx);
+            p.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::CaptaincyRemoved,
+                mag,
+                None,
+                happiness_ctx,
+                CAPTAINCY_EVENT_COOLDOWN_DAYS,
+            );
         }
-        if let Some(new_id) = new_vice {
-            if Some(new_id) != old_captain {
-                if let Some(p) = team.players.players.iter_mut().find(|p| p.id == new_id) {
-                    let mag = CaptaincyMagnitude::awarded(p) * Self::VICE_MAGNITUDE_SCALE;
-                    let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
-                        .with_leadership_attribute(p.skills.mental.leadership);
-                    let happiness_ctx = HappinessEventContext::new(
-                        HappinessEventCause::Other,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::DressingRoom,
-                    )
-                    .with_leadership_context(lctx);
-                    p.happiness.add_event_with_context_and_cooldown(
-                        HappinessEventType::CaptaincyAwarded,
-                        mag,
-                        None,
-                        happiness_ctx,
-                        CAPTAINCY_EVENT_COOLDOWN_DAYS,
-                    );
-                }
-            }
+        if let Some(new_id) = new_vice
+            && Some(new_id) != old_captain
+            && let Some(p) = team.players.players.iter_mut().find(|p| p.id == new_id)
+        {
+            let mag = CaptaincyMagnitude::awarded(p) * Self::VICE_MAGNITUDE_SCALE;
+            let lctx = LeadershipEventContext::new(LeadershipEventKind::CaptaincyAwarded)
+                .with_leadership_attribute(p.skills.mental.leadership);
+            let happiness_ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::from_magnitude(mag),
+                HappinessEventScope::DressingRoom,
+            )
+            .with_leadership_context(lctx);
+            p.happiness.add_event_with_context_and_cooldown(
+                HappinessEventType::CaptaincyAwarded,
+                mag,
+                None,
+                happiness_ctx,
+                CAPTAINCY_EVENT_COOLDOWN_DAYS,
+            );
         }
     }
 }
@@ -798,10 +796,10 @@ impl<'a> CaptaincyModel<'a> {
             if (c.expiration - self.date).num_days() <= CONTRACT_EXPIRY_SOON_DAYS {
                 pen += PEN_CONTRACT_EXPIRING;
             }
-            if let Some(started) = c.started {
-                if (self.date - started).num_days() < RECENT_SIGNING_DAYS {
-                    pen += PEN_RECENT_SIGNING;
-                }
+            if let Some(started) = c.started
+                && (self.date - started).num_days() < RECENT_SIGNING_DAYS
+            {
+                pen += PEN_RECENT_SIGNING;
             }
         }
         pen

@@ -177,7 +177,7 @@ impl NationalTeam {
                     player.player_attributes.international_apps += 1;
 
                     if let Some(stats) = match_result.player_stats.get(&player.id) {
-                        player.player_attributes.international_goals += stats.goals as u16;
+                        player.player_attributes.international_goals += stats.goals;
                     }
 
                     if was_uncapped {

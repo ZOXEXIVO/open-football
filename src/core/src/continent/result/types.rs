@@ -13,6 +13,12 @@ pub struct ContinentalCompetitionResults {
     pub match_results: Vec<MatchResult>,
 }
 
+impl Default for ContinentalCompetitionResults {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContinentalCompetitionResults {
     pub fn new() -> Self {
         ContinentalCompetitionResults {

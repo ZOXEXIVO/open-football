@@ -47,10 +47,12 @@ impl Fx {
     }
 
     fn player(id: u32, position: PlayerPositionType, ca: u8, age: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.potential_ability = ca;
-        attrs.condition = 10_000;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            potential_ability: ca,
+            condition: 10_000,
+            ..Default::default()
+        };
         let mut contract =
             PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
         contract.squad_status = PlayerSquadStatus::MainBackupPlayer;

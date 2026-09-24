@@ -31,6 +31,12 @@ pub struct PlayerDistanceItem {
     pub distance: f32,
 }
 
+impl Default for PlayerDistanceClosure {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerDistanceClosure {
     pub fn new() -> Self {
         PlayerDistanceClosure {
@@ -129,10 +135,8 @@ impl PlayerDistanceClosure {
 
         // Per-player neighbor lists — scalar fan-out reading distances
         // from the matrix the kernel just filled.
-        for i in 0..n {
-            let outer = &players[i];
-            for j in (i + 1)..n {
-                let inner = &players[j];
+        for (i, outer) in players.iter().enumerate() {
+            for (j, inner) in players.iter().enumerate().skip(i + 1) {
                 let distance = self.dist_matrix[i * MAX_PLAYERS + j];
 
                 let same_team = outer.team_id == inner.team_id;
@@ -311,8 +315,8 @@ unsafe fn compute_dist_matrix_avx2(
                 // back via a stack buffer, scalar scatter to column i.
                 let mut tmp = [0.0f32; 8];
                 _mm256_storeu_ps(tmp.as_mut_ptr(), d);
-                for k in 0..8 {
-                    *matrix.get_unchecked_mut((j + k) * MAX_PLAYERS + i) = tmp[k];
+                for (k, &distance) in tmp.iter().enumerate() {
+                    *matrix.get_unchecked_mut((j + k) * MAX_PLAYERS + i) = distance;
                 }
 
                 j += 8;

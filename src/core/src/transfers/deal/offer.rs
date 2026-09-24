@@ -265,9 +265,11 @@ mod tests {
     fn personal_terms_outrank_the_offer_level_contract_length() {
         // The negotiated wage/length package is what the two sides
         // actually shook on; the offer-level field is the opening ask.
-        let mut terms = PersonalTermsOffer::default();
-        terms.contract_years = Some(5);
-        terms.annual_wage = Some(120_000);
+        let terms = PersonalTermsOffer {
+            contract_years: Some(5),
+            annual_wage: Some(120_000),
+            ..Default::default()
+        };
         let offer = TransferOffer::default()
             .with_contract_length(2)
             .with_personal_terms(terms);

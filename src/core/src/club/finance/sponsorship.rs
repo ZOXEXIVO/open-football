@@ -46,7 +46,7 @@ impl ClubSponsorship {
         self.drop_expired(date)
     }
 
-    pub fn get_sponsorship_incomes<'s>(&mut self, date: NaiveDate) -> &[ClubSponsorshipContract] {
+    pub fn get_sponsorship_incomes(&mut self, date: NaiveDate) -> &[ClubSponsorshipContract] {
         self.drop_expired(date);
 
         &self.sponsorship_contracts

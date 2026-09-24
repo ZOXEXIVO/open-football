@@ -218,10 +218,11 @@ impl<'b> BallOperationsImpl<'b> {
         if self.ctx.tick_context.ball.hands_released_by == Some(keeper.id) {
             return HandlingVerdict::SecondTouch;
         }
-        if let Some((kicker, team)) = self.ctx.tick_context.ball.deliberate_kick_by {
-            if team == keeper.team_id && kicker != keeper.id {
-                return HandlingVerdict::BackPass;
-            }
+        if let Some((kicker, team)) = self.ctx.tick_context.ball.deliberate_kick_by
+            && team == keeper.team_id
+            && kicker != keeper.id
+        {
+            return HandlingVerdict::BackPass;
         }
         HandlingVerdict::Legal
     }

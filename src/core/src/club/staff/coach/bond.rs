@@ -495,7 +495,7 @@ impl BondInputs {
                 continue;
             }
             let age = (today - entry.date).num_days();
-            if age < 0 || age > RECENT_TALK_WINDOW_DAYS {
+            if !(0..=RECENT_TALK_WINDOW_DAYS).contains(&age) {
                 continue;
             }
             let decay = 1.0 - (age as f32 / RECENT_TALK_WINDOW_DAYS as f32);
@@ -679,7 +679,7 @@ mod tests {
         }
 
         fn staff(id: u32) -> Staff {
-            let mut s = StaffStub::default();
+            let mut s = StaffStub::build();
             s.id = id;
             s
         }

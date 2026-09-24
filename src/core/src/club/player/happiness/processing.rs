@@ -499,7 +499,7 @@ impl Player {
         club_ctx: ClubMoraleContext,
     ) {
         let age = DateUtils::age(self.birth_date, now);
-        let age_sensitivity = if age >= 24 && age <= 30 { 1.3 } else { 1.0 };
+        let age_sensitivity = if (24..=30).contains(&age) { 1.3 } else { 1.0 };
 
         // Decay old events weekly
         self.happiness.decay_events();
@@ -1537,9 +1537,11 @@ mod loan_morale_tests {
     };
 
     fn build_loan_player_with_form(apps: u16, rating: f32) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.world_reputation = 4_000;
-        attrs.current_reputation = 4_000;
+        let attrs = PlayerAttributes {
+            world_reputation: 4_000,
+            current_reputation: 4_000,
+            ..Default::default()
+        };
         let person = PersonAttributes::default();
         let mut player = PlayerBuilder::new()
             .id(101)
@@ -1631,10 +1633,12 @@ mod playing_time_opportunity_tests {
     /// Outfield player, age ~27, with a permanent contract at the given
     /// squad status and a transfer `days_ago` in the past.
     fn build_player(ca: u8, status: PlayerSquadStatus, days_ago: i64) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.world_reputation = 5_000;
-        attrs.current_reputation = 5_000;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            world_reputation: 5_000,
+            current_reputation: 5_000,
+            ..Default::default()
+        };
         let mut player = PlayerBuilder::new()
             .id(201)
             .full_name(FullName::new("PT".into(), "Tester".into()))
@@ -1989,11 +1993,13 @@ mod morale_timeline_tests {
         }
 
         fn build_player(&self) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.world_reputation = self.world_rep;
-            attrs.current_reputation = self.world_rep;
-            attrs.current_ability = self.current_ability;
-            attrs.potential_ability = self.current_ability;
+            let attrs = PlayerAttributes {
+                world_reputation: self.world_rep,
+                current_reputation: self.world_rep,
+                current_ability: self.current_ability,
+                potential_ability: self.current_ability,
+                ..Default::default()
+            };
 
             let mut player = PlayerBuilder::new()
                 .id(301)

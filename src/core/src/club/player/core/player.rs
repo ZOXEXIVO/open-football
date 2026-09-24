@@ -78,7 +78,6 @@ impl SquadSocialView {
     pub fn same_language_or_nationality(&self) -> u8 {
         self.same_nationality_teammates
             .saturating_add(self.same_language_teammates)
-            .min(u8::MAX)
     }
 }
 
@@ -865,10 +864,10 @@ impl Player {
         // Same-window protection: signed during this open window → protected
         if let (Some(transfer_date), Some((window_start, window_end))) =
             (self.last_transfer_date, current_window)
+            && transfer_date >= window_start
+            && transfer_date <= window_end
         {
-            if transfer_date >= window_start && transfer_date <= window_end {
-                return true;
-            }
+            return true;
         }
 
         // Club has a signing plan — don't poach until the plan concludes

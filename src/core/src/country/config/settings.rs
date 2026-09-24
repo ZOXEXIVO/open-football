@@ -1,16 +1,7 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CountrySettings {
     pub pricing: CountryPricing,
     pub skin_colors: SkinColorDistribution,
-}
-
-impl Default for CountrySettings {
-    fn default() -> Self {
-        CountrySettings {
-            pricing: CountryPricing::default(),
-            skin_colors: SkinColorDistribution::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

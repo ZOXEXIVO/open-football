@@ -257,9 +257,11 @@ mod free_agent_release_reason_tests {
         /// A contractless senior already sitting on the roster awaiting the
         /// sweep — the upstream release path has cleared the contract.
         fn player(id: u32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 80;
-            attrs.potential_ability = 80;
+            let attrs = PlayerAttributes {
+                current_ability: 80,
+                potential_ability: 80,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Free".to_string(), format!("P{id}")))

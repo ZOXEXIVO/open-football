@@ -418,7 +418,7 @@ impl GoalCelebration {
                     if (player.position - self.focus).norm() < Self::ARRIVED {
                         // He has run out of pitch. This is the bit where he
                         // slides, or points at somebody, or jumps.
-                        if player.height <= 0.0 && (tick + player.id as u64) % 190 == 0 {
+                        if player.height <= 0.0 && (tick + player.id as u64).is_multiple_of(190) {
                             player.leap(0.45);
                         }
                         (player.position, 0.0)

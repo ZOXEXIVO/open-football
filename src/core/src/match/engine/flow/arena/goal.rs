@@ -50,16 +50,16 @@ impl GoalPosition {
     }
 
     fn check_goal_line(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        if ball_position.x <= self.left.x {
-            if (self.left.y - GOAL_WIDTH..=self.left.y + GOAL_WIDTH).contains(&ball_position.y) {
-                return Some(GoalSide::Home);
-            }
+        if ball_position.x <= self.left.x
+            && (self.left.y - GOAL_WIDTH..=self.left.y + GOAL_WIDTH).contains(&ball_position.y)
+        {
+            return Some(GoalSide::Home);
         }
 
-        if ball_position.x >= self.right.x {
-            if (self.right.y - GOAL_WIDTH..=self.right.y + GOAL_WIDTH).contains(&ball_position.y) {
-                return Some(GoalSide::Away);
-            }
+        if ball_position.x >= self.right.x
+            && (self.right.y - GOAL_WIDTH..=self.right.y + GOAL_WIDTH).contains(&ball_position.y)
+        {
+            return Some(GoalSide::Away);
         }
 
         None

@@ -251,7 +251,7 @@ impl SnapshotPass {
                                 estimated_value: value.amount,
                                 contract_months_remaining: contract_months,
                                 club_in_debt,
-                                parent_club_reputation: rep_level.clone(),
+                                parent_club_reputation: rep_level,
                                 parent_club_score,
                                 parent_league_reputation,
                                 is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
@@ -573,7 +573,7 @@ impl<'a> ClubAdviceScan<'a> {
         let date = self.date;
         let is_january = self.is_january;
         let avg_ability = self.avg_ability;
-        let club_rep = self.club_rep.clone();
+        let club_rep = self.club_rep;
         let club_rep_score = self.club_rep_score;
         let already_recommended = &self.already_recommended;
         let max_recommend_value = self.max_recommend_value;
@@ -1009,7 +1009,7 @@ impl<'a> ClubAdviceScan<'a> {
         let club = self.club;
         let plan = self.plan;
         let date = self.date;
-        let club_rep = self.club_rep.clone();
+        let club_rep = self.club_rep;
         for (target, _score) in ranked.iter().take(3) {
             let current_recs = plan.staff_recommendations.len()
                 + actions.iter().filter(|a| a.club_id == club.id).count();
@@ -1059,7 +1059,7 @@ impl<'a> ClubAdviceScan<'a> {
         let team = self.team;
         let date = self.date;
         let avg_ability = self.avg_ability;
-        let club_rep = self.club_rep.clone();
+        let club_rep = self.club_rep;
         let club_total_wages = self.club_total_wages;
         let club_wage_budget = self.club_wage_budget;
         let already_recommended = &self.already_recommended;
@@ -1268,7 +1268,7 @@ impl<'a> ClubAdviceScan<'a> {
         let club = self.club;
         let plan = self.plan;
         let team = self.team;
-        let club_rep = self.club_rep.clone();
+        let club_rep = self.club_rep;
 
         // ── Small club staff: aggressive loan/bargain hunting ──
         // Small clubs rely on their staff to find cheap deals, loans,
@@ -1491,7 +1491,7 @@ impl<'a> ClubAdviceScan<'a> {
         let plan = self.plan;
         let date = self.date;
         let avg_ability = self.avg_ability;
-        let club_rep = self.club_rep.clone();
+        let club_rep = self.club_rep;
         let already_recommended = &self.already_recommended;
         let all_snapshots = self.snapshots;
         let coach_id = hunt.coach_id;

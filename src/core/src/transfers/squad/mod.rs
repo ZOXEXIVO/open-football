@@ -29,6 +29,7 @@ pub use standing::CareerRecordSnapshot;
 
 use chrono::NaiveDate;
 use log::debug;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use crate::club::board::ChairmanAmbition;
@@ -433,7 +434,7 @@ impl InvestmentWatch {
         // Best first: the biggest jump over what the club already has. A
         // club with one discretionary signing in it should spend it where
         // it gains most, not where its own squad happens to be strongest.
-        targets.sort_by(|a, b| b.improvement.cmp(&a.improvement));
+        targets.sort_by_key(|r| Reverse(r.improvement));
         targets.truncate(Self::MAX_TARGETS);
         InvestmentWatch { targets }
     }
@@ -447,7 +448,7 @@ impl LedgerContext {
     /// One club's own books, as it prices its squad against them.
     pub fn of(club: &Club) -> Self {
         LedgerContext {
-            philosophy: club.philosophy.clone(),
+            philosophy: club.philosophy,
             annual_wages: club
                 .teams
                 .iter()
@@ -1001,14 +1002,14 @@ impl SquadReviewPass {
                 // write Lst directly. Cheap — usually empty; non-empty
                 // only when a club has accumulated a positional surplus
                 // (e.g. the Gzira 10-GK case).
-                if !eval.force_transfer_list.is_empty() {
-                    if let Some(main_team) = club.teams.main_mut() {
-                        for player_id in eval.force_transfer_list {
-                            if let Some(player) = main_team.players.find_mut(player_id) {
-                                if !player.statuses.has(PlayerStatusType::Lst) {
-                                    player.statuses.add(date, PlayerStatusType::Lst);
-                                }
-                            }
+                if !eval.force_transfer_list.is_empty()
+                    && let Some(main_team) = club.teams.main_mut()
+                {
+                    for player_id in eval.force_transfer_list {
+                        if let Some(player) = main_team.players.find_mut(player_id)
+                            && !player.statuses.has(PlayerStatusType::Lst)
+                        {
+                            player.statuses.add(date, PlayerStatusType::Lst);
                         }
                     }
                 }
@@ -1085,7 +1086,7 @@ impl SquadReviewPass {
             .map(|t| t.get_annual_salary() as f64)
             .sum();
         let ctx = LedgerContext {
-            philosophy: club.philosophy.clone(),
+            philosophy: club.philosophy,
             annual_wages,
             wage_budget: club
                 .finance
@@ -1402,10 +1403,10 @@ impl SquadReviewPass {
             // Same-window signing protection.
             if let (Some(transfer_date), Some((window_start, window_end))) =
                 (player.last_transfer_date, current_window)
+                && transfer_date >= window_start
+                && transfer_date <= window_end
             {
-                if transfer_date >= window_start && transfer_date <= window_end {
-                    continue;
-                }
+                continue;
             }
             // Club signing plan still under evaluation pins the player —
             // except a development plan, where loaning IS the plan.
@@ -1615,7 +1616,7 @@ impl SquadReviewPass {
                 by_season.push((year, games));
             }
         }
-        by_season.sort_by(|a, b| b.0.cmp(&a.0));
+        by_season.sort_by_key(|r| Reverse(r.0));
         let mut count = 0u8;
         for (_, games) in by_season {
             if games == 0 {
@@ -1826,11 +1827,15 @@ mod stalled_prospect_tests {
         /// A player with `ca` at `pos`, born so they are ~`age` on the
         /// 2027 reference dates, with `league_apps` league appearances.
         fn player(id: u32, pos: PlayerPositionType, ca: u8, age: i32, league_apps: u16) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca.saturating_add(30);
-            let mut stats = PlayerStatistics::default();
-            stats.played = league_apps;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca.saturating_add(30),
+                ..Default::default()
+            };
+            let stats = PlayerStatistics {
+                played: league_apps,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Test".to_string(), format!("P{id}")))
@@ -1859,8 +1864,10 @@ mod stalled_prospect_tests {
         /// A frozen-history season row (parent or loan spell) with `games`
         /// official appearances.
         fn season_item(year: u16, is_loan: bool, games: u16) -> PlayerStatisticsHistoryItem {
-            let mut stats = PlayerStatistics::default();
-            stats.played = games;
+            let stats = PlayerStatistics {
+                played: games,
+                ..Default::default()
+            };
             PlayerStatisticsHistoryItem {
                 season: Season::new(year),
                 team_name: "T".to_string(),
@@ -2601,10 +2608,12 @@ mod goalkeeper_prospect_tests {
         }
 
         fn player(id: u32, pos: PlayerPositionType, ca: u8, age: i32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca.saturating_add(30);
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca.saturating_add(30),
+                condition: 10_000,
+                ..Default::default()
+            };
             let contract =
                 PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
             PlayerBuilder::new()

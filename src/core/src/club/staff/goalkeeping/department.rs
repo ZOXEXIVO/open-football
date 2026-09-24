@@ -430,10 +430,10 @@ impl GoalkeepingDepartment {
         // handover, not the incumbent's birthday — which is how a
         // twenty-five-year-old the board paid a fee for ends up on the
         // handover path instead of on the bench for two years.
-        if let Some(handover) = heir.and_then(|h| h.handover) {
-            if today >= handover {
-                return KeeperSuccession::Pressing;
-            }
+        if let Some(handover) = heir.and_then(|h| h.handover)
+            && today >= handover
+        {
+            return KeeperSuccession::Pressing;
         }
         let has_heir = heir.is_some();
         let base = if one.age >= KeeperAgeCurve::LATE_CAREER {
@@ -567,18 +567,18 @@ impl GoalkeepingDepartment {
         }
 
         // The succession.
-        if succession >= KeeperSuccession::Watch {
-            if let Some(one) = number_one {
-                out.push(KeeperRecommendation::about(
-                    KeeperAdvice::OpenTheSuccession,
-                    one.player_id,
-                    match succession {
-                        KeeperSuccession::Critical => KeeperUrgency::Urgent,
-                        KeeperSuccession::Pressing => KeeperUrgency::Pressing,
-                        _ => KeeperUrgency::Noted,
-                    },
-                ));
-            }
+        if succession >= KeeperSuccession::Watch
+            && let Some(one) = number_one
+        {
+            out.push(KeeperRecommendation::about(
+                KeeperAdvice::OpenTheSuccession,
+                one.player_id,
+                match succession {
+                    KeeperSuccession::Critical => KeeperUrgency::Urgent,
+                    KeeperSuccession::Pressing => KeeperUrgency::Pressing,
+                    _ => KeeperUrgency::Noted,
+                },
+            ));
         }
         if let Some(heir_id) = heir {
             // The heir's minutes are the succession. Saying it is the job.

@@ -229,9 +229,11 @@ impl TestPlayer {
 
     pub fn build(self) -> Player {
         let birth = TestDate::birth_on(self.today, self.age);
-        let mut attributes = PlayerAttributes::default();
-        attributes.current_ability = self.ability;
-        attributes.potential_ability = self.potential;
+        let mut attributes = PlayerAttributes {
+            current_ability: self.ability,
+            potential_ability: self.potential,
+            ..Default::default()
+        };
         if let Some(condition) = self.condition {
             attributes.condition = condition;
         }

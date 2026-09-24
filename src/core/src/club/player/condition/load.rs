@@ -167,11 +167,12 @@ impl PlayerLoad {
         // gone a fortnight without a competitive match — a spell out of the
         // side erases a stale run so a benched player becomes selectable
         // again, while an active player (a match inside 14 days) is untouched.
-        if let Some(target) = form_target {
-            if self.form_rating > 0.0 && self.matches_last_14_bits == 0 {
-                let f = FORM_FADE_DAILY.powi(delta_days);
-                self.form_rating = target + (self.form_rating - target) * f;
-            }
+        if let Some(target) = form_target
+            && self.form_rating > 0.0
+            && self.matches_last_14_bits == 0
+        {
+            let f = FORM_FADE_DAILY.powi(delta_days);
+            self.form_rating = target + (self.form_rating - target) * f;
         }
 
         // Floor f32 residuals so repeated decays don't leave negligible

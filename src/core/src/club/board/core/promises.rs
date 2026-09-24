@@ -134,11 +134,11 @@ impl ClubBoard {
         let season_due = today + Duration::days(330);
 
         // Headline season-outcome promise (survival / continental / title).
-        if let Some(kind) = self.season_outcome_promise(ctx) {
-            if !self.promises.has_active(kind) {
-                self.promises
-                    .add(BoardPromise::new(kind, today, season_due));
-            }
+        if let Some(kind) = self.season_outcome_promise(ctx)
+            && !self.promises.has_active(kind)
+        {
+            self.promises
+                .add(BoardPromise::new(kind, today, season_due));
         }
 
         // Youth-minutes commitment for development-minded or member-owned
@@ -229,34 +229,31 @@ impl ClubBoard {
             .decisions
             .iter()
             .any(|d| matches!(d, BoardDecision::IncreaseTransferBudget { .. }));
-        if delivered_funds {
-            if let Some(r) = self.promises.fulfil(PromiseType::TransferBudget) {
-                reward += r as i32;
-                kept += 1;
-            }
+        if delivered_funds && let Some(r) = self.promises.fulfil(PromiseType::TransferBudget) {
+            reward += r as i32;
+            kept += 1;
         }
         let upgraded_facility = result
             .decisions
             .iter()
             .any(|d| matches!(d, BoardDecision::ApproveFacilityUpgrade { .. }));
-        if upgraded_facility {
-            if let Some(r) = self.promises.fulfil(PromiseType::FacilityImprovement) {
-                reward += r as i32;
-                kept += 1;
-            }
+        if upgraded_facility && let Some(r) = self.promises.fulfil(PromiseType::FacilityImprovement)
+        {
+            reward += r as i32;
+            kept += 1;
         }
 
         // The sale the board insisted on. Judged on the money, not on a
         // headcount: a club that sold somebody cheap has not done what it
         // was told to do.
-        if let Some(mandate) = self.sale_mandate {
-            if mandate.is_satisfied_by(ctx.fees_received_this_season) {
-                if let Some(r) = self.promises.fulfil(PromiseType::SaleMandate) {
-                    reward += r as i32;
-                    kept += 1;
-                }
-                self.sale_mandate = None;
+        if let Some(mandate) = self.sale_mandate
+            && mandate.is_satisfied_by(ctx.fees_received_this_season)
+        {
+            if let Some(r) = self.promises.fulfil(PromiseType::SaleMandate) {
+                reward += r as i32;
+                kept += 1;
             }
+            self.sale_mandate = None;
         }
         // A mandate whose promise has already lapsed is over either way —
         // `break_overdue` took the trust off at the season turn.
@@ -265,32 +262,32 @@ impl ClubBoard {
         }
 
         // Youth pathway visibly delivering.
-        if ctx.academy_graduates_this_season > 0 || ctx.u21_minutes_share >= 0.25 {
-            if let Some(r) = self.promises.fulfil(PromiseType::YouthMinutes) {
-                reward += r as i32;
-                kept += 1;
-            }
+        if (ctx.academy_graduates_this_season > 0 || ctx.u21_minutes_share >= 0.25)
+            && let Some(r) = self.promises.fulfil(PromiseType::YouthMinutes)
+        {
+            reward += r as i32;
+            kept += 1;
         }
 
         // Season-outcome promises are judged once the table means something.
         if phase.can_judge_table() && ctx.league_position > 0 {
-            if ctx.distance_to_relegation > 0 {
-                if let Some(r) = self.promises.fulfil(PromiseType::Survival) {
-                    reward += r as i32;
-                    kept += 1;
-                }
+            if ctx.distance_to_relegation > 0
+                && let Some(r) = self.promises.fulfil(PromiseType::Survival)
+            {
+                reward += r as i32;
+                kept += 1;
             }
-            if ctx.distance_to_europe_or_playoff <= 0 {
-                if let Some(r) = self.promises.fulfil(PromiseType::ContinentalQualification) {
-                    reward += r as i32;
-                    kept += 1;
-                }
+            if ctx.distance_to_europe_or_playoff <= 0
+                && let Some(r) = self.promises.fulfil(PromiseType::ContinentalQualification)
+            {
+                reward += r as i32;
+                kept += 1;
             }
-            if ctx.league_position <= 2 {
-                if let Some(r) = self.promises.fulfil(PromiseType::TitleChallenge) {
-                    reward += r as i32;
-                    kept += 1;
-                }
+            if ctx.league_position <= 2
+                && let Some(r) = self.promises.fulfil(PromiseType::TitleChallenge)
+            {
+                reward += r as i32;
+                kept += 1;
             }
         }
 

@@ -267,10 +267,10 @@ impl TeamTraining {
         // If specific participants are listed, use those
         if !session.participants.is_empty() {
             for player_id in &session.participants {
-                if let Some(player) = team.players.find(*player_id) {
-                    if Self::can_participate(player, session) {
-                        participants.push(player);
-                    }
+                if let Some(player) = team.players.find(*player_id)
+                    && Self::can_participate(player, session)
+                {
+                    participants.push(player);
                 }
             }
         } else if !session.focus_positions.is_empty() {
@@ -952,9 +952,9 @@ impl WeeklyTrainingPlan {
         }
 
         // Days since previous match (1..6, or None when too far back).
-        let md_plus = previous_match.and_then(|m| Some(Self::weekday_distance(m, day)));
+        let md_plus = previous_match.map(|m| Self::weekday_distance(m, day));
         // Days until next match (1..6, or None when no fixture).
-        let md_minus = next_match.and_then(|m| Some(Self::weekday_distance(day, m)));
+        let md_minus = next_match.map(|m| Self::weekday_distance(day, m));
 
         // MD+1 → recovery + video. Universally true regardless of weekday.
         if md_plus == Some(1) {
@@ -1745,10 +1745,11 @@ mod bond_consumer_tests {
     use super::*;
 
     fn bond(training_receptiveness: f32, tactical_buy_in: f32) -> CoachPlayerBond {
-        let mut b = CoachPlayerBond::default();
-        b.training_receptiveness = training_receptiveness;
-        b.tactical_buy_in = tactical_buy_in;
-        b
+        CoachPlayerBond {
+            training_receptiveness,
+            tactical_buy_in,
+            ..Default::default()
+        }
     }
 
     #[test]

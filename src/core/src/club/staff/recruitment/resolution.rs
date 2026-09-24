@@ -52,10 +52,9 @@ impl StaffCollection {
             .responsibility
             .incoming_transfers
             .find_and_make_offers_first_team
+            && let Some(staff) = self.find(id)
         {
-            if let Some(staff) = self.find(id) {
-                return Some(staff);
-            }
+            return Some(staff);
         }
         self.find_by_position(StaffPosition::Manager)
             .or_else(|| self.find_by_position(StaffPosition::AssistantManager))
@@ -99,10 +98,9 @@ impl StaffCollection {
             .responsibility
             .incoming_transfers
             .finalize_first_team_signings
+            && let Some(staff) = self.find(id)
         {
-            if let Some(staff) = self.find(id) {
-                return Some(staff);
-            }
+            return Some(staff);
         }
         self.find_by_position(StaffPosition::DirectorOfFootball)
             .or_else(|| self.find_by_position(StaffPosition::Manager))

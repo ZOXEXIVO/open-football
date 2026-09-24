@@ -154,10 +154,10 @@ impl MentorshipScorer {
 
         // Existing strained relation between the two — a forced pair would
         // backfire even if every other axis lines up.
-        if let Some(rel) = mentor.relations.get_player(mentee.id) {
-            if rel.level <= -50.0 || rel.trust <= 20.0 {
-                score -= 25.0;
-            }
+        if let Some(rel) = mentor.relations.get_player(mentee.id)
+            && (rel.level <= -50.0 || rel.trust <= 20.0)
+        {
+            score -= 25.0;
         }
 
         score

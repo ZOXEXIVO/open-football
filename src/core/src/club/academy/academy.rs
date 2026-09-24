@@ -7,6 +7,7 @@ use crate::{
     Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerPositionType, StaffCollection,
 };
 use chrono::{Datelike, NaiveDate};
+use std::cmp::Reverse;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcademyDevelopmentIdentity {
@@ -260,8 +261,10 @@ impl ClubAcademy {
     }
 
     pub(super) fn pipeline_health(&self, date: NaiveDate) -> AcademyPipelineHealth {
-        let mut health = AcademyPipelineHealth::default();
-        health.total_players = self.players.players.len();
+        let mut health = AcademyPipelineHealth {
+            total_players: self.players.players.len(),
+            ..Default::default()
+        };
 
         let elite_pa = self.tuning.elite_pa_threshold;
         for player in &self.players.players {
@@ -342,7 +345,7 @@ impl ClubAcademy {
             })
             .collect();
 
-        gaps.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        gaps.sort_unstable_by_key(|g| Reverse(g.1));
         gaps.into_iter().map(|(group, _)| group).collect()
     }
 
@@ -356,10 +359,8 @@ impl ClubAcademy {
         let dev_pct = health.development_players as f32 / total;
         let pro_pct = health.professional_players as f32 / total;
         foundation_pct <= 0.25
-            && dev_pct >= 0.25
-            && dev_pct <= 0.55
-            && pro_pct >= 0.25
-            && pro_pct <= 0.55
+            && (0.25..=0.55).contains(&dev_pct)
+            && (0.25..=0.55).contains(&pro_pct)
     }
 
     pub(super) fn positional_balance_ok(&self, health: &AcademyPipelineHealth) -> bool {
@@ -368,14 +369,10 @@ impl ClubAcademy {
         let def_pct = health.group_counts[1] as f32 / total;
         let mid_pct = health.group_counts[2] as f32 / total;
         let fwd_pct = health.group_counts[3] as f32 / total;
-        gk_pct >= 0.05
-            && gk_pct <= 0.18
-            && def_pct >= 0.22
-            && def_pct <= 0.40
-            && mid_pct >= 0.30
-            && mid_pct <= 0.48
-            && fwd_pct >= 0.15
-            && fwd_pct <= 0.32
+        (0.05..=0.18).contains(&gk_pct)
+            && (0.22..=0.40).contains(&def_pct)
+            && (0.30..=0.48).contains(&mid_pct)
+            && (0.15..=0.32).contains(&fwd_pct)
     }
 
     /// Apply the monthly pathway-reputation delta. The score moves slowly
@@ -774,7 +771,7 @@ mod tests {
                     let player = synthetic_academy_player(age, ca as u8, pa as u8, date);
                     let s = scorer.score(&player, date);
                     assert!(
-                        s >= 0 && s <= 100,
+                        (0..=100).contains(&s),
                         "readiness out of range: CA={}, PA={}, age={} → {}",
                         ca,
                         pa,

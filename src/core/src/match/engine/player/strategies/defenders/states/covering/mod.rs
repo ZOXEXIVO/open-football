@@ -233,12 +233,11 @@ impl StateProcessingHandler for DefenderCoveringState {
             .player()
             .defensive()
             .find_unmarked_opponent(MARKING_DISTANCE * 3.0)
+            && !unmarked.has_ball(ctx)
         {
-            if !unmarked.has_ball(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Guarding,
-                ));
-            }
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Guarding,
+            ));
         }
 
         if Interception::is_available(ctx)
@@ -258,49 +257,47 @@ impl StateProcessingHandler for DefenderCoveringState {
         // between ball carrier and own goal. This is what "defending in
         // pairs" actually means — if Primary is beaten, the attacker
         // runs straight into Cover's zone rather than finding open space.
-        if let Some(cover_point) = ctx.player().defensive().cover_target_position() {
-            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                let opp_velocity = opponent.velocity(ctx);
-                // Small tether toward tactical position prevents all
-                // defenders collapsing onto the same spot when multiple
-                // are in Cover-adjacent states.
-                let tether = 0.2;
-                let target = cover_point * (1.0 - tether) + ctx.player.start_position * tether;
-                // The last shape-holding state that still answered only to
-                // its own job. Cover is a line role — sitting behind the
-                // presser is exactly the `DEPTH_DROP` this constraint
-                // exists to allow — so it belongs inside the shape, not
-                // outside it. The `start_position` tether above is also
-                // the kickoff slot, the same anchor the rest of the back
-                // line has now stopped using.
-                let target = DefensiveLine::hold_shape(ctx, target);
-                let to_target = target - ctx.player.position;
-                let distance = to_target.magnitude();
+        if let Some(cover_point) = ctx.player().defensive().cover_target_position()
+            && let Some(opponent) = ctx.players().opponents().with_ball().next()
+        {
+            let opp_velocity = opponent.velocity(ctx);
+            // Small tether toward tactical position prevents all
+            // defenders collapsing onto the same spot when multiple
+            // are in Cover-adjacent states.
+            let tether = 0.2;
+            let target = cover_point * (1.0 - tether) + ctx.player.start_position * tether;
+            // The last shape-holding state that still answered only to
+            // its own job. Cover is a line role — sitting behind the
+            // presser is exactly the `DEPTH_DROP` this constraint
+            // exists to allow — so it belongs inside the shape, not
+            // outside it. The `start_position` tether above is also
+            // the kickoff slot, the same anchor the rest of the back
+            // line has now stopped using.
+            let target = DefensiveLine::hold_shape(ctx, target);
+            let to_target = target - ctx.player.position;
+            let distance = to_target.magnitude();
 
-                if distance < 2.0 {
-                    // At the cover point — hold station on a MOVING man.
-                    //
-                    // This returned `opp_velocity * 0.4`: run the way he
-                    // is running, at 40% of his speed. See
-                    // [`StationKeeping`] for why that is a defender being
-                    // left behind by construction, and why it is the
-                    // reported behaviour written down.
-                    return Some(
-                        StationKeeping::hold(opp_velocity, to_target)
-                            + ctx.player().separation_velocity() * 0.3,
-                    );
-                }
-
-                let direction = to_target.normalize();
-                // Recovery_run_mult bakes pace/stamina/condition into a
-                // realistic 0.58..1.05 multiplier on the chase speed.
-                let def_profile = DefenderSkillProfile::from_ctx(ctx);
-                let speed = ctx.player.skills.physical.pace * 0.9 * def_profile.recovery_run_mult;
-                let urgency = (distance / 20.0).clamp(0.7, 1.4);
+            if distance < 2.0 {
+                // At the cover point — hold station on a MOVING man.
+                //
+                // This returned `opp_velocity * 0.4`: run the way he
+                // is running, at 40% of his speed. See
+                // [`StationKeeping`] for why that is a defender being
+                // left behind by construction, and why it is the
+                // reported behaviour written down.
                 return Some(
-                    direction * speed * urgency + ctx.player().separation_velocity() * 0.2,
+                    StationKeeping::hold(opp_velocity, to_target)
+                        + ctx.player().separation_velocity() * 0.3,
                 );
             }
+
+            let direction = to_target.normalize();
+            // Recovery_run_mult bakes pace/stamina/condition into a
+            // realistic 0.58..1.05 multiplier on the chase speed.
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            let speed = ctx.player.skills.physical.pace * 0.9 * def_profile.recovery_run_mult;
+            let urgency = (distance / 20.0).clamp(0.7, 1.4);
+            return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.2);
         }
 
         let target = self.calculate_optimal_covering_position(ctx);

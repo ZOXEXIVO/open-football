@@ -91,7 +91,7 @@ impl CompetitiveMind {
     fn is_frozen_out(&self, s: &MindSituation) -> bool {
         self.run <= Self::DROPPED_RUN * 2
             && s.has_squad_view()
-            && s.pecking_rank as u16 > (s.rivals_at_position as u16 + 1) / 2
+            && s.pecking_rank as u16 > (s.rivals_at_position as u16).div_ceil(2)
             && s.rival_gap > 0
     }
 
@@ -341,6 +341,84 @@ impl SubMind for CompetitiveMind {
             self.self_belief() * 6.0,
             evidence.max(0.3),
         )
+    }
+}
+
+impl CompetitiveMind {
+    /// What the shirt says about a decision. The loudest voice a player
+    /// has, and the one that decides most moves.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::StayAndFight => {
+                let win_back = organs.goals.pressure_of(GoalKind::WinBackMyPlace);
+                if win_back > 0.1 {
+                    // Blocked, it argues the other way: a want he cannot
+                    // act on is not a reason to stay, it is the reason he
+                    // is going.
+                    let blocked = organs
+                        .goals
+                        .get(GoalKind::WinBackMyPlace)
+                        .map(|g| g.blocked_by.is_blocked())
+                        .unwrap_or(false);
+                    reasons.push(
+                        GoalKind::WinBackMyPlace,
+                        if blocked { -win_back } else { win_back },
+                    );
+                }
+                if self.is_out_of_the_side() && self.self_belief() < 0.0 {
+                    reasons.push(GoalKind::PlayFirstTeamFootball, self.self_belief());
+                }
+                let holding_on = organs.goals.pressure_of(GoalKind::HoldOntoMyPlace);
+                if holding_on > 0.1 {
+                    reasons.push(GoalKind::HoldOntoMyPlace, holding_on);
+                }
+            }
+
+            MindOption::RequestTransfer | MindOption::AcceptLoan(_) => {
+                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
+                if needs_games > 0.1 {
+                    reasons.push(GoalKind::PlayFirstTeamFootball, needs_games);
+                }
+                let national = organs.goals.pressure_of(GoalKind::GetIntoTheNationalSquad);
+                if national > 0.3 {
+                    // A tournament is coming and he is not playing. This
+                    // is the argument that empties benches every January
+                    // of a World Cup year.
+                    reasons.push(GoalKind::GetIntoTheNationalSquad, national);
+                }
+            }
+
+            MindOption::JoinClub(_) => {
+                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
+                if needs_games > 0.1 {
+                    reasons.push(GoalKind::PlayFirstTeamFootball, needs_games);
+                }
+                if self.self_belief() > 0.4 {
+                    // A man in form backs himself anywhere.
+                    reasons.push(GoalKind::StepUpToABiggerClub, self.self_belief() * 0.5);
+                }
+            }
+
+            MindOption::SignContract => {
+                // Signing on for more years of what he has now. Wanting to
+                // be somewhere he plays is the argument against, and the
+                // only one this faculty has.
+                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
+                if needs_games > 0.1 {
+                    reasons.push(GoalKind::PlayFirstTeamFootball, -needs_games);
+                }
+            }
+
+            MindOption::Retire if self.self_belief() < -0.5 => {
+                reasons.push(GoalKind::RetireOnMyTerms, -self.self_belief() * 0.6);
+            }
+
+            _ => {}
+        }
+
+        reasons
     }
 }
 
@@ -625,85 +703,5 @@ mod tests {
             shot.observe(&episode(EpisodeKind::DroppedToBench), &mut organs);
         }
         assert!(shot.appraise(&organs).weighted() < 0.0);
-    }
-}
-
-impl CompetitiveMind {
-    /// What the shirt says about a decision. The loudest voice a player
-    /// has, and the one that decides most moves.
-    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
-
-        match option {
-            MindOption::StayAndFight => {
-                let win_back = organs.goals.pressure_of(GoalKind::WinBackMyPlace);
-                if win_back > 0.1 {
-                    // Blocked, it argues the other way: a want he cannot
-                    // act on is not a reason to stay, it is the reason he
-                    // is going.
-                    let blocked = organs
-                        .goals
-                        .get(GoalKind::WinBackMyPlace)
-                        .map(|g| g.blocked_by.is_blocked())
-                        .unwrap_or(false);
-                    reasons.push(
-                        GoalKind::WinBackMyPlace,
-                        if blocked { -win_back } else { win_back },
-                    );
-                }
-                if self.is_out_of_the_side() && self.self_belief() < 0.0 {
-                    reasons.push(GoalKind::PlayFirstTeamFootball, self.self_belief());
-                }
-                let holding_on = organs.goals.pressure_of(GoalKind::HoldOntoMyPlace);
-                if holding_on > 0.1 {
-                    reasons.push(GoalKind::HoldOntoMyPlace, holding_on);
-                }
-            }
-
-            MindOption::RequestTransfer | MindOption::AcceptLoan(_) => {
-                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
-                if needs_games > 0.1 {
-                    reasons.push(GoalKind::PlayFirstTeamFootball, needs_games);
-                }
-                let national = organs.goals.pressure_of(GoalKind::GetIntoTheNationalSquad);
-                if national > 0.3 {
-                    // A tournament is coming and he is not playing. This
-                    // is the argument that empties benches every January
-                    // of a World Cup year.
-                    reasons.push(GoalKind::GetIntoTheNationalSquad, national);
-                }
-            }
-
-            MindOption::JoinClub(_) => {
-                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
-                if needs_games > 0.1 {
-                    reasons.push(GoalKind::PlayFirstTeamFootball, needs_games);
-                }
-                if self.self_belief() > 0.4 {
-                    // A man in form backs himself anywhere.
-                    reasons.push(GoalKind::StepUpToABiggerClub, self.self_belief() * 0.5);
-                }
-            }
-
-            MindOption::SignContract => {
-                // Signing on for more years of what he has now. Wanting to
-                // be somewhere he plays is the argument against, and the
-                // only one this faculty has.
-                let needs_games = organs.goals.pressure_of(GoalKind::PlayFirstTeamFootball);
-                if needs_games > 0.1 {
-                    reasons.push(GoalKind::PlayFirstTeamFootball, -needs_games);
-                }
-            }
-
-            MindOption::Retire => {
-                if self.self_belief() < -0.5 {
-                    reasons.push(GoalKind::RetireOnMyTerms, -self.self_belief() * 0.6);
-                }
-            }
-
-            _ => {}
-        }
-
-        reasons
     }
 }

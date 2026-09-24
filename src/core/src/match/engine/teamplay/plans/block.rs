@@ -229,8 +229,7 @@ impl ShapeBuilder<'_> {
                 // attacked, and the forwards stood 12 m beyond it. Who
                 // stays home during an attack is a squad decision and is
                 // already made, by name, in `AttackPlan::rest_defence`.
-                .min(REAR_ATTACK_CEILING)
-                .max(REAR_FLOOR_PROGRESS)
+                .clamp(REAR_FLOOR_PROGRESS, REAR_ATTACK_CEILING)
         } else {
             // Back line sits goal-side of the ball by the standoff, and
             // the phase caps how high that may be. Taking the MINIMUM is
@@ -492,11 +491,13 @@ mod tests {
     /// kickoff dots it replaced spanned 85 m.
     #[test]
     fn plan_is_always_a_block() {
-        assert!(LENGTH_COMPACT < LENGTH_STRETCHED, "compactness inverted");
-        assert!(
-            LENGTH_STRETCHED * 0.125 < 50.0,
-            "the plan alone is already longer than a real block"
-        );
+        const { assert!(LENGTH_COMPACT < LENGTH_STRETCHED, "compactness inverted") };
+        const {
+            assert!(
+                LENGTH_STRETCHED * 0.125 < 50.0,
+                "the plan alone is already longer than a real block"
+            )
+        };
     }
 
     #[test]

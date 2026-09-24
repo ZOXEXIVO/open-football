@@ -1162,9 +1162,11 @@ mod tests {
         }
 
         fn sim() -> SimulatorData {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 90;
-            attrs.potential_ability = 90;
+            let attrs = PlayerAttributes {
+                current_ability: 90,
+                potential_ability: 90,
+                ..Default::default()
+            };
             let mut contract =
                 PlayerClubContract::new(80_000, NaiveDate::from_ymd_opt(2027, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::MainBackupPlayer;

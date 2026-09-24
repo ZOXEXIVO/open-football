@@ -1,7 +1,7 @@
 /// Facility quality levels for clubs.
 /// These affect training quality, youth development, and player generation.
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum FacilityLevel {
     Best,
     Exceptional,
@@ -10,6 +10,7 @@ pub enum FacilityLevel {
     Great,
     Good,
     Adequate,
+    #[default]
     Average,
     BelowAverage,
     FairlyBasic,
@@ -18,9 +19,9 @@ pub enum FacilityLevel {
     Poor,
 }
 
-impl FacilityLevel {
+impl From<&str> for FacilityLevel {
     /// Parse from string (e.g. "Superb", "Below Average")
-    pub fn from_str(s: &str) -> Self {
+    fn from(s: &str) -> Self {
         match s.to_lowercase().trim() {
             "best" => FacilityLevel::Best,
             "exceptional" => FacilityLevel::Exceptional,
@@ -38,7 +39,9 @@ impl FacilityLevel {
             _ => FacilityLevel::Average,
         }
     }
+}
 
+impl FacilityLevel {
     /// Numeric value 1-20
     pub fn to_rating(&self) -> u8 {
         match self {
@@ -91,12 +94,6 @@ impl FacilityLevel {
     pub fn upgrade_cost(&self) -> i64 {
         let r = self.to_rating() as i64;
         r * r * 250_000
-    }
-}
-
-impl Default for FacilityLevel {
-    fn default() -> Self {
-        FacilityLevel::Average
     }
 }
 
@@ -210,10 +207,8 @@ impl ClubFacilities {
         let rel_pos = pos / tt; // 0.0 top, 1.0 bottom
         let position = if rel_pos < 0.1 {
             0.20 // Title race
-        } else if rel_pos < 0.25 {
-            0.10 // European places
-        } else if rel_pos > 0.85 {
-            0.10 // Relegation drama
+        } else if rel_pos < 0.25 || rel_pos > 0.85 {
+            0.10 // European places / relegation drama
         } else if rel_pos > 0.7 {
             0.03
         } else {

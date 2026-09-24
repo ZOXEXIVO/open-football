@@ -346,6 +346,64 @@ impl SocialMind {
     }
 }
 
+impl SocialMind {
+    /// What belonging says about a decision.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::JoinClub(club_id) => {
+                let club = ActorRef::club(club_id);
+                // He knows the place. Nostalgia is not a metaphor here —
+                // the ledger has genuinely warmed over the years he was
+                // away, because a loyal man re-reads his own past kindly.
+                let home = organs.memory.believes(FactClaim::SpiritualHome, club);
+                let adored = organs
+                    .memory
+                    .believes(FactClaim::FansAdoredMe, ActorRef::fans(club_id));
+                let turned = organs
+                    .memory
+                    .believes(FactClaim::FansTurnedOnMe, ActorRef::fans(club_id));
+                if home > 0.1 {
+                    reasons.push(GoalKind::StayAtThisClub, home);
+                }
+                if adored > 0.1 {
+                    reasons.push(GoalKind::PlayForMyBoyhoodClub, adored * 0.7);
+                }
+                if turned > 0.1 {
+                    // Going back to a crowd that turned on him is a thing
+                    // very few players do.
+                    reasons.push(GoalKind::EscapeThePressure, -turned);
+                }
+            }
+
+            MindOption::RequestTransfer | MindOption::StayAndFight => {
+                let anchored = organs.goals.pressure_of(GoalKind::StayAtThisClub);
+                let legend = organs.goals.pressure_of(GoalKind::BecomeAClubLegend);
+                let homesick = organs.goals.pressure_of(GoalKind::GoHome);
+                let sign = if matches!(option, MindOption::StayAndFight) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                if anchored > 0.1 {
+                    reasons.push(GoalKind::StayAtThisClub, anchored * sign);
+                }
+                if legend > 0.1 {
+                    reasons.push(GoalKind::BecomeAClubLegend, legend * sign);
+                }
+                if homesick > 0.1 {
+                    reasons.push(GoalKind::GoHome, homesick * -sign);
+                }
+            }
+
+            _ => {}
+        }
+
+        reasons
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::MindTickContext;
@@ -617,63 +675,5 @@ mod tests {
             );
         }
         assert!(mind.appraise(&organs).weighted() < 0.0);
-    }
-}
-
-impl SocialMind {
-    /// What belonging says about a decision.
-    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
-        let mut reasons = ReasonSet::new();
-
-        match option {
-            MindOption::JoinClub(club_id) => {
-                let club = ActorRef::club(club_id);
-                // He knows the place. Nostalgia is not a metaphor here —
-                // the ledger has genuinely warmed over the years he was
-                // away, because a loyal man re-reads his own past kindly.
-                let home = organs.memory.believes(FactClaim::SpiritualHome, club);
-                let adored = organs
-                    .memory
-                    .believes(FactClaim::FansAdoredMe, ActorRef::fans(club_id));
-                let turned = organs
-                    .memory
-                    .believes(FactClaim::FansTurnedOnMe, ActorRef::fans(club_id));
-                if home > 0.1 {
-                    reasons.push(GoalKind::StayAtThisClub, home);
-                }
-                if adored > 0.1 {
-                    reasons.push(GoalKind::PlayForMyBoyhoodClub, adored * 0.7);
-                }
-                if turned > 0.1 {
-                    // Going back to a crowd that turned on him is a thing
-                    // very few players do.
-                    reasons.push(GoalKind::EscapeThePressure, -turned);
-                }
-            }
-
-            MindOption::RequestTransfer | MindOption::StayAndFight => {
-                let anchored = organs.goals.pressure_of(GoalKind::StayAtThisClub);
-                let legend = organs.goals.pressure_of(GoalKind::BecomeAClubLegend);
-                let homesick = organs.goals.pressure_of(GoalKind::GoHome);
-                let sign = if matches!(option, MindOption::StayAndFight) {
-                    1.0
-                } else {
-                    -1.0
-                };
-                if anchored > 0.1 {
-                    reasons.push(GoalKind::StayAtThisClub, anchored * sign);
-                }
-                if legend > 0.1 {
-                    reasons.push(GoalKind::BecomeAClubLegend, legend * sign);
-                }
-                if homesick > 0.1 {
-                    reasons.push(GoalKind::GoHome, homesick * -sign);
-                }
-            }
-
-            _ => {}
-        }
-
-        reasons
     }
 }

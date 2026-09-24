@@ -169,6 +169,12 @@ pub struct HappinessEvent {
     pub context: Option<HappinessEventContext>,
 }
 
+impl Default for PlayerHappiness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerHappiness {
     /// Maximum visible `ConflictWithTeammate` rows a single player can
     /// accrue in one processing tick across ALL emitters (behaviour
@@ -328,8 +334,7 @@ impl PlayerHappiness {
             .retain(|e| e.days_ago <= cfg.event_retention_days);
 
         if self.recent_events.len() > cfg.recent_events_cap {
-            self.recent_events
-                .sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
+            self.recent_events.sort_by_key(|a| a.days_ago);
             self.recent_events.truncate(cfg.recent_events_cap);
         }
 
@@ -503,8 +508,7 @@ impl PlayerHappiness {
         });
 
         if self.recent_events.len() > cfg.recent_events_cap {
-            self.recent_events
-                .sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
+            self.recent_events.sort_by_key(|a| a.days_ago);
             self.recent_events.truncate(cfg.recent_events_cap);
         }
     }

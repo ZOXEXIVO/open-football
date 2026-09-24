@@ -1016,10 +1016,10 @@ fn emergency_signing_marks_matching_transfer_request_fulfilled() {
         &mut rejected,
         &mut BlockReasonRecorder::new(),
     );
-    if let Some(signing) = signings.iter().find(|s| s.player_id == 5300) {
-        if let Some(group) = signing.fills_group {
-            TransferPlanSync::mark_group_fulfilled(&mut country, signing.to_club_id, group);
-        }
+    if let Some(signing) = signings.iter().find(|s| s.player_id == 5300)
+        && let Some(group) = signing.fills_group
+    {
+        TransferPlanSync::mark_group_fulfilled(&mut country, signing.to_club_id, group);
     }
     let club = &country.clubs[0];
     // Either: the request was marked fulfilled by the sync helper,

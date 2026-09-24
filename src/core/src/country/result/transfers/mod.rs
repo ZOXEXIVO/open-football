@@ -16,8 +16,8 @@ use crate::country::result::transfers::free::{FreeAgentLedger, FreeAgentWorld};
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::loan::LoanPipeline;
-use crate::transfers::pipeline::MarketCirculation;
 use crate::transfers::market::knowledge::PlacementReachIndex;
+use crate::transfers::pipeline::MarketCirculation;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -446,7 +446,7 @@ impl TransferTick {
         market_map: &MarketMap,
         config: &TransferConfig,
         global_free_agents: &[GlobalFreeAgentSummary],
-        mut summary: &mut TransferActivitySummary,
+        summary: &mut TransferActivitySummary,
         ops: &mut DeferredTransferOps,
     ) {
         let country_name = country.name.clone();
@@ -465,7 +465,7 @@ impl TransferTick {
                     country,
                     current_date,
                     market_map,
-                    &mut summary,
+                    summary,
                 )
             },
         );
@@ -487,11 +487,9 @@ impl TransferTick {
                         NegotiationStatus::Pending | NegotiationStatus::Countered
                     )
             });
-            if !saga_still_live {
-                if let Some(player) = CountryRoster::find_mut(country, player_id) {
-                    player.statuses.remove(PlayerStatusType::Bid);
-                    player.statuses.remove(PlayerStatusType::Trn);
-                }
+            if !saga_still_live && let Some(player) = CountryRoster::find_mut(country, player_id) {
+                player.statuses.remove(PlayerStatusType::Bid);
+                player.statuses.remove(PlayerStatusType::Trn);
             }
         }
 
@@ -524,10 +522,10 @@ impl TransferTick {
                     &FreeAgentWorld {
                         global_pool: global_free_agents,
                         market_map,
-                        config: &config,
+                        config,
                     },
                     &mut FreeAgentLedger {
-                        summary: &mut summary,
+                        summary,
                         domestic_signed_ids: &mut ops.domestic_signed_ids,
                         global_offered_ids: &mut ops.global_offered_ids,
                         global_rejected_ids: &mut ops.global_rejected_ids,
@@ -547,7 +545,7 @@ impl TransferTick {
             "tm_pre_contracts",
             3,
             || country_name.clone(),
-            || PreContractManager::stage(country, current_date, &config),
+            || PreContractManager::stage(country, current_date, config),
         );
     }
 
@@ -648,7 +646,7 @@ impl TransferTick {
             "tm_process_scouting",
             3,
             || country_name.clone(),
-            || ScoutingPass::process_scouting(country, &foreign_players, current_date, market_map),
+            || ScoutingPass::process_scouting(country, foreign_players, current_date, market_map),
         );
         PerformanceProfiler::stage_labelled(
             "tm_recruitment_meetings",
@@ -667,7 +665,7 @@ impl TransferTick {
         foreign_players: &[&PlayerSummary],
         market_map: &MarketMap,
         placement_reach: &PlacementReachIndex,
-        mut summary: &mut TransferActivitySummary,
+        summary: &mut TransferActivitySummary,
     ) {
         let country_name = country.name.clone();
 
@@ -676,7 +674,7 @@ impl TransferTick {
             "tm_list_players",
             3,
             || country_name.clone(),
-            || ListingPass::list_players_from_pipeline(country, current_date, &mut summary),
+            || ListingPass::list_players_from_pipeline(country, current_date, summary),
         );
         // Market-circulation / diagnosis: record interest in (or a
         // coherent block reason for) every available signed player,
@@ -744,7 +742,7 @@ impl TransferTick {
             || {
                 LoanPipeline::scan_foreign_loan_market(
                     country,
-                    &foreign_players,
+                    foreign_players,
                     current_date,
                     market_map,
                     placement_reach,
@@ -788,7 +786,7 @@ impl TransferTick {
             "tm_breakout_form",
             3,
             || country_name.clone(),
-            || FormWatch::scan_breakout_form(country, &foreign_players, current_date),
+            || FormWatch::scan_breakout_form(country, foreign_players, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_sync_wanted",
@@ -950,9 +948,11 @@ mod pending_signal_delivery_tests {
     }
 
     fn seller_player(id: u32) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = 120;
-        attrs.current_reputation = 2000;
+        let attrs = PlayerAttributes {
+            current_ability: 120,
+            current_reputation: 2000,
+            ..Default::default()
+        };
         let mut contract = PlayerClubContract::new(50_000, d(2029, 6, 30));
         contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
         PlayerBuilder::new()

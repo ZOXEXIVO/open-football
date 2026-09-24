@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -20,6 +20,7 @@ use core::TeamType;
 use core::club::player::mind;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
+use std::cmp::Reverse;
 
 #[derive(Deserialize)]
 pub struct PlayerPersonalRequest {
@@ -304,7 +305,7 @@ pub async fn player_personal_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -323,7 +324,7 @@ pub async fn player_personal_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -869,7 +870,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
@@ -1096,7 +1097,7 @@ impl PlayerMindView {
             })
             .collect();
         // Loudest first — the want that is actually driving him leads.
-        wants.sort_by(|a, b| b.pressure.cmp(&a.pressure));
+        wants.sort_by_key(|w| Reverse(w.pressure));
 
         // Club 0 is not a club. Cueing on it would match every episode
         // recorded while he had no club at all and present them as things he
@@ -1518,10 +1519,10 @@ mod page_tests {
         ] {
             html = html.replace(link, "");
         }
-        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
-            if let Some(end) = html[start..].find('>') {
-                html.replace_range(start..start + end + 1, "");
-            }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+            && let Some(end) = html[start..].find('>')
+        {
+            html.replace_range(start..start + end + 1, "");
         }
         html = html.replace(
             "</head>",

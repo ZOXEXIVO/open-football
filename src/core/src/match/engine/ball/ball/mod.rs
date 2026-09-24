@@ -1521,10 +1521,10 @@ impl Ball {
         if self.cached_shot_target.is_some() && self.previous_owner.is_none() {
             return Err("cached_shot_target without previous_owner");
         }
-        if let Some((_keeper, shooter)) = self.pending_save_credit {
-            if shooter == 0 {
-                return Err("pending_save_credit shooter id is sentinel zero");
-            }
+        if let Some((_keeper, shooter)) = self.pending_save_credit
+            && shooter == 0
+        {
+            return Err("pending_save_credit shooter id is sentinel zero");
         }
         if self.pass_target_player_id.is_some() && self.pending_pass_passer.is_none() {
             return Err("pass_target without pending_pass_passer");
@@ -1581,10 +1581,10 @@ impl Ball {
             return Err("pending_pass_passer without origin/target metadata");
         }
         // Carry tracking — a current carrier must match the ball owner.
-        if let (Some(carrier), Some(owner)) = (self.carry_owner, self.current_owner) {
-            if carrier != owner {
-                return Err("carry_owner disagrees with current_owner");
-            }
+        if let (Some(carrier), Some(owner)) = (self.carry_owner, self.current_owner)
+            && carrier != owner
+        {
+            return Err("carry_owner disagrees with current_owner");
         }
         // A ball in the gloves has a keeper holding it. Nothing else in
         // the engine may take ownership away without lowering the flag,

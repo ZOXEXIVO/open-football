@@ -432,7 +432,7 @@ impl Complexion {
     /// one on the move swings whichever leg was coming through anyway. About
     /// one in four is left-footed, which is roughly the real proportion.
     pub fn footedness(id: u32) -> f32 {
-        if (Self::hash(id) >> 4) % 4 == 0 {
+        if (Self::hash(id) >> 4).is_multiple_of(4) {
             -1.0
         } else {
             1.0

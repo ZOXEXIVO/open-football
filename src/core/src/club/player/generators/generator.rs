@@ -837,7 +837,7 @@ impl AcademyGenerationContext {
     /// `academy_tier`/`academy_tier_norm` helpers in the academy module.
     pub fn ca_floor_score(&self) -> f32 {
         let lvl = self.academy_level.clamp(1, 20) as u16;
-        let tier = (((lvl + 1) / 2) as u8).clamp(1, 10) as f32;
+        let tier = (lvl.div_ceil(2) as u8).clamp(1, 10) as f32;
         let tier_norm = tier / 10.0;
 
         let s = 0.30 * self.youth_facility_quality
@@ -1022,7 +1022,7 @@ impl PlayerGenerator {
             let talent_roll = rand::random::<f32>();
             let talent_max = 0.85 + cps * 0.65;
             let talent_factor = 0.35 + talent_roll.powi(2) * (talent_max - 0.35);
-            let jittered_base = (raw_ca as f32 * talent_factor) as i32;
+            let jittered_base = (raw_ca * talent_factor) as i32;
 
             // Headroom: bigger at well-resourced clubs (academy programme
             // + reputation pull) so the right-tail still has reach.
@@ -1094,7 +1094,7 @@ impl PlayerGenerator {
         // Youth contract
         let expiration =
             NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(2, 4), 6, 30).unwrap();
-        let salary = (500 + (rep_factor * 5000.0) as u32) as u32;
+        let salary = 500 + (rep_factor * 5000.0) as u32;
         let contract = PlayerClubContract::new_youth(salary, expiration);
 
         Player {
@@ -1221,14 +1221,14 @@ impl PlayerGenerator {
         let mental_bias = 0.85 + rand::random::<f32>() * 0.30;
         let phys_bias = 0.80 + rand::random::<f32>() * 0.40;
 
-        for i in 0..14 {
-            skills[i] *= tech_bias;
+        for skill in &mut skills[0..14] {
+            *skill *= tech_bias;
         }
-        for i in 14..28 {
-            skills[i] *= mental_bias;
+        for skill in &mut skills[14..28] {
+            *skill *= mental_bias;
         }
-        for i in 28..SK_MATCH_READINESS {
-            skills[i] *= phys_bias;
+        for skill in &mut skills[28..SK_MATCH_READINESS] {
+            *skill *= phys_bias;
         }
     }
 
@@ -1379,15 +1379,15 @@ impl PlayerGenerator {
 
         // Mental cohesion: pull toward group mean (mentality is unified)
         let m_avg: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
-        for i in 14..28 {
-            skills[i] = skills[i] * 0.70 + m_avg * 0.30;
+        for skill in &mut skills[14..28] {
+            *skill = *skill * 0.70 + m_avg * 0.30;
         }
 
         // Physical cohesion: light pull toward group mean
         let p_count = (SKILL_COUNT - 28) as f32;
         let p_avg: f32 = skills[28..SKILL_COUNT].iter().sum::<f32>() / p_count;
-        for i in 28..SKILL_COUNT {
-            skills[i] = skills[i] * 0.85 + p_avg * 0.15;
+        for skill in &mut skills[28..SKILL_COUNT] {
+            *skill = *skill * 0.85 + p_avg * 0.15;
         }
 
         // Match readiness default
@@ -1498,32 +1498,30 @@ impl PlayerGenerator {
 
         // Cross-side versatility: ~15% chance for wide players to play opposite flank.
         // These players (e.g. M L/R, D L/R) are more versatile and valuable.
-        if let Some(opposite) = cross_side_position(primary) {
-            if IntegerUtils::random(0, 99) < 15 {
-                if !positions.iter().any(|p| p.position == opposite) {
-                    let level = IntegerUtils::random(12, 16) as u8;
-                    positions.push(PlayerPosition {
-                        position: opposite,
-                        level,
-                    });
-                }
-            }
+        if let Some(opposite) = cross_side_position(primary)
+            && IntegerUtils::random(0, 99) < 15
+            && !positions.iter().any(|p| p.position == opposite)
+        {
+            let level = IntegerUtils::random(12, 16) as u8;
+            positions.push(PlayerPosition {
+                position: opposite,
+                level,
+            });
         }
 
         // Higher PA → additional chance of a versatile position
         let pa = potential_ability as i32;
         let versatility_pct = (pa * pa / 800).min(35);
-        if IntegerUtils::random(0, 99) < versatility_pct {
-            if let Some(extra) = pick_extra_position(primary) {
-                if !positions.iter().any(|p| p.position == extra) {
-                    let min_level = 10 + (potential_ability as i32 / 30).min(6);
-                    let max_level = 14 + (potential_ability as i32 / 50).min(4);
-                    positions.push(PlayerPosition {
-                        position: extra,
-                        level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
-                    });
-                }
-            }
+        if IntegerUtils::random(0, 99) < versatility_pct
+            && let Some(extra) = pick_extra_position(primary)
+            && !positions.iter().any(|p| p.position == extra)
+        {
+            let min_level = 10 + (potential_ability as i32 / 30).min(6);
+            let max_level = 14 + (potential_ability as i32 / 50).min(4);
+            positions.push(PlayerPosition {
+                position: extra,
+                level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
+            });
         }
 
         PlayerPositions { positions }

@@ -23,6 +23,7 @@ impl FriendlySourceSlug {
     ///      legacy saves that pre-date the field: a non-senior team's own
     ///      league directly, else the club's first youth team with a
     ///      league.
+    ///
     /// Senior callers with no youth squad fall through to empty → the
     /// projection inherits the anchor spell's league_slug → the pages
     /// render the generic "Friendly" label.

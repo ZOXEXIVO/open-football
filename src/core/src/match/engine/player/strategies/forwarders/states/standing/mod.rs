@@ -49,11 +49,12 @@ impl StateProcessingHandler for ForwardStandingState {
             // because they're inside the box. Without this dispatch the
             // legacy `with_shot_reason("FWD_STAND_POINT_BLANK")` path
             // skipped every gate in `evaluate_forward_shot_decision`.
-            if distance_to_goal <= 24.0 && can_shoot && ctx.player().shooting().in_shooting_range()
+            if distance_to_goal <= 24.0
+                && can_shoot
+                && ctx.player().shooting().in_shooting_range()
+                && let Some(result) = dispatch_shot(ctx, "FWD_STAND_POINT_BLANK")
             {
-                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_POINT_BLANK") {
-                    return Some(result);
-                }
+                return Some(result);
             }
 
             // Clear-shot trigger inside the standard shooting range.
@@ -68,23 +69,24 @@ impl StateProcessingHandler for ForwardStandingState {
                 && distance_to_goal <= 60.0
                 && ctx.player().shooting().in_shooting_range()
                 && ctx.player().has_clear_shot()
+                && let Some(result) = dispatch_shot(ctx, "FWD_STAND_CLEAR")
             {
-                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_CLEAR") {
-                    return Some(result);
-                }
+                return Some(result);
             }
 
             // 2026-08-16: the medium/long-range shot cooldown is REMOVED
             // for the same reason as the rest — it gated on how long the
             // player had been standing, which is not a footballing
             // constraint on striking a ball.
-            if has_settled && can_shoot && ctx.player().should_attempt_shot() {
-                if let Some(result) = dispatch_shot(ctx, "FWD_STAND_RANGE") {
-                    return Some(result);
-                }
+            if has_settled
+                && can_shoot
+                && ctx.player().should_attempt_shot()
+                && let Some(result) = dispatch_shot(ctx, "FWD_STAND_RANGE")
+            {
+                return Some(result);
             }
 
-            if let Some(_) = self.find_best_teammate_to_pass(ctx) {
+            if self.find_best_teammate_to_pass(ctx).is_some() {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 

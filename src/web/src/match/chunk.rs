@@ -124,10 +124,10 @@ fn find_league_slug(data: &core::SimulatorData, match_id: &str) -> String {
                     return league.slug.clone();
                 }
             }
-            if let Some(cup) = &country.domestic_cup {
-                if cup.league.matches.get(match_id).is_some() {
-                    return cup.league.slug.clone();
-                }
+            if let Some(cup) = &country.domestic_cup
+                && cup.league.matches.get(match_id).is_some()
+            {
+                return cup.league.slug.clone();
             }
         }
     }

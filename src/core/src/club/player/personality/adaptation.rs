@@ -417,6 +417,7 @@ impl Player {
     ///   * 40-59 → 0.88..0.94
     ///   * 20-39 → 0.82..0.88
     ///   * <20 → 0.78..0.82 (worst case, never below 0.78)
+    ///
     /// Highly-adapted dream moves can earn a tiny positive lift up to 1.02.
     pub fn settlement_form_multiplier_from_adaptation(
         &self,
@@ -676,6 +677,7 @@ impl Player {
     ///   - squad chemistry deviation from neutral
     ///   - recent appearances + starts post-transfer
     ///   - loan cap, dream-move lift, salary/ambition shock
+    ///
     /// Final score clamped to 0..100.
     pub fn adaptation_score(
         &self,
@@ -734,7 +736,7 @@ impl Player {
         // Role fit against the formation.
         if let Some(f) = formation {
             let primary = self.position();
-            if f.iter().any(|p| *p == primary) {
+            if f.contains(&primary) {
                 score += 10.0;
             } else if f
                 .iter()
@@ -1015,7 +1017,7 @@ impl Player {
             no_tactical_role: formation
                 .map(|f| {
                     let primary = self.position();
-                    !f.iter().any(|p| *p == primary)
+                    !f.contains(&primary)
                         && !f
                             .iter()
                             .any(|p| p.position_group() == primary.position_group())
@@ -1462,7 +1464,7 @@ impl Player {
 
     fn emit_role_mismatch_if_unfit(&mut self, formation: &[PlayerPositionType; 11]) {
         let primary = self.position();
-        if formation.iter().any(|p| *p == primary) {
+        if formation.contains(&primary) {
             return;
         }
         let group_match = formation
@@ -2191,10 +2193,10 @@ impl Player {
         }
 
         // Universal signals — fire alongside the narrative cap.
-        if profile.is_loan {
-            if let Some(c) = profile.loan_level_mismatch_candidate() {
-                self.emit_candidate(c);
-            }
+        if profile.is_loan
+            && let Some(c) = profile.loan_level_mismatch_candidate()
+        {
+            self.emit_candidate(c);
         }
         if let Some(c) = profile.media_spotlight_pressure_candidate() {
             self.emit_candidate(c);
@@ -3166,9 +3168,11 @@ mod years_at_club_tests {
     /// A 28-year-old — old enough that the discarded `age - 17` guess would
     /// have handed him eleven years of service he never served.
     fn player_aged_28() -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = 130;
-        attrs.potential_ability = 136;
+        let attrs = PlayerAttributes {
+            current_ability: 130,
+            potential_ability: 136,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(82_060_853)
             .full_name(FullName::new("Levi".into(), "Garcia".into()))
@@ -3402,11 +3406,13 @@ mod dream_move_gating_tests {
     }
 
     fn player(age: u8, ambition: f32, world_rep: i16) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.world_reputation = world_rep;
-        attrs.current_reputation = world_rep;
-        attrs.current_ability = 100;
-        attrs.potential_ability = 100;
+        let attrs = PlayerAttributes {
+            world_reputation: world_rep,
+            current_reputation: world_rep,
+            current_ability: 100,
+            potential_ability: 100,
+            ..Default::default()
+        };
         let today = d(2026, 4, 26);
         let birth = today
             .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
@@ -3740,11 +3746,13 @@ mod transfer_environment_tests {
         professionalism: f32,
         loyalty: f32,
     ) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.world_reputation = world_rep;
-        attrs.current_reputation = current_rep;
-        attrs.current_ability = ca;
-        attrs.potential_ability = ca;
+        let attrs = PlayerAttributes {
+            world_reputation: world_rep,
+            current_reputation: current_rep,
+            current_ability: ca,
+            potential_ability: ca,
+            ..Default::default()
+        };
         let today = d(2026, 4, 26);
         let birth = today
             .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
@@ -4396,12 +4404,14 @@ mod settlement_rating_tests {
         }
 
         fn build(spec: &PlayerSpec) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.world_reputation = spec.world_rep;
-            attrs.current_reputation = spec.world_rep;
-            attrs.current_ability = spec.ca;
-            attrs.potential_ability = spec.ca;
-            attrs.international_apps = spec.intl_apps;
+            let attrs = PlayerAttributes {
+                world_reputation: spec.world_rep,
+                current_reputation: spec.world_rep,
+                current_ability: spec.ca,
+                potential_ability: spec.ca,
+                international_apps: spec.intl_apps,
+                ..Default::default()
+            };
             let person = PersonAttributes {
                 adaptability: spec.adaptability,
                 ambition: 12.0,

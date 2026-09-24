@@ -68,7 +68,7 @@ impl Default for TieBreakPolicy {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LeagueTable {
     pub rows: Vec<LeagueTableRow>,
     pub tie_break: TieBreakPolicy,
@@ -255,15 +255,6 @@ impl LeagueTableRow {
 
     pub fn goal_difference(&self) -> i32 {
         self.goal_scored - self.goal_concerned
-    }
-}
-
-impl Default for LeagueTable {
-    fn default() -> Self {
-        LeagueTable {
-            rows: Vec::new(),
-            tie_break: TieBreakPolicy::fifa_default(),
-        }
     }
 }
 

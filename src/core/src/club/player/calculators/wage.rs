@@ -387,12 +387,14 @@ mod tests {
     }
 
     fn player_with(ability: u8, age: u8, ambition: f32, loyalty: f32) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ability;
-        attrs.potential_ability = ability;
-        attrs.current_reputation = (ability as i16) * 30;
-        attrs.world_reputation = (ability as i16) * 25;
-        attrs.home_reputation = (ability as i16) * 35;
+        let attrs = PlayerAttributes {
+            current_ability: ability,
+            potential_ability: ability,
+            current_reputation: (ability as i16) * 30,
+            world_reputation: (ability as i16) * 25,
+            home_reputation: (ability as i16) * 35,
+            ..Default::default()
+        };
 
         // Birth date 2026-04-26 minus age years (rough — leap days don't matter).
         let today = NaiveDate::from_ymd_opt(2026, 4, 26).unwrap();

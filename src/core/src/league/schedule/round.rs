@@ -36,7 +36,7 @@ impl ScheduleGenerator for RoundSchedule {
 
         if teams_len == 0 {
             warn!("schedule: team_len is empty. skip generation");
-            ScheduleError::from_str("team_len is empty");
+            ScheduleError::new("team_len is empty");
         }
 
         let season_year_start = season.start_year;
@@ -105,12 +105,12 @@ fn generate_tours(
     // For odd team counts we include a bye seat; each round still has
     // the same stride but one slot is a `(BYE, BYE)` pair that must be
     // skipped when building tours.
-    let games_per_round = if teams.len() % 2 == 0 {
+    let games_per_round = if teams.len().is_multiple_of(2) {
         teams.len() / 2
     } else {
-        (teams.len() + 1) / 2
+        teams.len().div_ceil(2)
     };
-    let total_rounds = if teams.len() % 2 == 0 {
+    let total_rounds = if teams.len().is_multiple_of(2) {
         (teams.len() - 1) * 2
     } else {
         teams.len() * 2
@@ -132,12 +132,11 @@ fn generate_tours(
     for tour_idx in 0..rounds_to_emit {
         // Second tournament of a split season: jump to its own window
         // (but never backwards, in case the halves overlap in config).
-        if tour_idx == rounds_to_emit / 2 {
-            if let Some(second_start) = second_half_start {
-                if second_start > current_date {
-                    current_date = second_start;
-                }
-            }
+        if tour_idx == rounds_to_emit / 2
+            && let Some(second_start) = second_half_start
+            && second_start > current_date
+        {
+            current_date = second_start;
         }
         let mut tour = ScheduleTour::new((tour_idx + 1) as u8, games_per_round);
 
@@ -197,7 +196,7 @@ fn generate_game_pairs(teams: &[u32], _tours_count: usize) -> Vec<(u32, u32)> {
     // are allocated sequentially and never reach that range.
     const BYE: u32 = u32::MAX;
     let mut seats: Vec<u32> = teams.to_vec();
-    if n % 2 != 0 {
+    if !n.is_multiple_of(2) {
         seats.push(BYE);
     }
     let seats_len = seats.len();

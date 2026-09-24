@@ -28,7 +28,7 @@ impl LeagueCollection {
                     .map(|(id, _)| *id)
                     .collect();
 
-                let message = &format!("simulate league: {}", &league.name);
+                let message = &format!("simulate league: {}", league.name);
                 let league_slug = String::from(&league.slug);
 
                 Logging::estimate_result(

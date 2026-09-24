@@ -48,7 +48,7 @@ impl MatchRng {
         // to derive a wider seed.
         let mut bytes = [0u8; 32];
         let mut state = seed;
-        for chunk in bytes.chunks_exact_mut(8) {
+        for chunk in bytes.as_chunks_mut::<8>().0 {
             state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
             let mut z = state;
             z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);

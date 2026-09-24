@@ -717,13 +717,12 @@ impl Player {
 
     fn fringe_at_current_club(&self) -> bool {
         use crate::PlayerSquadStatus as S;
-        match self.contract.as_ref().map(|c| c.squad_status.clone()) {
-            Some(S::MainBackupPlayer)
-            | Some(S::FirstTeamSquadRotation)
-            | Some(S::DecentYoungster)
-            | Some(S::NotNeeded) => true,
-            _ => false,
-        }
+        matches!(
+            self.contract.as_ref().map(|c| &c.squad_status),
+            Some(
+                S::MainBackupPlayer | S::FirstTeamSquadRotation | S::DecentYoungster | S::NotNeeded
+            )
+        )
     }
 
     fn signal_should_surface(

@@ -71,9 +71,11 @@ const BENCH: [PlayerPositionType; 7] = [
 const TICK_MS: u64 = 10;
 
 fn player(team_id: u32, id: u32, position: PlayerPositionType) -> MatchPlayer {
-    let mut attributes = PlayerAttributes::default();
-    attributes.condition = 9000;
-    attributes.current_ability = 150;
+    let attributes = PlayerAttributes {
+        condition: 9000,
+        current_ability: 150,
+        ..Default::default()
+    };
     let built = PlayerBuilder::new()
         .id(id)
         .full_name(FullName::new("T".to_string(), format!("P{id}")))
@@ -191,7 +193,7 @@ fn play_out_the_window(
         context.total_match_time += TICK_MS;
         advance_substitution_break(field, context);
         let now = context.total_match_time;
-        if now % 30 == 0 {
+        if now.is_multiple_of(30) {
             FootballEngine::<840, 545>::write_match_positions(field, now, &mut recording);
         }
         sample(field, &mut tracks);

@@ -264,10 +264,8 @@ impl Player {
         // Without this they would render as a second, duplicate row for a
         // team that already has a home spell. (`self.statistics` was just
         // drained above, so this seeds the destination spell's counter.)
-        if to_senior {
-            if let Some(folded) = self.statistics_history.take_secondary_for(&to.slug) {
-                self.statistics.merge_from(&folded);
-            }
+        if to_senior && let Some(folded) = self.statistics_history.take_secondary_for(&to.slug) {
+            self.statistics.merge_from(&folded);
         }
         let is_loan = self.is_on_loan();
         self.statistics_history.record_intra_club_move(
@@ -429,6 +427,7 @@ impl Player {
     /// - Long service: 100+ appearances at a club
     /// - Legend status: 50+ goals or 15+ player-of-the-match awards
     /// - Strong impact: average rating >= 7.3 over 30+ games
+    ///
     /// Max 3 favourite clubs per player.
     pub fn evaluate_favorite_club(&mut self, club_id: u32, team_slug: &str, _date: NaiveDate) {
         const MAX_FAVORITE_CLUBS: usize = 3;
@@ -630,10 +629,11 @@ mod tests {
     }
 
     fn make_stats(played: u16, goals: u16) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.goals = goals;
-        s
+        PlayerStatistics {
+            played,
+            goals,
+            ..Default::default()
+        }
     }
 
     fn make_team(name: &str, slug: &str) -> TeamInfo {
@@ -4630,10 +4630,11 @@ mod drain_invariants_tests {
     }
 
     fn stats(played: u16, goals: u16) -> PlayerStatistics {
-        let mut s = PlayerStatistics::default();
-        s.played = played;
-        s.goals = goals;
-        s
+        PlayerStatistics {
+            played,
+            goals,
+            ..Default::default()
+        }
     }
 
     fn player() -> crate::Player {

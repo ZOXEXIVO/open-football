@@ -476,7 +476,7 @@ impl SquadDepthRanks {
         Self {
             group_levels,
             incumbents,
-            squad_level: if count > 0 { (sum / count) as u8 } else { 0 },
+            squad_level: sum.checked_div(count).unwrap_or(0) as u8,
             top_level,
         }
     }
@@ -546,9 +546,11 @@ mod tests {
         }
 
         fn player(id: u32, pos: PlayerPositionType, ability: u8, age: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                ..Default::default()
+            };
             let mut contract =
                 PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::MainBackupPlayer;

@@ -187,8 +187,8 @@ impl PerformanceProfiler {
             ratio(top_cpu, top_wall),
         );
         eprintln!(
-            "{:<34} {:>10} {:>7} {:>11} {:>7} {:>9} {:>7}  {}",
-            "phase", "wall_ms", "%wall", "cpu_ms", "cores", "max_ms", "calls", "straggler"
+            "{:<34} {:>10} {:>7} {:>11} {:>7} {:>9} {:>7}  straggler",
+            "phase", "wall_ms", "%wall", "cpu_ms", "cores", "max_ms", "calls"
         );
         for row in regions.iter() {
             let wall_ms = row.wall_ns as f64 / 1e6;

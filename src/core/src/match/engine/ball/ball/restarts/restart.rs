@@ -454,30 +454,31 @@ impl Ball {
         // under somebody standing still rather than of a walk that failed.
         //
         // See [`AwaitedRestart::settled_tick`].
-        if arrived && await_state.take_from.is_none() {
-            if await_state.origin == PassOriginRestart::Corner {
-                let now = context.current_tick();
-                let settled_at = *await_state.settled_tick.get_or_insert(now);
-                let holding = now.saturating_sub(settled_at);
-                let box_full = Self::attackers_in_the_box(
-                    players,
-                    taker.team_id,
-                    await_state.taker_id,
-                    self.corner_attacked_goal_x(await_state.spot),
-                    self.field_height,
-                ) >= AwaitedRestart::CORNER_BOX_TARGET;
-                let ceiling = holding >= AwaitedRestart::CORNER_SETUP_CEILING;
-                if !box_full && !ceiling {
-                    // No `TakeMe`: he is standing over the ball, not
-                    // running at it, and the nudge would restart a chase
-                    // he has already finished.
-                    await_state.awarded_tick = now;
-                    self.awaiting_restart = Some(await_state);
-                    return;
-                }
-                #[cfg(feature = "match-logs")]
-                RestartCensus::note_corner_setup_wait(holding, ceiling && !box_full);
+        if arrived
+            && await_state.take_from.is_none()
+            && await_state.origin == PassOriginRestart::Corner
+        {
+            let now = context.current_tick();
+            let settled_at = *await_state.settled_tick.get_or_insert(now);
+            let holding = now.saturating_sub(settled_at);
+            let box_full = Self::attackers_in_the_box(
+                players,
+                taker.team_id,
+                await_state.taker_id,
+                self.corner_attacked_goal_x(await_state.spot),
+                self.field_height,
+            ) >= AwaitedRestart::CORNER_BOX_TARGET;
+            let ceiling = holding >= AwaitedRestart::CORNER_SETUP_CEILING;
+            if !box_full && !ceiling {
+                // No `TakeMe`: he is standing over the ball, not
+                // running at it, and the nudge would restart a chase
+                // he has already finished.
+                await_state.awarded_tick = now;
+                self.awaiting_restart = Some(await_state);
+                return;
             }
+            #[cfg(feature = "match-logs")]
+            RestartCensus::note_corner_setup_wait(holding, ceiling && !box_full);
         }
 
         // **The goal kick's run-up.** He has reached the ball; if he is
@@ -568,14 +569,14 @@ impl Ball {
                     // boot never got to. Measured on a recording: the kick
                     // left with him 1.7 m away.
                     RunUpPhase::Running => {
-                        if range > KeeperGoalKick::STRIKE_REACH {
-                            if now.saturating_sub(run_up.since) < KeeperGoalKick::RUN_IN_CEILING {
-                                await_state.awarded_tick = now;
-                                self.awaiting_restart = Some(await_state);
-                                return;
-                            }
-                            // Overdue: the ordinary arrival below takes it.
+                        if range > KeeperGoalKick::STRIKE_REACH
+                            && now.saturating_sub(run_up.since) < KeeperGoalKick::RUN_IN_CEILING
+                        {
+                            await_state.awarded_tick = now;
+                            self.awaiting_restart = Some(await_state);
+                            return;
                         }
+                        // Overdue: the ordinary arrival below takes it.
                     }
                 },
                 None => {}

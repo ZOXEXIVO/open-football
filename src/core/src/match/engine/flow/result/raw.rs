@@ -227,6 +227,12 @@ pub struct FieldSquad {
     pub starter_slots: Vec<(u32, PlayerPositionType)>,
 }
 
+impl Default for FieldSquad {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FieldSquad {
     pub fn new() -> Self {
         FieldSquad {
@@ -297,11 +303,10 @@ impl MatchResult {
             league_slug: String::from(&self.league_slug),
             home_team_id: self.home_team_id,
             away_team_id: self.away_team_id,
-            details: if self.details.is_some() {
-                Some(self.details.as_ref().unwrap().copy_without_data_positions())
-            } else {
-                None
-            },
+            details: self
+                .details
+                .as_ref()
+                .map(|details| details.copy_without_data_positions()),
             score: self.score.clone(),
             friendly: self.friendly,
         }

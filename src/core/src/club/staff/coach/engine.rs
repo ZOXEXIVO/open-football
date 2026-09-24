@@ -530,6 +530,7 @@ impl StrategyWeights {
 ///   * `player.load.form_rating` (an EMA of raw effective ratings)
 ///   * `training_impression` (visible effort vs actual performance)
 ///   * `coach_relationship` (Staff–Player relations)
+///
 /// The coach memory layer reads a *different* signal — the head
 /// coach's personality-shaped *interpretation* of recent ratings vs
 /// long-form baseline. The two share evidence but are computed

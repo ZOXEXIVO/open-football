@@ -5,6 +5,12 @@ pub struct TeamTrainingResult {
     pub player_results: Vec<PlayerTrainingResult>,
 }
 
+impl Default for TeamTrainingResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TeamTrainingResult {
     pub fn new() -> Self {
         TeamTrainingResult {

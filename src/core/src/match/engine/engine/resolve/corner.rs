@@ -133,7 +133,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     continue;
                 }
                 let s = sc::aerial_outfield_attacker(p, minute);
-                if best_att.map_or(true, |(_, bs)| s > bs) {
+                if best_att.is_none_or(|(_, bs)| s > bs) {
                     best_att = Some((i, s));
                 }
             } else if is_gk {

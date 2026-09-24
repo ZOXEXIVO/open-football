@@ -15,8 +15,8 @@ use chrono::NaiveDate;
 pub struct StaffStub;
 
 impl StaffStub {
-    pub fn default() -> Staff {
-        let staff = Staff {
+    pub fn build() -> Staff {
+        Staff {
             id: 0,
             full_name: FullName::with_full(
                 "stub".to_string(),
@@ -104,7 +104,6 @@ impl StaffStub {
             decision_state: CoachDecisionState::unbound(),
             mind: StaffMind::new(),
             dossiers: CoachDossierStore::new(),
-        };
-        staff
+        }
     }
 }

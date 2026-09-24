@@ -14,6 +14,7 @@
 use super::*;
 use crate::club::player::mind::MindClock;
 use crate::transfers::loan::agreement::ParentWillingness;
+use std::cmp::Reverse;
 
 /// The loan-out scan.
 pub(in crate::transfers::squad) struct LoanOutScan;
@@ -175,10 +176,10 @@ impl LoanOutScan {
         if !on_a_development_pathway {
             if let (Some(transfer_date), Some((window_start, window_end))) =
                 (player.last_transfer_date, current_window)
+                && transfer_date >= window_start
+                && transfer_date <= window_end
             {
-                if transfer_date >= window_start && transfer_date <= window_end {
-                    return true;
-                }
+                return true;
             }
             // …and the evaluation window it bought him. A club that just
             // signed a man does not lend him out because a depth cap says
@@ -241,7 +242,7 @@ impl LoanOutScan {
             .filter(|p| p.primary_position.position_group() == group)
             .map(|p| (p.player_id, p.current_ability))
             .collect();
-        group_ranks.sort_by(|a, b| b.1.cmp(&a.1));
+        group_ranks.sort_by_key(|g| Reverse(g.1));
         let rank = group_ranks
             .iter()
             .position(|(pid, _)| *pid == player_info.player_id)
@@ -351,19 +352,19 @@ impl LoanOutScan {
                     },
                 ),
             );
-            if let Some(scan) = UnsettledAbroadScan::read(player, home, adaptation, date) {
-                if scan.is_candidate() {
-                    loan_outs.push(LoanOutCandidate {
-                        player_id: player_info.player_id,
-                        reason: LoanOutReason::UnsettledAbroad,
-                        status: LoanOutStatus::Identified,
-                        loan_fee: 0.0,
-                        preferred_destination: scan.preference,
-                        from_pathway: false,
-                        band_target: None,
-                    });
-                    return true;
-                }
+            if let Some(scan) = UnsettledAbroadScan::read(player, home, adaptation, date)
+                && scan.is_candidate()
+            {
+                loan_outs.push(LoanOutCandidate {
+                    player_id: player_info.player_id,
+                    reason: LoanOutReason::UnsettledAbroad,
+                    status: LoanOutStatus::Identified,
+                    loan_fee: 0.0,
+                    preferred_destination: scan.preference,
+                    from_pathway: false,
+                    band_target: None,
+                });
+                return true;
             }
         }
 

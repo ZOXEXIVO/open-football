@@ -31,17 +31,21 @@ struct KeeperFixture;
 
 impl KeeperFixture {
     fn build(id: u32, age: u8, level: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = level;
-        attrs.condition = 9500;
+        let attrs = PlayerAttributes {
+            current_ability: level,
+            condition: 9500,
+            ..Default::default()
+        };
         // The observable ceiling reads attitude, and a default
         // `PersonAttributes` is a professional with zero professionalism and
         // zero ambition — which credits every fixture keeper with no future
         // at all. Give them an ordinary pro's application so the ceiling
         // means something.
-        let mut person = PersonAttributes::default();
-        person.professionalism = 15.0;
-        person.ambition = 15.0;
+        let person = PersonAttributes {
+            professionalism: 15.0,
+            ambition: 15.0,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("K".to_string(), format!("G{id}")))

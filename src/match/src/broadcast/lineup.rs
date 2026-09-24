@@ -331,7 +331,7 @@ impl Lineup {
     /// right men out. `starting` is carried anyway, because relying on the
     /// order of a list is the kind of contract that holds until somebody sorts
     /// it.
-    fn team_sheet<'a>(config: &'a ViewerConfig, home: bool) -> Vec<&'a PlayerInfo> {
+    fn team_sheet(config: &ViewerConfig, home: bool) -> Vec<&PlayerInfo> {
         let named: Vec<&PlayerInfo> = config
             .players
             .iter()
@@ -977,7 +977,7 @@ mod tests {
             Lineup::SPACING - shoulders
         );
         // …and the break between the sides still reads as a break.
-        assert!(Lineup::DIVIDE > Lineup::SPACING * 2.0);
+        const { assert!(Lineup::DIVIDE > Lineup::SPACING * 2.0) };
     }
 
     #[test]

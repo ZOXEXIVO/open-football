@@ -342,7 +342,7 @@ fn trim(
         .collect();
     let mut out = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut vertices = HashMap::new();
-    for tri in indices.chunks_exact(3) {
+    for tri in indices.as_chunks::<3>().0 {
         for cuff in [false, true] {
             let mut polygon = Vec::with_capacity(4);
             for edge in 0..3 {
@@ -629,7 +629,7 @@ mod tests {
                     }
                 }
                 let indices: Vec<_> = mesh.indices().unwrap().iter().collect();
-                for tri in indices.chunks_exact(3) {
+                for tri in indices.as_chunks::<3>().0 {
                     let first = root(&mut parents, tri[0]);
                     for &index in &tri[1..] {
                         let other = root(&mut parents, index);

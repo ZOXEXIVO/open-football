@@ -420,10 +420,10 @@ impl<'a> RatingContext<'a> {
         // when nearly empty) with a meaningful slope (0.55). Pure
         // player-state — it reads the player's own legs, nothing about the
         // club he plays for.
-        if let Some(start) = ctx.starting_condition_pct {
-            if start < 0.75 {
-                modifier -= (0.75 - start) * 0.55;
-            }
+        if let Some(start) = ctx.starting_condition_pct
+            && start < 0.75
+        {
+            modifier -= (0.75 - start) * 0.55;
         }
 
         if let Some(end) = ctx.final_energy_pct {

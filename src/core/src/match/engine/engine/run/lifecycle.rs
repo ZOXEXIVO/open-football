@@ -19,10 +19,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         is_friendly: bool,
         is_knockout: bool,
     ) -> MatchResultRaw {
-        let mut config = MatchEngineConfig::default();
-        config.match_recordings = match_recordings;
-        config.is_friendly = is_friendly;
-        config.is_knockout = is_knockout;
+        let config = MatchEngineConfig {
+            match_recordings,
+            is_friendly,
+            is_knockout,
+            ..Default::default()
+        };
         Self::play_with_config(left_squad, right_squad, config)
     }
 
@@ -40,11 +42,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         is_knockout: bool,
         seed: Option<u64>,
     ) -> MatchResultRaw {
-        let mut config = MatchEngineConfig::default();
-        config.seed = seed;
-        config.match_recordings = match_recordings;
-        config.is_friendly = is_friendly;
-        config.is_knockout = is_knockout;
+        let config = MatchEngineConfig {
+            seed,
+            match_recordings,
+            is_friendly,
+            is_knockout,
+            ..Default::default()
+        };
         Self::play_with_config(left_squad, right_squad, config)
     }
 
@@ -414,9 +418,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             tick_parity += 1;
             coach_eval_counter += 1;
             tactical_eval_counter += 1;
-            if transition_window_remaining > 0 {
-                transition_window_remaining -= 1;
-            }
+            transition_window_remaining = transition_window_remaining.saturating_sub(1);
 
             // Coach evaluates every 500 ticks (~5 seconds of match time)
             if coach_eval_counter >= 500 {

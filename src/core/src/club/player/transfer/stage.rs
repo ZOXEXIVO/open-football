@@ -396,10 +396,12 @@ mod tests {
         let birth = today
             .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
             .unwrap();
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.potential_ability = ca;
-        attrs.international_apps = caps;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            potential_ability: ca,
+            international_apps: caps,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(1)
             .full_name(FullName::new("Test".into(), "Player".into()))

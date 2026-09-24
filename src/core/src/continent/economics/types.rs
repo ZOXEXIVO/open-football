@@ -7,6 +7,12 @@ pub struct EconomicZone {
     pub economic_health_indicator: f32,
 }
 
+impl Default for EconomicZone {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EconomicZone {
     pub fn new() -> Self {
         EconomicZone {

@@ -560,7 +560,7 @@ impl SelectionScoringContext<'_> {
     fn apply_cup_rotation_target(
         &self,
         team_id: u32,
-        squad: &mut Vec<MatchPlayer>,
+        squad: &mut [MatchPlayer],
         used_ids: &mut Vec<u32>,
         available: &[&Player],
         cup: &DomesticCupContext,
@@ -788,16 +788,16 @@ impl SelectionScoringContext<'_> {
         // realistically come on for cameo minutes. If the bench-role scoring
         // overweighted established Impact subs, swap the lowest-impact
         // established outfielder for the best available non-established one.
-        if let Some(cup) = self.cup {
-            if cup.stage() == CupStage::Early {
-                self.ensure_non_established_bench_outfielders(
-                    team_id,
-                    &mut subs,
-                    &mut used_ids,
-                    remaining,
-                    2,
-                );
-            }
+        if let Some(cup) = self.cup
+            && cup.stage() == CupStage::Early
+        {
+            self.ensure_non_established_bench_outfielders(
+                team_id,
+                &mut subs,
+                &mut used_ids,
+                remaining,
+                2,
+            );
         }
 
         // 5. Backup-goalkeeper guarantee. The keeper step (1) already benches

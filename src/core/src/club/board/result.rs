@@ -1,4 +1,3 @@
-use crate::club::staff::SeparationCause;
 use crate::club::StaffPosition;
 use crate::club::board::manager;
 use crate::club::board::sale::ForcedSale;
@@ -8,6 +7,7 @@ use crate::club::facilities::FacilityLevel;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::news::ClubAffair;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::staff::SeparationCause;
 use crate::league::result::LeagueProcessAccess;
 use crate::{Club, HappinessEventType, Staff, StaffEventType, TeamType};
 use chrono::{Datelike, NaiveDate};
@@ -72,6 +72,12 @@ pub struct BoardResult {
     pub promises_kept: u8,
     /// A takeover the club had been living under fell through this tick.
     pub takeover_collapsed: bool,
+}
+
+impl Default for BoardResult {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BoardResult {
@@ -190,46 +196,43 @@ impl BoardResult {
             // a coach at a happy club feels secure, a coach under Poor mood
             // feels the pressure building. Applied after the sacking path so
             // we don't adjust a seat that's just been vacated.
-            if self.manager_satisfaction_delta.abs() > 0.01 && !self.manager_sacked {
-                if let Some(main_team) = club.teams.main_mut() {
-                    if let Some(mgr) = main_team
-                        .staffs
-                        .find_mut_by_position(StaffPosition::Manager)
-                    {
-                        mgr.job_satisfaction = (mgr.job_satisfaction
-                            + self.manager_satisfaction_delta)
-                            .clamp(0.0, 100.0);
-                    }
-                }
+            if self.manager_satisfaction_delta.abs() > 0.01
+                && !self.manager_sacked
+                && let Some(main_team) = club.teams.main_mut()
+                && let Some(mgr) = main_team
+                    .staffs
+                    .find_mut_by_position(StaffPosition::Manager)
+            {
+                mgr.job_satisfaction =
+                    (mgr.job_satisfaction + self.manager_satisfaction_delta).clamp(0.0, 100.0);
             }
 
             if let Some(meeting) = self.manager_meeting {
                 let club_id = self.club_id;
-                if let Some(main_team) = club.teams.main_mut() {
-                    if let Some(mgr) = main_team
+                if let Some(main_team) = club.teams.main_mut()
+                    && let Some(mgr) = main_team
                         .staffs
                         .find_mut_by_position(StaffPosition::Manager)
-                    {
-                        let event = match meeting {
-                            BoardManagerMeeting::Backing => StaffEventType::TrustBuilt,
-                            BoardManagerMeeting::Warning => StaffEventType::PerformanceDeclined,
-                            BoardManagerMeeting::Crisis => StaffEventType::Conflict,
-                        };
-                        mgr.add_event(event);
+                {
+                    let event = match meeting {
+                        BoardManagerMeeting::Backing => StaffEventType::TrustBuilt,
+                        BoardManagerMeeting::Warning => StaffEventType::PerformanceDeclined,
+                        BoardManagerMeeting::Crisis => StaffEventType::Conflict,
+                    };
+                    mgr.add_event(event);
 
-                        // A public backing is not a kindness. In football
-                        // it is what a board says on the way to sacking
-                        // someone, and a manager who has been sacked
-                        // before reads it that way immediately — see
-                        // `AmbitionMind::cynicism`.
-                        if matches!(meeting, BoardManagerMeeting::Backing) {
-                            mgr.remember(
-                                EpisodeKind::GivenAVoteOfConfidence,
-                                ActorRef::board(club_id),
-                                today,
-                                club_id,
-                            );
-                        }
+                    // A public backing is not a kindness. In football
+                    // it is what a board says on the way to sacking
+                    // someone, and a manager who has been sacked
+                    // before reads it that way immediately — see
+                    // `AmbitionMind::cynicism`.
+                    if matches!(meeting, BoardManagerMeeting::Backing) {
+                        mgr.remember(
+                            EpisodeKind::GivenAVoteOfConfidence,
+                            ActorRef::board(club_id),
+                            today,
+                            club_id,
+                        );
                     }
                 }
             }
@@ -244,40 +247,36 @@ impl BoardResult {
                 let mut extended: Option<u32> = None;
                 let club_id = self.club_id;
                 let club_name = club.name.clone();
-                if let Some(main_team) = club.teams.main_mut() {
-                    if let Some(mgr) = main_team
+                if let Some(main_team) = club.teams.main_mut()
+                    && let Some(mgr) = main_team
                         .staffs
                         .find_mut_by_position(StaffPosition::Manager)
-                    {
-                        let should_offer = mgr
-                            .contract
-                            .as_ref()
-                            .map(|c| (c.expired - today).num_days() < 540)
-                            .unwrap_or(true);
-                        if should_offer {
-                            if let Some(contract) = mgr.contract.as_mut() {
-                                let new_expires = today
-                                    .with_year(today.year() + 2)
-                                    .unwrap_or(contract.expired);
-                                if new_expires > contract.expired {
-                                    contract.expired = new_expires;
-                                }
-                                contract.salary = ((contract.salary as f32) * 1.15) as u32;
-                                mgr.job_satisfaction =
-                                    (mgr.job_satisfaction + 10.0).clamp(0.0, 100.0);
-                                extended = Some(mgr.id);
-                                mgr.remember(
-                                    EpisodeKind::ContractRenewed,
-                                    ActorRef::board(club_id),
-                                    today,
-                                    club_id,
-                                );
-                                info!(
-                                    "Board offered renewal (+2y, +15% salary) to manager {} at {}",
-                                    mgr.id, club_name
-                                );
-                            }
+                {
+                    let should_offer = mgr
+                        .contract
+                        .as_ref()
+                        .map(|c| (c.expired - today).num_days() < 540)
+                        .unwrap_or(true);
+                    if should_offer && let Some(contract) = mgr.contract.as_mut() {
+                        let new_expires = today
+                            .with_year(today.year() + 2)
+                            .unwrap_or(contract.expired);
+                        if new_expires > contract.expired {
+                            contract.expired = new_expires;
                         }
+                        contract.salary = ((contract.salary as f32) * 1.15) as u32;
+                        mgr.job_satisfaction = (mgr.job_satisfaction + 10.0).clamp(0.0, 100.0);
+                        extended = Some(mgr.id);
+                        mgr.remember(
+                            EpisodeKind::ContractRenewed,
+                            ActorRef::board(club_id),
+                            today,
+                            club_id,
+                        );
+                        info!(
+                            "Board offered renewal (+2y, +15% salary) to manager {} at {}",
+                            mgr.id, club_name
+                        );
                     }
                 }
                 if let Some(staff_id) = extended {
@@ -478,12 +477,7 @@ impl BoardResult {
                     }
                     if let Some(budget) = club.finance.transfer_budget.as_mut() {
                         budget.amount += *amount as f64;
-                        club.record_affair(
-                            ClubAffair::WarChest {
-                                amount: *amount as i64,
-                            },
-                            today,
-                        );
+                        club.record_affair(ClubAffair::WarChest { amount: *amount }, today);
                     }
                     debug!(
                         "Board raised transfer budget at {} by {}",

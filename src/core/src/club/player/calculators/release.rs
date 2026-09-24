@@ -362,8 +362,8 @@ impl AutomaticReleaseEligibility {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::PlayerFieldPositionGroup;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -422,9 +422,11 @@ mod tests {
 
         fn player(ability: u8, age: u8, contract: Option<PlayerClubContract>) -> Player {
             let birth_year = Self::date().year() - age as i32;
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(1)
                 .full_name(FullName::new("Test".to_string(), "Player".to_string()))

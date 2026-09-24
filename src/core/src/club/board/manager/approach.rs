@@ -1,9 +1,9 @@
-use crate::club::staff::SeparationCause;
 use crate::club::board::manager::scorer::ManagerCandidateScorer;
 use crate::club::board::manager::search::ManagerSearch;
 use crate::club::board::manager::seat::ManagerSeat;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::news::ClubAffair;
+use crate::club::staff::SeparationCause;
 use crate::club::staff::StaffPosition;
 use crate::{Relations, SimulatorData, Staff, TeamType};
 use chrono::NaiveDate;
@@ -181,7 +181,7 @@ impl ManagerApproach {
                 // that finalize would refuse anyway.
                 let requesting_vacant = data
                     .club(self.requesting_club_id)
-                    .map(|c| ManagerSeat::club_has_vacancy(c))
+                    .map(ManagerSeat::club_has_vacancy)
                     .unwrap_or(false);
                 if !requesting_vacant {
                     debug!(
@@ -312,7 +312,7 @@ impl ManagerApproach {
         // The pending approach is reaped via `Rejected` in the caller.
         let requesting_vacant = data
             .club(self.requesting_club_id)
-            .map(|c| ManagerSeat::club_has_vacancy(c))
+            .map(ManagerSeat::club_has_vacancy)
             .unwrap_or(false);
         if !requesting_vacant {
             info!(
@@ -345,13 +345,12 @@ impl ManagerApproach {
         // floor below.
         let mut staff: Option<Staff> = None;
         let mut source_salary: u32 = 0;
-        if let Some(src) = data.club_mut(self.source_club_id) {
-            if let Some(main) = src.teams.main_mut() {
-                if let Some(taken) = main.staffs.take_by_position(StaffPosition::Manager) {
-                    source_salary = taken.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-                    staff = Some(taken);
-                }
-            }
+        if let Some(src) = data.club_mut(self.source_club_id)
+            && let Some(main) = src.teams.main_mut()
+            && let Some(taken) = main.staffs.take_by_position(StaffPosition::Manager)
+        {
+            source_salary = taken.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+            staff = Some(taken);
         }
 
         let Some(mut staff) = staff else {
@@ -446,13 +445,13 @@ impl ManagerApproach {
                 .map(|t| t.reputation.world)
                 .unwrap_or(0);
             let mut caretaker: Option<u32> = None;
-            if let Some(main) = src.teams.main_mut() {
-                if ManagerSeat::promote_best_caretaker(main, source_salary, today) {
-                    caretaker = main
-                        .staffs
-                        .find_by_position(StaffPosition::CaretakerManager)
-                        .map(|staff| staff.id);
-                }
+            if let Some(main) = src.teams.main_mut()
+                && ManagerSeat::promote_best_caretaker(main, source_salary, today)
+            {
+                caretaker = main
+                    .staffs
+                    .find_by_position(StaffPosition::CaretakerManager)
+                    .map(|staff| staff.id);
             }
             // Losing a manager to a bigger club is a different morning
             // from being talked into sacking one, and the source club's

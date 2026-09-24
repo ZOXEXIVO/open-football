@@ -164,8 +164,8 @@ impl FirstTeamSquadNeeds {
 
     /// Ordered signing plan: most critical group first (GK > DEF > FWD
     /// > MID, then general depth). Order matches "what stops the team
-    /// being playable": no keeper is worse than no striker; the
-    /// midfield is the easiest zone to compensate for in tactics.
+    /// > being playable": no keeper is worse than no striker; the
+    /// > midfield is the easiest zone to compensate for in tactics.
     pub fn signing_plan(&self) -> Vec<EmergencyGroupSlot> {
         let mut plan = Vec::with_capacity(5);
         if self.gk_missing > 0 {
@@ -458,9 +458,9 @@ impl EmergencySquadFillStrategy {
         // tapering off above and below. Emergency depth doesn't want
         // the strongest available player; it wants a *fit* player.
         let ability = candidate.ability as f32;
-        let ability_score = if ability >= 80.0 && ability <= 120.0 {
+        let ability_score = if (80.0..=120.0).contains(&ability) {
             45.0
-        } else if ability >= 60.0 && ability <= 140.0 {
+        } else if (60.0..=140.0).contains(&ability) {
             38.0
         } else if ability >= 40.0 {
             28.0
@@ -689,10 +689,9 @@ impl EmergencyProjectedSquad {
             // On tie, lower priority value wins (higher tier), so
             // flip the comparator.
             a.1.cmp(&b.1).then_with(|| b.2.cmp(&a.2))
-        }) {
-            if *gap > 0 {
-                return *group;
-            }
+        }) && *gap > 0
+        {
+            return *group;
         }
         // All minimums met; bias depth into the proportionally
         // thinnest outfield group rather than always midfield. A

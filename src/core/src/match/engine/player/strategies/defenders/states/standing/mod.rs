@@ -266,24 +266,23 @@ impl StateProcessingHandler for DefenderStandingState {
         }
 
         // Mark or guard unmarked attackers in our area
-        if ctx.ball().on_own_side() || ctx.ball().distance() < 200.0 {
-            if let Some(unmarked) = ctx
+        if (ctx.ball().on_own_side() || ctx.ball().distance() < 200.0)
+            && let Some(unmarked) = ctx
                 .player()
                 .defensive()
                 .find_unmarked_opponent(MARKING_DISTANCE * 2.0)
-            {
-                let dist = unmarked.distance(ctx);
-                if dist < MARKING_DISTANCE {
-                    // Close enough to mark tightly
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Marking,
-                    ));
-                } else {
-                    // Further away — guard their space
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Guarding,
-                    ));
-                }
+        {
+            let dist = unmarked.distance(ctx);
+            if dist < MARKING_DISTANCE {
+                // Close enough to mark tightly
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            } else {
+                // Further away — guard their space
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Guarding,
+                ));
             }
         }
 

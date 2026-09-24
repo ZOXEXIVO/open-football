@@ -163,45 +163,45 @@ fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
             ContractClauseType::NonPromotionRelease,
         ));
     }
-    if let Some(pct) = p.yearly_wage_rise_pct {
-        if pct > 0 {
-            clauses.push(ContractClause::new(
-                pct as i32,
-                ContractClauseType::YearlyWageRise,
-            ));
-        }
+    if let Some(pct) = p.yearly_wage_rise_pct
+        && pct > 0
+    {
+        clauses.push(ContractClause::new(
+            pct as i32,
+            ContractClauseType::YearlyWageRise,
+        ));
     }
-    if let Some(pct) = p.promotion_wage_increase_pct {
-        if pct > 0 {
-            clauses.push(ContractClause::new(
-                pct as i32,
-                ContractClauseType::PromotionWageIncrease,
-            ));
-        }
+    if let Some(pct) = p.promotion_wage_increase_pct
+        && pct > 0
+    {
+        clauses.push(ContractClause::new(
+            pct as i32,
+            ContractClauseType::PromotionWageIncrease,
+        ));
     }
-    if let Some(pct) = p.relegation_wage_decrease_pct {
-        if pct > 0 {
-            clauses.push(ContractClause::new(
-                pct as i32,
-                ContractClauseType::RelegationWageDecrease,
-            ));
-        }
+    if let Some(pct) = p.relegation_wage_decrease_pct
+        && pct > 0
+    {
+        clauses.push(ContractClause::new(
+            pct as i32,
+            ContractClauseType::RelegationWageDecrease,
+        ));
     }
-    if let Some(years) = p.optional_extension_years {
-        if years > 0 {
-            clauses.push(ContractClause::new(
-                years as i32,
-                ContractClauseType::OptionalContractExtensionByClub,
-            ));
-        }
+    if let Some(years) = p.optional_extension_years
+        && years > 0
+    {
+        clauses.push(ContractClause::new(
+            years as i32,
+            ContractClauseType::OptionalContractExtensionByClub,
+        ));
     }
-    if let Some(threshold) = p.appearance_extension_threshold {
-        if threshold > 0 {
-            clauses.push(ContractClause::new(
-                threshold as i32,
-                ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
-            ));
-        }
+    if let Some(threshold) = p.appearance_extension_threshold
+        && threshold > 0
+    {
+        clauses.push(ContractClause::new(
+            threshold as i32,
+            ContractClauseType::OneYearExtensionAfterLeagueGamesFinalSeason,
+        ));
     }
     if let Some((threshold, pct)) = p.wage_after_apps {
         // Use explicit threshold + percentage fields so the negotiated
@@ -216,14 +216,14 @@ fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
             ));
         }
     }
-    if let Some((threshold, pct)) = p.wage_after_caps {
-        if threshold > 0 {
-            clauses.push(ContractClause::new_threshold_pct(
-                threshold,
-                pct,
-                ContractClauseType::WageAfterReachingInternationalCaps,
-            ));
-        }
+    if let Some((threshold, pct)) = p.wage_after_caps
+        && threshold > 0
+    {
+        clauses.push(ContractClause::new_threshold_pct(
+            threshold,
+            pct,
+            ContractClauseType::WageAfterReachingInternationalCaps,
+        ));
     }
     if p.match_highest_earner {
         clauses.push(ContractClause::new(
@@ -236,10 +236,10 @@ fn build_clauses(p: &PlayerContractProposal) -> Vec<ContractClause> {
 }
 
 fn push_optional(out: &mut Vec<ContractBonus>, value: Option<u32>, kind: ContractBonusType) {
-    if let Some(v) = value {
-        if v > 0 {
-            out.push(ContractBonus::new(v as i32, kind));
-        }
+    if let Some(v) = value
+        && v > 0
+    {
+        out.push(ContractBonus::new(v as i32, kind));
     }
 }
 

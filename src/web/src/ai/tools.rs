@@ -190,8 +190,8 @@ impl AiTools {
             "preferred_foot": format!("{:?}", player.preferred_foot),
             "current_ability": player.player_attributes.current_ability,
             "potential_ability": player.player_attributes.potential_ability,
-            "attributes": serde_json::to_value(&player.player_attributes).unwrap_or(Value::Null),
-            "skills": serde_json::to_value(&player.skills).unwrap_or(Value::Null),
+            "attributes": serde_json::to_value(player.player_attributes).unwrap_or(Value::Null),
+            "skills": serde_json::to_value(player.skills).unwrap_or(Value::Null),
             "personality": format!("{:?}", player.attributes),
         })
         .to_string()

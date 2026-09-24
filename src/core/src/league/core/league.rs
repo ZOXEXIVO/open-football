@@ -509,77 +509,6 @@ impl LeagueSettings {
     }
 }
 
-#[cfg(test)]
-mod split_season_tests {
-    use super::*;
-    use crate::league::LeagueTable;
-
-    fn split_league() -> League {
-        let settings = LeagueSettings {
-            season_starting_half: DayMonthPeriod::new(1, 2, 30, 6),
-            season_ending_half: DayMonthPeriod::new(15, 7, 15, 12),
-            tier: 1,
-            promotion_spots: 0,
-            relegation_spots: 1,
-            league_group: None,
-            split_season: true,
-        };
-        League::new(
-            1,
-            "Zona A".into(),
-            "zona-a".into(),
-            1,
-            7500,
-            settings,
-            false,
-        )
-    }
-
-    fn row(team_id: u32, points: u8, gs: i32, gc: i32) -> LeagueTableRow {
-        LeagueTableRow {
-            team_id,
-            played: 16,
-            win: points / 3,
-            draft: points % 3,
-            lost: 0,
-            goal_scored: gs,
-            goal_concerned: gc,
-            points,
-            points_deduction: 0,
-        }
-    }
-
-    #[test]
-    fn annual_table_sums_both_tournaments_and_resorts() {
-        let mut league = split_league();
-        // Apertura frozen: team 2 topped it; Clausura live: team 1 in front.
-        league.split_first_table = Some(vec![row(2, 35, 30, 10), row(1, 20, 15, 15)]);
-        league.table = LeagueTable::new(&[1, 2]);
-        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
-
-        let annual = league.annual_table_rows();
-        // Team 1: 50 pts, team 2: 45 pts — annual order flips the live one.
-        assert_eq!(annual[0].team_id, 1);
-        assert_eq!(annual[0].points, 50);
-        assert_eq!(annual[0].played, 32);
-        assert_eq!(annual[0].goal_scored, 40);
-        assert_eq!(annual[1].team_id, 2);
-        assert_eq!(annual[1].points, 45);
-    }
-
-    #[test]
-    fn annual_table_is_live_table_for_regular_leagues() {
-        let mut league = split_league();
-        league.settings.split_season = false;
-        league.table = LeagueTable::new(&[1, 2]);
-        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
-        let annual = league.annual_table_rows();
-        assert_eq!(annual.len(), 2);
-        assert_eq!(annual[0].team_id, 1);
-        assert_eq!(annual[0].points, 30);
-    }
-}
-
 // Schedule extensions for enhanced functionality
 impl Schedule {
     pub fn get_matches_in_next_days(&self, from_date: NaiveDate, days: i64) -> Vec<&ScheduleItem> {
@@ -650,5 +579,76 @@ impl Schedule {
         self.matches_for_team_in_days(team_id, from_date, days)
             .next()
             .is_some()
+    }
+}
+
+#[cfg(test)]
+mod split_season_tests {
+    use super::*;
+    use crate::league::LeagueTable;
+
+    fn split_league() -> League {
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 2, 30, 6),
+            season_ending_half: DayMonthPeriod::new(15, 7, 15, 12),
+            tier: 1,
+            promotion_spots: 0,
+            relegation_spots: 1,
+            league_group: None,
+            split_season: true,
+        };
+        League::new(
+            1,
+            "Zona A".into(),
+            "zona-a".into(),
+            1,
+            7500,
+            settings,
+            false,
+        )
+    }
+
+    fn row(team_id: u32, points: u8, gs: i32, gc: i32) -> LeagueTableRow {
+        LeagueTableRow {
+            team_id,
+            played: 16,
+            win: points / 3,
+            draft: points % 3,
+            lost: 0,
+            goal_scored: gs,
+            goal_concerned: gc,
+            points,
+            points_deduction: 0,
+        }
+    }
+
+    #[test]
+    fn annual_table_sums_both_tournaments_and_resorts() {
+        let mut league = split_league();
+        // Apertura frozen: team 2 topped it; Clausura live: team 1 in front.
+        league.split_first_table = Some(vec![row(2, 35, 30, 10), row(1, 20, 15, 15)]);
+        league.table = LeagueTable::new(&[1, 2]);
+        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
+
+        let annual = league.annual_table_rows();
+        // Team 1: 50 pts, team 2: 45 pts — annual order flips the live one.
+        assert_eq!(annual[0].team_id, 1);
+        assert_eq!(annual[0].points, 50);
+        assert_eq!(annual[0].played, 32);
+        assert_eq!(annual[0].goal_scored, 40);
+        assert_eq!(annual[1].team_id, 2);
+        assert_eq!(annual[1].points, 45);
+    }
+
+    #[test]
+    fn annual_table_is_live_table_for_regular_leagues() {
+        let mut league = split_league();
+        league.settings.split_season = false;
+        league.table = LeagueTable::new(&[1, 2]);
+        league.table.rows = vec![row(1, 30, 25, 8), row(2, 10, 9, 20)];
+        let annual = league.annual_table_rows();
+        assert_eq!(annual.len(), 2);
+        assert_eq!(annual[0].team_id, 1);
+        assert_eq!(annual[0].points, 30);
     }
 }

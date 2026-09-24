@@ -120,7 +120,7 @@ impl ContractStalemate {
                 offers += 1;
             } else if d.decision == RENEWAL_REJECTED_LABEL {
                 rejections += 1;
-                if last_reject.map_or(true, |prev| d.date > prev) {
+                if last_reject.is_none_or(|prev| d.date > prev) {
                     last_reject = Some(d.date);
                 }
             }

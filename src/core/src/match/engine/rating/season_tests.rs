@@ -1463,7 +1463,9 @@ impl SeasonFixture {
         };
         // Goal contribution days: (goals, assists, kp, pbox, prog
         // carries, prog passes, sot, shots, xg, xg_buildup, tg, og).
-        let decisive: [(u16, u16, u16, u16, u16, u16, u16, u16, f32, f32, u8, u8); 5] = [
+        type DecisiveDay = (u16, u16, u16, u16, u16, u16, u16, u16, f32, f32, u8, u8);
+        type CreatorDay = (u16, u16, u16, u16, u16, u16, f32, f32, u8, u8);
+        let decisive: [DecisiveDay; 5] = [
             (1, 0, 2, 1, 2, 3, 2, 3, 0.4, 0.5, 2, 0),
             (0, 1, 3, 2, 2, 4, 1, 1, 0.2, 0.7, 2, 0),
             (0, 1, 2, 1, 3, 3, 0, 1, 0.1, 0.6, 3, 1),
@@ -1478,7 +1480,7 @@ impl SeasonFixture {
             );
         }
         // Active creator days without a goal contribution: 8W 2D 2L.
-        let active: [(u16, u16, u16, u16, u16, u16, f32, f32, u8, u8); 12] = [
+        let active: [CreatorDay; 12] = [
             (2, 1, 2, 3, 1, 2, 0.3, 0.6, 2, 0),
             (3, 2, 3, 4, 0, 1, 0.15, 0.8, 2, 1),
             (2, 2, 2, 3, 1, 1, 0.2, 0.5, 1, 0),
@@ -1500,7 +1502,7 @@ impl SeasonFixture {
             );
         }
         // Quieter creator days: 5W 4D 4L.
-        let quiet: [(u16, u16, u16, u16, u16, u16, f32, f32, u8, u8); 13] = [
+        let quiet: [CreatorDay; 13] = [
             (1, 0, 1, 2, 0, 1, 0.1, 0.3, 1, 0),
             (1, 1, 1, 2, 0, 0, 0.0, 0.4, 2, 0),
             (1, 0, 1, 1, 0, 1, 0.1, 0.2, 1, 0),
@@ -1538,7 +1540,7 @@ impl SeasonFixture {
         };
         // (pa, pc, kp, pbox, pp, drib_s, drib_a, cr_a, cr_c, sot,
         //  shots, xg, xgb, tg, og). Wins: 19.
-        let rows: [(
+        type DayRow = (
             u16,
             u16,
             u16,
@@ -1554,7 +1556,8 @@ impl SeasonFixture {
             f32,
             u8,
             u8,
-        ); 30] = [
+        );
+        let rows: [DayRow; 30] = [
             (38, 33, 2, 3, 3, 1, 2, 3, 1, 0, 1, 0.05, 0.5, 2, 0),
             (42, 37, 1, 2, 4, 1, 3, 2, 0, 1, 1, 0.15, 0.4, 3, 1),
             (35, 30, 2, 4, 2, 0, 1, 4, 1, 0, 0, 0.0, 0.6, 1, 0),

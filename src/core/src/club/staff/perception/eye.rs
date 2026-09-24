@@ -206,7 +206,7 @@ mod tests {
         }
 
         fn judge(id: u32, judging_potential: u8) -> Staff {
-            let mut s = StaffStub::default();
+            let mut s = StaffStub::build();
             s.id = id;
             s.staff_attributes.knowledge.judging_player_potential = judging_potential;
             s.staff_attributes.knowledge.judging_player_ability = judging_potential;

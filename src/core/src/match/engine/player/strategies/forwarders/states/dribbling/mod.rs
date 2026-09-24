@@ -29,19 +29,22 @@ impl StateProcessingHandler for ForwardDribblingState {
         // PRIORITY 0: Near opponent goalkeeper.
         if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
             let distance_to_gk = (ctx.player.position - gk.position).magnitude();
-            if distance_to_gk < 25.0 && distance_to_goal < 120.0 && can_shoot {
-                if let Some(result) = dispatch_shot(ctx, "FWD_DRIB_NEAR_GK") {
-                    return Some(result);
-                }
+            if distance_to_gk < 25.0
+                && distance_to_goal < 120.0
+                && can_shoot
+                && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_NEAR_GK")
+            {
+                return Some(result);
             }
         }
 
         // PRIORITY 1: In shooting range with a clear lane.
-        if can_shoot && ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot()
+        if can_shoot
+            && ctx.player().shooting().in_shooting_range()
+            && ctx.player().has_clear_shot()
+            && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_CLEAR")
         {
-            if let Some(result) = dispatch_shot(ctx, "FWD_DRIB_CLEAR") {
-                return Some(result);
-            }
+            return Some(result);
         }
 
         // (A separate "PRIORITY 1b" range fallback used to re-test the
@@ -51,10 +54,12 @@ impl StateProcessingHandler for ForwardDribblingState {
 
         // Prevent infinite dribbling - timeout after 40 ticks to reassess.
         if ctx.in_state_time > 40 {
-            if can_shoot && distance_to_goal < 60.0 && ctx.player().has_clear_shot() {
-                if let Some(result) = dispatch_shot(ctx, "FWD_DRIB_TIMEOUT") {
-                    return Some(result);
-                }
+            if can_shoot
+                && distance_to_goal < 60.0
+                && ctx.player().has_clear_shot()
+                && let Some(result) = dispatch_shot(ctx, "FWD_DRIB_TIMEOUT")
+            {
+                return Some(result);
             }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }

@@ -98,7 +98,7 @@ impl ForwardFinishingState {
         StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
             Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::new()
+                ShootingEventContext::builder()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
                     .with_reason(reason)

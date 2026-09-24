@@ -294,7 +294,7 @@ impl Ball {
         // Clamp velocity if it exceeds maximum
         if velocity_norm_sq > MAX_VELOCITY * MAX_VELOCITY {
             let velocity_norm = velocity_norm_sq.sqrt();
-            self.velocity = self.velocity * (MAX_VELOCITY / velocity_norm);
+            self.velocity *= MAX_VELOCITY / velocity_norm;
             velocity_norm_sq = MAX_VELOCITY * MAX_VELOCITY;
         }
 
@@ -425,7 +425,7 @@ impl Ball {
         } else {
             // Ball has nearly stopped ON THE GROUND — see `airborne` above —
             // so bring it to complete rest smoothly rather than instantly.
-            self.velocity = self.velocity * 0.8; // Smooth final decay
+            self.velocity *= 0.8; // Smooth final decay
 
             // Only fully stop when truly negligible
             if self.velocity.norm_squared() < 0.0001 {

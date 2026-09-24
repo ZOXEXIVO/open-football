@@ -30,7 +30,7 @@ impl Sample {
     /// reason the worker can hand samples over as bare floats instead of JSON.
     pub fn from_quads(quads: &[f32]) -> Vec<Sample> {
         quads
-            .chunks_exact(4)
+            .as_chunks::<4>().0.iter()
             .map(|quad| Sample {
                 t: quad[0] as u32,
                 x: quad[1],

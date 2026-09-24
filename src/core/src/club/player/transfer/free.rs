@@ -248,15 +248,17 @@ impl FreeAgentMarketState {
             // Both close events sit within the same calendar year:
             // winter on Jan 31, summer on Aug 31. Counting them in
             // adjacent years would skew long sits by 1.
-            if let Some(winter) = NaiveDate::from_ymd_opt(year, 1, 31) {
-                if winter > from && winter <= to {
-                    count += 1;
-                }
+            if let Some(winter) = NaiveDate::from_ymd_opt(year, 1, 31)
+                && winter > from
+                && winter <= to
+            {
+                count += 1;
             }
-            if let Some(summer) = NaiveDate::from_ymd_opt(year, 8, 31) {
-                if summer > from && summer <= to {
-                    count += 1;
-                }
+            if let Some(summer) = NaiveDate::from_ymd_opt(year, 8, 31)
+                && summer > from
+                && summer <= to
+            {
+                count += 1;
             }
             year += 1;
         }
@@ -805,10 +807,12 @@ mod tests {
     }
 
     fn make_player(ca: u8, age: u8, today: NaiveDate) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.potential_ability = ca;
-        attrs.current_reputation = (ca as i16) * 30;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            potential_ability: ca,
+            current_reputation: (ca as i16) * 30,
+            ..Default::default()
+        };
         let birth = today
             .checked_sub_signed(chrono::Duration::days(age as i64 * 365))
             .unwrap();

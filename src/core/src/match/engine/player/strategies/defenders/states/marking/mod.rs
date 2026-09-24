@@ -220,12 +220,14 @@ impl StateProcessingHandler for DefenderMarkingState {
             }
 
             // If ball is close and unmarked, consider intercepting
-            if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD && !opponent.has_ball(ctx) {
-                if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.7) {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Intercepting,
-                    ));
-                }
+            if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD
+                && !opponent.has_ball(ctx)
+                && Interception::is_available(ctx)
+                && ctx.ball().is_towards_player_with_angle(0.7)
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
             }
 
             // Role check: if a ball carrier exists and our role has
@@ -562,10 +564,10 @@ impl DefenderMarkingState {
             return Some(man);
         }
 
-        if ctx.players().opponents().with_ball().next().is_some() {
-            if let Some(help_target) = ctx.player().defensive().find_help_target() {
-                return Some(help_target);
-            }
+        if ctx.players().opponents().with_ball().next().is_some()
+            && let Some(help_target) = ctx.player().defensive().find_help_target()
+        {
+            return Some(help_target);
         }
 
         // No live carrier: mark the most dangerous unmarked opponent.

@@ -606,24 +606,22 @@ impl TransferExecutor {
         // budget — and so ANY early-out here (self-transfer, route block, squad
         // full, lost race) leaves the budget intact instead of leaking the
         // set-aside money. Loans never reserved, so they're skipped.
-        if !is_loan {
-            if let Some(buying_country) = data.country_mut(buying_country_id) {
-                if let Some(buying_club) = buying_country
-                    .clubs
-                    .iter_mut()
-                    .find(|c| c.id == buying_club_id)
-                {
-                    // The reservation only set aside the upfront portion
-                    // (installment tranches settle from future cash), so the
-                    // release must match it — refunding the full headline here
-                    // handed every structured deal free budget equal to the
-                    // deferred portion.
-                    let upfront = TransferExecution::upfront_fee(transfer);
-                    buying_club.finance.refund_transfer_budget(upfront);
-                    buying_club.transfer_plan.reserved =
-                        (buying_club.transfer_plan.reserved - upfront).max(0.0);
-                }
-            }
+        if !is_loan
+            && let Some(buying_country) = data.country_mut(buying_country_id)
+            && let Some(buying_club) = buying_country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == buying_club_id)
+        {
+            // The reservation only set aside the upfront portion
+            // (installment tranches settle from future cash), so the
+            // release must match it — refunding the full headline here
+            // handed every structured deal free budget equal to the
+            // deferred portion.
+            let upfront = TransferExecution::upfront_fee(transfer);
+            buying_club.finance.refund_transfer_budget(upfront);
+            buying_club.transfer_plan.reserved =
+                (buying_club.transfer_plan.reserved - upfront).max(0.0);
         }
 
         // Safety: never transfer/loan a player to their own club
@@ -874,12 +872,11 @@ impl TransferExecutor {
                 .index_of_type(TeamType::Reserve)
                 .or_else(|| selling_club.teams.index_of_type(TeamType::B))
                 .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
-            if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
-                if mi != ri {
-                    if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {
-                        selling_club.teams.teams[ri].players.add(p);
-                    }
-                }
+            if let (Some(mi), Some(ri)) = (main_idx, reserve_idx)
+                && mi != ri
+                && let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id)
+            {
+                selling_club.teams.teams[ri].players.add(p);
             }
         }
 
@@ -1306,36 +1303,32 @@ impl TransferExecutor {
     ) {
         // Selling-side dressing-room pass: the player has been taken out of
         // the squad, the remaining teammates feel the departure.
-        if let Some(info) = &departing {
-            if let Some(country) = data.country_mut(selling_country_id) {
-                if let Some(selling_club) =
-                    country.clubs.iter_mut().find(|c| c.id == selling_club_id)
-                {
-                    for team in &mut selling_club.teams.teams {
-                        for teammate in team.players.iter_mut() {
-                            let bond = match teammate.relations.get_player(info.id) {
-                                Some(rel) => rel.friendship,
-                                None => continue,
-                            };
-                            let same_nat = teammate.country_id == info.country_id;
-                            let teammate_age = teammate.age(date);
-                            let is_mentor_break =
-                                info.age >= 30 && teammate_age <= 23 && bond >= 55.0;
-                            if is_mentor_break {
-                                teammate.on_mentor_departed(info.id, bond, same_nat);
-                            } else if bond >= 65.0 {
-                                teammate.on_close_friend_sold(
-                                    info.id,
-                                    bond,
-                                    same_nat,
-                                    info.high_reputation,
-                                );
-                            }
-                        }
+        if let Some(info) = &departing
+            && let Some(country) = data.country_mut(selling_country_id)
+            && let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id)
+        {
+            for team in &mut selling_club.teams.teams {
+                for teammate in team.players.iter_mut() {
+                    let bond = match teammate.relations.get_player(info.id) {
+                        Some(rel) => rel.friendship,
+                        None => continue,
+                    };
+                    let same_nat = teammate.country_id == info.country_id;
+                    let teammate_age = teammate.age(date);
+                    let is_mentor_break = info.age >= 30 && teammate_age <= 23 && bond >= 55.0;
+                    if is_mentor_break {
+                        teammate.on_mentor_departed(info.id, bond, same_nat);
+                    } else if bond >= 65.0 {
+                        teammate.on_close_friend_sold(
+                            info.id,
+                            bond,
+                            same_nat,
+                            info.high_reputation,
+                        );
                     }
-                    SquadReactionPass::squad_concern_signal(selling_club, info);
                 }
             }
+            SquadReactionPass::squad_concern_signal(selling_club, info);
         }
     }
 
@@ -1384,12 +1377,11 @@ impl TransferExecutor {
             buying_club.transfer_plan.spent += upfront;
             // Agent fee — a pure cash movement (not sale income), so it must not
             // perturb the transfer budget.
-            if let Some(terms) = transfer.personal_terms.as_ref() {
-                if let Some(amount) = terms.agent_fee {
-                    if amount > 0 {
-                        buying_club.finance.adjust_cash(-(amount as f64));
-                    }
-                }
+            if let Some(terms) = transfer.personal_terms.as_ref()
+                && let Some(amount) = terms.agent_fee
+                && amount > 0
+            {
+                buying_club.finance.adjust_cash(-(amount as f64));
             }
             TransferExecution::sign_into_main_team(buying_club, player, date);
             // The club now has a relationship with this market. Both halves
@@ -1558,7 +1550,7 @@ impl TransferExecutor {
             selling_club_id,
             parent_team_id,
             buying_club_id,
-            &player,
+            player,
             transfer.has_option_to_buy,
             transfer.agreed_annual_wage,
             transfer.loan_future_fee,
@@ -1569,7 +1561,7 @@ impl TransferExecutor {
         // Main identity when the squad couldn't be resolved.
         let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
         player.complete_loan(LoanCompletion {
-            from: &from_info,
+            from: from_info,
             history_source: &history_source,
             to: &to,
             loan_fee,
@@ -1824,21 +1816,20 @@ impl ExecutionLookup {
         credited_fee: f64,
         is_loan: bool,
     ) {
-        if let Some(selling_country) = data.country_mut(selling_country_id) {
-            if let Some(selling_club) = selling_country
+        if let Some(selling_country) = data.country_mut(selling_country_id)
+            && let Some(selling_club) = selling_country
                 .clubs
                 .iter_mut()
                 .find(|c| c.id == selling_club_id)
-            {
-                TransferExecution::add_to_main_team(selling_club, player);
-                if is_loan {
-                    selling_club.finance.refund_loan_fee(credited_fee);
-                } else {
-                    let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-                    selling_club
-                        .finance
-                        .add_transfer_income_at(-credited_fee, share);
-                }
+        {
+            TransferExecution::add_to_main_team(selling_club, player);
+            if is_loan {
+                selling_club.finance.refund_loan_fee(credited_fee);
+            } else {
+                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                selling_club
+                    .finance
+                    .add_transfer_income_at(-credited_fee, share);
             }
         }
     }
@@ -2106,15 +2097,15 @@ impl DevelopmentLoanPathway {
         // The buyer promised immediate regular football — honouring the
         // promise excludes a same-window loan-out. Only an explicit
         // prospect framing (or no promise at all) keeps the path open.
-        if let Some(terms) = personal_terms {
-            if matches!(
+        if let Some(terms) = personal_terms
+            && matches!(
                 terms.squad_status_promise,
                 Some(PromisedSquadStatus::KeyPlayer)
                     | Some(PromisedSquadStatus::FirstTeamRegular)
                     | Some(PromisedSquadStatus::FirstTeamSquadRotation)
-            ) {
-                return;
-            }
+            )
+        {
+            return;
         }
 
         // Phase 1: immutable gate evaluation.
@@ -2520,12 +2511,11 @@ mod country_pair_execution_tests {
         // the inverse transfer by swapping ids only after seeding a
         // player into Dynamo's roster.
         let ua_player = CountryPairFixtures::player(201, 200);
-        if let Some(country) = data.country_mut(2) {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == 200) {
-                if let Some(team) = club.teams.teams.first_mut() {
-                    team.players.add(ua_player);
-                }
-            }
+        if let Some(country) = data.country_mut(2)
+            && let Some(club) = country.clubs.iter_mut().find(|c| c.id == 200)
+            && let Some(team) = club.teams.teams.first_mut()
+        {
+            team.players.add(ua_player);
         }
         transfer.player_id = 201;
         transfer.selling_country_id = 2;
@@ -2650,8 +2640,10 @@ mod development_pathway_tests {
         }
 
         fn player(id: u32, birth_year: i32, level: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = level;
+            let mut attrs = PlayerAttributes {
+                current_ability: level,
+                ..Default::default()
+            };
             // A prospect is a player somebody can see something in. Without
             // a ceiling the club is buying a body, and the pathway it lands
             // on says so.
@@ -2726,8 +2718,10 @@ mod development_pathway_tests {
 
         /// Goalkeeper variant of [`Self::player`] — same profile, GK slot.
         fn gk_player(id: u32, birth_year: i32, ca: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Dev".to_string(), format!("GK{id}")))
@@ -3299,15 +3293,14 @@ mod development_pathway_tests {
                 .clubs
                 .iter_mut()
                 .find(|c| c.id == DevPathwayFixtures::SELLER_ID)
+                && let Some(team) = seller.teams.teams.first_mut()
             {
-                if let Some(team) = seller.teams.teams.first_mut() {
-                    team.players
-                        .players
-                        .push(DevPathwayFixtures::player(110, 1997, 80));
-                    team.players
-                        .players
-                        .push(DevPathwayFixtures::player(111, 1998, 80));
-                }
+                team.players
+                    .players
+                    .push(DevPathwayFixtures::player(110, 1997, 80));
+                team.players
+                    .players
+                    .push(DevPathwayFixtures::player(111, 1998, 80));
             }
         }
 

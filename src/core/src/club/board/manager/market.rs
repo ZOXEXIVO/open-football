@@ -189,9 +189,7 @@ impl ManagerMarketTick {
             .flat_map(|c| c.countries.par_iter())
             .flat_map(|country| country.clubs.par_iter())
             .filter_map(|club| {
-                if club.board.manager_search_since.is_none() {
-                    return None;
-                }
+                club.board.manager_search_since?;
                 // Vacancy invariant: never start an approach for a
                 // club whose permanent manager is still in post
                 // (stale search state). `refresh_shortlists` clears

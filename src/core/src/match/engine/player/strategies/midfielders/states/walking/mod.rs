@@ -96,12 +96,12 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 }
             }
 
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Tackling,
-                    ));
-                }
+            if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
             }
         }
 

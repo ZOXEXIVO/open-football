@@ -66,13 +66,11 @@ impl StateProcessingHandler for MidfielderPassingState {
         let under_pressure = self.is_under_heavy_pressure(ctx);
         if under_pressure && self.in_box_danger_zone(ctx) {
             let has_safe_pass = ctx.player().passing().find_safe_pass_option().is_some();
-            if !has_safe_pass {
-                if let Some(event) = self.emit_emergency_clearance(ctx) {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        event,
-                    ));
-                }
+            if !has_safe_pass && let Some(event) = self.emit_emergency_clearance(ctx) {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    event,
+                ));
             }
         }
 
@@ -105,7 +103,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(ball.target_id)
                             .with_target_point(ball.aim_point)
@@ -120,7 +118,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Running,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target_teammate.id)
                             .with_reason("MID_PASSING_STATE")
@@ -213,18 +211,18 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // Adjust position to find better passing angles if needed
-        if self.should_adjust_position(ctx) {
-            if let Some(nearest_teammate) = ctx.players().teammates().nearby_to_opponent_goal() {
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target: self.calculate_better_passing_position(ctx, &nearest_teammate),
-                        slowing_distance: 30.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        + ctx.player().separation_velocity(),
-                );
-            }
+        if self.should_adjust_position(ctx)
+            && let Some(nearest_teammate) = ctx.players().teammates().nearby_to_opponent_goal()
+        {
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: self.calculate_better_passing_position(ctx, &nearest_teammate),
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
+            );
         }
 
         // Default: stationary while scanning for pass options

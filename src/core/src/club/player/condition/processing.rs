@@ -780,12 +780,12 @@ mod recovery_tests {
         let worst =
             ConditionRecoveryModel::training_fatigue_cost_mult(0.0, 0.0, 0, 2_000.0, 10_000, 40);
         assert!(
-            best >= 0.82 - 1e-5 && best <= 1.35 + 1e-5,
+            (0.82 - 1e-5..=1.35 + 1e-5).contains(&best),
             "best out of band: {}",
             best
         );
         assert!(
-            worst >= 0.82 - 1e-5 && worst <= 1.35 + 1e-5,
+            (0.82 - 1e-5..=1.35 + 1e-5).contains(&worst),
             "worst out of band: {}",
             worst
         );
@@ -796,11 +796,13 @@ mod recovery_tests {
     }
 
     fn make_player(birth: NaiveDate, natural_fitness: f32) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 5_000;
-        attrs.fitness = 7_000;
-        attrs.jadedness = 2_000;
-        attrs.days_since_last_match = 1;
+        let attrs = PlayerAttributes {
+            condition: 5_000,
+            fitness: 7_000,
+            jadedness: 2_000,
+            days_since_last_match: 1,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.physical.natural_fitness = natural_fitness;
         skills.physical.match_readiness = 13.0;
@@ -971,17 +973,21 @@ mod recovery_tests {
         stamina: f32,
         fitness: i16,
     ) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 5_000;
-        attrs.fitness = fitness;
-        attrs.jadedness = 2_000;
-        attrs.days_since_last_match = 1;
+        let attrs = PlayerAttributes {
+            condition: 5_000,
+            fitness,
+            jadedness: 2_000,
+            days_since_last_match: 1,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.physical.natural_fitness = natural_fitness;
         skills.physical.stamina = stamina;
         skills.physical.match_readiness = 13.0;
-        let mut person_attrs = PersonAttributes::default();
-        person_attrs.professionalism = 12.0;
+        let person_attrs = PersonAttributes {
+            professionalism: 12.0,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
@@ -1109,7 +1115,7 @@ mod recovery_tests {
                 let stamina = 7.0 + (i as f32) * 1.2;
                 let fitness = 6_000 + (i as i16) * 350;
                 let age_year = 1986 + i;
-                let birth = NaiveDate::from_ymd_opt(age_year as i32, 1, 1).unwrap();
+                let birth = NaiveDate::from_ymd_opt(age_year, 1, 1).unwrap();
                 let mut p = make_pro_player(1_000 + i as u32, birth, nf, stamina, fitness);
                 // Random-ish starting condition between 55% and 80%
                 p.player_attributes.condition = 5_500 + (i as i16 * 200);

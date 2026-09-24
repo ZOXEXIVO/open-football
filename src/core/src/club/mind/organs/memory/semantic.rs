@@ -433,11 +433,10 @@ impl Semantic {
 
         // Erode the contradicting belief first — a man who is being shown
         // he was wrong loosens the old conviction as he forms the new one.
-        if let Some(opposite) = claim.opposite() {
-            if let Some(existing) = store.find_mut(|f| f.claim == opposite && f.subject == subject)
-            {
-                existing.contradict();
-            }
+        if let Some(opposite) = claim.opposite()
+            && let Some(existing) = store.find_mut(|f| f.claim == opposite && f.subject == subject)
+        {
+            existing.contradict();
         }
         store.retain(|f| !f.is_spent());
 

@@ -671,8 +671,10 @@ mod captaincy_tests {
     fn build_leader(id: u32, leadership: f32, reputation: i16) -> Player {
         let mut skills = PlayerSkills::default();
         skills.mental.leadership = leadership;
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_reputation = reputation;
+        let attrs = PlayerAttributes {
+            current_reputation: reputation,
+            ..Default::default()
+        };
         let mut contract = PlayerClubContract::new(20_000, d(2035, 6, 30));
         contract.started = Some(d(2020, 7, 1));
         let mut p = PlayerBuilder::new()

@@ -97,7 +97,7 @@ impl StateProcessingHandler for DefenderRunningState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target.id)
                             .with_reason("DEF_COUNTER_ATTACK")
@@ -124,19 +124,19 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
                 // When finally passing during slow tempo, prefer backward/lateral passes
                 // to other defenders or GK rather than forward
-                if ownership_ticks >= min_hold {
-                    if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
-                        return Some(StateChangeResult::with_defender_state_and_event(
-                            DefenderState::Standing,
-                            Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
-                                    .with_from_player_id(ctx.player.id)
-                                    .with_to_player_id(safe_target.id)
-                                    .with_reason("DEF_COACH_TEMPO_PASS_BACK")
-                                    .build(ctx),
-                            )),
-                        ));
-                    }
+                if ownership_ticks >= min_hold
+                    && let Some(safe_target) = self.find_safe_backward_pass(ctx)
+                {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::builder()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe_target.id)
+                                .with_reason("DEF_COACH_TEMPO_PASS_BACK")
+                                .build(ctx),
+                        )),
+                    ));
                 }
             }
 
@@ -146,7 +146,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target.id)
                                 .with_reason("DEF_EMERGENCY_PASS")
@@ -181,7 +181,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(safe.id)
                                 .with_reason("DEF_EMERGENCY_SAFE_PASS")
@@ -209,7 +209,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target)
                                 .with_reason("DEF_FLANK_RELEASE")
@@ -285,14 +285,13 @@ impl StateProcessingHandler for DefenderRunningState {
             // We still keep a proximity override: the ball within ~30u
             // forces an engagement regardless of the eligibility score
             // (instinct beats math when the carrier is on top of you).
-            if ctx.team().counterpress_window() {
-                if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                    if TackleEngagement::should_commit(ctx, opponent.distance(ctx)) {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Tackling,
-                        ));
-                    }
-                }
+            if ctx.team().counterpress_window()
+                && let Some(opponent) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, opponent.distance(ctx))
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
             }
 
             if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
@@ -359,21 +358,23 @@ impl StateProcessingHandler for DefenderRunningState {
             // The contract answers carrier distance, once; a defender it
             // refuses keeps running at the man, because the state's own
             // velocity is already a pursuit onto him.
-            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                if TackleEngagement::should_commit(ctx, opponent.distance(ctx)) {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
+            if let Some(opponent) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, opponent.distance(ctx))
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
             }
 
             // Loose ball nearby — only chase if we're the best positioned teammate
-            if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
-                if ctx.team().is_best_player_to_chase_ball() {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::TakeBall,
-                    ));
-                }
+            if !ctx.ball().is_owned()
+                && ctx.ball().distance() < 50.0
+                && ctx.ball().speed() < 3.0
+                && ctx.team().is_best_player_to_chase_ball()
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
             }
 
             // Loose-ball claim lives in the dispatcher.
@@ -461,35 +462,35 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             // 80-150 ticks: Look for safe short pass to nearby midfielder or defender
-            if ctx.in_state_time <= 150 {
-                if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0) {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("DEF_RUNNING_BUILDUP_SHORT")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+            if ctx.in_state_time <= 150
+                && let Some(target) = self.find_safe_buildup_pass(ctx, 150.0)
+            {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_RUNNING_BUILDUP_SHORT")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // 150-250 ticks: Look for longer pass upfield
-            if ctx.in_state_time <= 250 {
-                if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0) {
-                    return Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("DEF_RUNNING_BUILDUP_LONG")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+            if ctx.in_state_time <= 250
+                && let Some(target) = self.find_safe_buildup_pass(ctx, 300.0)
+            {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_RUNNING_BUILDUP_LONG")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // 250+ ticks: Force clear as last resort
@@ -607,29 +608,28 @@ impl StateProcessingHandler for DefenderRunningState {
                 })
                 .unwrap_or(0.0);
 
-            if engage > 0.0 {
-                if let Some(ball_carrier) = carrier {
-                    let carrier_velocity =
-                        ctx.tick_context.positions.players.velocity(ball_carrier.id);
-                    let pursuit = SteeringBehavior::Pursuit {
-                        target: ball_carrier.position,
-                        target_velocity: carrier_velocity,
-                    }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                    if engage >= 1.0 {
-                        return Some(pursuit + ctx.player().separation_velocity());
-                    }
-
-                    let home = SteeringBehavior::Arrive {
-                        target: home_slot + ctx.player().separation_offset(),
-                        slowing_distance: 30.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity;
-                    return Some(pursuit * engage + home * (1.0 - engage));
+            if engage > 0.0
+                && let Some(ball_carrier) = carrier
+            {
+                let carrier_velocity = ctx.tick_context.positions.players.velocity(ball_carrier.id);
+                let pursuit = SteeringBehavior::Pursuit {
+                    target: ball_carrier.position,
+                    target_velocity: carrier_velocity,
                 }
+                .calculate(ctx.player)
+                .velocity;
+
+                if engage >= 1.0 {
+                    return Some(pursuit + ctx.player().separation_velocity());
+                }
+
+                let home = SteeringBehavior::Arrive {
+                    target: home_slot + ctx.player().separation_offset(),
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity;
+                return Some(pursuit * engage + home * (1.0 - engage));
             }
 
             // No carrier in range — recover the mark.
@@ -766,12 +766,12 @@ impl DefenderRunningState {
         // still decides whether it is worth breaking shape for: a marker
         // whose man is thirty metres away holds his position and lets the
         // phase logic run, which is also what a real defender does.
-        if let Some(man) = ctx.team().my_mark() {
-            if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                ));
-            }
+        if let Some(man) = ctx.team().my_mark()
+            && (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Marking,
+            ));
         }
 
         // …and the same for the man on the ball.
@@ -848,12 +848,12 @@ impl DefenderRunningState {
             // Defensive transition — the one closest defender engages,
             // others recover shape.
             GamePhase::DefensiveTransition => {
-                if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                    if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Tackling,
-                        ));
-                    }
+                if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                    && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+                {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
                 }
                 if !near_start {
                     return Some(StateChangeResult::with_defender_state(
@@ -1047,7 +1047,7 @@ impl DefenderRunningState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target.id)
                             .with_reason(reason)
@@ -1062,19 +1062,19 @@ impl DefenderRunningState {
         // a raw `vision >= 14.0` threshold so technique/composure also
         // count and a fatigued reading drops the gate.
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
-        if def_profile.allows_switch() {
-            if let Some(target) = self.find_open_teammate_on_opposite_side(ctx) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(target.id)
-                            .with_reason("DEF_SWITCH_PLAY")
-                            .build(ctx),
-                    )),
-                ));
-            }
+        if def_profile.allows_switch()
+            && let Some(target) = self.find_open_teammate_on_opposite_side(ctx)
+        {
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderState::Standing,
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::builder()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(target.id)
+                        .with_reason("DEF_SWITCH_PLAY")
+                        .build(ctx),
+                )),
+            ));
         }
 
         None
@@ -1811,13 +1811,12 @@ impl DefenderRunningState {
 
     fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {
         // Don't intercept if a teammate has the ball
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    // A teammate has the ball, don't try to intercept
-                    return false;
-                }
-            }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            // A teammate has the ball, don't try to intercept
+            return false;
         }
 
         // Only intercept if you're the best player to chase the ball

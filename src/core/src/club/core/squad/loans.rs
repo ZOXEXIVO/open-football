@@ -8,6 +8,7 @@
 //! the decisions afterwards.
 
 use chrono::NaiveDate;
+use std::cmp::Reverse;
 
 use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::loan::agreement::ParentWillingness;
@@ -74,7 +75,7 @@ impl LoanSweep {
                 continue;
             }
             // Keep the best `keep` by observable level; the rest are surplus.
-            active.sort_by(|a, b| b.1.cmp(&a.1));
+            active.sort_by_key(|a| Reverse(a.1));
             for (player_id, _, pinned) in active.into_iter().skip(keep) {
                 // A keeper the goalkeeping department is building around
                 // is not surplus, however many keepers sit on this roster.
@@ -203,7 +204,7 @@ impl LoanSweep {
                 })
                 .map(|(id, age, _, _)| (*id, *age))
                 .collect();
-            candidates.sort_by(|a, b| b.1.cmp(&a.1));
+            candidates.sort_by_key(|c| Reverse(c.1));
 
             for (player_id, _age) in candidates {
                 if remaining <= min_field {

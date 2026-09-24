@@ -1032,7 +1032,7 @@ mod tests {
         assert!(base_coaching <= 0.90 + 1e-6);
         // Sanity: weakest academy still trains.
         let weak_base = 0.45 + AcademyTier::from_level(1).norm() * 0.45;
-        assert!(weak_base >= 0.49 && weak_base <= 0.55);
+        assert!((0.49..=0.55).contains(&weak_base));
     }
 
     #[test]

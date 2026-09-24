@@ -41,9 +41,11 @@ use chrono::NaiveDate;
 /// tests so each composite reads a single skill band — keeps the
 /// calibration tests focused on the band → composite relationship.
 fn build_player(fill: f32, condition: i16, position: PlayerPositionType) -> MatchPlayer {
-    let mut attrs = PlayerAttributes::default();
-    attrs.condition = condition;
-    attrs.jadedness = 0;
+    let attrs = PlayerAttributes {
+        condition,
+        jadedness: 0,
+        ..Default::default()
+    };
     let mut skills = PlayerSkills::default();
     skills.technical.passing = fill;
     skills.technical.technique = fill;

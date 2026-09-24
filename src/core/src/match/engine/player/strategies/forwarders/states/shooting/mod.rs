@@ -93,7 +93,7 @@ impl StateProcessingHandler for ForwardShootingState {
         // the shot in the per-match log — matches the pass-reason
         // pattern. Fall back to distance-bucketed reason if nothing
         // was tagged (rare — only direct-to-Shooting paths).
-        let reason = ctx.player.pending_shot_reason.unwrap_or_else(|| {
+        let reason = ctx.player.pending_shot_reason.unwrap_or({
             if distance_to_goal <= 30.0 {
                 "FWD_SHOOTING_CLOSE"
             } else if distance_to_goal <= 60.0 {
@@ -106,7 +106,7 @@ impl StateProcessingHandler for ForwardShootingState {
         Some(StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
             Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::new()
+                ShootingEventContext::builder()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
                     .with_reason(reason)

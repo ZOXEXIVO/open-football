@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -25,6 +25,15 @@ pub struct AwardCard {
     pub count: u16,
     pub tone: &'static str,
     pub icon: &'static str,
+}
+
+/// Award cards split into the page's five groups.
+struct AwardCardGroups {
+    weekly: Vec<AwardCard>,
+    monthly: Vec<AwardCard>,
+    season: Vec<AwardCard>,
+    silverware: Vec<AwardCard>,
+    global: Vec<AwardCard>,
 }
 
 /// One bar in the past-12-months chart at the bottom of the page.
@@ -203,7 +212,7 @@ pub async fn player_awards_action(
             }
         }),
         sub_title_link: team_opt
-            .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
+            .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt
@@ -222,7 +231,7 @@ pub async fn player_awards_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         menu_sections: if let Some(team) = team_opt {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -260,7 +269,13 @@ pub async fn player_awards_action(
 
 fn build_summary(counts: &PlayerAwardsCount, i18n: &I18n) -> SummaryBlock {
     let totals = LeagueAwardTotals::from_lifetime(counts);
-    let (weekly, monthly, season, silverware, global) = build_cards(&totals, i18n);
+    let AwardCardGroups {
+        weekly,
+        monthly,
+        season,
+        silverware,
+        global,
+    } = build_cards(&totals, i18n);
     let sum = |cards: &[AwardCard]| -> u32 { cards.iter().map(|c| c.count as u32).sum() };
     let weekly_total = sum(&weekly);
     let monthly_total = sum(&monthly);
@@ -381,16 +396,7 @@ impl LeagueAwardTotals {
     }
 }
 
-fn build_cards(
-    totals: &LeagueAwardTotals,
-    i18n: &I18n,
-) -> (
-    Vec<AwardCard>,
-    Vec<AwardCard>,
-    Vec<AwardCard>,
-    Vec<AwardCard>,
-    Vec<AwardCard>,
-) {
+fn build_cards(totals: &LeagueAwardTotals, i18n: &I18n) -> AwardCardGroups {
     let card = |title_key: &str, count: u16, tone: &'static str, icon: &'static str| AwardCard {
         title: i18n.t(title_key).to_string(),
         count,
@@ -525,7 +531,13 @@ fn build_cards(
         ),
     ];
 
-    (weekly, monthly, season, silverware, global)
+    AwardCardGroups {
+        weekly,
+        monthly,
+        season,
+        silverware,
+        global,
+    }
 }
 
 /// Group the lifetime timeline into per-league blocks, sorted by
@@ -566,7 +578,13 @@ fn build_league_blocks(
     let mut blocks: Vec<LeagueBlock> = Vec::with_capacity(keys.len());
     for league_id in keys.iter() {
         let totals = totals_by_league.get(league_id).expect("populated above");
-        let (weekly, monthly, season, silverware, global) = build_cards(totals, i18n);
+        let AwardCardGroups {
+            weekly,
+            monthly,
+            season,
+            silverware,
+            global,
+        } = build_cards(totals, i18n);
         let has_weekly = weekly.iter().any(|c| c.count > 0);
         let has_monthly = monthly.iter().any(|c| c.count > 0);
         let has_season = season.iter().any(|c| c.count > 0);
@@ -736,7 +754,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;

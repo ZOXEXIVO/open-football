@@ -29,6 +29,7 @@ pub struct EventCollection {
     /// header: that keeps `StateProcessingResult` inside the 128 bytes
     /// the compiler still moves inline, instead of a `memcpy` call on
     /// every player update.
+    #[allow(clippy::box_collection)]
     overflow: Option<Box<Vec<Event>>>,
 }
 

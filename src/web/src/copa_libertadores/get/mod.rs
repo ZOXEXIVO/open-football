@@ -38,8 +38,11 @@ pub struct CopaLibertadoresGetTemplate {
 }
 
 impl CopaLibertadoresGetTemplate {
-
-    fn club_display(simulator_data: &core::SimulatorData, i18n: &I18n, club_id: u32) -> (String, String) {
+    fn club_display(
+        simulator_data: &core::SimulatorData,
+        i18n: &I18n,
+        club_id: u32,
+    ) -> (String, String) {
         if let Some(club) = simulator_data.club(club_id) {
             let slug = club
                 .teams
@@ -113,8 +116,11 @@ pub async fn copa_libertadores_get_action(
                 .rows
                 .iter()
                 .map(|row| {
-                    let (name, slug) =
-                        CopaLibertadoresGetTemplate::club_display(simulator_data, &i18n, row.team_id);
+                    let (name, slug) = CopaLibertadoresGetTemplate::club_display(
+                        simulator_data,
+                        &i18n,
+                        row.team_id,
+                    );
                     CopaGroupRowDto {
                         club_name: name,
                         club_slug: slug,
@@ -130,7 +136,9 @@ pub async fn copa_libertadores_get_action(
                 .collect();
 
             groups.push(CopaGroupDto {
-                name: i18n.t("group_name").replace("{letter}", &letter.to_string()),
+                name: i18n
+                    .t("group_name")
+                    .replace("{letter}", &letter.to_string()),
                 rows,
             });
         }
@@ -157,7 +165,7 @@ pub async fn copa_libertadores_get_action(
         }
     }
 
-    let current_path = format!("/{}/copa-libertadores", &route_params.lang);
+    let current_path = format!("/{}/copa-libertadores", route_params.lang);
 
     Ok(CopaLibertadoresGetTemplate {
         css_version: CSS_VERSION,

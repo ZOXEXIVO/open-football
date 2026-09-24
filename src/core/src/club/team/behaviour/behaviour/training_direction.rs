@@ -453,23 +453,23 @@ impl TeamBehaviour {
 
             // Specialty polishing: a position-relevant skill that
             // clearly lags the player's own technical level.
-            if !specific_skill_assigned {
-                if let Some(skill) = TrainingDirection::specific_skill_target(player, age) {
-                    player.individual_training = Some(IndividualTrainingPlan {
-                        player_id: player.id,
-                        focus_areas: vec![TrainingFocus::SpecificSkill(skill)],
-                        intensity_modifier: 1.0,
-                        special_instructions: Vec::new(),
-                        started: Some(today),
-                    });
-                    player.happiness.add_event_with_cooldown(
-                        HappinessEventType::PersonalTrainingPlanSet,
-                        cfg.catalog.personal_training_plan_set,
-                        120,
-                    );
-                    specific_skill_assigned = true;
-                    continue;
-                }
+            if !specific_skill_assigned
+                && let Some(skill) = TrainingDirection::specific_skill_target(player, age)
+            {
+                player.individual_training = Some(IndividualTrainingPlan {
+                    player_id: player.id,
+                    focus_areas: vec![TrainingFocus::SpecificSkill(skill)],
+                    intensity_modifier: 1.0,
+                    special_instructions: Vec::new(),
+                    started: Some(today),
+                });
+                player.happiness.add_event_with_cooldown(
+                    HappinessEventType::PersonalTrainingPlanSet,
+                    cfg.catalog.personal_training_plan_set,
+                    120,
+                );
+                specific_skill_assigned = true;
+                continue;
             }
 
             // Mentality program: a fragile young talent under a coach

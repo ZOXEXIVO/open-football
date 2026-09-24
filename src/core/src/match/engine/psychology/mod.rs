@@ -233,8 +233,8 @@ impl Psychology {
 
     /// Leadership team score (0..1).
     ///
-    /// captain_leadership*0.35 + captain_teamwork*0.15 + captain_determination*0.18
-    /// + captain_pressure*0.18 + vice_leadership*0.08 + gk_communication*0.06.
+    /// captain_leadership*0.35 + captain_teamwork*0.15 + captain_determination*0.18 +
+    /// captain_pressure*0.18 + vice_leadership*0.08 + gk_communication*0.06.
     /// All 0..20 inputs.
     ///
     /// TODO(matchday-leadership): pure + unit-tested, not yet wired into the

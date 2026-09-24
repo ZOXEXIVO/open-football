@@ -143,7 +143,7 @@ impl BorrowerTaste {
             club_id: club.id,
             judging,
             squad_average,
-            philosophy: club.philosophy.clone(),
+            philosophy: club.philosophy,
             youth_focus: club.board.vision.youth_focus,
             financial_stance: club.board.vision.financial_stance,
             signing_preference: club.board.vision.signing_preference,

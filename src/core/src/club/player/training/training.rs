@@ -396,41 +396,39 @@ impl PlayerTraining {
                 | TrainingType::RestDay
                 | TrainingType::VideoAnalysis
         );
-        if !is_recovery_family {
-            if let Some(plan) = &player.individual_training {
-                let focus_gain = 0.02
-                    * coach_quality
-                    * player_receptiveness
-                    * plan.intensity_modifier.clamp(0.5, 1.5);
-                for focus in &plan.focus_areas {
-                    match focus {
-                        TrainingFocus::SpecificSkill(skill) => {
-                            let t = &mut effects.technical_gains;
-                            match skill {
-                                SkillType::FreeKicks => t.free_kicks += focus_gain,
-                                SkillType::Penalties => t.penalty_taking += focus_gain,
-                                SkillType::LongShots => t.long_shots += focus_gain,
-                                SkillType::Heading => t.heading += focus_gain,
-                                SkillType::Tackling => t.tackling += focus_gain,
-                                SkillType::Crossing => t.crossing += focus_gain,
-                                SkillType::Dribbling => t.dribbling += focus_gain,
-                            }
+        if !is_recovery_family && let Some(plan) = &player.individual_training {
+            let focus_gain = 0.02
+                * coach_quality
+                * player_receptiveness
+                * plan.intensity_modifier.clamp(0.5, 1.5);
+            for focus in &plan.focus_areas {
+                match focus {
+                    TrainingFocus::SpecificSkill(skill) => {
+                        let t = &mut effects.technical_gains;
+                        match skill {
+                            SkillType::FreeKicks => t.free_kicks += focus_gain,
+                            SkillType::Penalties => t.penalty_taking += focus_gain,
+                            SkillType::LongShots => t.long_shots += focus_gain,
+                            SkillType::Heading => t.heading += focus_gain,
+                            SkillType::Tackling => t.tackling += focus_gain,
+                            SkillType::Crossing => t.crossing += focus_gain,
+                            SkillType::Dribbling => t.dribbling += focus_gain,
                         }
-                        TrainingFocus::FitnessBuilding => {
-                            effects.physical_gains.stamina += focus_gain * 0.6 * age_factor;
-                            effects.physical_gains.natural_fitness += focus_gain * 0.4 * age_factor;
-                        }
-                        TrainingFocus::MentalDevelopment => {
-                            effects.mental_gains.composure += focus_gain * 0.5;
-                            effects.mental_gains.decisions += focus_gain * 0.5;
-                        }
-                        // Weak-foot work, position retraining, and injury
-                        // recovery move foot levels / position levels /
-                        // rehab state, not skills.
-                        TrainingFocus::WeakFootImprovement
-                        | TrainingFocus::PositionRetraining(_)
-                        | TrainingFocus::InjuryRecovery => {}
                     }
+                    TrainingFocus::FitnessBuilding => {
+                        effects.physical_gains.stamina += focus_gain * 0.6 * age_factor;
+                        effects.physical_gains.natural_fitness += focus_gain * 0.4 * age_factor;
+                    }
+                    TrainingFocus::MentalDevelopment => {
+                        effects.mental_gains.composure += focus_gain * 0.5;
+                        effects.mental_gains.decisions += focus_gain * 0.5;
+                    }
+                    // Weak-foot work, position retraining, and injury
+                    // recovery move foot levels / position levels /
+                    // rehab state, not skills.
+                    TrainingFocus::WeakFootImprovement
+                    | TrainingFocus::PositionRetraining(_)
+                    | TrainingFocus::InjuryRecovery => {}
                 }
             }
         }
@@ -1156,7 +1154,7 @@ impl PlayerTraining {
         } else if coach
             .relations
             .get_player(player.id)
-            .map_or(false, |r| r.level < -50.0)
+            .is_some_and(|r| r.level < -50.0)
         {
             -0.2
         } else {
@@ -1411,11 +1409,13 @@ mod training_load_tests {
     }
 
     fn build_player_with_birth(pos: PlayerPositionType, birth: NaiveDate, pa: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.condition = 9_000;
-        attrs.fitness = 9_000;
-        attrs.potential_ability = pa;
-        attrs.current_ability = (pa as f32 * 0.5) as u8;
+        let attrs = PlayerAttributes {
+            condition: 9_000,
+            fitness: 9_000,
+            potential_ability: pa,
+            current_ability: (pa as f32 * 0.5) as u8,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.physical.natural_fitness = 14.0;
         skills.physical.match_readiness = 12.0;
@@ -1426,9 +1426,11 @@ mod training_load_tests {
         skills.physical.jumping = 10.0;
         skills.mental.work_rate = 10.0;
         skills.mental.determination = 10.0;
-        let mut person = PersonAttributes::default();
-        person.professionalism = 10.0;
-        person.ambition = 10.0;
+        let person = PersonAttributes {
+            professionalism: 10.0,
+            ambition: 10.0,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(7)
             .full_name(FullName::new("T".to_string(), "P".to_string()))
@@ -1460,7 +1462,7 @@ mod training_load_tests {
     #[test]
     fn endurance_costs_condition_not_recovers_it() {
         let player = build_player(PlayerPositionType::MidfielderCenter);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Endurance, TrainingIntensity::Moderate);
         let r = PlayerTraining::train(&player, &coach, &s, d(2025, 9, 14), 0.6);
         // Endurance must be a positive (costing) fatigue change.
@@ -1476,7 +1478,7 @@ mod training_load_tests {
     #[test]
     fn recovery_session_restores_condition_with_little_sharpness() {
         let player = build_player(PlayerPositionType::MidfielderCenter);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Recovery, TrainingIntensity::VeryLight);
         let r = PlayerTraining::train(&player, &coach, &s, d(2025, 9, 14), 0.6);
         assert!(r.effects.fatigue_change < -300.0);
@@ -1491,7 +1493,7 @@ mod training_load_tests {
     #[test]
     fn pressing_drills_load_higher_than_video_analysis() {
         let player = build_player(PlayerPositionType::ForwardLeft);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let pressing = PlayerTraining::train(
             &player,
             &coach,
@@ -1519,7 +1521,7 @@ mod training_load_tests {
     #[test]
     fn match_preparation_gains_more_sharpness_than_rest_day() {
         let player = build_player(PlayerPositionType::MidfielderCenter);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let prep = PlayerTraining::train(
             &player,
             &coach,
@@ -1547,7 +1549,7 @@ mod training_load_tests {
     #[test]
     fn goalkeeper_session_trains_goalkeeping_skills() {
         let player = build_player(PlayerPositionType::Goalkeeper);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(
             TrainingType::GoalkeeperTraining,
             TrainingIntensity::Moderate,
@@ -1577,7 +1579,7 @@ mod training_load_tests {
         // less passing work than a 24-year-old. Without the taper the
         // veteran kept refilling the CA headroom his physical decline
         // opened, so squads never aged.
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
         let date = d(2025, 9, 14);
         let prime = build_player_with_birth(
@@ -1605,7 +1607,7 @@ mod training_load_tests {
     #[test]
     fn light_short_session_teaches_less_than_high_long() {
         let player = build_player(PlayerPositionType::MidfielderCenter);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let date = d(2025, 9, 14);
         let light = TrainingSession {
             session_type: TrainingType::Passing,
@@ -1636,7 +1638,7 @@ mod training_load_tests {
     #[test]
     fn individual_plan_focus_skill_receives_extra_gain() {
         let mut player = build_player(PlayerPositionType::MidfielderCenter);
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
         let date = d(2025, 9, 14);
 
@@ -1664,7 +1666,7 @@ mod training_load_tests {
         // 14-year-old vs 22-year-old, identical PA, same Strength
         // session. The physical maturity gate must drag the youth's
         // strength gain materially below the adult's.
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Strength, TrainingIntensity::High);
         let date = d(2025, 9, 14);
 
@@ -1698,7 +1700,7 @@ mod training_load_tests {
         // sits at 0.7 vs 1.1 for a 22yo, so the adult still gains more,
         // but the youth value should be a meaningful fraction of it
         // (not a near-zero like physical).
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
         let date = d(2025, 9, 14);
 
@@ -1758,7 +1760,7 @@ mod training_load_tests {
         // High condition (no fatigue alibi), low pro & work rate, no
         // injury. The reason picker must conclude PoorAttitude when the
         // body says "I can do this" but the effort says "no".
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let mut p = build_pro_pro(PlayerPositionType::MidfielderCenter, 4.0, 4.0, 4.0);
         p.attributes.consistency = 6.0;
         p.player_attributes.condition = 9_500; // 95%
@@ -1770,11 +1772,11 @@ mod training_load_tests {
         let mut saw_attitude = false;
         for day in 1..=14 {
             let r = PlayerTraining::train(&p, &coach, &s, d(2025, 9, day), 0.6);
-            if let Some(ob) = r.outcome.as_ref() {
-                if ob.primary_reason == TrainingEventReason::PoorAttitude {
-                    saw_attitude = true;
-                    break;
-                }
+            if let Some(ob) = r.outcome.as_ref()
+                && ob.primary_reason == TrainingEventReason::PoorAttitude
+            {
+                saw_attitude = true;
+                break;
             }
         }
         assert!(
@@ -1785,7 +1787,7 @@ mod training_load_tests {
 
     #[test]
     fn high_pro_low_condition_yields_struggled_with_intensity_not_attitude() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let mut p = build_pro_pro(PlayerPositionType::MidfielderCenter, 18.0, 16.0, 16.0);
         drain_player(&mut p);
         let s = session(TrainingType::PressingDrills, TrainingIntensity::High);
@@ -1802,11 +1804,11 @@ mod training_load_tests {
         let mut saw_fatigue = false;
         for day in 1..=14 {
             let r = PlayerTraining::train(&p, &coach, &s, d(2025, 9, day), 0.6);
-            if let Some(ob) = r.outcome.as_ref() {
-                if ob.primary_reason == TrainingEventReason::StruggledWithIntensity {
-                    saw_fatigue = true;
-                    break;
-                }
+            if let Some(ob) = r.outcome.as_ref()
+                && ob.primary_reason == TrainingEventReason::StruggledWithIntensity
+            {
+                saw_fatigue = true;
+                break;
             }
         }
         assert!(
@@ -1817,7 +1819,7 @@ mod training_load_tests {
 
     #[test]
     fn high_pro_high_workrate_outscores_low_pro_on_average() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let pro = build_pro_pro(PlayerPositionType::MidfielderCenter, 18.0, 17.0, 16.0);
         let lazy = build_pro_pro(PlayerPositionType::MidfielderCenter, 5.0, 5.0, 5.0);
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
@@ -1841,7 +1843,7 @@ mod training_load_tests {
 
     #[test]
     fn deterministic_seed_reproduces_same_outcome() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let p = build_pro_pro(PlayerPositionType::MidfielderCenter, 14.0, 12.0, 12.0);
         let s = session(TrainingType::TeamShape, TrainingIntensity::Moderate);
         let date = d(2026, 3, 4);
@@ -1860,7 +1862,7 @@ mod training_load_tests {
         // A clean professional should never see a sustained PoorTraining
         // streak from random noise alone. Run two simulated weeks and
         // verify that PoorTraining never becomes the *modal* outcome.
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let p = build_pro_pro(PlayerPositionType::MidfielderCenter, 18.0, 16.0, 16.0);
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
         let mut poor = 0;
@@ -1885,7 +1887,7 @@ mod training_load_tests {
         // The fixed +0.05 morale that used to fire for every Recovery
         // session is gone. With a plain neutral profile the outcome is
         // expected to be near-baseline → no event, no morale movement.
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let p = build_pro_pro(PlayerPositionType::MidfielderCenter, 12.0, 12.0, 12.0);
         let s = session(TrainingType::Recovery, TrainingIntensity::VeryLight);
         let r = PlayerTraining::train(&p, &coach, &s, d(2025, 9, 14), 0.6);
@@ -1900,7 +1902,7 @@ mod training_load_tests {
 
     #[test]
     fn team_shape_session_no_longer_auto_emits_good_training() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let p = build_pro_pro(PlayerPositionType::MidfielderCenter, 12.0, 12.0, 12.0);
         let s = session(TrainingType::TeamShape, TrainingIntensity::Moderate);
         let r = PlayerTraining::train(&p, &coach, &s, d(2025, 9, 14), 0.6);
@@ -1913,7 +1915,7 @@ mod training_load_tests {
 
     #[test]
     fn outcome_breakdown_carries_reason_and_evidence() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let p = build_pro_pro(PlayerPositionType::MidfielderCenter, 18.0, 16.0, 16.0);
         let s = session(TrainingType::MatchPreparation, TrainingIntensity::Light);
         let r = PlayerTraining::train(&p, &coach, &s, d(2025, 9, 14), 0.6);
@@ -2064,14 +2066,14 @@ mod training_load_tests {
         sessions: &[(TrainingType, TrainingIntensity)],
         days: u32,
     ) -> (f32, Vec<TrainingEventReason>) {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let mut perf_sum: f32 = 0.0;
         let mut count: f32 = 0.0;
         let mut reasons: Vec<TrainingEventReason> = Vec::new();
         for offset in 0..days {
-            let day = 1 + (offset % 28) as u32;
-            let month = 9 + (offset / 28) as u32;
-            let date = d(2025, month.min(12), day.max(1).min(28));
+            let day = 1 + (offset % 28);
+            let month = 9 + (offset / 28);
+            let date = d(2025, month.min(12), day.clamp(1, 28));
             for (t, i) in sessions {
                 let r = PlayerTraining::train(
                     player,
@@ -2424,13 +2426,13 @@ mod training_load_tests {
     // ── Noise-model deterministic guards ─────────────────────────
 
     fn noise_off_day_count(player: &Player, days: u32) -> u32 {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let s = session(TrainingType::Passing, TrainingIntensity::Moderate);
         let mut count = 0;
         for offset in 0..days {
-            let day = 1 + (offset % 28) as u32;
-            let month = 9 + (offset / 28) as u32;
-            let date = d(2025, month.min(12), day.max(1).min(28));
+            let day = 1 + (offset % 28);
+            let month = 9 + (offset / 28);
+            let date = d(2025, month.min(12), day.clamp(1, 28));
             let r = PlayerTraining::train(player, &coach, &s, date, 0.6);
             if r.session_performance <= 6.5 {
                 count += 1;
@@ -2459,7 +2461,7 @@ mod training_load_tests {
 
     #[test]
     fn high_consistency_narrows_session_variance() {
-        let coach = StaffStub::default();
+        let coach = StaffStub::build();
         let mut steady = build_pro_pro(PlayerPositionType::MidfielderCenter, 12.0, 12.0, 12.0);
         steady.attributes.consistency = 18.0;
         let mut flaky = build_pro_pro(PlayerPositionType::MidfielderCenter, 12.0, 12.0, 12.0);
@@ -2470,7 +2472,7 @@ mod training_load_tests {
         for offset in 0..60 {
             let day = 1 + (offset % 28) as u32;
             let month = 9 + (offset / 28) as u32;
-            let date = d(2025, month.min(12), day.max(1).min(28));
+            let date = d(2025, month.min(12), day.clamp(1, 28));
             steady_perfs
                 .push(PlayerTraining::train(&steady, &coach, &s, date, 0.6).session_performance);
             flaky_perfs

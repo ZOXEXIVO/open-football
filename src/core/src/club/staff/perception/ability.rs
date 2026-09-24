@@ -237,9 +237,11 @@ mod tests {
         /// skills). `hidden_ca` is stamped onto `current_ability` purely to
         /// prove the estimator ignores it.
         fn player(id: u32, visible: u8, hidden_ca: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = hidden_ca;
-            attrs.potential_ability = 200;
+            let attrs = PlayerAttributes {
+                current_ability: hidden_ca,
+                potential_ability: 200,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Test".to_string(), format!("P{id}")))

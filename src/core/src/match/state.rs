@@ -4,6 +4,12 @@ pub struct GameState {
     pub match_state: MatchState,
 }
 
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GameState {
     pub fn new() -> Self {
         GameState {

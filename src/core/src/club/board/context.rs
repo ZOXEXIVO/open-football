@@ -135,6 +135,12 @@ pub struct BoardContext {
     pub facility_recruitment: FacilityLevel,
 }
 
+impl Default for BoardContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BoardContext {
     pub fn new() -> Self {
         BoardContext {

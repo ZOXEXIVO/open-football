@@ -52,8 +52,9 @@ mod tests {
 
     #[test]
     fn override_trim_day() {
-        let mut c = SimulatorConfig::default();
-        c.match_store_trim_day_of_month = 15;
+        let c = SimulatorConfig {
+            match_store_trim_day_of_month: 15,
+        };
         assert!(c.is_trim_day(NaiveDate::from_ymd_opt(2026, 4, 15).unwrap()));
         assert!(!c.is_trim_day(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()));
     }

@@ -1,6 +1,7 @@
+use crate::Country;
 use crate::continent::{CompetitionTier, Continent};
 use crate::league::League;
-use crate::Country;
+use std::cmp::Reverse;
 
 /// A run of final-table places that feeds one continental competition:
 /// positions `skip + 1 ..= skip + take`.
@@ -44,7 +45,7 @@ impl ContinentalQualification {
     /// ranking every allocation below is keyed on.
     pub fn ranked_countries(continent: &Continent) -> Vec<&Country> {
         let mut countries: Vec<&Country> = continent.countries.iter().collect();
-        countries.sort_by(|a, b| b.reputation.cmp(&a.reputation));
+        countries.sort_by_key(|c| Reverse(c.reputation));
         countries
     }
 

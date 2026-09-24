@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use core::league::{CROSS_BRACKET, PlayoffRoundLabel, PlayoffSeries, ScheduleItem};
 use core::r#match::player::statistics::MatchStatisticType;
 use serde::Deserialize;
+use std::cmp::Reverse;
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
@@ -208,26 +209,26 @@ pub async fn playoff_get_action(
     // Goals of one played game, oriented to the series' home/away sides.
     // The schedule item's ids may sit in either slot of the stored `Score`,
     // so map through the recorded `team_id`s like the cup page's build_tie.
-    let game_goals =
-        |s: &PlayoffSeries, item: &ScheduleItem| -> Option<(u8, u8, Option<(u8, u8)>)> {
-            let res = item.result.as_ref()?;
-            let series_home_first = s.home_team_id == res.home_team.team_id;
-            let (hg, ag) = if series_home_first {
-                (res.home_team.get(), res.away_team.get())
-            } else {
-                (res.away_team.get(), res.home_team.get())
-            };
-            let pens = if res.had_shootout() {
-                if series_home_first {
-                    Some((res.home_shootout, res.away_shootout))
-                } else {
-                    Some((res.away_shootout, res.home_shootout))
-                }
-            } else {
-                None
-            };
-            Some((hg, ag, pens))
+    type GameGoals = (u8, u8, Option<(u8, u8)>);
+    let game_goals = |s: &PlayoffSeries, item: &ScheduleItem| -> Option<GameGoals> {
+        let res = item.result.as_ref()?;
+        let series_home_first = s.home_team_id == res.home_team.team_id;
+        let (hg, ag) = if series_home_first {
+            (res.home_team.get(), res.away_team.get())
+        } else {
+            (res.away_team.get(), res.home_team.get())
         };
+        let pens = if res.had_shootout() {
+            if series_home_first {
+                Some((res.home_shootout, res.away_shootout))
+            } else {
+                Some((res.away_shootout, res.home_shootout))
+            }
+        } else {
+            None
+        };
+        Some((hg, ag, pens))
+    };
 
     let build_card = |s: &PlayoffSeries| -> PlayoffSeriesCard {
         let (home_name, home_slug) = team_info(s.home_team_id);
@@ -365,7 +366,7 @@ pub async fn playoff_get_action(
                 PlayoffRound {
                     label: playoff_round_label(&i18n, label),
                     is_final: label == PlayoffRoundLabel::Final,
-                    series: in_round.into_iter().map(|s| build_card(s)).collect(),
+                    series: in_round.into_iter().map(&build_card).collect(),
                 }
             })
             .collect()
@@ -415,7 +416,7 @@ pub async fn playoff_get_action(
 
     let champion_id = playoff.champion();
     let is_decided = champion_id.is_some();
-    let (champion_name, champion_slug) = champion_id.map(|id| team_info(id)).unwrap_or_default();
+    let (champion_name, champion_slug) = champion_id.map(&team_info).unwrap_or_default();
 
     // While the playoff is live, the furthest round drawn is its current
     // stage; blanked once a champion is known or before the draw.
@@ -443,10 +444,7 @@ pub async fn playoff_get_action(
         rounds.len()
     };
 
-    let (shield_name, shield_slug) = playoff
-        .shield_team_id
-        .map(|id| team_info(id))
-        .unwrap_or_default();
+    let (shield_name, shield_slug) = playoff.shield_team_id.map(team_info).unwrap_or_default();
     let has_shield = !shield_name.is_empty();
 
     // Playoff-scoped player tallies, read from this competition's own
@@ -495,7 +493,7 @@ pub async fn playoff_get_action(
                 value,
             ));
         }
-        rows.sort_by(|a, b| b.5.cmp(&a.5));
+        rows.sort_by_key(|r| Reverse(r.5));
         rows.into_iter()
             .take(10)
             .map(
@@ -515,7 +513,7 @@ pub async fn playoff_get_action(
     let top_assisters = build_stats(&assists_per_player);
 
     let title = views::league_display_name(&playoff.league, &i18n, simulator_data);
-    let current_path = format!("/{}/playoffs/{}", &route_params.lang, &playoff.league.slug);
+    let current_path = format!("/{}/playoffs/{}", route_params.lang, playoff.league.slug);
     let country_leagues: Vec<(&str, &str)> = country
         .leagues
         .leagues
@@ -558,7 +556,7 @@ pub async fn playoff_get_action(
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
         sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),

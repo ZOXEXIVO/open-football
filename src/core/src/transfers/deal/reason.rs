@@ -122,6 +122,33 @@ impl AbilityBand {
     }
 }
 
+/// Assembles the localisable reason a signing is recorded under.
+pub(in crate::transfers) struct TransferReasonBuilder;
+
+impl TransferReasonBuilder {
+    /// Build the localisable transfer reason from the transfer request
+    /// and optional scout report. Both halves travel as data — the motive
+    /// as an i18n key, the verdict as the numbers the scout filed — so the
+    /// history row can be phrased in whatever language the reader picked.
+    pub(in crate::transfers) fn build_transfer_reason(
+        request: Option<&TransferRequest>,
+        report: Option<&DetailedScoutingReport>,
+    ) -> TransferReason {
+        let key = request
+            .map(|r| r.reason.as_signing_reason_key())
+            .unwrap_or_default();
+
+        let scout = report.map(|r| ScoutVerdict {
+            recommendation: r.recommendation.clone(),
+            assessed_ability: r.assessed_ability,
+            assessed_potential: r.assessed_potential,
+            confidence: r.confidence,
+        });
+
+        TransferReason::key(key).with_scout(scout)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,32 +184,5 @@ mod tests {
             confidence: 0.404,
         };
         assert_eq!(verdict.confidence_pct(), 40);
-    }
-}
-
-/// Assembles the localisable reason a signing is recorded under.
-pub(in crate::transfers) struct TransferReasonBuilder;
-
-impl TransferReasonBuilder {
-    /// Build the localisable transfer reason from the transfer request
-    /// and optional scout report. Both halves travel as data — the motive
-    /// as an i18n key, the verdict as the numbers the scout filed — so the
-    /// history row can be phrased in whatever language the reader picked.
-    pub(in crate::transfers) fn build_transfer_reason(
-        request: Option<&TransferRequest>,
-        report: Option<&DetailedScoutingReport>,
-    ) -> TransferReason {
-        let key = request
-            .map(|r| r.reason.as_signing_reason_key())
-            .unwrap_or_default();
-
-        let scout = report.map(|r| ScoutVerdict {
-            recommendation: r.recommendation.clone(),
-            assessed_ability: r.assessed_ability,
-            assessed_potential: r.assessed_potential,
-            confidence: r.confidence,
-        });
-
-        TransferReason::key(key).with_scout(scout)
     }
 }

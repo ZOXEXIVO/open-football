@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::NewspaperCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -222,18 +222,18 @@ pub async fn team_finances_get_action(
         .map(|(date, bal)| {
             let month_str = format!("{}/{}", date.format("%m"), date.format("%y"));
             chart_labels.push(month_str.clone());
-            chart_balances.push(bal.balance as i64);
-            chart_incomes.push(bal.income as i64);
-            chart_expenses.push(bal.outcome as i64);
+            chart_balances.push(bal.balance);
+            chart_incomes.push(bal.income);
+            chart_expenses.push(bal.outcome);
 
             let net_val = bal.income - bal.outcome;
             FinanceHistoryEntry {
                 month: i18n.format_month_year(*date),
-                balance: format_currency(bal.balance as i64),
+                balance: format_currency(bal.balance),
                 balance_positive: bal.balance >= 0,
-                income: format_currency(bal.income as i64),
-                expenses: format_currency(bal.outcome as i64),
-                net: format_currency(net_val as i64),
+                income: format_currency(bal.income),
+                expenses: format_currency(bal.outcome),
+                net: format_currency(net_val),
                 net_positive: net_val >= 0,
             }
         })
@@ -257,7 +257,7 @@ pub async fn team_finances_get_action(
         .collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/finances", &route_params.lang, &team.slug);
+    let current_path = format!("/{}/teams/{}/finances", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
         i18n: &i18n,
         lang: &route_params.lang,
@@ -283,7 +283,7 @@ pub async fn team_finances_get_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: club.colors.background.clone(),
@@ -344,7 +344,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;

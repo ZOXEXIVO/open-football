@@ -50,12 +50,12 @@ impl StateProcessingHandler for DefenderInterceptingState {
         // asked BALL distance and never asked whether an opponent was
         // carrying it, so it handed a defender into a state that ejects
         // him again on the next line.
-        if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-            if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
+        if let Some(carrier) = ctx.players().opponents().with_ball().next()
+            && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Tackling,
+            ));
         }
 
         // Only abandon interception if ball is moving away AND is far

@@ -216,10 +216,8 @@ impl PlayerAvailability {
             return false;
         }
 
-        if !is_friendly {
-            if player.player_attributes.is_banned {
-                return false;
-            }
+        if !is_friendly && player.player_attributes.is_banned {
+            return false;
         }
 
         true
@@ -333,15 +331,14 @@ pub fn tactical_style_bonus(
                 bonus += player.skills.mental.off_the_ball * 0.08;
             }
         }
-        TacticalStyle::WingPlay | TacticalStyle::WidePlay => {
-            if position == PlayerPositionType::WingbackLeft
+        TacticalStyle::WingPlay | TacticalStyle::WidePlay
+            if (position == PlayerPositionType::WingbackLeft
                 || position == PlayerPositionType::WingbackRight
                 || position == PlayerPositionType::MidfielderLeft
-                || position == PlayerPositionType::MidfielderRight
-            {
-                bonus += player.skills.technical.crossing * 0.1;
-                bonus += player.skills.physical.pace * 0.08;
-            }
+                || position == PlayerPositionType::MidfielderRight) =>
+        {
+            bonus += player.skills.technical.crossing * 0.1;
+            bonus += player.skills.physical.pace * 0.08;
         }
         _ => {}
     }

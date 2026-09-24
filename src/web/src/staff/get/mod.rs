@@ -1,14 +1,14 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::utils::{DateUtils, FormattingUtils};
 use chrono::NaiveDate;
 use core::club::mind::organs::memory::MindClock;
+use core::utils::{DateUtils, FormattingUtils};
 use core::{SimulatorData, Staff, StaffPosition};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -262,7 +262,7 @@ pub async fn staff_get_action(
             i18n.t(team.team_type.as_i18n_key()).to_string()
         },
         sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+        sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
         sub_title_country_code: String::new(),
         header_color: simulator_data
             .club(team.club_id)
@@ -274,7 +274,7 @@ pub async fn staff_get_action(
             .unwrap_or_default(),
         menu_sections: {
             let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -294,7 +294,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
@@ -363,7 +363,7 @@ impl KnownPlayers {
                         matches: record.matches_together,
                         regard_key: Self::regard(warmth),
                         working_together: record.open,
-                        parted_key: (!record.open).then(|| record.parted.as_i18n_key()),
+                        parted_key: (!record.open).then_some(record.parted.as_i18n_key()),
                         medals: record.medals.held().map(|(_, key)| key).collect(),
                         scars: record.scars.held().map(|(_, key)| key).collect(),
                     },

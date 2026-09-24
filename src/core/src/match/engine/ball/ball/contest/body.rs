@@ -745,18 +745,16 @@ impl Ball {
         // block use.
         self.flags.in_flight_state = 20;
         self.claim_cooldown = 0;
-        if saved_a_shot {
-            if let Some(shooter_id) = self.previous_owner {
-                self.pending_save_credit = Some((keeper_id, shooter_id));
-                self.pending_save_reach = if already_diving { 1.0 } else { 0.0 };
-                #[cfg(feature = "match-logs")]
-                crate::save_accounting_stats::PENDING_STAGED
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                // Its own accounting site: this is not a parry — a parry is a
-                // save he MADE, and this is one made for him by standing in
-                // the right place. See `save_accounting_stats::SITE_LABELS`.
-                self.pending_save_site = 3; // body
-            }
+        if saved_a_shot && let Some(shooter_id) = self.previous_owner {
+            self.pending_save_credit = Some((keeper_id, shooter_id));
+            self.pending_save_reach = if already_diving { 1.0 } else { 0.0 };
+            #[cfg(feature = "match-logs")]
+            crate::save_accounting_stats::PENDING_STAGED
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Its own accounting site: this is not a parry — a parry is a
+            // save he MADE, and this is one made for him by standing in
+            // the right place. See `save_accounting_stats::SITE_LABELS`.
+            self.pending_save_site = 3; // body
         }
         self.cached_shot_target = None;
         // He is the last man it came off, which is what the endline

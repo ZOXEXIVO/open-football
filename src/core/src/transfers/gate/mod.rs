@@ -356,8 +356,8 @@ impl TransferPlausibilityVerdict {
 }
 
 /// Inputs the plausibility evaluator needs. Callers build this from
-/// whatever shape they have (PlayerSummary, PlayerSnapshot, raw Player
-/// + Club refs in the negotiation pipeline). Keeping the evaluator a
+/// whatever shape they have (PlayerSummary, PlayerSnapshot, raw Player +
+/// Club refs in the negotiation pipeline). Keeping the evaluator a
 /// pure function of this struct makes it trivially unit-testable and
 /// keeps integration churn confined to building inputs.
 #[derive(Debug, Clone)]

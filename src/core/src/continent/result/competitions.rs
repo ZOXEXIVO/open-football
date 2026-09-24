@@ -41,28 +41,38 @@ impl ContinentResult {
 
             match (date.month(), date.day()) {
                 (8, 15) if is_europe => {
-                    let cl = Self::collect_qualified_clubs(&countries, &CompetitionTier::ChampionsLeague);
+                    let cl = Self::collect_qualified_clubs(
+                        &countries,
+                        &CompetitionTier::ChampionsLeague,
+                    );
                     if cl.is_empty() {
                         return;
                     }
                     (cl, Vec::new(), Vec::new(), Vec::new(), 0u8)
                 }
                 (8, 16) if is_south_america => {
-                    let copa = Self::collect_qualified_clubs(&countries, &CompetitionTier::CopaLibertadores);
+                    let copa = Self::collect_qualified_clubs(
+                        &countries,
+                        &CompetitionTier::CopaLibertadores,
+                    );
                     if copa.is_empty() {
                         return;
                     }
                     (Vec::new(), Vec::new(), Vec::new(), copa, 3u8)
                 }
                 (8, 20) if is_europe => {
-                    let el = Self::collect_qualified_clubs(&countries, &CompetitionTier::EuropaLeague);
+                    let el =
+                        Self::collect_qualified_clubs(&countries, &CompetitionTier::EuropaLeague);
                     if el.is_empty() {
                         return;
                     }
                     (Vec::new(), el, Vec::new(), Vec::new(), 1u8)
                 }
                 (8, 25) if is_europe => {
-                    let conf = Self::collect_qualified_clubs(&countries, &CompetitionTier::ConferenceLeague);
+                    let conf = Self::collect_qualified_clubs(
+                        &countries,
+                        &CompetitionTier::ConferenceLeague,
+                    );
                     if conf.is_empty() {
                         return;
                     }
@@ -152,10 +162,10 @@ impl ContinentResult {
                 if row.team_id == 0 {
                     continue;
                 }
-                if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id)) {
-                    if !qualified.contains(&club.id) {
-                        qualified.push(club.id);
-                    }
+                if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id))
+                    && !qualified.contains(&club.id)
+                {
+                    qualified.push(club.id);
                 }
             }
         }

@@ -6,8 +6,8 @@ use crate::r#match::midfielders::states::common::{
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    BallZone, ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
@@ -637,7 +637,7 @@ impl MidfielderCreatingSpaceState {
         // Good distance from ball
         let ball_distance = ctx.ball().distance();
         let good_distance =
-            ball_distance >= MIN_DISTANCE_FROM_BALL && ball_distance <= MAX_DISTANCE_FROM_BALL;
+            (MIN_DISTANCE_FROM_BALL..=MAX_DISTANCE_FROM_BALL).contains(&ball_distance);
 
         // Clear passing lane
         let has_clear_lane = self.has_clear_receiving_lane(ctx);
@@ -928,12 +928,11 @@ impl MidfielderCreatingSpaceState {
     }
 
     fn find_ball_holder(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    return Some(ctx.player().get(owner_id));
-                }
-            }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            return Some(ctx.player().get(owner_id));
         }
         None
     }
@@ -1084,14 +1083,6 @@ enum SpaceType {
     DeepPocket,
     ThirdManRun,
     CentralOverload,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-enum BallZone {
-    DefensiveThird,
-    MiddleThird,
-    AttackingThird,
 }
 
 #[allow(dead_code)]

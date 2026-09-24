@@ -220,7 +220,7 @@ impl DutyAssigner<'_> {
         let mut taken = [false; MAX_UNIT];
         let carrier = owner_team
             .filter(|t| *t != self.team_id)
-            .and_then(|_| self.field.ball.current_owner)
+            .and(self.field.ball.current_owner)
             .and_then(|id| self.field.players.iter().find(|p| p.id == id))
             .filter(|p| p.team_id != self.team_id);
 

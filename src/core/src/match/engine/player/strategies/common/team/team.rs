@@ -189,7 +189,7 @@ impl<'b> TeamOperationsImpl<'b> {
                 .map(|c| c.position)
                 .or_else(|| {
                     (!self.ctx.ball().is_owned())
-                        .then(|| self.ctx.tick_context.positions.ball.position)
+                        .then_some(self.ctx.tick_context.positions.ball.position)
                 })
         };
         match self.my_duty() {
@@ -266,10 +266,10 @@ impl<'b> TeamOperationsImpl<'b> {
         if let Some(slot) = self.my_box_slot_target() {
             return slot;
         }
-        if !self.tactical().in_possession {
-            if let Some(duty) = self.my_duty_anchor() {
-                return duty;
-            }
+        if !self.tactical().in_possession
+            && let Some(duty) = self.my_duty_anchor()
+        {
+            return duty;
         }
         if let Some(wide) = self.my_width_anchor() {
             return wide;
@@ -687,40 +687,39 @@ impl<'b> TeamOperationsImpl<'b> {
         let current_player_team_id = self.ctx.player.team_id;
 
         // First check: if a player from player's team has the ball
-        if let Some(owner_id) = self.ctx.ball().owner_id() {
-            if let Some(ball_owner) = self.ctx.context.players.by_id(owner_id) {
-                return ball_owner.team_id == current_player_team_id;
-            }
+        if let Some(owner_id) = self.ctx.ball().owner_id()
+            && let Some(ball_owner) = self.ctx.context.players.by_id(owner_id)
+        {
+            return ball_owner.team_id == current_player_team_id;
         }
 
         // Second check: if previous owner was from player's team
-        if let Some(prev_owner_id) = self.ctx.ball().previous_owner_id() {
-            if let Some(prev_ball_owner) = self.ctx.context.players.by_id(prev_owner_id) {
-                if prev_ball_owner.team_id == current_player_team_id {
-                    // Check if the ball is still heading in a favorable direction for the team
-                    // or if a teammate is clearly going to get it
-                    let ball_velocity = self.ctx.tick_context.positions.ball.velocity;
+        if let Some(prev_owner_id) = self.ctx.ball().previous_owner_id()
+            && let Some(prev_ball_owner) = self.ctx.context.players.by_id(prev_owner_id)
+            && prev_ball_owner.team_id == current_player_team_id
+        {
+            // Check if the ball is still heading in a favorable direction for the team
+            // or if a teammate is clearly going to get it
+            let ball_velocity = self.ctx.tick_context.positions.ball.velocity;
 
-                    // If ball has significant velocity and is heading toward opponent's goal
-                    if ball_velocity.norm_squared() > 1.0 {
-                        // Determine which way is "forward" based on team side
-                        let forward_direction = match self.ctx.player.side {
-                            Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0), // Left team attacks right
-                            Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0), // Right team attacks left
-                            None => Vector3::new(0.0, 0.0, 0.0),
-                        };
+            // If ball has significant velocity and is heading toward opponent's goal
+            if ball_velocity.norm_squared() > 1.0 {
+                // Determine which way is "forward" based on team side
+                let forward_direction = match self.ctx.player.side {
+                    Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0), // Left team attacks right
+                    Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0), // Right team attacks left
+                    None => Vector3::new(0.0, 0.0, 0.0),
+                };
 
-                        // If ball is moving forward or toward a teammate
-                        let dot_product = ball_velocity.normalize().dot(&forward_direction);
-                        if dot_product > 0.1 {
-                            return true;
-                        }
+                // If ball is moving forward or toward a teammate
+                let dot_product = ball_velocity.normalize().dot(&forward_direction);
+                if dot_product > 0.1 {
+                    return true;
+                }
 
-                        // If a teammate is clearly going for the ball and is close
-                        if self.is_teammate_chasing_ball() {
-                            return true;
-                        }
-                    }
+                // If a teammate is clearly going for the ball and is close
+                if self.is_teammate_chasing_ball() {
+                    return true;
                 }
             }
         }
@@ -776,10 +775,9 @@ impl<'b> TeamOperationsImpl<'b> {
         // If a teammate is significantly closer to the ball than any opponent
         // 0.7 distance ratio = 0.49 squared ratio
         if let (Some(team_sq), Some(opp_sq)) = (closest_teammate_dist_sq, closest_opponent_dist_sq)
+            && team_sq < opp_sq * 0.49
         {
-            if team_sq < opp_sq * 0.49 {
-                return true;
-            }
+            return true;
         }
 
         false
@@ -794,15 +792,14 @@ impl<'b> TeamOperationsImpl<'b> {
         }
 
         // Check if previous owner was from our team
-        if let Some(prev_id) = self.ctx.tick_context.ball.last_owner {
-            if let Some(prev_player) = self.ctx.context.players.by_id(prev_id) {
-                if prev_player.team_id == self.ctx.player.team_id {
-                    // Previous owner was us, now we don't control ball
-                    // Only counts as "just lost" if within ~300ms
-                    let new_ownership = self.ctx.tick_context.ball.ownership_duration;
-                    return new_ownership < 30;
-                }
-            }
+        if let Some(prev_id) = self.ctx.tick_context.ball.last_owner
+            && let Some(prev_player) = self.ctx.context.players.by_id(prev_id)
+            && prev_player.team_id == self.ctx.player.team_id
+        {
+            // Previous owner was us, now we don't control ball
+            // Only counts as "just lost" if within ~300ms
+            let new_ownership = self.ctx.tick_context.ball.ownership_duration;
+            return new_ownership < 30;
         }
 
         false
@@ -921,12 +918,11 @@ impl<'b> TeamOperationsImpl<'b> {
 
     fn compute_is_best_player_to_chase_ball(&self) -> bool {
         // Don't chase the ball if a teammate already has it
-        if let Some(owner_id) = self.ctx.ball().owner_id() {
-            if let Some(owner) = self.ctx.context.players.by_id(owner_id) {
-                if owner.team_id == self.ctx.player.team_id {
-                    return false;
-                }
-            }
+        if let Some(owner_id) = self.ctx.ball().owner_id()
+            && let Some(owner) = self.ctx.context.players.by_id(owner_id)
+            && owner.team_id == self.ctx.player.team_id
+        {
+            return false;
         }
         let Some(side) = self.ctx.player.side else {
             return false;

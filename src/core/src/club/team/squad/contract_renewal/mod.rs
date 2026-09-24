@@ -261,7 +261,7 @@ impl ContractRenewalManager {
     /// `OptionalContractExtensionByClub`: club exercises the option only
     /// when the player is still a first-team contributor with
     /// >= 1 appearance per ~5 weeks of the contract window. Otherwise the
-    /// option lapses and the clause is consumed.
+    /// > option lapses and the clause is consumed.
     fn apply_team_level_clauses(team: &mut Team, date: NaiveDate) {
         // Snapshot ids + salaries so we can compute "top excluding self"
         // without holding two mutable borrows simultaneously.
@@ -614,7 +614,7 @@ impl ContractRenewalManager {
         let stuck_bar = if is_veteran {
             VETERAN_STUCK_SEASONS
         } else {
-            STUCK_SEASONS + (u16::from(DEVELOPMENT_AGE.saturating_sub(age)) + 1) / 2
+            STUCK_SEASONS + u16::from(DEVELOPMENT_AGE.saturating_sub(age)).div_ceil(2)
         };
         // A manager-pinned player is wanted by definition.
         if player.is_force_match_selection {
@@ -760,10 +760,10 @@ impl ContractRenewalManager {
         offered = ((offered as f32) * escalation) as u32;
 
         // Converge toward the player's own ask when we have it.
-        if let Some(ask) = &player.pending_contract_ask {
-            if ask.desired_salary > offered {
-                offered = (offered + ask.desired_salary) / 2;
-            }
+        if let Some(ask) = &player.pending_contract_ask
+            && ask.desired_salary > offered
+        {
+            offered = (offered + ask.desired_salary) / 2;
         }
 
         // The club's own sanity ceiling: escalation and ask-convergence
@@ -876,17 +876,16 @@ impl ContractRenewalManager {
             if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
                 proposal.release_clause = ask.demanded_release_clause;
             }
-            if let Some(status) = &ask.demanded_status {
-                if proposal.squad_status_promise.is_none()
-                    && status.seniority_rank() > contract.squad_status.seniority_rank()
-                {
-                    proposal.squad_status_promise = Some(status.clone());
-                }
+            if let Some(status) = &ask.demanded_status
+                && proposal.squad_status_promise.is_none()
+                && status.seniority_rank() > contract.squad_status.seniority_rank()
+            {
+                proposal.squad_status_promise = Some(status.clone());
             }
-            if let Some(b) = ask.demanded_signing_bonus {
-                if proposal.signing_bonus < b {
-                    proposal.signing_bonus = b;
-                }
+            if let Some(b) = ask.demanded_signing_bonus
+                && proposal.signing_bonus < b
+            {
+                proposal.signing_bonus = b;
             }
             if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract)) {
                 proposal.years = proposal.years.max(ask.desired_years);
@@ -1051,16 +1050,16 @@ impl ContractRenewalManager {
         // player's absolute walk-away floor (`min_acceptable`). Mirror both
         // gates, or we'd green-light a doomed offer the acceptance side
         // provably rejects.
-        if let Some(current) = player.contract.as_ref().map(|c| c.salary.max(1)) {
-            if proposal.salary >= current {
-                let pkg = ProcessContractHandler::expected_package_value(proposal, player);
-                let clears_walkaway = proposal
-                    .valuation_min_acceptable
-                    .map(|floor| pkg >= floor)
-                    .unwrap_or(true);
-                if clears_walkaway && pkg as f32 / current as f32 >= 1.10 {
-                    return true;
-                }
+        if let Some(current) = player.contract.as_ref().map(|c| c.salary.max(1))
+            && proposal.salary >= current
+        {
+            let pkg = ProcessContractHandler::expected_package_value(proposal, player);
+            let clears_walkaway = proposal
+                .valuation_min_acceptable
+                .map(|floor| pkg >= floor)
+                .unwrap_or(true);
+            if clears_walkaway && pkg as f32 / current as f32 >= 1.10 {
+                return true;
             }
         }
 
@@ -1076,10 +1075,10 @@ impl ContractRenewalManager {
             return true;
         }
         // Grants the squad role he wanted written in.
-        if let Some(status) = ask.demanded_status.as_ref() {
-            if proposal.squad_status_promise.as_ref() == Some(status) {
-                return true;
-            }
+        if let Some(status) = ask.demanded_status.as_ref()
+            && proposal.squad_status_promise.as_ref() == Some(status)
+        {
+            return true;
         }
         // Honours a longer contract when length was the sticking point.
         if matches!(ask.rejection_reason, Some(RejectionReason::ShortContract))
@@ -1098,10 +1097,10 @@ impl ContractRenewalManager {
         let Some(ask) = player.pending_contract_ask.as_ref() else {
             return RenewalWalkReason::ClubLetWalk;
         };
-        if let Some(status) = ask.demanded_status.as_ref() {
-            if proposal.squad_status_promise.as_ref() != Some(status) {
-                return RenewalWalkReason::WantedBiggerRole;
-            }
+        if let Some(status) = ask.demanded_status.as_ref()
+            && proposal.squad_status_promise.as_ref() != Some(status)
+        {
+            return RenewalWalkReason::WantedBiggerRole;
         }
         if ask.demanded_release_clause.is_some() && proposal.release_clause.is_none() {
             return RenewalWalkReason::WantedReleaseClause;
@@ -1234,16 +1233,8 @@ impl WageStructureSnapshot {
                 _ => {}
             }
         }
-        let average_first_team = if first_team_count > 0 {
-            first_team_sum / first_team_count
-        } else {
-            0
-        };
-        let average_backup = if backup_count > 0 {
-            backup_sum / backup_count
-        } else {
-            0
-        };
+        let average_first_team = first_team_sum.checked_div(first_team_count).unwrap_or(0);
+        let average_backup = backup_sum.checked_div(backup_count).unwrap_or(0);
 
         Self {
             current_bill: bill,

@@ -18,8 +18,10 @@ struct BorrowerFixtures;
 
 impl BorrowerFixtures {
     fn player(id: u32, position: PlayerPositionType, level: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = level;
+        let attrs = PlayerAttributes {
+            current_ability: level,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("Loan".to_string(), format!("P{id}")))

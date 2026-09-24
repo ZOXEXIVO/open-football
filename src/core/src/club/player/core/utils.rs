@@ -11,8 +11,8 @@ impl PlayerUtils {
         let age_factor = Self::age_factor(age);
 
         let determination = player.skills().get(SkillId::Determination) / 20.0;
-        let ambition = player.attributes.ambition as f32 / 20.0;
-        let professionalism = player.attributes.professionalism as f32 / 20.0;
+        let ambition = player.attributes.ambition / 20.0;
+        let professionalism = player.attributes.professionalism / 20.0;
         let base_factor = determination + ambition + professionalism;
 
         let current_ability = player.player_attributes.current_ability as f32;
@@ -34,8 +34,7 @@ impl PlayerUtils {
             * reputation
             * international_factor;
 
-        let growth_potential = (total_factor * 5.0).round() as u8;
-        growth_potential
+        (total_factor * 5.0).round() as u8
     }
 
     pub fn age_factor(age: u8) -> f32 {

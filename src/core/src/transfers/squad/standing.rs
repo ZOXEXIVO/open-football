@@ -35,6 +35,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::PlayerStatCompetitionKind;
 use crate::club::player::statistics::PlayerStatLedgerEntry;
 use crate::club::player::transfer::{BigStagePull, BigStagePullConfig};
+use std::cmp::Reverse;
 
 /// Observable career facts a standing read needs beyond the current
 /// season's line. Built once per player when the world pool is assembled
@@ -130,7 +131,7 @@ impl CareerRecordSnapshot {
         // Completed seasons in which he played a regular's worth of
         // football, walked newest-first — a career record, not this
         // season's.
-        per_year.sort_unstable_by(|a, b| b.year.cmp(&a.year));
+        per_year.sort_unstable_by_key(|t| Reverse(t.year));
         let mut seasons_as_regular = 0u8;
         for tally in per_year.iter() {
             // A year with no League row is not a season he had — an
@@ -417,9 +418,11 @@ mod career_record_tests {
 
     impl Career {
         fn new() -> Self {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 145;
-            attrs.potential_ability = 145;
+            let attrs = PlayerAttributes {
+                current_ability: 145,
+                potential_ability: 145,
+                ..Default::default()
+            };
             let player = PlayerBuilder::new()
                 .id(1)
                 .full_name(FullName::new("Test".into(), "Player".into()))
@@ -446,10 +449,12 @@ mod career_record_tests {
             apps: u16,
             rating: f32,
         ) -> Self {
-            let mut statistics = PlayerStatistics::default();
-            statistics.played = apps;
-            statistics.rating_matches = apps;
-            statistics.rating_sum = rating * apps as f32;
+            let statistics = PlayerStatistics {
+                played: apps,
+                rating_matches: apps,
+                rating_sum: rating * apps as f32,
+                ..Default::default()
+            };
             self.seq += 1;
             self.player
                 .statistics_history
@@ -542,10 +547,12 @@ mod career_record_tests {
     #[test]
     fn an_imported_season_average_is_still_a_rating() {
         let mut career = Career::new();
-        let mut statistics = PlayerStatistics::default();
-        statistics.played = 30;
-        // Per-match ledgers empty, season average present.
-        statistics.average_rating = 7.4;
+        let statistics = PlayerStatistics {
+            played: 30,
+            // Per-match ledgers empty, season average present.
+            average_rating: 7.4,
+            ..Default::default()
+        };
         career.seq += 1;
         career
             .player

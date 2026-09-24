@@ -138,9 +138,9 @@ impl SeasonAwardsTick {
         if matches_played > 0 {
             ctx = ctx
                 .with_avg_rating(avg_rating)
-                .with_matches_played(matches_played as u16)
-                .with_season_goals(goals as u16)
-                .with_season_assists(assists as u16);
+                .with_matches_played(matches_played)
+                .with_season_goals(goals)
+                .with_season_assists(assists);
         }
         player.on_recognition_award(happiness_event, ctx, 330);
 
@@ -151,7 +151,7 @@ impl SeasonAwardsTick {
         if matches_played > 0 {
             input = input
                 .with_avg_rating(avg_rating)
-                .with_matches_played(matches_played as u16);
+                .with_matches_played(matches_played);
         }
         player.apply_award_reputation_impact(reputation_kind, input, now);
     }

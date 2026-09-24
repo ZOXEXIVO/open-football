@@ -39,9 +39,11 @@ use chrono::NaiveDate;
 use nalgebra::Vector3;
 
 fn build_runner(acceleration: f32, agility: f32, condition: i16) -> MatchPlayer {
-    let mut attrs = PlayerAttributes::default();
-    attrs.condition = condition;
-    attrs.jadedness = 0;
+    let attrs = PlayerAttributes {
+        condition,
+        jadedness: 0,
+        ..Default::default()
+    };
     let mut skills = PlayerSkills::default();
     // Identical top-speed inputs across every runner in a comparison —
     // pace fixed, and the attribute under test varied per call. Stamina /

@@ -715,25 +715,17 @@ impl EligibilityEvaluator {
                 reason: EligibilityReason::Injured,
             };
         }
-        if rules
-            .competition_suspended_player_ids
-            .iter()
-            .any(|id| *id == player.id)
-        {
+        if rules.competition_suspended_player_ids.contains(&player.id) {
             return EligibilityDecision::HardBlocked {
                 reason: EligibilityReason::SuspendedInCompetition,
             };
         }
-        if rules.cup_tied_player_ids.iter().any(|id| *id == player.id) {
+        if rules.cup_tied_player_ids.contains(&player.id) {
             return EligibilityDecision::HardBlocked {
                 reason: EligibilityReason::CupTied,
             };
         }
-        if rules
-            .clause_blocked_player_ids
-            .iter()
-            .any(|id| *id == player.id)
-        {
+        if rules.clause_blocked_player_ids.contains(&player.id) {
             return EligibilityDecision::HardBlocked {
                 reason: EligibilityReason::LoanClause,
             };
@@ -745,11 +737,8 @@ impl EligibilityEvaluator {
         }
         if let Some(registered) = rules.registered_player_ids.as_ref() {
             let id = player.id;
-            let is_registered = registered.iter().any(|rid| *rid == id);
-            let is_exempt = rules
-                .registration_exempt_player_ids
-                .iter()
-                .any(|rid| *rid == id);
+            let is_registered = registered.contains(&id);
+            let is_exempt = rules.registration_exempt_player_ids.contains(&id);
             if !is_registered && !is_exempt {
                 return EligibilityDecision::HardBlocked {
                     reason: EligibilityReason::NotRegistered,

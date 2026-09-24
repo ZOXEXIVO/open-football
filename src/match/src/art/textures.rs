@@ -2499,7 +2499,7 @@ impl Textures {
         let spread = |bytes: &[u8]| -> ([f32; 4], [f32; 4]) {
             let n = (bytes.len() / 4) as f32;
             let mut mean = [0.0f32; 4];
-            for texel in bytes.chunks_exact(4) {
+            for texel in bytes.as_chunks::<4>().0 {
                 for channel in 0..4 {
                     mean[channel] += texel[channel] as f32;
                 }
@@ -2508,7 +2508,7 @@ impl Textures {
                 *value /= n;
             }
             let mut deviation = [0.0f32; 4];
-            for texel in bytes.chunks_exact(4) {
+            for texel in bytes.as_chunks::<4>().0 {
                 for channel in 0..4 {
                     let off = texel[channel] as f32 - mean[channel];
                     deviation[channel] += off * off;
@@ -2527,6 +2527,8 @@ impl Textures {
             across = (across / 2).max(1);
             down = (down / 2).max(1);
             let end = start + (across * down * 4) as usize;
+            // `HOLD` is a tuning knob; at zero no level is held outright.
+            #[allow(clippy::absurd_extreme_comparisons)]
             let keep = if level <= HOLD {
                 1.0
             } else if level >= GONE {
@@ -2536,7 +2538,7 @@ impl Textures {
             };
             if keep > 0.0 {
                 let (mean, have) = spread(&data[start..end]);
-                for texel in data[start..end].chunks_exact_mut(4) {
+                for texel in data[start..end].as_chunks_mut::<4>().0 {
                     for channel in 0..3 {
                         if have[channel] <= 0.0 {
                             continue;
@@ -4750,7 +4752,7 @@ mod tests {
         );
 
         let mut mean = Vec3::ZERO;
-        for texel in tile.chunks_exact(4) {
+        for texel in tile.as_chunks::<4>().0 {
             mean += Vec3::new(texel[0] as f32, texel[1] as f32, texel[2] as f32) / 255.0;
         }
         mean /= (size * size) as f32;

@@ -1,11 +1,11 @@
-/// Player language proficiency system.
-///
-/// Players have a native language from their home country and can learn
-/// new languages when playing abroad. Learning speed depends on:
-/// - Adaptability (primary factor)
-/// - Professionalism (study habits)
-/// - Age (younger = faster)
-/// - Star status (stars may resist learning — they don't "need" to)
+//! Player language proficiency system.
+//!
+//! Players have a native language from their home country and can learn
+//! new languages when playing abroad. Learning speed depends on:
+//! - Adaptability (primary factor)
+//! - Professionalism (study habits)
+//! - Age (younger = faster)
+//! - Star status (stars may resist learning — they don't "need" to)
 
 /// Languages in the football world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

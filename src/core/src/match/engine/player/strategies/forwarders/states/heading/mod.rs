@@ -83,7 +83,7 @@ impl StateProcessingHandler for ForwardHeadingState {
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
                     Event::PlayerEvent(PlayerEvent::Shoot(
-                        ShootingEventContext::new()
+                        ShootingEventContext::builder()
                             .with_player_id(ctx.player.id)
                             .with_target(ctx.player().shooting_direction())
                             .with_reason("FWD_HEADING_ON_GOAL")
@@ -142,7 +142,7 @@ impl StateProcessingHandler for ForwardHeadingState {
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
                     Event::PlayerEvent(PlayerEvent::Shoot(
-                        ShootingEventContext::new()
+                        ShootingEventContext::builder()
                             .with_player_id(ctx.player.id)
                             .with_target(ctx.player().shooting_direction())
                             .with_reason("FWD_HEADING_ON_GOAL")
@@ -213,7 +213,7 @@ impl StateProcessingHandler for ForwardHeadingState {
             Some(StateChangeResult::with_forward_state_and_event(
                 ForwardState::Running,
                 Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::new()
+                    ShootingEventContext::builder()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().shooting_direction())
                         .with_reason("FWD_HEADING_ON_GOAL")

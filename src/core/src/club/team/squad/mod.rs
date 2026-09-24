@@ -387,8 +387,10 @@ mod execute_moves_tests {
 
         let mut player = make_player(1);
         // Pre-load a prior season so this is NOT the player's first record.
-        let mut prior = PlayerStatistics::default();
-        prior.played = 30;
+        let prior = PlayerStatistics {
+            played: 30,
+            ..Default::default()
+        };
         player.statistics_history =
             crate::PlayerStatisticsHistory::from_items(vec![PlayerStatisticsHistoryItem {
                 season: Season::new(2024),

@@ -25,9 +25,7 @@ impl<'a> LeagueLadder<'a> {
             .leagues
             .iter()
             .filter(|l| {
-                l.id != league_id
-                    && l.settings.tier == lower_tier
-                    && l.settings.promotion_spots > 0
+                l.id != league_id && l.settings.tier == lower_tier && l.settings.promotion_spots > 0
             })
             .collect();
         if candidates.is_empty() {
@@ -56,10 +54,10 @@ impl<'a> LeagueLadder<'a> {
                 .collect();
             grouped.sort_unstable_by_key(|l| l.id);
 
-            if let Some(pos) = zones.iter().position(|&id| id == league_id) {
-                if let Some(l) = grouped.get(pos) {
-                    return Some(l);
-                }
+            if let Some(pos) = zones.iter().position(|&id| id == league_id)
+                && let Some(l) = grouped.get(pos)
+            {
+                return Some(l);
             }
         }
 
@@ -103,7 +101,10 @@ impl<'a> LeagueLadder<'a> {
         self.leagues
             .iter()
             .filter(|upper| upper.settings.tier + 1 == league.settings.tier)
-            .filter(|upper| self.lower_partner(upper.id).is_some_and(|l| l.id == league.id))
+            .filter(|upper| {
+                self.lower_partner(upper.id)
+                    .is_some_and(|l| l.id == league.id)
+            })
             .map(|upper| {
                 let zones = self.split_zones(upper);
                 if zones.len() < 2 {

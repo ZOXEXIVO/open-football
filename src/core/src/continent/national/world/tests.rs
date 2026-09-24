@@ -699,7 +699,7 @@ fn u21_candidate_collection_includes_youth_teams_and_excludes_overage() {
     let u19_team = make_team_typed(11, 1, vec![young_u19], TeamType::U19);
     let club = make_club_from_teams(1, vec![main_team, u19_team]);
     let country = make_country(1, 1, "Brazil", vec![club], 8000);
-    let continents = vec![make_continent(1, vec![country])];
+    let continents = [make_continent(1, vec![country])];
 
     let policy = NationalSelectionPolicy::under21();
     let map = NationalTeam::collect_all_candidates_by_country_with_policy(

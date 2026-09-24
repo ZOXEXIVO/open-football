@@ -126,7 +126,7 @@ pub async fn workers_page_action(
     Path(route_params): Path<WorkersPageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
-    let current_path = format!("/{}/workers", &route_params.lang);
+    let current_path = format!("/{}/workers", route_params.lang);
     let menu_sections = views::search_menu(&i18n, &route_params.lang, &current_path);
 
     let snapshot = state.workers.snapshot().await;

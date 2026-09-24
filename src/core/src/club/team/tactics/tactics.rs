@@ -827,9 +827,9 @@ impl TacticsSelector {
             // line regardless of midfield depth. A back-three with
             // wingbacks (3-4-3) is the cleanest way to fit three
             // forwards when the midfielder pool is thin.
-            if analysis.forward_count >= 4 {
-                MatchTacticType::T433
-            } else if analysis.forward_count >= 3 && analysis.midfielder_count >= 3 {
+            if analysis.forward_count >= 4
+                || (analysis.forward_count >= 3 && analysis.midfielder_count >= 3)
+            {
                 MatchTacticType::T433
             } else if analysis.forward_count >= 3 {
                 MatchTacticType::T343
@@ -1240,7 +1240,7 @@ mod tests {
 
     #[test]
     fn test_formation_fitness_calculation() {
-        let players = vec![
+        let players = [
             create_test_player(1, PlayerPositionType::Goalkeeper, 150),
             create_test_player(2, PlayerPositionType::DefenderLeft, 140),
             create_test_player(3, PlayerPositionType::MidfielderCenter, 160),
@@ -1257,7 +1257,7 @@ mod tests {
     #[test]
     fn test_tactical_selection_by_composition() {
         // Create a team with strong attackers
-        let players = vec![
+        let players = [
             create_test_player(1, PlayerPositionType::ForwardCenter, 180),
             create_test_player(2, PlayerPositionType::ForwardLeft, 175),
             create_test_player(3, PlayerPositionType::ForwardRight, 170),
@@ -1277,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_counter_tactic_selection() {
-        let players = vec![create_test_player(1, PlayerPositionType::Goalkeeper, 150)];
+        let players = [create_test_player(1, PlayerPositionType::Goalkeeper, 150)];
         let player_refs: Vec<&Player> = players.iter().collect();
 
         // The counter to a 4-3-3 is now picked from a priority-ordered

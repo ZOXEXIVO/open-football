@@ -5,7 +5,7 @@ use crate::common::friendly_source::FriendlySourceSlug;
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -121,15 +121,13 @@ impl TeamLocationInfo {
         if self
             .last_recorded_season
             .is_some_and(|last| last >= season_start_year)
-        {
-            if let Some((_, name, slug)) = self
+            && let Some((_, name, slug)) = self
                 .league_by_season
                 .iter()
                 .rev()
                 .find(|(year, _, _)| *year <= season_start_year)
-            {
-                return (name.clone(), slug.clone());
-            }
+        {
+            return (name.clone(), slug.clone());
         }
         (self.league_name.clone(), self.league_slug.clone())
     }
@@ -409,10 +407,10 @@ pub async fn player_history_action(
         .into_iter()
         .map(|item| {
             let location = if !item.team_slug.is_empty() {
-                if !location_cache.contains_key(&item.team_slug) {
-                    if let Some(info) = find_team_location(simulator_data, &item.team_slug) {
-                        location_cache.insert(item.team_slug.clone(), info);
-                    }
+                if !location_cache.contains_key(&item.team_slug)
+                    && let Some(info) = find_team_location(simulator_data, &item.team_slug)
+                {
+                    location_cache.insert(item.team_slug.clone(), info);
                 }
                 location_cache.get(&item.team_slug)
             } else {
@@ -553,7 +551,7 @@ pub async fn player_history_action(
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
             sub_title: team.name.clone(),
-            sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+            sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
             sub_title_country_code: String::new(),
             header_color: simulator_data
                 .club(team.club_id)
@@ -565,7 +563,7 @@ pub async fn player_history_action(
                 .unwrap_or_default(),
             menu_sections: {
                 let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-                let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+                let current_path = format!("/{}/teams/{}", route_params.lang, team.slug);
                 let mp = views::MenuParams {
                     i18n: &i18n,
                     lang: &route_params.lang,
@@ -603,7 +601,7 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &I18n,
-) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
+) -> Result<NeighborMenus, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;

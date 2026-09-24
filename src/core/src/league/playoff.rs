@@ -1224,7 +1224,7 @@ mod tests {
     fn cross_group_draw_crosses_zones_immediately() {
         let mut pf = playoff(PlayoffFormat::CrossGroupBracket, 8);
         pf.season_start_year = 2026;
-        let members_owned = vec![group(10, rows(0, 15, 50)), group(20, rows(100, 15, 45))];
+        let members_owned = [group(10, rows(0, 15, 50)), group(20, rows(100, 15, 45))];
         let members: Vec<&GroupStanding> = members_owned.iter().collect();
         let today = NaiveDate::from_ymd_opt(2026, 5, 20).unwrap();
         pf.draw_bracket(&members, today);
@@ -1260,7 +1260,7 @@ mod tests {
     fn cross_group_bracket_resolves_with_neutral_final() {
         let mut pf = playoff(PlayoffFormat::CrossGroupBracket, 8);
         pf.season_start_year = 2026;
-        let members_owned = vec![group(10, rows(0, 15, 50)), group(20, rows(100, 15, 45))];
+        let members_owned = [group(10, rows(0, 15, 50)), group(20, rows(100, 15, 45))];
         let members: Vec<&GroupStanding> = members_owned.iter().collect();
         pf.draw_bracket(&members, NaiveDate::from_ymd_opt(2026, 5, 20).unwrap());
 
@@ -1284,7 +1284,7 @@ mod tests {
         pf.season_start_year = 2026;
         // East (group 10): ids 1..15, best regular season record overall.
         // West (group 20): ids 101..115.
-        let members_owned = vec![group(10, rows(0, 15, 70)), group(20, rows(100, 15, 60))];
+        let members_owned = [group(10, rows(0, 15, 70)), group(20, rows(100, 15, 60))];
         let members: Vec<&GroupStanding> = members_owned.iter().collect();
         let today = NaiveDate::from_ymd_opt(2026, 9, 20).unwrap();
         pf.draw_bracket(&members, today);
@@ -1343,7 +1343,7 @@ mod tests {
     fn best_of_three_split_schedules_a_third_game() {
         let mut pf = playoff(PlayoffFormat::MlsCup, 9);
         pf.season_start_year = 2026;
-        let members_owned = vec![group(10, rows(0, 15, 70)), group(20, rows(100, 15, 60))];
+        let members_owned = [group(10, rows(0, 15, 70)), group(20, rows(100, 15, 60))];
         let members: Vec<&GroupStanding> = members_owned.iter().collect();
         pf.draw_bracket(&members, NaiveDate::from_ymd_opt(2026, 9, 20).unwrap());
 
@@ -1376,7 +1376,7 @@ mod tests {
         // 2 byes; the byes must reappear in round two.
         let mut pf = playoff(PlayoffFormat::SingleElimination, 3);
         pf.season_start_year = 2026;
-        let members_owned = vec![group(10, rows(0, 5, 50)), group(20, rows(100, 5, 45))];
+        let members_owned = [group(10, rows(0, 5, 50)), group(20, rows(100, 5, 45))];
         let members: Vec<&GroupStanding> = members_owned.iter().collect();
         pf.draw_bracket(&members, NaiveDate::from_ymd_opt(2026, 11, 1).unwrap());
 

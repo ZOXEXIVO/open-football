@@ -383,14 +383,12 @@ impl BoardroomDesk {
                     .against(pursuit.other_club_id),
             );
         }
-        if settled {
-            if let Some(pursuit) = watch.headline_pursuit(true) {
-                out.push(
-                    NewsStory::new(NewsStoryKind::ManagerTargetLinked, date)
-                        .by_staff(pursuit.staff_id)
-                        .against(pursuit.other_club_id),
-                );
-            }
+        if settled && let Some(pursuit) = watch.headline_pursuit(true) {
+            out.push(
+                NewsStory::new(NewsStoryKind::ManagerTargetLinked, date)
+                    .by_staff(pursuit.staff_id)
+                    .against(pursuit.other_club_id),
+            );
         }
     }
 

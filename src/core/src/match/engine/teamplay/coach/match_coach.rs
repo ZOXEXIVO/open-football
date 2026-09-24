@@ -126,11 +126,7 @@ impl MatchCoach {
             1 => {
                 if match_progress > rung(0.92) {
                     CoachInstruction::ParkTheBus
-                } else if match_progress > rung(0.83) {
-                    CoachInstruction::SlowDown
-                } else if is_first_half_end {
-                    CoachInstruction::SlowDown
-                } else if team_tired {
+                } else if match_progress > rung(0.83) || is_first_half_end || team_tired {
                     CoachInstruction::SlowDown
                 } else {
                     CoachInstruction::Normal
@@ -150,9 +146,7 @@ impl MatchCoach {
             }
             // Losing by 1 — start pushing earlier to reduce draw lock-ins
             -1 => {
-                if is_very_late {
-                    CoachInstruction::AllOutAttack
-                } else if is_late_game {
+                if is_very_late || is_late_game {
                     CoachInstruction::AllOutAttack
                 } else if match_progress > rung(0.55) {
                     CoachInstruction::PushForward
@@ -162,9 +156,7 @@ impl MatchCoach {
             }
             // Losing by 2
             -2 => {
-                if is_very_late {
-                    CoachInstruction::AllOutAttack
-                } else if is_late_game {
+                if is_very_late || is_late_game {
                     CoachInstruction::AllOutAttack
                 } else if match_progress > rung(0.55) {
                     CoachInstruction::PushForward
@@ -314,10 +306,12 @@ impl MatchCoach {
 
         // Drawing but dominating xG → don't blow the shape. Stay on
         // PushForward (or Normal) instead of AllOutAttack.
-        if score_diff == 0 && is_late && xg_diff_15 >= 0.7 {
-            if matches!(self.instruction, CoachInstruction::AllOutAttack) {
-                self.instruction = CoachInstruction::PushForward;
-            }
+        if score_diff == 0
+            && is_late
+            && xg_diff_15 >= 0.7
+            && matches!(self.instruction, CoachInstruction::AllOutAttack)
+        {
+            self.instruction = CoachInstruction::PushForward;
         }
 
         // Drawing late and getting outxG'd badly → push harder than the

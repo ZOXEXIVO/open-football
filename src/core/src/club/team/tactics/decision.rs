@@ -134,7 +134,7 @@ impl TacticalDecisionEngine {
             .players()
             .iter()
             .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
-            .map(|p| *p)
+            .copied()
             .collect();
 
         let formation_fitness = current_tactics.calculate_formation_fitness(&available_players);

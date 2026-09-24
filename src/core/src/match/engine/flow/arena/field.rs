@@ -140,7 +140,7 @@ impl MatchField {
         let (players_on_field, substitutes) =
             setup_player_on_field(left_team_squad, right_team_squad);
 
-        let field = MatchField {
+        MatchField {
             size,
             ball: Ball::with_coord(width as f32, height as f32),
             players: players_on_field,
@@ -154,9 +154,7 @@ impl MatchField {
             right_team_tactics: right_tactics,
             home_coach_snapshot,
             away_coach_snapshot,
-        };
-
-        field
+        }
     }
 
     /// Borrow the coach snapshot for the given `team_id`, if any.

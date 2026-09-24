@@ -317,10 +317,10 @@ impl ShortlistPass {
         let mut approved_targets: Vec<(u32, u32)> = Vec::new();
 
         for d in &decisions {
-            if d.approved {
-                if let Some(player_id) = d.named_target {
-                    approved_targets.push((d.club_id, player_id));
-                }
+            if d.approved
+                && let Some(player_id) = d.named_target
+            {
+                approved_targets.push((d.club_id, player_id));
             }
         }
 
@@ -511,13 +511,13 @@ impl ShortlistPass {
                                 && p.skill_ability >= request.min_ability
                                 && p.age >= request.preferred_age_min
                                 && p.age <= request.preferred_age_max.saturating_add(3)
-                                && Self::affordable_for_request(&request, &p, fee_free_only)
+                                && Self::affordable_for_request(request, &p, fee_free_only)
                             {
                                 // Plausibility veto: drop HardReject
                                 // entries, soft-dampen the rest.
                                 let plausibility =
                                     TransferPlausibilityBuilder::evaluate_summary(
-                                        &buyer_ctx, &p, false, false, date, None,
+                                        buyer_ctx, &p, false, false, date, None,
                                     );
                                 if let Some(TransferPlausibilityVerdict::HardReject(_)) =
                                     plausibility
@@ -632,7 +632,7 @@ impl ShortlistPass {
                 }
                 let plausibility = summary.as_ref().and_then(|p| {
                     TransferPlausibilityBuilder::evaluate_summary(
-                        &buyer_ctx, p, false, true, date, None,
+                        buyer_ctx, p, false, true, date, None,
                     )
                 });
                 if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
@@ -996,16 +996,14 @@ impl ShortlistPass {
                     club.board.chairman.manager_loyalty =
                         (cur + d.loyalty_delta).clamp(0, 100) as u8;
                 }
-                if d.satisfaction_delta.abs() > 0.01 {
-                    if let Some(main_team) = club.teams.main_mut() {
-                        if let Some(mgr) = main_team
-                            .staffs
-                            .find_mut_by_position(StaffPosition::Manager)
-                        {
-                            mgr.job_satisfaction =
-                                (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
-                        }
-                    }
+                if d.satisfaction_delta.abs() > 0.01
+                    && let Some(main_team) = club.teams.main_mut()
+                    && let Some(mgr) = main_team
+                        .staffs
+                        .find_mut_by_position(StaffPosition::Manager)
+                {
+                    mgr.job_satisfaction =
+                        (mgr.job_satisfaction + d.satisfaction_delta).clamp(0.0, 100.0);
                 }
                 // Surface a BoardPresentation event on the lead scout
                 // so the staff page reflects who took the dossier in
@@ -1021,24 +1019,24 @@ impl ShortlistPass {
                 // If approved, advance the monitoring rows for the
                 // signed target so subsequent ticks see Negotiating
                 // status rather than PromotedToShortlist.
-                if d.approved {
-                    if let Some(player_id) = d.named_target {
-                        club.transfer_plan.set_monitoring_status_for_player(
-                            player_id,
-                            ScoutMonitoringStatus::Negotiating,
-                        );
-                    }
+                if d.approved
+                    && let Some(player_id) = d.named_target
+                {
+                    club.transfer_plan.set_monitoring_status_for_player(
+                        player_id,
+                        ScoutMonitoringStatus::Negotiating,
+                    );
                 }
                 // Vetoed targets fall back to monitoring — scouts
                 // keep an eye but downstream pursuit halts.
-                if !d.approved {
-                    if let Some(player_id) = d.named_target {
-                        for m in club.transfer_plan.scout_monitoring.iter_mut() {
-                            if m.player_id == player_id
-                                && matches!(m.status, ScoutMonitoringStatus::PromotedToShortlist)
-                            {
-                                m.status = ScoutMonitoringStatus::Active;
-                            }
+                if !d.approved
+                    && let Some(player_id) = d.named_target
+                {
+                    for m in club.transfer_plan.scout_monitoring.iter_mut() {
+                        if m.player_id == player_id
+                            && matches!(m.status, ScoutMonitoringStatus::PromotedToShortlist)
+                        {
+                            m.status = ScoutMonitoringStatus::Active;
                         }
                     }
                 }

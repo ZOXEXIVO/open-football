@@ -56,25 +56,25 @@ impl WorldPlayerOfYearTick {
                 );
             }
         }
-        if let Some(id) = winner {
-            if let Some(player) = data.player_mut(id) {
-                let mut ctx = RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYear);
-                if let Some(rup) = runner_up_id {
-                    ctx = ctx.with_runner_up(rup);
-                }
-                if let Some(margin) = winner_margin {
-                    ctx = ctx.with_margin(margin);
-                }
-                if let Some(score) = winner_score {
-                    ctx = ctx.with_avg_rating(score);
-                }
-                player.on_recognition_award(HappinessEventType::WorldPlayerOfYear, ctx, 330);
-                player.apply_award_reputation_impact(
-                    AwardReputationKind::WorldPlayerOfYear,
-                    AwardReputationInput::new(),
-                    today,
-                );
+        if let Some(id) = winner
+            && let Some(player) = data.player_mut(id)
+        {
+            let mut ctx = RecognitionEventContext::new(RecognitionEventKind::WorldPlayerOfYear);
+            if let Some(rup) = runner_up_id {
+                ctx = ctx.with_runner_up(rup);
             }
+            if let Some(margin) = winner_margin {
+                ctx = ctx.with_margin(margin);
+            }
+            if let Some(score) = winner_score {
+                ctx = ctx.with_avg_rating(score);
+            }
+            player.on_recognition_award(HappinessEventType::WorldPlayerOfYear, ctx, 330);
+            player.apply_award_reputation_impact(
+                AwardReputationKind::WorldPlayerOfYear,
+                AwardReputationInput::new(),
+                today,
+            );
         }
     }
 }

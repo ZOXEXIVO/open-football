@@ -18,24 +18,24 @@
 //!   * `pool`      — the player is in the world snapshot a buyer scans
 //!   * `discovery` — breakout / standing scores against the admission bar
 //!   * `buyer`     — one buying club's gates: reach, dedup, plausibility,
-//!                   listed-target verdict, whether a file was opened
+//!     listed-target verdict, whether a file was opened
 //!   * `need`      — the buyer's own squad evaluation (investment appetite)
 //!   * `plaus`     — the staged move-plausibility verdict at negotiation time
 //!   * `approach`  — the seller's engagement roll and its inputs
 //!   * `fee`       — the club-fee round: reservation, ratio, windfall
 //!   * `seller`    — seller-side economics (asset class, importance, income)
 //!   * `list`      — the SELLER side putting him on the market: which pass
-//!                   listed him, for what reason, and whether his signing
-//!                   protection was live at the time
+//!     listed him, for what reason, and whether his signing protection was
+//!     live at the time
 //!   * `exit`      — a release, a terminated contract, or a squad removal
 //!   * `squad`     — where the club registered him and why: the day-0
-//!                   placement verdict, and every weekly promotion the
-//!                   rebalance considered (which guard stopped it, or
-//!                   which loan intent it withdrew)
+//!     placement verdict, and every weekly promotion the rebalance
+//!     considered (which guard stopped it, or which loan intent it
+//!     withdrew)
 //!   * `loan`      — the loan funnel, one line per gate per candidate
-//!                   destination: the asset class, the unsolicited-target
-//!                   verdict, the guard's reach and both money terms, the
-//!                   destination-level floors and the minutes read
+//!     destination: the asset class, the unsolicited-target verdict, the
+//!     guard's reach and both money terms, the destination-level floors and
+//!     the minutes read
 //!
 //! `list` and `exit` are the seller-side half. A move that never happens
 //! leaves no evidence, and neither does a sale that should never have

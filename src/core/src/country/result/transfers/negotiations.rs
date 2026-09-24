@@ -292,7 +292,7 @@ impl NegotiationPass {
                         selling_country_id: n.selling_country_id,
                         selling_continent_id: n.selling_continent_id,
                         selling_country_code: n.selling_country_code.clone(),
-                        player_sold_from: n.player_sold_from.clone(),
+                        player_sold_from: n.player_sold_from,
                         player_name: n.player_name.clone(),
                         selling_club_name: n.selling_club_name.clone(),
                         offered_annual_wage: n.offered_salary,
@@ -459,10 +459,10 @@ impl NegotiationPass {
                     source,
                     repeated_attention,
                 );
-                if let Some(sig) = signal {
-                    if let Some(player) = CountryRoster::find_mut(country, neg_data.player_id) {
-                        player.on_transfer_interest_signal(&sig);
-                    }
+                if let Some(sig) = signal
+                    && let Some(player) = CountryRoster::find_mut(country, neg_data.player_id)
+                {
+                    player.on_transfer_interest_signal(&sig);
                 }
             }
             Some(selling_country_id) => {
@@ -972,16 +972,15 @@ impl NegotiationPass {
             // every approach barred the pair for a month on top of that,
             // and was most of why a borrower and a target only ever met
             // once a window.
-            if neg_data.is_loan {
-                if let Some(buyer) = country
+            if neg_data.is_loan
+                && let Some(buyer) = country
                     .clubs
                     .iter_mut()
                     .find(|c| c.id == neg_data.buying_club_id)
-                {
-                    buyer
-                        .transfer_plan
-                        .record_loan_approach(neg_data.player_id, date);
-                }
+            {
+                buyer
+                    .transfer_plan
+                    .record_loan_approach(neg_data.player_id, date);
             }
             Self::refuse_talks(country, neg_id, neg_data, outcomes);
         }
@@ -1393,21 +1392,21 @@ impl NegotiationPass {
         // sold cheaply against the current offer reads as having been
         // undervalued; a much bigger club now, or a man old enough to be
         // pragmatic, takes the sting out.
-        if let Some((sold_club_id, sold_fee)) = &neg_data.player_sold_from {
-            if *sold_club_id == neg_data.buying_club_id {
-                let mut sting: f32 = 1.0;
-                if *sold_fee > 0.0 && neg_data.offer_amount > sold_fee * 3.0 {
-                    sting += 0.4;
-                }
-                let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-                if rep_diff > 0.3 {
-                    sting -= 0.6;
-                } else if rep_diff > 0.15 {
-                    sting -= 0.3;
-                }
-                sting -= 0.4 * stance.career_spent;
-                offer.returning_to_seller = sting.clamp(0.2, 1.4);
+        if let Some((sold_club_id, sold_fee)) = &neg_data.player_sold_from
+            && *sold_club_id == neg_data.buying_club_id
+        {
+            let mut sting: f32 = 1.0;
+            if *sold_fee > 0.0 && neg_data.offer_amount > sold_fee * 3.0 {
+                sting += 0.4;
             }
+            let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
+            if rep_diff > 0.3 {
+                sting -= 0.6;
+            } else if rep_diff > 0.15 {
+                sting -= 0.3;
+            }
+            sting -= 0.4 * stance.career_spent;
+            offer.returning_to_seller = sting.clamp(0.2, 1.4);
         }
         offer
     }
@@ -1555,10 +1554,10 @@ impl NegotiationPass {
         let Some((tier, amount)) = draw else {
             return;
         };
-        if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            if let Some(targets) = buyer.board.season_targets.as_mut() {
-                targets.owner_envelopes.consume(tier, amount);
-            }
+        if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == buying_club_id)
+            && let Some(targets) = buyer.board.season_targets.as_mut()
+        {
+            targets.owner_envelopes.consume(tier, amount);
         }
     }
 
@@ -1882,10 +1881,9 @@ impl NegotiationPass {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)
+            && selling_club.finance.balance.balance < 0
         {
-            if selling_club.finance.balance.balance < 0 {
-                seller_reservation -= 0.12;
-            }
+            seller_reservation -= 0.12;
         }
 
         // A long-unsold genuine listing erodes the seller's stance on the
@@ -1894,13 +1892,12 @@ impl NegotiationPass {
         // wants a premium, so its acceptance band walks down toward the
         // (itself eroding) absolute fee floor instead of holding a price
         // the market has already refused for half a season.
-        if !neg_data.is_loan {
-            if let Some(days_listed) =
+        if !neg_data.is_loan
+            && let Some(days_listed) =
                 NegotiationPass::seller_listing_age_days(country, neg_data, date)
-            {
-                let t = (days_listed as f64 / SellerFeeFloor::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
-                seller_reservation -= t * 0.20;
-            }
+        {
+            let t = (days_listed as f64 / SellerFeeFloor::FLOOR_EROSION_DAYS).clamp(0.0, 1.0);
+            seller_reservation -= t * 0.20;
         }
 
         let urgency = NegotiationPass::deadline_urgency_for(country, date) as f64;
@@ -2159,11 +2156,11 @@ impl NegotiationPass {
                     exception = Some(target.min(negotiation.buyer_ceiling_fee.unwrap_or(target)));
                 }
             }
-            if let Some(ceiling) = negotiation.buyer_ceiling_fee {
-                if target > ceiling {
-                    target = ceiling;
-                    doctrine_blocked = true;
-                }
+            if let Some(ceiling) = negotiation.buyer_ceiling_fee
+                && target > ceiling
+            {
+                target = ceiling;
+                doctrine_blocked = true;
             }
 
             let escalation = 0.45 + urgency * 0.25;
@@ -2210,20 +2207,19 @@ impl NegotiationPass {
         // The board was asked again and raised its own number. A decision
         // a supporter learns about while the deal is still live, which is
         // the only boardroom fact in a negotiation that ever reaches him.
-        if let Some(fee) = exception {
-            if let Some(buyer) = country
+        if let Some(fee) = exception
+            && let Some(buyer) = country
                 .clubs
                 .iter_mut()
                 .find(|c| c.id == neg_data.buying_club_id)
-            {
-                buyer.record_affair(
-                    ClubAffair::TransferExceptionApproved {
-                        player_id: neg_data.player_id,
-                        fee: fee as i64,
-                    },
-                    date,
-                );
-            }
+        {
+            buyer.record_affair(
+                ClubAffair::TransferExceptionApproved {
+                    player_id: neg_data.player_id,
+                    fee: fee as i64,
+                },
+                date,
+            );
         }
         if buyer_walks {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
@@ -2348,7 +2344,6 @@ impl NegotiationPass {
                     neg_data.player_id,
                     false,
                 );
-                return;
             }
         } else if is_pool_free_agent {
             // Pool membership can't be verified from country scope —
@@ -2370,7 +2365,6 @@ impl NegotiationPass {
                     neg_data.player_id,
                     false,
                 );
-                return;
             }
         } else {
             let player_at_selling_club = country
@@ -2392,7 +2386,6 @@ impl NegotiationPass {
                     neg_data.player_id,
                     false,
                 );
-                return;
             }
         }
     }
@@ -2816,22 +2809,21 @@ impl NegotiationPass {
                         })
                     })
                     .unwrap_or(false);
-            if let Some(player) = CountryRoster::find(country, neg_data.player_id) {
-                if !development_loan_listed && player.is_transfer_protected(date, current_window) {
-                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
-                    {
-                        negotiation
-                            .reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
-                    }
-                    NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
-                    ApproachPass::on_negotiation_resolved(
-                        country,
-                        neg_data.buying_club_id,
-                        neg_data.player_id,
-                        false,
-                    );
-                    return true;
+            if let Some(player) = CountryRoster::find(country, neg_data.player_id)
+                && !development_loan_listed
+                && player.is_transfer_protected(date, current_window)
+            {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
                 }
+                NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
+                ApproachPass::on_negotiation_resolved(
+                    country,
+                    neg_data.buying_club_id,
+                    neg_data.player_id,
+                    false,
+                );
+                return true;
             }
         }
 
@@ -3089,14 +3081,15 @@ impl NegotiationPass {
         // for the offer — so they are built once, together.
         let mut stance = neg_data.staged_stance;
         let mut sporting_drop = neg_data.staged_sporting_drop;
-        if stance.is_none() && !is_foreign {
-            if let Some((built, drop)) = NegotiationPass::stance_for(country, neg_data, date) {
-                stance = Some(built);
-                sporting_drop = Some(drop);
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.staged_stance = Some(built);
-                    negotiation.staged_sporting_drop = Some(drop);
-                }
+        if stance.is_none()
+            && !is_foreign
+            && let Some((built, drop)) = NegotiationPass::stance_for(country, neg_data, date)
+        {
+            stance = Some(built);
+            sporting_drop = Some(drop);
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.staged_stance = Some(built);
+                negotiation.staged_sporting_drop = Some(drop);
             }
         }
         // A global-pool free agent has no club, no depth chart and no
@@ -3140,7 +3133,7 @@ impl NegotiationPass {
                     neg_data.player_age,
                     neg_data.player_ambition,
                     offer.offered_wage,
-                    PlayerOfferAppraisal::anchor(&stance),
+                    PlayerOfferAppraisal::anchor(stance),
                     appraisal.explain(),
                     if appraisal.accepts() { "AGREED" } else { "no" },
                 ),
@@ -3217,31 +3210,30 @@ impl NegotiationPass {
         power: Option<WagePower>,
     ) -> bool {
         const MAX_WAGE_ROUNDS: u8 = 2;
-        if round < MAX_WAGE_ROUNDS {
-            if let Some(power) = power {
-                let reservation = appraisal.reservation_wage as f64;
-                let target = (reservation * 1.02).min(power.ceiling);
-                if power.can_reach(reservation) && target > offer.offered_wage {
-                    // Close 60 % of the gap, as before — except on the
-                    // last round, which closes it, so a deal the buyer
-                    // can genuinely afford is not lost to arithmetic.
-                    let close = if round + 1 >= MAX_WAGE_ROUNDS {
-                        1.0
-                    } else {
-                        0.6
-                    };
-                    let improved =
-                        (offer.offered_wage + (target - offer.offered_wage) * close).round() as u32;
-                    if improved as f64 > offer.offered_wage {
-                        if let Some(negotiation) =
-                            country.transfer_market.negotiations.get_mut(&neg_id)
-                        {
-                            negotiation.raise_offered_salary(improved);
-                            negotiation.advance_personal_terms_round(date);
-                            negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
-                        }
-                        return true;
+        if round < MAX_WAGE_ROUNDS
+            && let Some(power) = power
+        {
+            let reservation = appraisal.reservation_wage as f64;
+            let target = (reservation * 1.02).min(power.ceiling);
+            if power.can_reach(reservation) && target > offer.offered_wage {
+                // Close 60 % of the gap, as before — except on the
+                // last round, which closes it, so a deal the buyer
+                // can genuinely afford is not lost to arithmetic.
+                let close = if round + 1 >= MAX_WAGE_ROUNDS {
+                    1.0
+                } else {
+                    0.6
+                };
+                let improved =
+                    (offer.offered_wage + (target - offer.offered_wage) * close).round() as u32;
+                if improved as f64 > offer.offered_wage {
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
+                    {
+                        negotiation.raise_offered_salary(improved);
+                        negotiation.advance_personal_terms_round(date);
+                        negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
                     }
+                    return true;
                 }
             }
         }
@@ -3654,6 +3646,7 @@ impl SellerBidOrdering {
 ///   * **Total potential** — base + clause expected value, at 30%.
 ///   * **Buyer credibility** — reputation premium (a richer buyer is
 ///     less likely to renege on installments), at 10%.
+///
 /// Loans get a small flat score because they only ever generate the
 /// loan fee — they shouldn't outrank a clean permanent bid for the
 /// same player.
@@ -3878,8 +3871,10 @@ mod development_pathway_protection_tests {
         /// Fresh signing under an active Development plan — protected
         /// from outbound moves by `is_transfer_protected`.
         fn protected_prospect() -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 60;
+            let attrs = PlayerAttributes {
+                current_ability: 60,
+                ..Default::default()
+            };
             let mut player = PlayerBuilder::new()
                 .id(Self::PLAYER_ID)
                 .full_name(FullName::new("Dev".to_string(), "Prospect".to_string()))
@@ -4181,12 +4176,14 @@ mod seller_fee_floor_tests {
             status: PlayerSquadStatus,
             expiration: NaiveDate,
         ) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ca;
-            attrs.potential_ability = ca;
-            attrs.current_reputation = rep;
-            attrs.home_reputation = rep;
-            attrs.world_reputation = rep;
+            let attrs = PlayerAttributes {
+                current_ability: ca,
+                potential_ability: ca,
+                current_reputation: rep,
+                home_reputation: rep,
+                world_reputation: rep,
+                ..Default::default()
+            };
             let mut contract = PlayerClubContract::new(50_000, expiration);
             contract.squad_status = status;
             let birth_year = Self::date().year() - age as i32;
@@ -4333,8 +4330,10 @@ mod seller_fee_floor_tests {
         }
 
         fn history_row(year: u16, games: u16) -> PlayerStatisticsHistoryItem {
-            let mut stats = PlayerStatistics::default();
-            stats.played = games;
+            let stats = PlayerStatistics {
+                played: games,
+                ..Default::default()
+            };
             PlayerStatisticsHistoryItem {
                 season: Season::new(year),
                 team_name: "T".to_string(),
@@ -4780,10 +4779,12 @@ mod saga_visibility_tests {
         }
 
         fn player(id: u32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 120;
-            attrs.potential_ability = 120;
-            attrs.current_reputation = 2000;
+            let attrs = PlayerAttributes {
+                current_ability: 120,
+                potential_ability: 120,
+                current_reputation: 2000,
+                ..Default::default()
+            };
             let mut contract =
                 PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
             contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
@@ -5214,8 +5215,10 @@ mod book_floor_tests {
         }
 
         fn bought(contract_started: NaiveDate, last_transfer: NaiveDate) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 140;
+            let attrs = PlayerAttributes {
+                current_ability: 140,
+                ..Default::default()
+            };
             let mut player = PlayerBuilder::new()
                 .id(1)
                 .full_name(FullName::new("Marquee".to_string(), "Signing".to_string()))

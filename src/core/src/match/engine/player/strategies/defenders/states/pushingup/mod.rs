@@ -75,12 +75,12 @@ impl StateProcessingHandler for DefenderPushingUpState {
             // Only a man ON the ball can be challenged, and whether he can
             // be is not conditional on some other opponent happening to be
             // inside the press scan below.
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
+            if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
             }
 
             // Scan out to press range — the tackle branch re-checks its

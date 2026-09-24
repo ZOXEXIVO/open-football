@@ -10,6 +10,7 @@ use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use rayon::prelude::*;
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 /// Per-matchday snapshot of clubs and teams indexed by id. Built once
@@ -305,9 +306,9 @@ impl League {
         // DevelopAndSell / LoanFocused sides actually put their archetype
         // on the pitch, not just on paper.
         let home_philosophy: Option<ClubPhilosophy> =
-            lookup.club(home_team.club_id).map(|c| c.philosophy.clone());
+            lookup.club(home_team.club_id).map(|c| c.philosophy);
         let away_philosophy: Option<ClubPhilosophy> =
-            lookup.club(away_team.club_id).map(|c| c.philosophy.clone());
+            lookup.club(away_team.club_id).map(|c| c.philosophy);
 
         // Surface each side's baseline tactic to the other so a sharp
         // coach can pick a counter. If the team hasn't locked in tactics
@@ -485,14 +486,14 @@ impl League {
     }
 
     /// Resolve the club and hand the fixture to [`MatchdayPool`].
-    fn collect_reserve_players<'a>(
-        clubs: &'a [Club],
+    fn collect_reserve_players(
+        clubs: &[Club],
         club_id: u32,
         team_id: u32,
         is_friendly: bool,
         for_main_team: bool,
         date: NaiveDate,
-    ) -> Vec<&'a Player> {
+    ) -> Vec<&Player> {
         let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
             return Vec::new();
         };
@@ -576,12 +577,12 @@ impl League {
 
     /// Collect supplementary players from other teams in the same club.
     /// Used by non-main teams in friendly leagues to ensure they have enough players.
-    fn collect_supplementary_players<'a>(
-        clubs: &'a [Club],
+    fn collect_supplementary_players(
+        clubs: &[Club],
         club_id: u32,
         team_id: u32,
         is_friendly: bool,
-    ) -> Vec<&'a Player> {
+    ) -> Vec<&Player> {
         let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
             return Vec::new();
         };
@@ -1065,7 +1066,7 @@ impl YouthSeniorCallUp {
             }
         }
 
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|c| Reverse(c.1));
         for (p, _) in candidates.into_iter().take(Self::MAX_PER_MATCHDAY) {
             reserves.push(p);
         }
@@ -1825,7 +1826,7 @@ mod tests {
     /// whose seat the plan otherwise falls back to.
     fn md_goalkeeping_coach(id: u32) -> crate::Staff {
         use crate::{StaffClubContract, StaffPosition, StaffStatus, StaffStub};
-        let mut staff = StaffStub::default();
+        let mut staff = StaffStub::build();
         staff.id = id;
         staff.contract = Some(StaffClubContract::new(
             50_000,

@@ -101,10 +101,10 @@ impl DatabaseGenerator {
 
                 let facilities = match &club.facilities {
                     Some(f) => ClubFacilities {
-                        training: FacilityLevel::from_str(&f.training),
-                        youth: FacilityLevel::from_str(&f.youth),
-                        academy: FacilityLevel::from_str(&f.academy),
-                        recruitment: FacilityLevel::from_str(&f.recruitment),
+                        training: FacilityLevel::from(f.training.as_str()),
+                        youth: FacilityLevel::from(f.youth.as_str()),
+                        academy: FacilityLevel::from(f.academy.as_str()),
+                        recruitment: FacilityLevel::from(f.recruitment.as_str()),
                         average_attendance,
                         stadium_capacity,
                     },
@@ -397,7 +397,7 @@ impl OdbSquadPlacement {
         now_year: i32,
         club_reputation: TeamReputation,
     ) -> HashMap<TeamType, Vec<OdbPlayer>> {
-        let has = |tt: TeamType| available.iter().any(|t| *t == tt);
+        let has = |tt: TeamType| available.contains(&tt);
         let anchor = ClubLevelAnchor::for_reputation(club_reputation.overall_score());
         // Position group per record and the club's senior bar per group,
         // both resolved once: the bar is a property of the squad, not of

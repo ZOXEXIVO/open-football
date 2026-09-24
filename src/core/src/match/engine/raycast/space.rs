@@ -32,6 +32,12 @@ impl From<&MatchField> for Space {
     }
 }
 
+impl Default for Space {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Space {
     pub fn new() -> Self {
         Space {

@@ -88,7 +88,7 @@ impl KickoffDelivery {
         }
         let partner = ctx.tick_context.ball.kickoff_partner?;
         Some(Event::PlayerEvent(PlayerEvent::PassTo(
-            PassingEventContext::new()
+            PassingEventContext::builder()
                 .with_from_player_id(ctx.player.id)
                 .with_to_player_id(partner)
                 .with_reason("KICK_OFF")

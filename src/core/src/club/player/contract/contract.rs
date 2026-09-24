@@ -164,7 +164,7 @@ impl PlayerSquadStatus {
         // is first choice or a backup, so goalkeeping gets no rotation tier
         // and keeps two backup slots before the rest are surplus.
         let starters = group.typical_starters();
-        let key_cutoff = ((starters + 2) / 3).max(1);
+        let key_cutoff = starters.div_ceil(3).max(1);
         let is_goalkeeper = matches!(group, PlayerFieldPositionGroup::Goalkeeper);
         let rotation_slots = if is_goalkeeper {
             0
@@ -349,7 +349,10 @@ impl PlayerSquadStatus {
     /// wherever he is registered; a role claim or a prospect label ranks him
     /// only inside the squad that awarded it.
     pub fn carries_across_squads(&self) -> bool {
-        matches!(self, PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid)
+        matches!(
+            self,
+            PlayerSquadStatus::NotNeeded | PlayerSquadStatus::Invalid
+        )
     }
 
     /// The same label re-read as a **first-team** designation, given the
@@ -792,7 +795,7 @@ impl PlayerClubContract {
                 ContractClauseType::OptionalContractExtensionByClub
             )
         })?;
-        let years = self.clauses[pos].value.max(0) as i32;
+        let years = self.clauses[pos].value.max(0);
         if years == 0 {
             self.clauses.remove(pos);
             return None;

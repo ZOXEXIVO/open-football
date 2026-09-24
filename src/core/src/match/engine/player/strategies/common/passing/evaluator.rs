@@ -465,7 +465,7 @@ impl PassEvaluator {
                 continue;
             };
             let aerial = sc::aerial_outfield_attacker(player, minute);
-            if best.map_or(true, |(_, b)| aerial > b) {
+            if best.is_none_or(|(_, b)| aerial > b) {
                 best = Some((mate, aerial));
             }
         }
@@ -869,8 +869,7 @@ impl PassEvaluator {
                 PlayerFieldPositionGroup::Goalkeeper
             );
         let build_up_recycle_bonus = if matches!(phase, GamePhase::BuildUp)
-            && pass_distance >= 24.0
-            && pass_distance <= 240.0
+            && (24.0..=240.0).contains(&pass_distance)
             && receiver_is_recycle_target
         {
             let under_press = ctx.players().opponents().nearby(12.0).next().is_some();

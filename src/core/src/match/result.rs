@@ -477,6 +477,12 @@ impl Serialize for ResultMatchPositionData {
     }
 }
 
+impl Default for ResultMatchPositionData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ResultMatchPositionData {
     /// Shared shape. Every recording starts [`RecordingScope::Full`] — the
     /// scope that keeps everything — and the game narrows it explicitly.
@@ -1187,10 +1193,10 @@ impl ResultMatchPositionData {
         }
 
         // Fast dedup using integer comparison — avoids to_string() ~90% of the time
-        if let Some(&last_id) = self.last_state_ids.get(&player_id) {
-            if last_id == state_id {
-                return;
-            }
+        if let Some(&last_id) = self.last_state_ids.get(&player_id)
+            && last_id == state_id
+        {
+            return;
         }
 
         self.last_state_ids.insert(player_id, state_id);

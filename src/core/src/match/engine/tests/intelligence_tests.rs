@@ -37,8 +37,10 @@ fn build(
     condition: i16,
     traits: Vec<PlayerTrait>,
 ) -> MatchPlayer {
-    let mut attrs = PlayerAttributes::default();
-    attrs.condition = condition;
+    let attrs = PlayerAttributes {
+        condition,
+        ..Default::default()
+    };
     let mut player = PlayerBuilder::new()
         .id(1)
         .full_name(FullName::new("T".to_string(), "P".to_string()))

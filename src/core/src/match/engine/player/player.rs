@@ -449,15 +449,15 @@ impl MatchPlayer {
     #[inline]
     pub fn max_speed_with_condition_cached(&self) -> f32 {
         let condition = self.player_attributes.condition;
-        if let Some((key, cached)) = self.max_speed_memo.get() {
-            if key == condition {
-                debug_assert_eq!(
-                    cached.to_bits(),
-                    self.skills.max_speed_with_condition(condition).to_bits(),
-                    "max-speed memo mismatch"
-                );
-                return cached;
-            }
+        if let Some((key, cached)) = self.max_speed_memo.get()
+            && key == condition
+        {
+            debug_assert_eq!(
+                cached.to_bits(),
+                self.skills.max_speed_with_condition(condition).to_bits(),
+                "max-speed memo mismatch"
+            );
+            return cached;
         }
         let value = self.skills.max_speed_with_condition(condition);
         self.max_speed_memo.set(condition, value);
@@ -511,7 +511,7 @@ impl MatchPlayer {
     /// Fast trait lookup used inside hot decision paths.
     #[inline]
     pub fn has_trait(&self, t: PlayerTrait) -> bool {
-        self.traits.iter().any(|x| *x == t)
+        self.traits.contains(&t)
     }
 }
 

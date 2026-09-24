@@ -194,10 +194,10 @@ impl GoalkeeperJumpingState {
 
         let mut catch_prob = prof.catch_probability(catch_difficulty);
         // Deflection damping — match `catching/mod.rs` and `diving/mod.rs`.
-        if let Some(t) = &ctx.tick_context.ball.cached_shot_target {
-            if t.deflected {
-                catch_prob *= 0.50;
-            }
+        if let Some(t) = &ctx.tick_context.ball.cached_shot_target
+            && t.deflected
+        {
+            catch_prob *= 0.50;
         }
         catch_prob
     }
@@ -242,7 +242,7 @@ impl GoalkeeperJumpingState {
         if to_ball.magnitude() > 0.0 {
             // Calculate diving direction considering goalkeeper's diving ability
             let diving_direction = to_ball.normalize();
-            let diving_power = ctx.player.skills.physical.jumping as f32 / 20.0;
+            let diving_power = ctx.player.skills.physical.jumping / 20.0;
 
             diving_direction * diving_power * 2.0
         } else {

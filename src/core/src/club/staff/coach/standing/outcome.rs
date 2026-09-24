@@ -77,7 +77,9 @@ impl StandingRead {
     /// This is what turns a standing into a career: a plan role feeds the
     /// renewal desk, the listing sweep and the conversation where a player
     /// is told where he stands.
-    pub fn plan_bounds(standing: Option<&CoachStanding>) -> (Option<PlannedRole>, Option<PlannedRole>) {
+    pub fn plan_bounds(
+        standing: Option<&CoachStanding>,
+    ) -> (Option<PlannedRole>, Option<PlannedRole>) {
         let Some(standing) = standing else {
             return (None, None);
         };
@@ -120,10 +122,11 @@ impl StandingRead {
                 role = floor;
             }
         }
-        if let Some(ceiling) = ceiling {
-            if role.is_at_least(ceiling) && role != ceiling {
-                role = ceiling;
-            }
+        if let Some(ceiling) = ceiling
+            && role.is_at_least(ceiling)
+            && role != ceiling
+        {
+            role = ceiling;
         }
         role
     }
@@ -131,8 +134,8 @@ impl StandingRead {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::ladder::{GrievanceFlags, LadderContext, StandingLadder};
+    use super::*;
 
     /// Fixture builders, grouped so the tests read as sentences.
     struct Fx;
@@ -143,10 +146,11 @@ mod tests {
         }
 
         fn at(rung: StandingRung) -> CoachStanding {
-            let mut standing = CoachStanding::default();
-            standing.rung = rung;
-            standing.since = Some(Self::date());
-            standing
+            CoachStanding {
+                rung,
+                since: Some(Self::date()),
+                ..Default::default()
+            }
         }
     }
 

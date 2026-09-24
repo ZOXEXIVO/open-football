@@ -10,9 +10,11 @@ use crate::{
 use chrono::NaiveDate;
 
 fn build_test_player(skill_fill: f32, position: PlayerPositionType) -> MatchPlayer {
-    let mut attrs = PlayerAttributes::default();
-    attrs.condition = 9000;
-    attrs.jadedness = 0;
+    let attrs = PlayerAttributes {
+        condition: 9000,
+        jadedness: 0,
+        ..Default::default()
+    };
     let mut skills = PlayerSkills::default();
     skills.technical.passing = skill_fill;
     skills.technical.technique = skill_fill;

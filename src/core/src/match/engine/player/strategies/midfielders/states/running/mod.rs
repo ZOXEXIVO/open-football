@@ -871,7 +871,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         return Some(StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
+                                PassingEventContext::builder()
                                     .with_from_player_id(ctx.player.id)
                                     .with_to_player_id(square.id)
                                     .with_reason("MID_SQUARE_BALL")
@@ -920,7 +920,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                             return Some(StateChangeResult::with_midfielder_state_and_event(
                                 MidfielderState::Standing,
                                 Event::PlayerEvent(PlayerEvent::PassTo(
-                                    PassingEventContext::new()
+                                    PassingEventContext::builder()
                                         .with_from_player_id(ctx.player.id)
                                         .with_to_player_id(target.id)
                                         .with_reason("MID_SHOOT_LAYOFF")
@@ -982,41 +982,40 @@ impl StateProcessingHandler for MidfielderRunningState {
                 && ctx.tick_context.ball.ownership_duration > 8
                 && lane.openness < 0.5
                 && ctx.team().should_play_possession()
+                && let Some(target) = self.find_best_pass_option(ctx).map(|(t, _)| t)
             {
-                if let Some(target) = self.find_best_pass_option(ctx).map(|(t, _)| t) {
-                    // Prefer the sideways / backward retention ball, but
-                    // the bar rises with how patient the side actually is
-                    // rather than sitting at a flat 0.4 for everyone.
-                    let player_pos = ctx.player.position;
-                    let goal_pos = ctx.player().opponent_goal_position();
-                    let to_goal = (goal_pos - player_pos).normalize();
-                    let to_t = (target.position - player_pos).normalize();
-                    let forward_component = to_t.dot(&to_goal);
-                    let target_in_space = ctx
-                        .tick_context
-                        .grid
-                        .opponents(target.id, 2.5 * U_PER_M)
-                        .count()
-                        < 2;
-                    let forward_tolerance = 0.30 + ctx.team().risk_appetite() * 0.55;
-                    if forward_component < forward_tolerance && target_in_space {
-                        onball_diag::record(Exit::PatientRecycle);
-                        return Some(StateChangeResult::with_midfielder_state_and_event(
-                            MidfielderState::Standing,
-                            Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
-                                    .with_from_player_id(ctx.player.id)
-                                    .with_to_player_id(target.id)
-                                    .with_reason("MID_PATIENT_POSSESSION")
-                                    .build(ctx),
-                            )),
-                        ));
-                    }
+                // Prefer the sideways / backward retention ball, but
+                // the bar rises with how patient the side actually is
+                // rather than sitting at a flat 0.4 for everyone.
+                let player_pos = ctx.player.position;
+                let goal_pos = ctx.player().opponent_goal_position();
+                let to_goal = (goal_pos - player_pos).normalize();
+                let to_t = (target.position - player_pos).normalize();
+                let forward_component = to_t.dot(&to_goal);
+                let target_in_space = ctx
+                    .tick_context
+                    .grid
+                    .opponents(target.id, 2.5 * U_PER_M)
+                    .count()
+                    < 2;
+                let forward_tolerance = 0.30 + ctx.team().risk_appetite() * 0.55;
+                if forward_component < forward_tolerance && target_in_space {
+                    onball_diag::record(Exit::PatientRecycle);
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::builder()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target.id)
+                                .with_reason("MID_PATIENT_POSSESSION")
+                                .build(ctx),
+                        )),
+                    ));
                 }
-                // Nothing safe on — fall through to the rest of the
-                // tree. He is not obliged to stand still just because
-                // the manager wants the ball kept.
             }
+            // Nothing safe on — fall through to the rest of the
+            // tree. He is not obliged to stand still just because
+            // the manager wants the ball kept.
 
             // (Shooting — including the box arrival / cutback finish and
             // point-blank chances — is handled by the unified skill-driven
@@ -1038,7 +1037,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         return Some(StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
+                                PassingEventContext::builder()
                                     .with_from_player_id(ctx.player.id)
                                     .with_to_player_id(target_teammate.id)
                                     .with_reason("MID_RUNNING_EMERGENCY_CLEARANCE_BEST")
@@ -1071,7 +1070,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target_teammate.id)
                                 .with_reason("MID_RUNNING_EMERGENCY_CLEARANCE_NEARBY")
@@ -1110,22 +1109,23 @@ impl StateProcessingHandler for MidfielderRunningState {
             // who cannot does not. The bar inside is drawn once per
             // possession, so declining is a decision and not a dice roll
             // he can re-take next tick.
-            if !MidfieldPlay::legacy() && ownership_ticks > 5 && ctx.ball().has_stable_possession()
+            if !MidfieldPlay::legacy()
+                && ownership_ticks > 5
+                && ctx.ball().has_stable_possession()
+                && let Some(ball) = ThroughBall::find(ctx, role.creation)
             {
-                if let Some(ball) = ThroughBall::find(ctx, role.creation) {
-                    onball_diag::record(Exit::ThroughBall);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(ball.target_id)
-                                .with_target_point(ball.aim_point)
-                                .with_reason(ball.kind.reason())
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::ThroughBall);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(ball.target_id)
+                            .with_target_point(ball.aim_point)
+                            .with_reason(ball.kind.reason())
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // ── THE MAN IN FRONT ──────────────────────────────────────
@@ -1160,20 +1160,19 @@ impl StateProcessingHandler for MidfielderRunningState {
             if settled
                 && ctx.ball().has_stable_possession()
                 && self.is_counter_attack_opportunity(ctx)
+                && let Some(forward_target) = self.find_counter_attack_pass(ctx)
             {
-                if let Some(forward_target) = self.find_counter_attack_pass(ctx) {
-                    onball_diag::record(Exit::CounterPass);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(forward_target.id)
-                                .with_reason("MID_RUNNING_COUNTER_ATTACK")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::CounterPass);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(forward_target.id)
+                            .with_reason("MID_RUNNING_COUNTER_ATTACK")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // ONE-TWO COMBINATION: the man who just gave it to us has
@@ -1189,40 +1188,38 @@ impl StateProcessingHandler for MidfielderRunningState {
             if settled
                 && ownership_ticks <= (2.5 * TICKS_PER_SECOND) as u32
                 && ctx.ball().has_stable_possession()
+                && let Some(return_target) = self.find_one_two_return(ctx)
             {
-                if let Some(return_target) = self.find_one_two_return(ctx) {
-                    onball_diag::record(Exit::OneTwo);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(return_target.id)
-                                .with_reason("MID_RUNNING_ONE_TWO_RETURN")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::OneTwo);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(return_target.id)
+                            .with_reason("MID_RUNNING_ONE_TWO_RETURN")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // DRAW AND RELEASE: If opponent is committing to tackle, draw them in
             // then pass to space they vacated — requires carrying to draw them
             if ownership_ticks > (0.3 * TICKS_PER_SECOND) as u32
                 && ctx.ball().has_stable_possession()
+                && let Some(release_target) = self.find_draw_and_release_pass(ctx)
             {
-                if let Some(release_target) = self.find_draw_and_release_pass(ctx) {
-                    onball_diag::record(Exit::DrawRelease);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(release_target.id)
-                                .with_reason("MID_RUNNING_DRAW_AND_RELEASE")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::DrawRelease);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(release_target.id)
+                            .with_reason("MID_RUNNING_DRAW_AND_RELEASE")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // CUTBACK FROM WIDE: a wide carrier near the byline plays a low
@@ -1243,8 +1240,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                 let carrier_byline = (mid_goal.x - ctx.player.position.x).abs() < 90.0;
                 let carrier_offcenter =
                     (ctx.player.position.y - field_h / 2.0).abs() > field_h * 0.15;
-                if carrier_byline && carrier_offcenter {
-                    if let Some(runner) =
+                if carrier_byline && carrier_offcenter
+                    && let Some(runner) =
                         crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
                     {
                         #[cfg(feature = "match-logs")]
@@ -1256,7 +1253,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         return Some(StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
+                                PassingEventContext::builder()
                                     .with_from_player_id(ctx.player.id)
                                     .with_to_player_id(runner.id)
                                     .with_reason("MID_CUTBACK_TO_RUNNER")
@@ -1264,7 +1261,6 @@ impl StateProcessingHandler for MidfielderRunningState {
                             )),
                         ));
                     }
-                }
             }
 
             // CARRY FORWARD: grass in front, so run into it.
@@ -1339,7 +1335,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         return Some(StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Running,
                             Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
+                                PassingEventContext::builder()
                                     .with_from_player_id(ctx.player.id)
                                     .with_to_player_id(target)
                                     .with_reason("MID_FLANK_RELEASE")
@@ -1488,20 +1484,19 @@ impl StateProcessingHandler for MidfielderRunningState {
             if !MidfieldPlay::legacy()
                 && outlet > RELEASE_OUTLET
                 && ctx.ball().has_stable_possession()
+                && let Some((target, _)) = self.find_best_pass_option(ctx)
             {
-                if let Some((target, _)) = self.find_best_pass_option(ctx) {
-                    onball_diag::record(Exit::ShouldPass);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target.id)
-                                .with_reason("MID_HEAD_UP_RELEASE")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::ShouldPass);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("MID_HEAD_UP_RELEASE")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // SWITCH PLAY: the ball side is crowded and the far flank is
@@ -1590,40 +1585,38 @@ impl StateProcessingHandler for MidfielderRunningState {
             if coach.prefer_possession()
                 && ownership_ticks > coach.min_possession_ticks()
                 && ctx.ball().has_stable_possession()
+                && let Some(safe_target) = self.find_safe_backward_pass(ctx)
             {
-                if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
-                    onball_diag::record(Exit::TempoBackPass);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(safe_target.id)
-                                .with_reason("MID_COACH_TEMPO_PASS_BACK")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::TempoBackPass);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe_target.id)
+                            .with_reason("MID_COACH_TEMPO_PASS_BACK")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // Enhanced passing decision — look for a good pass
             if ownership_ticks > 15
                 && ctx.ball().has_stable_possession()
                 && self.should_pass(ctx, &mid_profile, &lane)
+                && let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx)
             {
-                if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
-                    onball_diag::record(Exit::ShouldPass);
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target_teammate.id)
-                                .with_reason("MID_RUNNING_SHOULD_PASS")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                onball_diag::record(Exit::ShouldPass);
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("MID_RUNNING_SHOULD_PASS")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // ⚠ A "no pass on, so beat him" clause was tried here and
@@ -1767,12 +1760,12 @@ impl StateProcessingHandler for MidfielderRunningState {
             // did not move **at all** — the back line acted on its new
             // duties from the equivalent branch, which carries no such
             // gate, and the midfield could not.
-            if let Some(man) = ctx.team().my_mark() {
-                if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Guarding,
-                    ));
-                }
+            if let Some(man) = ctx.team().my_mark()
+                && (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Guarding,
+                ));
             }
 
             // …and the same for the man on the ball. The back line has
@@ -1894,7 +1887,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Running,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target_teammate.id)
                             .with_reason("MID_RUNNING_ANTI_OSCILLATION")
@@ -1917,20 +1910,14 @@ impl StateProcessingHandler for MidfielderRunningState {
             let player_pos = ctx.player.position;
             let goal_pos = ctx.player().opponent_goal_position();
             let to_goal = (goal_pos - player_pos).normalize();
-            if let Some(target_teammate) = ctx
-                .players()
-                .teammates()
-                .nearby(200.0)
-                .filter(|t| {
-                    let to_teammate = (t.position - player_pos).normalize();
-                    to_teammate.dot(&to_goal) > 0.0 // Teammate is ahead (toward opponent goal)
-                })
-                .next()
-            {
+            if let Some(target_teammate) = ctx.players().teammates().nearby(200.0).find(|t| {
+                let to_teammate = (t.position - player_pos).normalize();
+                to_teammate.dot(&to_goal) > 0.0 // Teammate is ahead (toward opponent goal)
+            }) {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Running,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target_teammate.id)
                             .with_reason("MID_RUNNING_ANTI_OSCILLATION_FALLBACK")
@@ -1943,7 +1930,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Running,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
+                        PassingEventContext::builder()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target_teammate.id)
                             .with_reason("MID_RUNNING_ANTI_OSCILLATION_FALLBACK_ANY")
@@ -2184,15 +2171,16 @@ impl MidfielderRunningState {
             // Low-block: cut passing lanes by dropping into the gap
             // between defenders and the ball. Midfielders shouldn't
             // continue chasing upfield in this phase.
-            GamePhase::LowBlock if !has_ball => {
+            GamePhase::LowBlock
+                if !has_ball
                 // Same shared predicate: drop back only when actually out
                 // of shape. Unconditional on `ball_dist` alone, this was
                 // the single biggest midfield loop in the engine.
-                if ball_dist > 50.0 && ShapeStation::should_recover(ctx) {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Returning,
-                    ));
-                }
+                && ball_dist > 50.0 && ShapeStation::should_recover(ctx) =>
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Returning,
+                ));
             }
             _ => {}
         }

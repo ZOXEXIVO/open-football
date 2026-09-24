@@ -11,6 +11,7 @@
 //! fact about the club, the plan is somebody's opinion about it.
 
 use chrono::NaiveDate;
+use std::cmp::Reverse;
 
 use crate::club::staff::goalkeeping::{
     GoalkeepingDepartment, KeeperCoachAuthority, KeeperRoom, KeeperRoomPlan, KeeperSelectionBrief,
@@ -162,7 +163,7 @@ impl Club {
         }
         // The nominated keeper leads: he is the one the department has
         // actually asked for.
-        picks.sort_by(|a, b| b.1.cmp(&a.1));
+        picks.sort_by_key(|p| Reverse(p.1));
         picks.into_iter().map(|(p, _)| p).collect()
     }
 }
@@ -192,12 +193,16 @@ mod tests {
         }
 
         fn keeper(id: u32, age: u8, level: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = level;
-            attrs.condition = 9500;
-            let mut person = PersonAttributes::default();
-            person.professionalism = 15.0;
-            person.ambition = 15.0;
+            let attrs = PlayerAttributes {
+                current_ability: level,
+                condition: 9500,
+                ..Default::default()
+            };
+            let person = PersonAttributes {
+                professionalism: 15.0,
+                ambition: 15.0,
+                ..Default::default()
+            };
             let birth = NaiveDate::from_ymd_opt(2026 - age as i32, 1, 1).unwrap();
             let mut player = PlayerBuilder::new()
                 .id(id)
@@ -224,7 +229,7 @@ mod tests {
 
         /// A goalkeeping coach who knows his job.
         fn specialist(id: u32) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = id;
             staff.contract = Some(StaffClubContract::new(
                 50_000,
@@ -248,7 +253,7 @@ mod tests {
         /// A manager, so a club with no specialist still has somebody to
         /// hold the plan.
         fn manager_only(id: u32) -> Staff {
-            let mut staff = StaffStub::default();
+            let mut staff = StaffStub::build();
             staff.id = id;
             staff.contract = Some(StaffClubContract::new(
                 80_000,

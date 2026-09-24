@@ -35,7 +35,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
 
-        if timestamp % Self::POSITION_RECORD_INTERVAL_MS != 0 {
+        if !timestamp.is_multiple_of(Self::POSITION_RECORD_INTERVAL_MS) {
             return;
         }
 

@@ -545,10 +545,10 @@ impl DevelopmentPlan {
                     + Self::PRIORITY_SPAN
                         * (ceiling_share * ceiling_norm.of(ceilings[i])
                             + (1.0 - ceiling_share) * level_norm.of(levels[i]));
-                if let Some(cap) = age_cap {
-                    if DateUtils::age(p.birth_date, sel.date) >= cap {
-                        w *= Self::SHOWCASE_BUMP;
-                    }
+                if let Some(cap) = age_cap
+                    && DateUtils::age(p.birth_date, sel.date) >= cap
+                {
+                    w *= Self::SHOWCASE_BUMP;
                 }
                 w
             })
@@ -767,10 +767,10 @@ impl KeeperRotationPlan {
                     + Self::PRIORITY_SPAN
                         * (ceiling_share * ceiling_norm.of(own_ceilings[k])
                             + (1.0 - ceiling_share) * level_norm.of(own_levels[k]));
-                if let Some(cap) = age_cap {
-                    if DateUtils::age(candidates[i].birth_date, sel.date) >= cap {
-                        w *= Self::SHOWCASE_BUMP;
-                    }
+                if let Some(cap) = age_cap
+                    && DateUtils::age(candidates[i].birth_date, sel.date) >= cap
+                {
+                    w *= Self::SHOWCASE_BUMP;
                 }
                 w
             })

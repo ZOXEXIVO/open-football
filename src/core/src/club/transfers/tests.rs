@@ -39,9 +39,11 @@ impl Fx {
         potential_ability: u8,
         contract_expiry: Option<NaiveDate>,
     ) -> Player {
-        let mut player_attributes = PlayerAttributes::default();
-        player_attributes.current_ability = current_ability;
-        player_attributes.potential_ability = potential_ability;
+        let player_attributes = PlayerAttributes {
+            current_ability,
+            potential_ability,
+            ..Default::default()
+        };
 
         let mut p = PlayerBuilder::new()
             .id(id)
@@ -89,15 +91,17 @@ impl Fx {
     // Pull the first matching clause off an offer so a test can
     // inspect its payload (e.g. installment years, addon fee).
     fn find_clause<'a>(offer: &'a TransferOffer, tag: &str) -> Option<&'a TransferClause> {
-        offer.clauses.iter().find(|c| match (c, tag) {
-            (TransferClause::SellOnClause(_), "sell_on") => true,
-            (TransferClause::AppearanceFee(_, _), "appearance") => true,
-            (TransferClause::GoalBonus(_, _), "goals") => true,
-            (TransferClause::PromotionBonus(_), "promotion") => true,
-            (TransferClause::Installments(_, _), "installments") => true,
-            (TransferClause::LoanOptionToBuy(_), "loan_option") => true,
-            (TransferClause::LoanObligationToBuy(_), "loan_obligation") => true,
-            _ => false,
+        offer.clauses.iter().find(|c| {
+            matches!(
+                (c, tag),
+                (TransferClause::SellOnClause(_), "sell_on")
+                    | (TransferClause::AppearanceFee(_, _), "appearance")
+                    | (TransferClause::GoalBonus(_, _), "goals")
+                    | (TransferClause::PromotionBonus(_), "promotion")
+                    | (TransferClause::Installments(_, _), "installments")
+                    | (TransferClause::LoanOptionToBuy(_), "loan_option")
+                    | (TransferClause::LoanObligationToBuy(_), "loan_obligation")
+            )
         })
     }
 }

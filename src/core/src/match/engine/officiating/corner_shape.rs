@@ -357,12 +357,12 @@ impl CornerShape {
     /// Outfield players of one side who are still on the pitch, in roster
     /// order (which is stable across ticks, so every tie broken by it is
     /// reproducible).
-    fn pool<'a>(
-        players: &'a [MatchPlayer],
+    fn pool(
+        players: &[MatchPlayer],
         attacking_side: PlayerSide,
         taker_id: u32,
         want_attacking: bool,
-    ) -> Vec<&'a MatchPlayer> {
+    ) -> Vec<&MatchPlayer> {
         players
             .iter()
             .filter(|p| {
@@ -395,7 +395,7 @@ impl CornerShape {
         // ten-versus-ten siege with no downside for the attacking side.
         // The quickest forward is the one who gets left, and he holds the
         // last line rather than the halfway line — see `outlet_depth`.
-        if let Some(p) = Self::take_best(pool, |p| Self::outlet_score(p)) {
+        if let Some(p) = Self::take_best(pool, Self::outlet_score) {
             out.push(CornerStation {
                 player_id: p.id,
                 position: g.at(outlet_depth, 0.0),
@@ -441,7 +441,7 @@ impl CornerShape {
             (PENALTY_SPOT_DEPTH - 8.0, -20.0),
         ];
         for (i, (depth, y)) in screen.iter().enumerate() {
-            let Some(p) = Self::take_best(pool, |p| Self::aerial_score(p)) else {
+            let Some(p) = Self::take_best(pool, Self::aerial_score) else {
                 break;
             };
             out.push(CornerStation {
@@ -523,7 +523,7 @@ impl CornerShape {
 
         // Near-post flick, penalty spot, back post — best heads first.
         for (depth, y) in [(30.0, 34.0), (86.0, 4.0), (46.0, -52.0)] {
-            let Some(p) = Self::take_best(pool, |p| Self::aerial_score(p)) else {
+            let Some(p) = Self::take_best(pool, Self::aerial_score) else {
                 break;
             };
             out.push(CornerStation {
@@ -535,7 +535,7 @@ impl CornerShape {
 
         // One on the edge for the cut-back and the second ball. The best
         // striker of a ball from range, since that is the shot he will get.
-        if let Some(p) = Self::take_best(pool, |p| Self::edge_score(p)) {
+        if let Some(p) = Self::take_best(pool, Self::edge_score) {
             out.push(CornerStation {
                 player_id: p.id,
                 position: g.at(PENALTY_AREA_DEPTH + 20.0, -6.0),
@@ -556,7 +556,7 @@ impl CornerShape {
         let mut best: Option<(usize, f32)> = None;
         for (i, p) in pool.iter().enumerate() {
             let s = score(p);
-            if best.map_or(true, |(_, bs)| s > bs) {
+            if best.is_none_or(|(_, bs)| s > bs) {
                 best = Some((i, s));
             }
         }

@@ -1444,7 +1444,7 @@ impl FreeAgentPass {
             );
         }
         let chosen =
-            Self::sample_clearing_buyer(&fitting, candidate.position_group, &candidate_market);
+            Self::sample_clearing_buyer(&fitting, candidate.position_group, candidate_market);
         let Some((buyer, min_ca, max_ca)) = chosen else {
             recorder.record(
                 candidate.player_id,

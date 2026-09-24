@@ -17,7 +17,7 @@ impl DateUtils {
 
     #[inline]
     pub fn is_quarter_start(date: NaiveDate) -> bool {
-        date.day() == 1 && date.month() % 3 == 0
+        date.day() == 1 && date.month().is_multiple_of(3)
     }
 
     #[inline]

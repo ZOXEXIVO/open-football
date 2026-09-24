@@ -503,9 +503,11 @@ mod tests {
         }
 
         fn player_aged(today: NaiveDate, age: i32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 130;
-            attrs.potential_ability = 140;
+            let attrs = PlayerAttributes {
+                current_ability: 130,
+                potential_ability: 140,
+                ..Default::default()
+            };
             let birth = NaiveDate::from_ymd_opt(today.year() - age, 1, 1).unwrap();
             PlayerBuilder::new()
                 .id(1)

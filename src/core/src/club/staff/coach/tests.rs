@@ -40,9 +40,11 @@ impl PlayerFixture {
     }
 
     fn build(id: u32, age: u32, pos: PlayerPositionType, ca: u8) -> Player {
-        let mut attrs = PlayerAttributes::default();
-        attrs.current_ability = ca;
-        attrs.condition = 9000;
+        let attrs = PlayerAttributes {
+            current_ability: ca,
+            condition: 9000,
+            ..Default::default()
+        };
         let mut skills = PlayerSkills::default();
         skills.technical.finishing = 14.0;
         skills.mental.composure = 14.0;
@@ -74,7 +76,7 @@ struct CoachSetup;
 
 impl CoachSetup {
     fn baseline_staff() -> Staff {
-        let mut s = StaffStub::default();
+        let mut s = StaffStub::build();
         s.id = 1;
         s.staff_attributes.knowledge.judging_player_ability = 14;
         s.staff_attributes.knowledge.judging_player_potential = 14;

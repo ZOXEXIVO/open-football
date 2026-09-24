@@ -182,10 +182,12 @@ impl ClubBoard {
 
         // "Two scouts watching, consensus near zero" = open disagreement.
         // The board doesn't sign on a flip-coin.
-        if let Some(d) = proposal.dossier {
-            if d.scout_votes >= 2 && d.consensus_score.abs() < 0.4 && d.risk_flag_count >= 2 {
-                return BoardTransferDecision::Vetoed(BoardTransferConcern::WeakSportingCase);
-            }
+        if let Some(d) = proposal.dossier
+            && d.scout_votes >= 2
+            && d.consensus_score.abs() < 0.4
+            && d.risk_flag_count >= 2
+        {
+            return BoardTransferDecision::Vetoed(BoardTransferConcern::WeakSportingCase);
         }
 
         // Ownership-archetype governance: squad-profile fit + deal
@@ -241,10 +243,10 @@ impl ClubBoard {
                 }
                 // Galáctico policy: signings must raise the bar.
                 SquadProfile::Stars => {
-                    if let Some(ability) = proposal.player_ability {
-                        if ability + 4 < proposal.squad_avg_ability {
-                            return Some(BoardTransferDecision::Vetoed(WeakSportingCase));
-                        }
+                    if let Some(ability) = proposal.player_ability
+                        && ability + 4 < proposal.squad_avg_ability
+                    {
+                        return Some(BoardTransferDecision::Vetoed(WeakSportingCase));
                     }
                 }
                 _ => {}
@@ -252,9 +254,7 @@ impl ClubBoard {
         }
 
         // ── Deal economics ──
-        let Some(e) = proposal.economics else {
-            return None;
-        };
+        let e = proposal.economics?;
 
         let elite_exception = matches!(
             self.chairman.ambition,

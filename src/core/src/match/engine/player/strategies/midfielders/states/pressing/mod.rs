@@ -120,8 +120,8 @@ impl StateProcessingHandler for MidfielderPressingState {
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        if !TackleEngagement::is_nominated_presser(ctx) {
-            if let Some(closest_teammate) = ctx
+        if !TackleEngagement::is_nominated_presser(ctx)
+            && let Some(closest_teammate) = ctx
                 .players()
                 .teammates()
                 .all()
@@ -131,14 +131,13 @@ impl StateProcessingHandler for MidfielderPressingState {
                     let dist_b = (b.position - ball_position).magnitude();
                     dist_a.total_cmp(&dist_b)
                 })
-            {
-                let teammate_distance = (closest_teammate.position - ball_position).magnitude();
+        {
+            let teammate_distance = (closest_teammate.position - ball_position).magnitude();
 
-                if teammate_distance < ball_distance - HANDOVER_MARGIN {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Running,
-                    ));
-                }
+            if teammate_distance < ball_distance - HANDOVER_MARGIN {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Running,
+                ));
             }
         }
 

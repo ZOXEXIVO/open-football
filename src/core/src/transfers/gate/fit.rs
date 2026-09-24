@@ -293,6 +293,7 @@ impl SquadFitSnapshot {
     ///   the candidate would rank strictly outside the cap. Displacing an
     ///   incumbent (equal or better rank) is normal squad upgrading and
     ///   stays allowed; the incumbent becomes the surplus body instead.
+    ///
     /// The squad is short enough at this position that the club takes who
     /// it can get.
     ///

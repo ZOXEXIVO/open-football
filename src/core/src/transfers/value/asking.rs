@@ -32,13 +32,13 @@ impl AskingPrice {
         // club still controls him, and where he sits on his own career arc.
         // See [`AssetLedger::asking_for`]. `SellerFeeFloor` is still the
         // absolute floor underneath whatever comes out.
-        if let Some(asking) = club.transfer_plan.asking_for(player.id) {
-            if asking > 0.0 {
-                return CurrencyValue {
-                    amount: FormattingUtils::round_fee(asking),
-                    currency: Currency::Usd,
-                };
-            }
+        if let Some(asking) = club.transfer_plan.asking_for(player.id)
+            && asking > 0.0
+        {
+            return CurrencyValue {
+                amount: FormattingUtils::round_fee(asking),
+                currency: Currency::Usd,
+            };
         }
         // Selling clubs anchor on their own market context — a Serie A
         // club asking the same fee as a Maltese side for an identical

@@ -386,7 +386,7 @@ impl WorkerRegistry {
                     (WorkerStatus::Ready, Some(conn)) => {
                         let stale = w
                             .last_seen
-                            .map_or(true, |t| now.duration_since(t) >= PING_STALE_AFTER);
+                            .is_none_or(|t| now.duration_since(t) >= PING_STALE_AFTER);
                         stale.then(|| Probe::Ping {
                             address: w.address.clone(),
                             conn: Arc::clone(conn),
@@ -415,7 +415,10 @@ impl WorkerRegistry {
                         },
                         Probe::Redial { address } => {
                             let worker = Self::connect_and_handshake(address.clone(), v).await;
-                            ProbeResult::Redial { address, worker }
+                            ProbeResult::Redial {
+                                address,
+                                worker: Box::new(worker),
+                            }
                         }
                     }
                 })
@@ -462,7 +465,7 @@ impl WorkerRegistry {
                         // Don't clobber a worker that became Ready meanwhile
                         // (e.g. a manual re-add landed during this round).
                         if !w.status.is_ready() {
-                            w.apply_handshake(worker, now);
+                            w.apply_handshake(*worker, now);
                         }
                     }
                 }
@@ -483,8 +486,8 @@ impl WorkerRegistry {
             Err(_) => return PingOutcome::Busy,
         };
         let exchange = async {
-            Frame::write(&mut *stream, &Request::Ping).await?;
-            Frame::read::<Response>(&mut *stream).await
+            Frame::write(&mut stream, &Request::Ping).await?;
+            Frame::read::<Response>(&mut stream).await
         };
         match tokio::time::timeout(PING_TIMEOUT, exchange).await {
             Ok(Ok(Response::Pong)) => PingOutcome::Pong,
@@ -655,7 +658,7 @@ enum ProbeResult {
     },
     Redial {
         address: String,
-        worker: Worker,
+        worker: Box<Worker>,
     },
 }
 

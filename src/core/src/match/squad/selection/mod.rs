@@ -334,8 +334,7 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let is_main_team = team.team_type == TeamType::Main;
-        let mut engine =
-            ScoringEngine::from_staff_for_team(staff, ctx.philosophy.clone(), is_main_team);
+        let mut engine = ScoringEngine::from_staff_for_team(staff, ctx.philosophy, is_main_team);
         engine.owning_roster = Some(team.players.iter().map(|p| p.id).collect());
         let policy = SelectionPolicy::from_context(ctx);
         // Domestic-cup opportunity bias, built once per side. `None` for
@@ -491,7 +490,7 @@ impl SquadSelector {
         let squad_depth = StrategyInputsBuilder::squad_depth(available.len());
         let coach_strategy = StrategyDeriver::derive(&StrategyInputs {
             profile: &coach_profile,
-            philosophy: ctx.philosophy.clone(),
+            philosophy: ctx.philosophy,
             match_importance: ctx.match_importance,
             is_friendly: ctx.is_friendly,
             is_cup: matches!(
@@ -919,7 +918,7 @@ impl CoachStrategyForSelection {
         let model = ctx.game_model.as_ref();
         StrategyDeriver::derive(&StrategyInputs {
             profile,
-            philosophy: ctx.philosophy.clone(),
+            philosophy: ctx.philosophy,
             match_importance: ctx.match_importance,
             is_friendly: ctx.is_friendly,
             is_cup: matches!(

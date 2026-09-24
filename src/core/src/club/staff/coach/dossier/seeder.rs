@@ -62,7 +62,12 @@ impl ReunionSeeder {
     /// Returns `None` when there is nothing to seed from — which is the
     /// ordinary case, and the reason every caller can run this
     /// unconditionally.
-    pub fn seed(staff: &mut Staff, player_id: u32, age: u8, today: NaiveDate) -> Option<ReunionSeed> {
+    pub fn seed(
+        staff: &mut Staff,
+        player_id: u32,
+        age: u8,
+        today: NaiveDate,
+    ) -> Option<ReunionSeed> {
         let day = MindClock::day(today);
         let profile = CoachProfile::from_staff(staff);
 
@@ -141,9 +146,7 @@ impl ReunionSeeder {
         // A grievance he never got past is re-armed — a second chance, and
         // a watched one.
         let mut grievance = GrievanceFlags::default();
-        if record.scars.contains(ScarFlags::REFUSED_TO_PLAY)
-            && scar >= DossierTuning::SCAR_REARM
-        {
+        if record.scars.contains(ScarFlags::REFUSED_TO_PLAY) && scar >= DossierTuning::SCAR_REARM {
             grievance.insert(GrievanceFlags::REFUSED);
         }
         let score = record.standing() * prior + warmth * DossierTuning::SEED_STANDING_WARMTH_BONUS;
@@ -237,7 +240,9 @@ impl ReunionSeeder {
     ) -> (Option<PlannedRole>, Option<PlannedRole>) {
         // Against him: a poisonous history, and a coach stubborn enough to
         // hold it.
-        if record.scars.contains(ScarFlags::WANTED_OUT | ScarFlags::REFUSED_TO_PLAY)
+        if record
+            .scars
+            .contains(ScarFlags::WANTED_OUT | ScarFlags::REFUSED_TO_PLAY)
             && scar >= 0.3
             && profile.stubbornness >= DossierTuning::REUNION_STUBBORN
         {
@@ -246,12 +251,10 @@ impl ReunionSeeder {
         // For him: warmth, a real role last time, and legs.
         if warmth >= DossierTuning::REUNION_PLAN_WARMTH
             && age <= DossierTuning::REUNION_PLAN_MAX_AGE
+            && let Some(last) = record.last_role()
+            && last.is_at_least(PlannedRole::Rotation)
         {
-            if let Some(last) = record.last_role() {
-                if last.is_at_least(PlannedRole::Rotation) {
-                    return (Some(last.demoted()), None);
-                }
-            }
+            return (Some(last.demoted()), None);
         }
         (None, None)
     }

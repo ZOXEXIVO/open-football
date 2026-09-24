@@ -765,7 +765,7 @@ impl Quality {
         // absent, so this context is created, asked a question it cannot
         // answer, and abandoned, on precisely the browser that cannot afford
         // to hold it.
-        if let Some(Some(lose)) = context.get_extension("WEBGL_lose_context").ok() {
+        if let Ok(Some(lose)) = context.get_extension("WEBGL_lose_context") {
             let _ = js_sys::Reflect::get(&lose, &wasm_bindgen::JsValue::from_str("loseContext"))
                 .ok()
                 .and_then(|method| method.dyn_into::<js_sys::Function>().ok())
@@ -810,11 +810,10 @@ impl Quality {
         // reports `Radeon RX 6700 XT` and stops. The trailing "graphics" is the
         // whole tell, and `rx` is the guard against the handful of discrete
         // Vegas that would otherwise match on the second clause.
-        if name.contains("radeon") && !name.contains(" rx") {
-            if name.contains("graphics") || name.contains("vega") {
+        if name.contains("radeon") && !name.contains(" rx")
+            && (name.contains("graphics") || name.contains("vega")) {
                 return true;
             }
-        }
 
         // Phones and tablets, which are integrated by construction. Apple's own
         // parts are deliberately absent: they share memory too, and they have

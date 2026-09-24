@@ -395,42 +395,41 @@ impl PlayerMatchState {
         // into a guaranteed free shot later.
         if let Some(reason) = state_change_result.shot_reason {
             player.pending_shot_reason = Some(reason);
-        } else if let Some(new_state) = new_state {
-            if !Self::is_shot_emitting_state(new_state) {
-                // A STRUCK shot leaves the same way a lost one does, so the
-                // event has to be what separates them.
-                //
-                // The shooting states return `Running` + a `Shoot` event and
-                // no `shot_reason` (the reason was consumed to build the
-                // event), which lands here — so every armed shot that
-                // actually FIRED was being counted as destroyed. The harness
-                // read 632 "queued shots lost" against 985 shots taken and
-                // the number was almost entirely successful strikes.
-                //
-                // A player who struck the ball emits an event; one who was
-                // pulled out of the strike — lost possession, cooldown, a
-                // handler yanking him elsewhere — emits none. Anything
-                // event-carrying is therefore a resolution, not a loss.
-                // NB an armed player who leaves on a DIFFERENT event (laying
-                // it off instead) is not counted either; that is a decision
-                // reversal rather than a dropped strike and belongs to the
-                // pass-deferral counters.
-                #[cfg(feature = "match-logs")]
-                if player.pending_shot_reason.is_some() && !state_change_result.events.has_events()
-                {
-                    let goal_x = match player.side {
-                        Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
-                        _ => 0.0,
-                    };
-                    let dx = player.position.x - goal_x;
-                    let dy = player.position.y - context.field_size.height as f32 / 2.0;
-                    let d = (dx * dx + dy * dy).sqrt();
-                    crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::QUEUED_SHOT_LOST
+        } else if let Some(new_state) = new_state
+            && !Self::is_shot_emitting_state(new_state)
+        {
+            // A STRUCK shot leaves the same way a lost one does, so the
+            // event has to be what separates them.
+            //
+            // The shooting states return `Running` + a `Shoot` event and
+            // no `shot_reason` (the reason was consumed to build the
+            // event), which lands here — so every armed shot that
+            // actually FIRED was being counted as destroyed. The harness
+            // read 632 "queued shots lost" against 985 shots taken and
+            // the number was almost entirely successful strikes.
+            //
+            // A player who struck the ball emits an event; one who was
+            // pulled out of the strike — lost possession, cooldown, a
+            // handler yanking him elsewhere — emits none. Anything
+            // event-carrying is therefore a resolution, not a loss.
+            // NB an armed player who leaves on a DIFFERENT event (laying
+            // it off instead) is not counted either; that is a decision
+            // reversal rather than a dropped strike and belongs to the
+            // pass-deferral counters.
+            #[cfg(feature = "match-logs")]
+            if player.pending_shot_reason.is_some() && !state_change_result.events.has_events() {
+                let goal_x = match player.side {
+                    Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,
+                    _ => 0.0,
+                };
+                let dx = player.position.x - goal_x;
+                let dy = player.position.y - context.field_size.height as f32 / 2.0;
+                let d = (dx * dx + dy * dy).sqrt();
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::QUEUED_SHOT_LOST
                         [crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag::band_for_distance(d)]
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                player.pending_shot_reason = None;
             }
+            player.pending_shot_reason = None;
         }
 
         if let Some(state) = new_state {
@@ -455,15 +454,14 @@ impl PlayerMatchState {
             // typically fifteen metres away and still climbing at the
             // moment he commits (see `KeeperShotDive`).
             let mut aerial_height = tick_context.positions.ball.position.z;
-            if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
-                if let Some(target) = tick_context
+            if state == PlayerState::Goalkeeper(GoalkeeperState::Diving)
+                && let Some(target) = tick_context
                     .ball
                     .cached_shot_target
                     .as_ref()
                     .filter(|t| Some(t.defending_side) == player.side)
-                {
-                    aerial_height = target.goal_line_z;
-                }
+            {
+                aerial_height = target.goal_line_z;
             }
             let apex = Self::leap_apex(player, state, aerial_height);
             #[cfg(feature = "match-logs")]
@@ -511,12 +509,12 @@ impl PlayerMatchState {
         // strike, not to the state. `hop` refuses a man already off the
         // ground, so a keeper who has just taken off for a dive above is
         // left alone. See `KeeperSplitStep`.
-        if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
-            if let Some(apex) = KeeperSplitStep::apex(player, tick_context) {
-                #[cfg(feature = "match-logs")]
-                crate::mid_run_diag::KeeperActionDiag::note(16);
-                player.hop(apex);
-            }
+        if player_position_group == PlayerFieldPositionGroup::Goalkeeper
+            && let Some(apex) = KeeperSplitStep::apex(player, tick_context)
+        {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperActionDiag::note(16);
+            player.hop(apex);
         }
 
         if let Some(velocity) = state_change_result.velocity {

@@ -6,6 +6,7 @@
 //! execution applies both, honouring the squad-size guards; and the backfill
 //! tops the first team back up if it is still short.
 
+use std::cmp::Reverse;
 use std::collections::HashSet;
 
 use chrono::NaiveDate;
@@ -256,7 +257,7 @@ impl Club {
         mut promotions: Vec<PromotionCandidate>,
         moves: &mut Vec<PendingMove>,
     ) {
-        promotions.sort_by(|a, b| b.level.cmp(&a.level));
+        promotions.sort_by_key(|c| Reverse(c.level));
         let mut admitted = [0usize; PlayerFieldPositionGroup::COUNT];
         for c in promotions {
             let slot = &mut admitted[c.group.index()];
@@ -313,7 +314,7 @@ impl Club {
                     )
                 })
                 .collect();
-            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            ranked.sort_by_key(|r| Reverse(r.1));
             for (player_id, _, age, is_loan_in, is_protected) in ranked.into_iter().skip(depth) {
                 if is_loan_in || is_protected {
                     continue;
@@ -673,7 +674,7 @@ impl Club {
             }
         }
 
-        candidates.sort_by(|a, b| b.2.cmp(&a.2));
+        candidates.sort_by_key(|c| Reverse(c.2));
         candidates.truncate(deficit);
 
         for (team_idx, player_id, _) in candidates {
@@ -717,10 +718,8 @@ impl Club {
                 Some(cap) => player_age <= cap,
                 None => true,
             };
-            if age_ok {
-                if let Some(idx) = self.teams.index_of_type(*next_type) {
-                    return Some(idx);
-                }
+            if age_ok && let Some(idx) = self.teams.index_of_type(*next_type) {
+                return Some(idx);
             }
         }
 
@@ -752,10 +751,10 @@ impl Club {
         ];
 
         for (team_type, max_age) in targets {
-            if player_age <= max_age {
-                if let Some(idx) = self.teams.index_of_type(team_type) {
-                    return Some(idx);
-                }
+            if player_age <= max_age
+                && let Some(idx) = self.teams.index_of_type(team_type)
+            {
+                return Some(idx);
             }
         }
         None
@@ -793,10 +792,12 @@ mod promotion_evidence_tests {
 
         fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
             let date = Self::date();
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                condition: 10_000,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("T".to_string(), format!("P{id}")))
@@ -993,10 +994,12 @@ mod rebalance_patience_tests {
 
         fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
             let date = Self::date();
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                condition: 10_000,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("T".to_string(), format!("P{id}")))
@@ -1186,10 +1189,12 @@ mod overage_graduation_tests {
 
         fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
             let date = Self::date();
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                condition: 10_000,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("T".to_string(), format!("P{id}")))
@@ -1264,10 +1269,8 @@ mod overage_graduation_tests {
         /// target (its own size never blocks an incoming move).
         fn second_roster() -> Vec<Player> {
             let mut players = Vec::new();
-            let mut id = 500u32;
-            for _ in 0..11 {
+            for id in 500u32..511 {
                 players.push(Self::player(id, PlayerPositionType::DefenderCenter, 70, 24));
-                id += 1;
             }
             players
         }
@@ -1416,10 +1419,12 @@ mod promotion_guard_tests {
 
         fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
             let date = Self::date();
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                condition: 10_000,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("T".to_string(), format!("P{id}")))
@@ -1465,10 +1470,8 @@ mod promotion_guard_tests {
         /// `SquadSize::MIN_YOUTH`.
         fn u20_roster(candidate: Player) -> Vec<Player> {
             let mut players = vec![candidate];
-            let mut id = 300u32;
-            for _ in 0..7 {
+            for id in 300u32..307 {
                 players.push(Self::player(id, PlayerPositionType::DefenderCenter, 50, 18));
-                id += 1;
             }
             players
         }
@@ -1652,10 +1655,12 @@ mod squad_balance_tests {
 
         fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
             let date = Self::date();
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                condition: 10_000,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("T".to_string(), format!("P{id}")))

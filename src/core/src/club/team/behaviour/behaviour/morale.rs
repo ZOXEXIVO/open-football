@@ -233,10 +233,10 @@ impl TeamBehaviour {
 
             let deficit = expected_by_now.saturating_sub(actual);
             // Open the recall window for any meaningful shortfall.
-            if let Some(loan) = player.contract_loan.as_mut() {
-                if loan.loan_recall_available_after.is_none() {
-                    loan.loan_recall_available_after = Some(today);
-                }
+            if let Some(loan) = player.contract_loan.as_mut()
+                && loan.loan_recall_available_after.is_none()
+            {
+                loan.loan_recall_available_after = Some(today);
             }
             // Morale hit scales with how badly we're trailing.
             let magnitude = -((deficit as f32 * 0.8).min(6.0) + 1.0);
@@ -633,63 +633,60 @@ impl TeamBehaviour {
             // picked precisely because friendship was low — surface that
             // as evidence so the UI explains why this teammate, not the
             // generic "argued with a teammate".
-            if let Some(vid) = victim_id {
-                if let Some(victim) = players.players.iter_mut().find(|p| p.id == vid) {
-                    let snapshot = victim
-                        .relations
-                        .get_player(offender_id)
-                        .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
-                    let mut victim_evidence: Vec<HappinessEventEvidence> =
-                        vec![HappinessEventEvidence::DressingRoomRow];
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        if friendship <= 35.0 {
-                            victim_evidence.push(HappinessEventEvidence::LowFriendship);
-                        }
-                        if trust <= 35.0 {
-                            victim_evidence.push(HappinessEventEvidence::LowTrust);
-                        }
-                        if prof <= 35.0 {
-                            victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
-                        }
-                        if level <= -25.0 {
-                            victim_evidence
-                                .push(HappinessEventEvidence::AlreadyStrainedRelationship);
-                        }
+            if let Some(vid) = victim_id
+                && let Some(victim) = players.players.iter_mut().find(|p| p.id == vid)
+            {
+                let snapshot = victim
+                    .relations
+                    .get_player(offender_id)
+                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
+                let mut victim_evidence: Vec<HappinessEventEvidence> =
+                    vec![HappinessEventEvidence::DressingRoomRow];
+                if let Some((level, trust, friendship, prof)) = snapshot {
+                    if friendship <= 35.0 {
+                        victim_evidence.push(HappinessEventEvidence::LowFriendship);
                     }
-                    let mut conflict_ctx = HappinessEventContext::new(
-                        HappinessEventCause::PersonalityClash,
-                        HappinessEventSeverity::from_magnitude(-2.0),
-                        HappinessEventScope::DressingRoom,
-                    )
-                    .with_evidence_iter(victim_evidence.iter().copied())
-                    .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::PersonalityClash,
-                            ConflictLocation::DressingRoom,
-                        ),
-                    );
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        conflict_ctx = conflict_ctx
-                            .with_relationship_levels(level, level)
-                            .with_relationship_axes(trust, friendship, prof);
+                    if trust <= 35.0 {
+                        victim_evidence.push(HappinessEventEvidence::LowTrust);
                     }
-                    // Shared same-tick budget + 45-day partner
-                    // cooldown via the central helper, so the
-                    // controversy emit can't quietly leapfrog the
-                    // behaviour-pass cap or refire on a recurring
-                    // offender/victim pair.
-                    victim
-                        .happiness
-                        .try_add_partner_context_with_same_tick_budget(
-                            HappinessEventType::ConflictWithTeammate,
-                            -2.0,
-                            offender_id,
-                            conflict_ctx,
-                            45,
-                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
-                        );
+                    if prof <= 35.0 {
+                        victim_evidence.push(HappinessEventEvidence::LowProfessionalRespect);
+                    }
+                    if level <= -25.0 {
+                        victim_evidence.push(HappinessEventEvidence::AlreadyStrainedRelationship);
+                    }
                 }
+                let mut conflict_ctx = HappinessEventContext::new(
+                    HappinessEventCause::PersonalityClash,
+                    HappinessEventSeverity::from_magnitude(-2.0),
+                    HappinessEventScope::DressingRoom,
+                )
+                .with_evidence_iter(victim_evidence.iter().copied())
+                .with_follow_up(HappinessEventFollowUp::DressingRoomDamageRisk)
+                .with_teammate_conflict_context(TeammateConflictContext::new(
+                    TeammateConflictReason::PersonalityClash,
+                    ConflictLocation::DressingRoom,
+                ));
+                if let Some((level, trust, friendship, prof)) = snapshot {
+                    conflict_ctx = conflict_ctx
+                        .with_relationship_levels(level, level)
+                        .with_relationship_axes(trust, friendship, prof);
+                }
+                // Shared same-tick budget + 45-day partner
+                // cooldown via the central helper, so the
+                // controversy emit can't quietly leapfrog the
+                // behaviour-pass cap or refire on a recurring
+                // offender/victim pair.
+                victim
+                    .happiness
+                    .try_add_partner_context_with_same_tick_budget(
+                        HappinessEventType::ConflictWithTeammate,
+                        -2.0,
+                        offender_id,
+                        conflict_ctx,
+                        45,
+                        PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+                    );
             }
         }
     }
@@ -1301,7 +1298,7 @@ impl TeamBehaviour {
             .players
             .iter()
             .filter(|p| p.position().is_goalkeeper())
-            .map(|p| AbilityEstimator::observable_level(p))
+            .map(AbilityEstimator::observable_level)
             .collect();
 
         for player in players.players.iter_mut() {
@@ -2759,10 +2756,11 @@ impl BackupCareerAnxiety {
         }
 
         // Loyal servants of a favourite club accept the squad role.
-        if let Some(club) = ctx.club.as_ref() {
-            if player.attributes.loyalty >= 17.0 && player.favorite_clubs.contains(&club.id) {
-                return None;
-            }
+        if let Some(club) = ctx.club.as_ref()
+            && player.attributes.loyalty >= 17.0
+            && player.favorite_clubs.contains(&club.id)
+        {
+            return None;
         }
 
         let scan = StuckCareerScan::of(player, today)?;
@@ -2773,12 +2771,12 @@ impl BackupCareerAnxiety {
 
         // Breaking through right now? A backup who has claimed the shirt
         // this season is not stuck any more.
-        if let Some(club) = ctx.club.as_ref() {
-            if club.league_matches_played >= 8 {
-                let share = player.statistics.played as f32 / club.league_matches_played as f32;
-                if share >= 0.40 {
-                    return None;
-                }
+        if let Some(club) = ctx.club.as_ref()
+            && club.league_matches_played >= 8
+        {
+            let share = player.statistics.played as f32 / club.league_matches_played as f32;
+            if share >= 0.40 {
+                return None;
             }
         }
 
@@ -3339,10 +3337,12 @@ mod tests {
     }
 
     fn build_player(id: u32, birth: NaiveDate, ca: u8, world_rep: i16, ambition: f32) -> Player {
-        let mut pa = PlayerAttributes::default();
-        pa.current_ability = ca;
-        pa.world_reputation = world_rep;
-        pa.current_reputation = world_rep;
+        let pa = PlayerAttributes {
+            current_ability: ca,
+            world_reputation: world_rep,
+            current_reputation: world_rep,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("T".into(), id.to_string()))

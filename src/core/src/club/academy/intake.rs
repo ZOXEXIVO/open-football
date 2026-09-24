@@ -193,10 +193,7 @@ impl ClubAcademy {
             return false;
         }
 
-        match self.last_production_year {
-            Some(last_year) if last_year >= current_year => false,
-            _ => true,
-        }
+        !matches!(self.last_production_year, Some(last_year) if last_year >= current_year)
     }
 
     /// Annual intake count.
@@ -231,7 +228,7 @@ impl ClubAcademy {
         let tier_norm = AcademyTier::from_level(self.level).norm();
         let multiplier = (2.0 + recruitment_quality * 7.0 + tier_norm * 3.0).round() as i32;
         let raw = intake as i32 * multiplier.max(2);
-        (raw.max(12).min(96)) as usize
+        raw.clamp(12, 96) as usize
     }
 
     pub(super) fn ensure_minimum_players(&mut self, ctx: GlobalContext<'_>) {

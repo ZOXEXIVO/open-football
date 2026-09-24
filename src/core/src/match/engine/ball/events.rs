@@ -259,9 +259,9 @@ impl BallEventDispatcher {
                         )
                     });
                     if let Some((team, zone)) = giver_meta {
-                        let was_own_box = zone.map_or(false, |z| z.is_own_box());
+                        let was_own_box = zone.is_some_and(|z| z.is_own_box());
                         let was_dangerous_zone =
-                            zone.map_or(false, |z| z.is_own_box() || z.is_own_third());
+                            zone.is_some_and(|z| z.is_own_box() || z.is_own_third());
                         field.ball.stamp_giveaway(
                             passer,
                             team,
@@ -272,11 +272,10 @@ impl BallEventDispatcher {
                         // stats so the rating helper can dock the
                         // own-third / own-box penalty even if no shot
                         // converts within the response window.
-                        if was_dangerous_zone {
-                            if let (Some(zone), Some(giver)) = (zone, field.get_player_mut(passer))
-                            {
-                                giver.statistics.note_dangerous_turnover(zone);
-                            }
+                        if was_dangerous_zone
+                            && let (Some(zone), Some(giver)) = (zone, field.get_player_mut(passer))
+                        {
+                            giver.statistics.note_dangerous_turnover(zone);
                         }
                     }
                     // Successful pressure: opponents who were within
@@ -387,19 +386,18 @@ impl BallEventDispatcher {
                         )
                     });
                     if let Some((team, zone)) = meta {
-                        let was_own_box = zone.map_or(false, |z| z.is_own_box());
+                        let was_own_box = zone.is_some_and(|z| z.is_own_box());
                         field.ball.stamp_giveaway(
                             receiver_id,
                             team,
                             context.current_tick(),
                             was_own_box,
                         );
-                        if let Some(zone) = zone {
-                            if zone.is_own_box() || zone.is_own_third() {
-                                if let Some(receiver) = field.get_player_mut(receiver_id) {
-                                    receiver.statistics.note_dangerous_turnover(zone);
-                                }
-                            }
+                        if let Some(zone) = zone
+                            && (zone.is_own_box() || zone.is_own_third())
+                            && let Some(receiver) = field.get_player_mut(receiver_id)
+                        {
+                            receiver.statistics.note_dangerous_turnover(zone);
                         }
                     }
                     if let Some(receiver) = field.get_player_mut(receiver_id) {

@@ -532,9 +532,7 @@ impl DomesticCup {
             return None;
         }
         let item = &last.items[0];
-        if item.result.is_none() {
-            return None;
-        }
+        item.result.as_ref()?;
         Some((item.home_team_id, item.away_team_id))
     }
 }

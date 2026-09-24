@@ -187,11 +187,7 @@ impl MatchExperienceBackground {
                             w + s.apps as u32,
                         )
                     });
-                let record_rep = if weight > 0 {
-                    (rep_weighted / weight) as u16
-                } else {
-                    0
-                };
+                let record_rep = rep_weighted.checked_div(weight).unwrap_or(0) as u16;
                 (share, loan_starts, record_rep)
             }
         };

@@ -484,7 +484,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     return Some(StateChangeResult::with_forward_state_and_event(
                         ForwardState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target.id)
                                 .with_reason("FWD_PATIENT_POSSESSION")
@@ -908,8 +908,8 @@ impl StateProcessingHandler for ForwardRunningState {
             // and the runner converts via the box-arrival carve-out.
             let fwd_stuck = ctx.player().pressure().is_under_immediate_pressure()
                 || !self.has_open_space_ahead(ctx);
-            if has_settled && distance_to_goal < 130.0 && fwd_stuck {
-                if let Some(runner) =
+            if has_settled && distance_to_goal < 130.0 && fwd_stuck
+                && let Some(runner) =
                     crate::r#match::player::strategies::common::players::ops::forward_shot_decision::find_cutback_to_arriving_runner(ctx)
                 {
                     #[cfg(feature = "match-logs")]
@@ -920,7 +920,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     return Some(StateChangeResult::with_forward_state_and_event(
                         ForwardState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
+                            PassingEventContext::builder()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(runner.id)
                                 .with_reason("FWD_RUNNING_CUTBACK_TO_RUNNER")
@@ -928,7 +928,6 @@ impl StateProcessingHandler for ForwardRunningState {
                         )),
                     ));
                 }
-            }
 
             // If we deferred to a better-positioned teammate, route
             // through Passing — the pass state picks the target. The
@@ -966,22 +965,20 @@ impl StateProcessingHandler for ForwardRunningState {
             // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
             if ctx.ball().has_stable_possession() {
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-                if ownership_ticks >= 2
-                    && ownership_ticks <= 10
+                if (2..=10).contains(&ownership_ticks)
                     && distance_to_goal > POINT_BLANK_DISTANCE
+                    && let Some(return_target) = self.find_one_two_return(ctx)
                 {
-                    if let Some(return_target) = self.find_one_two_return(ctx) {
-                        return Some(StateChangeResult::with_forward_state_and_event(
-                            ForwardState::Running,
-                            Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
-                                    .with_from_player_id(ctx.player.id)
-                                    .with_to_player_id(return_target.id)
-                                    .with_reason("FWD_RUNNING_ONE_TWO_RETURN")
-                                    .build(ctx),
-                            )),
-                        ));
-                    }
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::builder()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(return_target.id)
+                                .with_reason("FWD_RUNNING_ONE_TWO_RETURN")
+                                .build(ctx),
+                        )),
+                    ));
                 }
             }
 
@@ -993,32 +990,28 @@ impl StateProcessingHandler for ForwardRunningState {
                 && ctx.tick_context.ball.ownership_duration > 30
                 && !self.has_open_space_ahead(ctx)
             // Don't lay off if can run forward
+                && let Some(layoff_target) = self.find_hold_up_layoff(ctx)
             {
-                if let Some(layoff_target) = self.find_hold_up_layoff(ctx) {
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(layoff_target.id)
-                                .with_reason("FWD_RUNNING_HOLD_UP_LAYOFF")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(layoff_target.id)
+                            .with_reason("FWD_RUNNING_HOLD_UP_LAYOFF")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // Clear ball if congested far from goal — only after carrying for a while
             if distance_to_goal > SHOOTING_ZONE_DISTANCE
                 && ctx.tick_context.ball.ownership_duration > 15
+                && (ctx.player().movement().is_congested_near_boundary()
+                    || ctx.player().movement().is_congested())
+                && let Some(_) = ctx.players().teammates().all().next()
             {
-                if ctx.player().movement().is_congested_near_boundary()
-                    || ctx.player().movement().is_congested()
-                {
-                    if let Some(_) = ctx.players().teammates().all().next() {
-                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                    }
-                }
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
             // DRAW AND RELEASE: When an opponent is committing to tackle, draw them in
@@ -1026,19 +1019,18 @@ impl StateProcessingHandler for ForwardRunningState {
             if ctx.ball().has_stable_possession()
                 && ctx.tick_context.ball.ownership_duration > 20
                 && distance_to_goal > CLOSE_RANGE_DISTANCE
+                && let Some(release_target) = self.find_draw_and_release_pass(ctx)
             {
-                if let Some(release_target) = self.find_draw_and_release_pass(ctx) {
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(release_target.id)
-                                .with_reason("FWD_RUNNING_DRAW_AND_RELEASE")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::builder()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(release_target.id)
+                            .with_reason("FWD_RUNNING_DRAW_AND_RELEASE")
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // Under pressure - quick decision needed
@@ -1072,7 +1064,7 @@ impl StateProcessingHandler for ForwardRunningState {
                         return Some(StateChangeResult::with_forward_state_and_event(
                             ForwardState::Running,
                             Event::PlayerEvent(PlayerEvent::PassTo(
-                                PassingEventContext::new()
+                                PassingEventContext::builder()
                                     .with_from_player_id(ctx.player.id)
                                     .with_to_player_id(target)
                                     .with_reason("FWD_FLANK_RELEASE")
@@ -1116,15 +1108,13 @@ impl StateProcessingHandler for ForwardRunningState {
                     && finishing > 0.5
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
-                {
-                    if let ShotDecision::Shoot { reason } =
+                    && let ShotDecision::Shoot { reason } =
                         evaluate_forward_shot_decision(ctx, "FWD_RUN_ANTI_OSCILLATION")
-                    {
-                        return Some(
-                            StateChangeResult::with_forward_state(ForwardState::Shooting)
-                                .with_shot_reason(reason),
-                        );
-                    }
+                {
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason(reason),
+                    );
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
@@ -1345,25 +1335,24 @@ impl StateProcessingHandler for ForwardRunningState {
             // players milling around the ball. The offer below has a
             // floor of 9.5 m and keeps his own bearing, so he stays on
             // whichever side of the carrier he was already on.
-            if ctx.team().is_control_ball() && ball_distance < SupportOffer::far() {
-                if let Some(carrier) = ctx
+            if ctx.team().is_control_ball()
+                && ball_distance < SupportOffer::far()
+                && let Some(carrier) = ctx
                     .players()
                     .teammates()
                     .all()
                     .find(|t| ctx.ball().owner_id() == Some(t.id))
-                {
-                    if let Some(target) = SupportOffer::target(ctx, carrier.position) {
-                        return Some(
-                            SteeringBehavior::Arrive {
-                                target,
-                                slowing_distance: 24.0,
-                            }
-                            .calculate(ctx.player)
-                            .velocity
-                                * fatigue_factor,
-                        );
+                && let Some(target) = SupportOffer::target(ctx, carrier.position)
+            {
+                return Some(
+                    SteeringBehavior::Arrive {
+                        target,
+                        slowing_distance: 24.0,
                     }
-                }
+                    .calculate(ctx.player)
+                    .velocity
+                        * fatigue_factor,
+                );
             }
 
             let attacking_direction = match ctx.player.side {
@@ -1632,14 +1621,12 @@ impl ForwardRunningState {
     /// Enhanced interception check
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
         // Don't try to intercept if ball is already owned by teammate
-        if ctx.ball().is_owned() {
-            if let Some(owner_id) = ctx.ball().owner_id() {
-                if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                    if owner.team_id == ctx.player.team_id {
-                        return false;
-                    }
-                }
-            }
+        if ctx.ball().is_owned()
+            && let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            return false;
         }
 
         if !ctx.tick_context.chase.may_go(ctx.player.id) {
@@ -1732,47 +1719,42 @@ impl ForwardRunningState {
         let high_press = ctx.team().tactics().is_high_pressing();
 
         // PRESSING TRAP: Opponent defender receiving ball facing own goal — press aggressively
-        if ball_distance < effective_press_distance * 1.5 {
-            if let Some(opponent) = ctx
+        if ball_distance < effective_press_distance * 1.5
+            && let Some(opponent) = ctx
                 .players()
                 .opponents()
                 .nearby(effective_press_distance * 1.5)
                 .with_ball(ctx)
                 .next()
+        {
+            let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
+            // The carrier's OWN goal is the goal we attack — no
+            // reflection needed. (The old `ball*2 - goal` mirror
+            // pointed at OUR goal instead, so the trap fired on
+            // advancing carriers and missed the retreating ones it
+            // was written for.)
+            let opp_own_goal = ctx.player().opponent_goal_position();
+
+            // Opponent retreating toward their own goal (back to us)
+            if opp_velocity.magnitude() > 0.5
+                && let Some(to_own_goal) = (opp_own_goal - opponent.position).try_normalize(1e-4)
+                && opp_velocity.normalize().dot(&to_own_goal) > 0.4
             {
-                let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
-                // The carrier's OWN goal is the goal we attack — no
-                // reflection needed. (The old `ball*2 - goal` mirror
-                // pointed at OUR goal instead, so the trap fired on
-                // advancing carriers and missed the retreating ones it
-                // was written for.)
-                let opp_own_goal = ctx.player().opponent_goal_position();
+                return true; // Opponent in trouble — press!
+            }
 
-                // Opponent retreating toward their own goal (back to us)
-                if opp_velocity.magnitude() > 0.5 {
-                    if let Some(to_own_goal) =
-                        (opp_own_goal - opponent.position).try_normalize(1e-4)
-                    {
-                        if opp_velocity.normalize().dot(&to_own_goal) > 0.4 {
-                            return true; // Opponent in trouble — press!
-                        }
-                    }
-                }
+            // WIDE ISOLATION: Opponent near touchline — trap them
+            let field_height = ctx.context.field_size.height as f32;
+            if opponent.position.y < field_height * 0.1 || opponent.position.y > field_height * 0.9
+            {
+                return true;
+            }
 
-                // WIDE ISOLATION: Opponent near touchline — trap them
-                let field_height = ctx.context.field_size.height as f32;
-                if opponent.position.y < field_height * 0.1
-                    || opponent.position.y > field_height * 0.9
-                {
-                    return true;
-                }
-
-                // TIRED OPPONENT: Increase pressing range against fatigued players
-                if let Some(opp_player) = ctx.context.players.by_id(opponent.id) {
-                    if opp_player.player_attributes.condition_percentage() < 50 {
-                        return ball_distance < effective_press_distance * 1.4;
-                    }
-                }
+            // TIRED OPPONENT: Increase pressing range against fatigued players
+            if let Some(opp_player) = ctx.context.players.by_id(opponent.id)
+                && opp_player.player_attributes.condition_percentage() < 50
+            {
+                return ball_distance < effective_press_distance * 1.4;
             }
         }
 
@@ -1798,34 +1780,32 @@ impl ForwardRunningState {
         // I was >60u from the ball, which meant close forwards stayed
         // huddled around the carrier instead of making the diagonal runs
         // that create triangles.
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if owner_id != ctx.player.id {
-                if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                    if owner.team_id == ctx.player.team_id {
-                        // Create space whenever we're clustered with
-                        // another forward / any teammate — the exact
-                        // distance to the ball doesn't matter, what
-                        // matters is whether we're bunched.
-                        let me_pos = ctx.player.position;
-                        let bunched = ctx.players().teammates().all().any(|t| {
-                            if t.id == ctx.player.id {
-                                return false;
-                            }
-                            let d_sq = (t.position - me_pos).norm_squared();
-                            d_sq < 22.0 * 22.0 // < ~2.5m
-                        });
-                        if bunched {
-                            return true;
-                        }
-                        // Even without an immediate cluster: if I'm
-                        // reasonably close to the ball (30-150u, the
-                        // "attacking support" band), make a run to pull
-                        // defenders. Carriers need OPTIONS, not another
-                        // nearby body.
-                        return ball_distance > 30.0 && ball_distance < 150.0;
-                    }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && owner_id != ctx.player.id
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            // Create space whenever we're clustered with
+            // another forward / any teammate — the exact
+            // distance to the ball doesn't matter, what
+            // matters is whether we're bunched.
+            let me_pos = ctx.player.position;
+            let bunched = ctx.players().teammates().all().any(|t| {
+                if t.id == ctx.player.id {
+                    return false;
                 }
+                let d_sq = (t.position - me_pos).norm_squared();
+                d_sq < 22.0 * 22.0 // < ~2.5m
+            });
+            if bunched {
+                return true;
             }
+            // Even without an immediate cluster: if I'm
+            // reasonably close to the ball (30-150u, the
+            // "attacking support" band), make a run to pull
+            // defenders. Carriers need OPTIONS, not another
+            // nearby body.
+            return ball_distance > 30.0 && ball_distance < 150.0;
         }
 
         // No teammate has ball - still try to create space if we're not closest
@@ -2039,15 +2019,15 @@ impl ForwardRunningState {
         // `FlankPlay` returns `None` for every carrier who is not
         // actually wide, so a central striker's carry is untouched.
         let openness = LaneAhead::read(ctx).openness;
-        if let Some(byline) = FlankPlay::carry_aim(ctx, openness) {
-            if (byline - ctx.player.position).magnitude() >= CARRY_DEADBAND {
-                return SteeringBehavior::Arrive {
-                    target: byline,
-                    slowing_distance: 20.0,
-                }
-                .calculate(ctx.player)
-                .velocity;
+        if let Some(byline) = FlankPlay::carry_aim(ctx, openness)
+            && (byline - ctx.player.position).magnitude() >= CARRY_DEADBAND
+        {
+            return SteeringBehavior::Arrive {
+                target: byline,
+                slowing_distance: 20.0,
             }
+            .calculate(ctx.player)
+            .velocity;
         }
 
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
@@ -2245,8 +2225,6 @@ impl ForwardRunningState {
         best_gap
     }
 
-    /// Calculate supporting movement when team has ball
-
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
         // ≤10 teammates are on the pitch — a stack buffer replaces the
         // per-evaluation Vec collect (same iteration order, the helper
@@ -2287,18 +2265,18 @@ impl ForwardRunningState {
         if under_pressure {
             let pass_p = SkillCurve::new(passing_raw, 10.0, 0.6).probability();
             if ctx.context.rng.unit_f32() < pass_p || stamina < 0.4 {
-                return self.has_safe_passing_option(ctx, &teammates);
+                return self.has_safe_passing_option(ctx, teammates);
             }
         }
 
         // 2. PREFER TO RUN/SHOOT: Very close to goal - only pass if teammate is much better positioned
         if distance_to_goal < CLOSE_RANGE_DISTANCE && !under_pressure {
-            return self.has_better_positioned_teammate(ctx, &teammates, distance_to_goal);
+            return self.has_better_positioned_teammate(ctx, teammates, distance_to_goal);
         }
 
         if distance_to_goal < SHOOTING_ZONE_DISTANCE && !under_pressure {
             // Enhanced shooting zone - only forward passes to significantly better teammates
-            return self.has_forward_pass_to_better_teammate(ctx, &teammates, distance_to_goal);
+            return self.has_forward_pass_to_better_teammate(ctx, teammates, distance_to_goal);
         }
 
         // 3. LOOK FOR QUALITY OPPORTUNITIES: vision/passing scale smoothly
@@ -2306,7 +2284,7 @@ impl ForwardRunningState {
             .probability()
             .max(SkillCurve::new(passing_raw, 14.0, 0.6).probability());
         if ctx.context.rng.unit_f32() < quality_p
-            && self.has_teammate_in_dangerous_position(ctx, &teammates, distance_to_goal)
+            && self.has_teammate_in_dangerous_position(ctx, teammates, distance_to_goal)
         {
             return true;
         }
@@ -2315,7 +2293,7 @@ impl ForwardRunningState {
         let team_p = SkillCurve::new(teamwork_raw, 14.0, 0.6).probability()
             * SkillCurve::new(decisions_raw, 12.0, 0.6).probability();
         if ctx.context.rng.unit_f32() < team_p {
-            return self.has_good_passing_option(ctx, &teammates);
+            return self.has_good_passing_option(ctx, teammates);
         }
 
         // 5. DEFAULT: Keep the ball unless there's a clear benefit to passing

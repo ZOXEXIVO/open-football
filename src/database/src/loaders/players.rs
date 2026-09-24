@@ -400,7 +400,7 @@ impl PlayersOdb {
         if source.is_empty() {
             return None;
         }
-        let odb = Self::from_players(source.iter().cloned().collect());
+        let odb = Self::from_players(source.to_vec());
         let total: usize = odb.by_physical_club.values().map(|v| v.len()).sum();
         info!(
             "players loaded from compiled DB: {} clubbed players across {} clubs, {} free agents",

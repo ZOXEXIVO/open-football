@@ -7,6 +7,12 @@ pub struct ContinentalRegulations {
     pub youth_requirements: YouthRequirements,
 }
 
+impl Default for ContinentalRegulations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContinentalRegulations {
     pub fn new() -> Self {
         ContinentalRegulations {
@@ -38,6 +44,12 @@ pub struct FinancialFairPlayRules {
     pub squad_cost_ratio_limit: f32,
 }
 
+impl Default for FinancialFairPlayRules {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FinancialFairPlayRules {
     pub fn new() -> Self {
         FinancialFairPlayRules {
@@ -63,6 +75,12 @@ pub struct ForeignPlayerLimits {
     pub homegrown_minimum: u8,
 }
 
+impl Default for ForeignPlayerLimits {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ForeignPlayerLimits {
     pub fn new() -> Self {
         ForeignPlayerLimits {
@@ -76,6 +94,12 @@ impl ForeignPlayerLimits {
 pub struct YouthRequirements {
     pub minimum_academy_investment: f64,
     pub minimum_youth_squad_size: u8,
+}
+
+impl Default for YouthRequirements {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl YouthRequirements {

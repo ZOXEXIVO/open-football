@@ -268,10 +268,10 @@ impl MeetingPass {
             }
         }
         // Data analyst attended even though they don't vote.
-        if let Some(da) = team.staffs.find_by_position(StaffPosition::DataAnalyst) {
-            if !participants.contains(&da.id) {
-                participants.push(da.id);
-            }
+        if let Some(da) = team.staffs.find_by_position(StaffPosition::DataAnalyst)
+            && !participants.contains(&da.id)
+        {
+            participants.push(da.id);
         }
 
         let meeting_id = club.transfer_plan.next_meeting_id;
@@ -585,10 +585,10 @@ impl MeetingPass {
                     None
                 }
             });
-        if let Some(id) = request_id {
-            if !agenda_request_ids.contains(&id) {
-                agenda_request_ids.push(id);
-            }
+        if let Some(id) = request_id
+            && !agenda_request_ids.contains(&id)
+        {
+            agenda_request_ids.push(id);
         }
 
         // Aggregate role-fit, fee, etc from the strongest
@@ -655,7 +655,6 @@ impl MeetingPass {
             date,
             staff_events,
         );
-        let consensus_score = consensus_score;
 
         let Consensus {
             score: consensus_score,
@@ -731,7 +730,7 @@ impl MeetingPass {
             // Confidence dampens the vote — a low-confidence
             // approval doesn't count for as much as a deeply
             // informed one.
-            weight *= (m.confidence as f32).max(0.4);
+            weight *= m.confidence.max(0.4);
             // Determination amplifies a touch.
             weight *= 1.0 + (scout.determination as f32 / 80.0).min(0.25);
             if scout.is_chief {
@@ -743,7 +742,7 @@ impl MeetingPass {
                     chief_scout_support = true;
                 }
             }
-            let score = (weight as f32).clamp(-3.0, 3.0);
+            let score = weight.clamp(-3.0, 3.0);
             consensus_score += score;
             total_weight += weight.abs();
             let vote = ScoutVote {
@@ -906,31 +905,30 @@ impl MeetingPass {
             RecruitmentDecisionType::PromoteToShortlist
                 | RecruitmentDecisionType::AskBoardApproval
                 | RecruitmentDecisionType::StartNegotiation
-        ) {
-            if let Some(req_id) = request_id {
-                let lead_scout = monitorings
-                    .iter()
-                    .max_by(|a, b| {
-                        a.confidence
-                            .partial_cmp(&b.confidence)
-                            .unwrap_or(Ordering::Equal)
-                    })
-                    .map(|m| m.scout_staff_id);
-                promotions.push(PromotionPlan {
-                    player_id,
-                    request_id: req_id,
-                    consensus_score,
-                    estimated_fee,
-                    assessed_ability,
-                    role_fit,
-                    risk_flag_count,
-                    chief_scout_support,
-                    lead_scout_staff_id: lead_scout,
-                });
-            }
+        ) && let Some(req_id) = request_id
+        {
+            let lead_scout = monitorings
+                .iter()
+                .max_by(|a, b| {
+                    a.confidence
+                        .partial_cmp(&b.confidence)
+                        .unwrap_or(Ordering::Equal)
+                })
+                .map(|m| m.scout_staff_id);
+            promotions.push(PromotionPlan {
+                player_id,
+                request_id: req_id,
+                consensus_score,
+                estimated_fee,
+                assessed_ability,
+                role_fit,
+                risk_flag_count,
+                chief_scout_support,
+                lead_scout_staff_id: lead_scout,
+            });
         }
 
-        let decision = RecruitmentDecision {
+        RecruitmentDecision {
             player_id,
             transfer_request_id: request_id,
             decision: decision_type,
@@ -940,9 +938,7 @@ impl MeetingPass {
             board_risk_score,
             budget_fit,
             reason_key,
-        };
-
-        decision
+        }
     }
 }
 
@@ -1018,13 +1014,12 @@ impl MeetingOutcome {
                 .transfer_requests
                 .iter_mut()
                 .find(|r| r.id == promo.request_id)
-            {
-                if matches!(
+                && matches!(
                     req.status,
                     TransferRequestStatus::Pending | TransferRequestStatus::ScoutingActive
-                ) {
-                    req.status = TransferRequestStatus::Shortlisted;
-                }
+                )
+            {
+                req.status = TransferRequestStatus::Shortlisted;
             }
         }
     }

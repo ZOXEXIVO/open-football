@@ -1127,66 +1127,66 @@ mod tests {
     use crate::club::player::skills::{Goalkeeping, Mental, Physical, PlayerSkills, Technical};
 
     fn skills_with_known_values() -> PlayerSkills {
-        let mut s = PlayerSkills::default();
-        s.technical = Technical {
-            corners: 1.0,
-            crossing: 2.0,
-            dribbling: 3.0,
-            finishing: 4.0,
-            first_touch: 5.0,
-            free_kicks: 6.0,
-            heading: 7.0,
-            long_shots: 8.0,
-            long_throws: 9.0,
-            marking: 10.0,
-            passing: 11.0,
-            penalty_taking: 12.0,
-            tackling: 13.0,
-            technique: 14.0,
-        };
-        s.mental = Mental {
-            aggression: 15.0,
-            anticipation: 16.0,
-            bravery: 17.0,
-            composure: 18.0,
-            concentration: 19.0,
-            decisions: 20.0,
-            determination: 21.0,
-            flair: 22.0,
-            leadership: 23.0,
-            off_the_ball: 24.0,
-            positioning: 25.0,
-            teamwork: 26.0,
-            vision: 27.0,
-            work_rate: 28.0,
-        };
-        s.physical = Physical {
-            acceleration: 29.0,
-            agility: 30.0,
-            balance: 31.0,
-            jumping: 32.0,
-            natural_fitness: 33.0,
-            pace: 34.0,
-            stamina: 35.0,
-            strength: 36.0,
-            match_readiness: 37.0,
-        };
-        s.goalkeeping = Goalkeeping {
-            aerial_reach: 38.0,
-            command_of_area: 39.0,
-            communication: 40.0,
-            eccentricity: 41.0,
-            first_touch: 42.0,
-            handling: 43.0,
-            kicking: 44.0,
-            one_on_ones: 45.0,
-            passing: 46.0,
-            punching: 47.0,
-            reflexes: 48.0,
-            rushing_out: 49.0,
-            throwing: 50.0,
-        };
-        s
+        PlayerSkills {
+            technical: Technical {
+                corners: 1.0,
+                crossing: 2.0,
+                dribbling: 3.0,
+                finishing: 4.0,
+                first_touch: 5.0,
+                free_kicks: 6.0,
+                heading: 7.0,
+                long_shots: 8.0,
+                long_throws: 9.0,
+                marking: 10.0,
+                passing: 11.0,
+                penalty_taking: 12.0,
+                tackling: 13.0,
+                technique: 14.0,
+            },
+            mental: Mental {
+                aggression: 15.0,
+                anticipation: 16.0,
+                bravery: 17.0,
+                composure: 18.0,
+                concentration: 19.0,
+                decisions: 20.0,
+                determination: 21.0,
+                flair: 22.0,
+                leadership: 23.0,
+                off_the_ball: 24.0,
+                positioning: 25.0,
+                teamwork: 26.0,
+                vision: 27.0,
+                work_rate: 28.0,
+            },
+            physical: Physical {
+                acceleration: 29.0,
+                agility: 30.0,
+                balance: 31.0,
+                jumping: 32.0,
+                natural_fitness: 33.0,
+                pace: 34.0,
+                stamina: 35.0,
+                strength: 36.0,
+                match_readiness: 37.0,
+            },
+            goalkeeping: Goalkeeping {
+                aerial_reach: 38.0,
+                command_of_area: 39.0,
+                communication: 40.0,
+                eccentricity: 41.0,
+                first_touch: 42.0,
+                handling: 43.0,
+                kicking: 44.0,
+                one_on_ones: 45.0,
+                passing: 46.0,
+                punching: 47.0,
+                reflexes: 48.0,
+                rushing_out: 49.0,
+                throwing: 50.0,
+            },
+        }
     }
 
     #[test]
@@ -1275,15 +1275,15 @@ mod tests {
         // or vision driver. Catches typos in the registry table.
         let valid = [SkillId::Passing, SkillId::Vision, SkillId::Decisions];
         for entry in TRAIT_REGISTRY {
-            if entry.category == TraitCategory::Passing {
-                if let Some(p) = entry.primary_skill {
-                    assert!(
-                        valid.contains(&p),
-                        "passing trait {:?} routes to non-passing skill {:?}",
-                        entry.trait_id,
-                        p
-                    );
-                }
+            if entry.category == TraitCategory::Passing
+                && let Some(p) = entry.primary_skill
+            {
+                assert!(
+                    valid.contains(&p),
+                    "passing trait {:?} routes to non-passing skill {:?}",
+                    entry.trait_id,
+                    p
+                );
             }
         }
     }

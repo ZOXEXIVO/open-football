@@ -2198,7 +2198,7 @@ impl Actors {
             Footballer::assemble(
                 &mut commands,
                 entity,
-                &*parts,
+                &parts,
                 &outfit,
                 player.is_goalkeeper(),
             );
@@ -2694,23 +2694,6 @@ impl Actors {
         reach < allowed && height > Self::GLOVE_HEIGHT.0 && height < Self::GLOVE_HEIGHT.1
     }
 
-    /// Finds the next moment the ball is struck, within the backswing window
-    /// ahead of the playhead: where it will be hit, how fast it will leave,
-    /// and how long until it happens.
-    ///
-    /// Walks the window a probe at a time rather than sampling its far end,
-    /// for two reasons. The delay has to be a real countdown — the swing is a
-    /// function of it, and a fixed one would leave every player's leg stuck at
-    /// the top of the backswing until the ball had already gone. And a kick is
-    /// a LOCAL jump in speed: comparing each step against the one before it
-    /// catches a first-time volley, where the ball was already travelling
-    /// quickly and simply changed direction and got faster.
-    ///
-    /// Stateless on purpose. Nothing is remembered between frames, so the
-    /// swing is right wherever the playhead is put — scrubbed, reversed or
-    /// running at 8x — instead of being right only if it was watched from the
-    /// beginning.
-
     /// **A contact the RECORDING names**, for the ones the ball's own track
     /// cannot show.
     ///
@@ -2794,6 +2777,23 @@ impl Actors {
         }
         None
     }
+
+    /// Finds the next moment the ball is struck, within the backswing window
+    /// ahead of the playhead: where it will be hit, how fast it will leave,
+    /// and how long until it happens.
+    ///
+    /// Walks the window a probe at a time rather than sampling its far end,
+    /// for two reasons. The delay has to be a real countdown — the swing is a
+    /// function of it, and a fixed one would leave every player's leg stuck at
+    /// the top of the backswing until the ball had already gone. And a kick is
+    /// a LOCAL jump in speed: comparing each step against the one before it
+    /// catches a first-time volley, where the ball was already travelling
+    /// quickly and simply changed direction and got faster.
+    ///
+    /// Stateless on purpose. Nothing is remembered between frames, so the
+    /// swing is right wherever the playhead is put — scrubbed, reversed or
+    /// running at 8x — instead of being right only if it was watched from the
+    /// beginning.
     fn next_impact(ball: &mut Track, now: f64) -> Option<Contact> {
         let at = |ball: &mut Track, t: f64| {
             ball.position_ahead(t)
@@ -2806,9 +2806,7 @@ impl Actors {
         let mut before = (here - previous).length() / (Self::PROBE as f32 / 1000.0);
 
         for step in 1..=Self::WINDUP_STEPS {
-            let Some(next) = at(ball, now + step as f64 * Self::PROBE) else {
-                return None;
-            };
+            let next = at(ball, now + step as f64 * Self::PROBE)?;
             let velocity = (next - here) / (Self::PROBE as f32 / 1000.0);
             let leaving = velocity.length();
             if leaving > Self::TOUCHED
@@ -3459,13 +3457,11 @@ impl Actors {
                 let reach = Vec3::new(from_him.x, 0.0, from_him.z).length();
                 let departing = ball.velocity.dot(from_him) > 0.0;
                 if reach < Self::STRIKE_REACH && departing && ball.velocity.length() > Self::STRUCK
-                {
-                    if let Some(direction) =
+                    && let Some(direction) =
                         Vec3::new(ball.velocity.x, 0.0, ball.velocity.z).try_normalize()
                     {
                         actor.strike = Some((direction, Self::STRIKE_HOLD));
                     }
-                }
             }
             // Tick the hold down in match time, so a strike does not hold for
             // eight times as long when the replay is run at 8x.
@@ -6571,7 +6567,7 @@ mod flight {
                 }
                 // From the landing on, which is the half nothing has drawn.
                 let since = frame as i64 - FULL_LENGTH.len() as i64;
-                if since < 0 || since as usize % every != 0 || column >= STEPS {
+                if since < 0 || !(since as usize).is_multiple_of(every) || column >= STEPS {
                     continue;
                 }
                 let (pitch, roll) = actor.topple();
@@ -8253,9 +8249,6 @@ mod ground {
         );
     }
 
-    /// Every one of the above has to leave the boots on the grass. A wide
-    /// base is a LOW one and the drop that pays for it is a real loss of
-
     /// **How well the planted foot carries the ground across the WHOLE of
     /// its stance**, rather than at the one instant of it that has a test.
     ///
@@ -8423,6 +8416,9 @@ mod ground {
             );
         }
     }
+
+    /// Every one of the above has to leave the boots on the grass. A wide
+    /// base is a LOW one and the drop that pays for it is a real loss of
     /// height, so getting the two out of step buries him or floats him.
     #[test]
     fn a_shuffle_keeps_his_boots_on_the_grass() {
@@ -10676,10 +10672,12 @@ mod midair {
     #[test]
     fn the_ceiling_is_one_number() {
         assert_eq!(Actors::OVERHEAD, 2.8);
-        assert!(
-            Actors::HEADED < Actors::OVERHEAD,
-            "a header happens in a band between the boot and the ceiling"
-        );
+        const {
+            assert!(
+                Actors::HEADED < Actors::OVERHEAD,
+                "a header happens in a band between the boot and the ceiling"
+            )
+        };
     }
 
     /// ⚠ **Owning a ball and striking one are two questions**, and the
@@ -10690,10 +10688,12 @@ mod midair {
     /// the ceiling on a ball being played TO somebody.
     #[test]
     fn a_man_strikes_a_ball_higher_than_one_can_be_his() {
-        assert!(
-            Actors::HEADED_CEILING > Actors::OVERHEAD,
-            "a header goes higher than a ball can be somebody's"
-        );
+        const {
+            assert!(
+                Actors::HEADED_CEILING > Actors::OVERHEAD,
+                "a header goes higher than a ball can be somebody's"
+            )
+        };
         // `AerialReach::HIGHEST` in the engine — the best leaper's jump.
         assert_eq!(Actors::HEADED_CEILING, 3.1);
     }
@@ -11154,7 +11154,7 @@ mod arrival {
                         .then_some(Impact { by: id, contact })
                 });
                 walker.step(position, ball, arriving);
-                if k < lead || (k - lead) % EVERY != 0 {
+                if k < lead || !(k - lead).is_multiple_of(EVERY) {
                     continue;
                 }
                 let actor = &walker.actor;

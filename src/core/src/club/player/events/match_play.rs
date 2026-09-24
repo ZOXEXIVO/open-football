@@ -167,7 +167,7 @@ impl Player {
         );
 
         const ALPHA: f32 = 0.25;
-        self.happiness.starter_ratio = self.happiness.starter_ratio * (1.0 - ALPHA);
+        self.happiness.starter_ratio *= 1.0 - ALPHA;
         self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
 
         if counts_as_opportunity {
@@ -488,9 +488,9 @@ impl Player {
                     MatchPerformanceKind::CostlyErrorUnderPressure,
                 )
                 .with_rating(o.effective_rating)
-                .with_minutes(o.stats.minutes_played as u16)
+                .with_minutes(o.stats.minutes_played)
                 .with_team_won(o.team_won)
-                .with_goal_margin(o.goal_margin() as i8)
+                .with_goal_margin(o.goal_margin())
                 .with_derby(o.is_derby)
                 .with_cup(o.is_cup)
                 .with_evidence(MatchPerformanceEvidence::LowRating);
@@ -1499,11 +1499,11 @@ impl MatchPerfContextBuilder {
     ) -> MatchPerformanceEventContext {
         let mut mp = MatchPerformanceEventContext::new(kind)
             .with_rating(o.effective_rating)
-            .with_minutes(o.stats.minutes_played as u16)
+            .with_minutes(o.stats.minutes_played)
             .with_goals(o.stats.goals as u8)
             .with_assists(o.stats.assists as u8)
             .with_team_won(o.team_won)
-            .with_goal_margin(o.goal_margin() as i8)
+            .with_goal_margin(o.goal_margin())
             .with_derby(o.is_derby)
             .with_cup(o.is_cup);
         if o.effective_rating >= 7.5 {
@@ -1537,9 +1537,9 @@ impl MatchPerfContextBuilder {
         let mut mp =
             MatchPerformanceEventContext::new(MatchPerformanceKind::CostlyErrorUnderPressure)
                 .with_rating(o.effective_rating)
-                .with_minutes(o.stats.minutes_played as u16)
+                .with_minutes(o.stats.minutes_played)
                 .with_team_won(o.team_won)
-                .with_goal_margin(o.goal_margin() as i8)
+                .with_goal_margin(o.goal_margin())
                 .with_derby(o.is_derby)
                 .with_cup(o.is_cup)
                 .with_evidence(MatchPerformanceEvidence::LowRating);

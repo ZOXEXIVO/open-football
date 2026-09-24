@@ -212,18 +212,17 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         }
 
         // Guard unmarked attackers in our zone who are trying to get open
-        if ctx.ball().on_own_side() {
-            if let Some(unmarked) = ctx
+        if ctx.ball().on_own_side()
+            && let Some(unmarked) = ctx
                 .player()
                 .defensive()
                 .find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0)
-            {
-                let dist = unmarked.distance(ctx);
-                if dist < 60.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Guarding,
-                    ));
-                }
+        {
+            let dist = unmarked.distance(ctx);
+            if dist < 60.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Guarding,
+                ));
             }
         }
 

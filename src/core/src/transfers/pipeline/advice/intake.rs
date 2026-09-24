@@ -125,7 +125,7 @@ impl IntakeScan<'_> {
             let summary = player_lookup.find_summary(country, rec.player_id, date);
             if let Some(summary) = &summary {
                 let plausibility = TransferPlausibilityBuilder::evaluate_summary(
-                    &buyer_ctx, summary, false, true, date, None,
+                    buyer_ctx, summary, false, true, date, None,
                 );
                 if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
                     continue;
@@ -413,14 +413,13 @@ impl IntakeCommit {
                             .transfer_requests
                             .iter_mut()
                             .find(|r| r.id == request_id)
-                        {
-                            if matches!(
+                            && matches!(
                                 req.status,
                                 TransferRequestStatus::Pending
                                     | TransferRequestStatus::ScoutingActive
-                            ) {
-                                req.status = TransferRequestStatus::Shortlisted;
-                            }
+                            )
+                        {
+                            req.status = TransferRequestStatus::Shortlisted;
                         }
                     }
                     RecommendationProcessKind::CreateRequest {

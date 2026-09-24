@@ -1,9 +1,9 @@
-/// Country-specific skill biases based on real-world football culture.
-///
-/// Applied as additive modifiers to the 1–20 skill scale after base generation.
-/// Typical range: ±0.5 to ±2.0 per skill. These create recognizable national
-/// playing styles without making all players from one country identical
-/// (noise and role archetypes still dominate individual variation).
+//! Country-specific skill biases based on real-world football culture.
+//!
+//! Applied as additive modifiers to the 1–20 skill scale after base generation.
+//! Typical range: ±0.5 to ±2.0 per skill. These create recognizable national
+//! playing styles without making all players from one country identical
+//! (noise and role archetypes still dominate individual variation).
 
 // Skill index constants (must match player.rs)
 #[allow(dead_code)]

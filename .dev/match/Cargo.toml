@@ -3,6 +3,10 @@ name = "dev_match"
 version = "0.1.0"
 edition = "2024"
 
+# Same policy as the host workspace, which this crate sits outside of.
+[lints.clippy]
+too_many_arguments = "allow"
+
 [dependencies]
 # Enable the core crate's `match-logs` feature so the dev analytic
 # harness gets per-shot / blowout diagnostics. Production runs

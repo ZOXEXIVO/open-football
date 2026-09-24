@@ -129,7 +129,7 @@ pub async fn team_tactics_get_action(
         .collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
-    let current_path = format!("/{}/teams/{}/tactics", &route_params.lang, &team.slug);
+    let current_path = format!("/{}/teams/{}/tactics", route_params.lang, team.slug);
     let menu_params = views::MenuParams {
         i18n: &i18n,
         lang: &route_params.lang,
@@ -155,7 +155,7 @@ pub async fn team_tactics_get_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
             .unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: simulator_data

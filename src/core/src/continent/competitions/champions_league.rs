@@ -66,7 +66,7 @@ impl ChampionsLeague {
         self.season_year = date.year() as u16;
 
         // Create groups: distribute clubs round-robin into 8 groups
-        let num_groups = (count / 4).max(1).min(8);
+        let num_groups = (count / 4).clamp(1, 8);
         self.groups = (0..num_groups)
             .map(|g| {
                 let team_ids: Vec<u32> = (0..4)
@@ -147,11 +147,11 @@ impl ChampionsLeague {
         // Draw: match winners against runners-up (avoiding same group)
         self.knockout_round.clear();
         let num_ties = winners.len().min(runners_up.len());
-        for i in 0..num_ties {
+        for (i, &winner) in winners.iter().enumerate().take(num_ties) {
             // Simple draw: winner i vs runner-up (i+1) % n
             let r_idx = (i + 1) % runners_up.len();
             self.knockout_round
-                .push(KnockoutTie::new(winners[i], runners_up[r_idx]));
+                .push(KnockoutTie::new(winner, runners_up[r_idx]));
         }
 
         // Schedule R16 matches
@@ -381,10 +381,11 @@ impl ChampionsLeague {
                             if tie.leg1_score.is_none() {
                                 tie.record_leg1(home_goals, away_goals);
                             }
-                        } else if tie.home_team == cm.away_team && tie.away_team == cm.home_team {
-                            if tie.leg2_score.is_none() {
-                                tie.record_leg2_with_shootout(home_goals, away_goals, shootout);
-                            }
+                        } else if tie.home_team == cm.away_team
+                            && tie.away_team == cm.home_team
+                            && tie.leg2_score.is_none()
+                        {
+                            tie.record_leg2_with_shootout(home_goals, away_goals, shootout);
                         }
                     }
                 }

@@ -480,7 +480,7 @@ mod tests {
     }
 
     fn staff_with(judging_pot: u8, judging_ab: u8, working_youth: u8) -> Staff {
-        let mut s = StaffStub::default();
+        let mut s = StaffStub::build();
         s.id = 7;
         s.staff_attributes.knowledge.judging_player_potential = judging_pot;
         s.staff_attributes.knowledge.judging_player_ability = judging_ab;

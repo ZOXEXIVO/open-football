@@ -454,10 +454,12 @@ mod tests {
         /// A useful, transfer-listed midfielder whose deal expires in
         /// `days_to_expiry` days — a textbook leaving player.
         fn leaving_player(id: u32, today: NaiveDate, days_to_expiry: i64) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 80;
-            attrs.potential_ability = 85;
-            attrs.current_reputation = 2400;
+            let attrs = PlayerAttributes {
+                current_ability: 80,
+                potential_ability: 85,
+                current_reputation: 2400,
+                ..Default::default()
+            };
             let mut p = PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Lea".to_string(), format!("Ving{id}")))

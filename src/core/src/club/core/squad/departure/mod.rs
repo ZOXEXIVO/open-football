@@ -65,12 +65,7 @@ impl SquadDepartures {
 
     /// As [`Self::notify`], for the routes that hold a team rather than the
     /// whole club — the end-of-season sweeps walk teams directly.
-    pub fn notify_team(
-        team: &mut Team,
-        player_id: u32,
-        cause: SeparationCause,
-        today: NaiveDate,
-    ) {
+    pub fn notify_team(team: &mut Team, player_id: u32, cause: SeparationCause, today: NaiveDate) {
         let club_id = team.club_id;
         let Some(report) = Self::report_from_team(team, player_id, club_id, today) else {
             return;
@@ -230,12 +225,11 @@ impl SquadDepartures {
             .iter()
             .find_map(|team| team.players.players.iter().find(|p| p.id == player_id));
 
-        if let Some(player) = player {
-            if player.statuses.has(PlayerStatusType::Req)
-                || player.mind.wants_to_leave() >= Self::MOVE_WAS_HIS_IDEA
-            {
-                return SeparationCause::HeRequestedOut;
-            }
+        if let Some(player) = player
+            && (player.statuses.has(PlayerStatusType::Req)
+                || player.mind.wants_to_leave() >= Self::MOVE_WAS_HIS_IDEA)
+        {
+            return SeparationCause::HeRequestedOut;
         }
 
         let coach = main.staffs.head_coach();

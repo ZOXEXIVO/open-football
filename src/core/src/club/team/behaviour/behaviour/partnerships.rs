@@ -606,10 +606,12 @@ mod tests {
     }
 
     fn build(id: u32, pos: PlayerPositionType, country_id: u32, ca: u8, rep: i16) -> Player {
-        let mut player_attrs = PlayerAttributes::default();
-        player_attrs.current_ability = ca;
-        player_attrs.current_reputation = rep;
-        player_attrs.world_reputation = rep;
+        let player_attrs = PlayerAttributes {
+            current_ability: ca,
+            current_reputation: rep,
+            world_reputation: rep,
+            ..Default::default()
+        };
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("T".to_string(), id.to_string()))

@@ -41,12 +41,12 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             let ball_distance = ctx.ball().distance();
 
             // Very close — tackle reactively (always urgent, ignore min stay)
-            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
-                if TackleEngagement::should_commit(ctx, carrier.distance(ctx)) {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Tackling,
-                    ));
-                }
+            if let Some(carrier) = ctx.players().opponents().with_ball().next()
+                && TackleEngagement::should_commit(ctx, carrier.distance(ctx))
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
             }
 
             // Only the best-positioned player presses — others hold shape
@@ -134,45 +134,45 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         }
 
         // Key change: Don't run to the ball if a teammate has it
-        if let Some(ball_owner_id) = ctx.ball().owner_id() {
-            if let Some(ball_owner) = ctx.context.players.by_id(ball_owner_id) {
-                if ball_owner.team_id == ctx.player.team_id {
-                    // Teammate has ball - make attacking run instead of clustering
-                    let target_position = self.calculate_attacking_run_position(ctx);
+        if let Some(ball_owner_id) = ctx.ball().owner_id()
+            && let Some(ball_owner) = ctx.context.players.by_id(ball_owner_id)
+            && ball_owner.team_id == ctx.player.team_id
+        {
+            // Teammate has ball - make attacking run instead of clustering
+            let target_position = self.calculate_attacking_run_position(ctx);
 
-                    // Vary speed based on situation
-                    let urgency_factor = self.calculate_urgency_factor(ctx);
-                    let slowing_distance = 20.0 * (1.0 - urgency_factor * 0.3);
+            // Vary speed based on situation
+            let urgency_factor = self.calculate_urgency_factor(ctx);
+            let slowing_distance = 20.0 * (1.0 - urgency_factor * 0.3);
 
-                    let dist_to_target = (target_position - ctx.player.position).magnitude();
-                    if dist_to_target < 8.0 {
-                        return Some(Vector3::zeros());
-                    }
-                    return Some(
-                        SteeringBehavior::Arrive {
-                            target: target_position,
-                            slowing_distance,
-                        }
-                        .calculate(ctx.player)
-                        .velocity,
-                    );
-                }
+            let dist_to_target = (target_position - ctx.player.position).magnitude();
+            if dist_to_target < 8.0 {
+                return Some(Vector3::zeros());
             }
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: target_position,
+                    slowing_distance,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
         }
 
         // Ball is loose or opponent has it - only pursue if we're closest
-        if !ctx.team().is_control_ball() || !ctx.ball().is_owned() {
-            if ctx.team().is_best_player_to_chase_ball() && ball_distance < 100.0 {
-                // We're best positioned - go get the ball
-                return Some(
-                    SteeringBehavior::Pursuit {
-                        target: ball_position,
-                        target_velocity: ctx.tick_context.positions.ball.velocity,
-                    }
-                    .calculate(ctx.player)
-                    .velocity,
-                );
-            }
+        if (!ctx.team().is_control_ball() || !ctx.ball().is_owned())
+            && ctx.team().is_best_player_to_chase_ball()
+            && ball_distance < 100.0
+        {
+            // We're best positioned - go get the ball
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target: ball_position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
         }
 
         // Opponent owns the ball: process() holds this state for up to
@@ -468,6 +468,7 @@ impl MidfielderAttackSupportingState {
     ///   * there is DEFENSIVE COVER behind them — at least one central
     ///     mid or defender is goal-side — so the midfield is never wholly
     ///     vacated (which regresses team scoring).
+    ///
     /// A two-CM pivot naturally produces one runner + one holder; a side
     /// with no genuine attacking mid produces no late runner (correct —
     /// holding-midfield teams don't get bodies in the box).
@@ -1522,16 +1523,15 @@ impl MidfielderAttackSupportingState {
 
     /// Find teammate who currently has the ball
     fn find_ball_holder(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id == ctx.player.team_id {
-                    return Some(MatchPlayerLite {
-                        id: owner_id,
-                        position: ctx.tick_context.positions.players.position(owner_id),
-                        tactical_positions: owner.tactical_position.current_position,
-                    });
-                }
-            }
+        if let Some(owner_id) = ctx.ball().owner_id()
+            && let Some(owner) = ctx.context.players.by_id(owner_id)
+            && owner.team_id == ctx.player.team_id
+        {
+            return Some(MatchPlayerLite {
+                id: owner_id,
+                position: ctx.tick_context.positions.players.position(owner_id),
+                tactical_positions: owner.tactical_position.current_position,
+            });
         }
         None
     }

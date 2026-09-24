@@ -959,7 +959,7 @@ impl FormWatch {
                 // step-down realism. Unsolicited: we're scouting on form.
                 if matches!(
                     TransferPlausibilityBuilder::evaluate_summary(
-                        &buyer_plaus_ctx,
+                        buyer_plaus_ctx,
                         s,
                         false,
                         true,
@@ -1073,9 +1073,11 @@ mod breakout_watch_tests {
         }
 
         fn player(id: u32, ability: u8) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Home".into(), format!("P{id}")))
@@ -1095,7 +1097,7 @@ mod breakout_watch_tests {
         }
 
         fn scout(id: u32) -> crate::Staff {
-            let mut s = StaffStub::default();
+            let mut s = StaffStub::build();
             s.id = id;
             s.staff_attributes.knowledge.judging_player_ability = 15;
             s.staff_attributes.knowledge.judging_player_potential = 15;

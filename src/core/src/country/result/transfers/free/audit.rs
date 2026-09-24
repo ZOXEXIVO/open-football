@@ -275,7 +275,7 @@ impl FreeAgentMarketAuditor {
         // to the structural classifications so a player no matcher has
         // touched yet still gets an answer.
         let stored = state.and_then(|s| s.last_block).map(|(_, reason)| reason);
-        let last_block_reason = stored.or_else(|| {
+        let last_block_reason = stored.or({
             if nationality_unknown {
                 Some(FreeAgentBlockReason::UnknownNationality)
             } else if matching_request_count == 0 {
@@ -466,9 +466,11 @@ mod tests {
         }
 
         fn pool_player(id: u32, country_id: u32, today: NaiveDate) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 80;
-            attrs.potential_ability = 90;
+            let attrs = PlayerAttributes {
+                current_ability: 80,
+                potential_ability: 90,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Pool".to_string(), format!("P{id}")))

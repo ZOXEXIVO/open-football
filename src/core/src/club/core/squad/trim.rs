@@ -282,9 +282,11 @@ mod tests {
         fn goalkeeper(id: u32, ability: u8, age: u8, salary: u32, contract_months: u32) -> Player {
             let date = Self::date();
             let expiration = date + Duration::days(contract_months as i64 * 30);
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = ability;
-            attrs.potential_ability = ability;
+            let attrs = PlayerAttributes {
+                current_ability: ability,
+                potential_ability: ability,
+                ..Default::default()
+            };
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Test".to_string(), format!("Keeper{}", id)))

@@ -15,6 +15,12 @@ pub struct LeagueDynamics {
     pub attendance_multiplier: f32,
 }
 
+impl Default for LeagueDynamics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LeagueDynamics {
     pub fn new() -> Self {
         LeagueDynamics {
@@ -67,10 +73,7 @@ impl LeagueDynamics {
     pub fn update_team_streaks(&mut self, home_id: u32, away_id: u32, score: &Score) {
         let outcome = score.outcome();
 
-        let home_streak = self
-            .team_streaks
-            .entry(home_id)
-            .or_insert(TeamStreak::default());
+        let home_streak = self.team_streaks.entry(home_id).or_default();
         match outcome {
             MatchResultOutcome::HomeWin => {
                 home_streak.winning_streak += 1;
@@ -89,10 +92,7 @@ impl LeagueDynamics {
             }
         }
 
-        let away_streak = self
-            .team_streaks
-            .entry(away_id)
-            .or_insert(TeamStreak::default());
+        let away_streak = self.team_streaks.entry(away_id).or_default();
         match outcome {
             MatchResultOutcome::AwayWin => {
                 away_streak.winning_streak += 1;
@@ -175,7 +175,7 @@ impl LeagueDynamics {
             self.attendance_multiplier *= 1.2;
         }
 
-        if month >= 6 && month <= 8 {
+        if (6..=8).contains(&month) {
             self.attendance_multiplier *= 0.9;
         }
 

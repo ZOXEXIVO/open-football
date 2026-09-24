@@ -55,15 +55,15 @@ impl ManagerSeatRepair {
 
         // ── A permanent manager is in post ──
         if manager_count >= 1 {
-            if manager_count > 1 || has_caretaker {
-                if let Some(main) = club.teams.main_mut() {
-                    if manager_count > 1 {
-                        ManagerSeat::dedupe_managers(main);
-                    }
-                    // A permanent manager and a caretaker can't co-hold the seat.
-                    if has_caretaker {
-                        ManagerSeat::clear_caretaker(main);
-                    }
+            if (manager_count > 1 || has_caretaker)
+                && let Some(main) = club.teams.main_mut()
+            {
+                if manager_count > 1 {
+                    ManagerSeat::dedupe_managers(main);
+                }
+                // A permanent manager and a caretaker can't co-hold the seat.
+                if has_caretaker {
+                    ManagerSeat::clear_caretaker(main);
                 }
             }
             // A filled permanent seat means any lingering search is stale.

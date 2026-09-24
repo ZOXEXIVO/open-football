@@ -139,7 +139,7 @@ struct Fx;
 
 impl Fx {
     fn coach(id: u32, age: u8, today: NaiveDate, skill: u8) -> Staff {
-        let mut s = StaffStub::default();
+        let mut s = StaffStub::build();
         s.id = id;
         s.birth_date = NaiveDate::from_ymd_opt(today.year() - age as i32, 1, 1).unwrap();
         s.staff_attributes.coaching.tactical = skill;

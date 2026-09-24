@@ -59,9 +59,7 @@ pub(super) fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
     let mut w = [0.8f32; SKILL_COUNT];
 
     // GK-specific skills default to 0 for outfield players: they don't train them.
-    for i in SK_GK_AERIAL_REACH..=SK_GK_THROWING {
-        w[i] = 0.0;
-    }
+    w[SK_GK_AERIAL_REACH..=SK_GK_THROWING].fill(0.0);
 
     match group {
         PosGroup::Goalkeeper => {

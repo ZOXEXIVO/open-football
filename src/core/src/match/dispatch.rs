@@ -1,6 +1,9 @@
 use crate::r#match::{Match, MatchResult, MatchResultRaw, MatchSquad};
 use std::sync::OnceLock;
 
+/// `(index, home, away, is_knockout)` — one raw squad-vs-squad fixture.
+pub type SquadFixture = (usize, MatchSquad, MatchSquad, bool);
+
 /// Pluggable executor for match work. When installed via
 /// [`MatchDispatcherRegistry::set`], `MatchPlayEnginePool` consults the
 /// dispatcher first and only falls back to the local rayon thread-pool
@@ -19,8 +22,8 @@ pub trait MatchDispatcher: Send + Sync {
     fn dispatch_league(&self, matches: Vec<Match>) -> Result<Vec<MatchResult>, Vec<Match>>;
     fn dispatch_squads(
         &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>>;
+        matches: Vec<SquadFixture>,
+    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<SquadFixture>>;
 }
 
 /// Process-wide handle to the active [`MatchDispatcher`]. The binary

@@ -253,10 +253,12 @@ mod tests {
         /// `played` is set separately because the ledger doesn't count
         /// appearances.
         fn youth(id: u32, age: u8, games: u16, rating: f32) -> Player {
-            let mut attrs = PlayerAttributes::default();
-            attrs.current_ability = 90;
-            attrs.potential_ability = 140;
-            attrs.condition = 10_000;
+            let attrs = PlayerAttributes {
+                current_ability: 90,
+                potential_ability: 140,
+                condition: 10_000,
+                ..Default::default()
+            };
             let contract = PlayerClubContract::new_youth(
                 10_000,
                 NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),

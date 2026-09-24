@@ -78,7 +78,7 @@ impl DefensiveRelease {
             Self::Outlet(target) => StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
+                    PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(target)
                         .with_reason("DEF_CLEARANCE_OUTLET")

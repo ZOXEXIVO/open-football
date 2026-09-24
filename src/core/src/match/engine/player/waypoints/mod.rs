@@ -189,6 +189,12 @@ pub struct WaypointManager {
     pub path_completed: bool,
 }
 
+impl Default for WaypointManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaypointManager {
     pub fn new() -> Self {
         WaypointManager {

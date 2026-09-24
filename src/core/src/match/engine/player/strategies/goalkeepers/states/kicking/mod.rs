@@ -47,20 +47,20 @@ impl StateProcessingHandler for GoalkeeperKickingState {
         // 2. In his hands — punt it. No receiver, no lead, no claim
         //    privilege: a ball dropped on the halfway line belongs to
         //    whoever gets up highest.
-        if KeeperPunt::from_hands(ctx) {
-            if let Some(plan) = KeeperPunt::plan(ctx) {
-                #[cfg(feature = "match-logs")]
-                crate::mid_run_diag::KeeperReleaseDiag::note_punt(
-                    plan.is_drop_kick(),
-                    (plan.target - ctx.player.position).norm(),
-                    plan.apex,
-                    plan.target_man.is_some(),
-                );
-                return Some(StateChangeResult::with_goalkeeper_state_and_event(
-                    GoalkeeperState::ReturningToGoal,
-                    Event::PlayerEvent(PlayerEvent::ClearBall(ctx.player.id, plan.velocity)),
-                ));
-            }
+        if KeeperPunt::from_hands(ctx)
+            && let Some(plan) = KeeperPunt::plan(ctx)
+        {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperReleaseDiag::note_punt(
+                plan.is_drop_kick(),
+                (plan.target - ctx.player.position).norm(),
+                plan.apex,
+                plan.target_man.is_some(),
+            );
+            return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                GoalkeeperState::ReturningToGoal,
+                Event::PlayerEvent(PlayerEvent::ClearBall(ctx.player.id, plan.velocity)),
+            ));
         }
 
         // 3. Off the deck: find the best teammate to kick the ball to
@@ -72,7 +72,7 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
+                    PassingEventContext::builder()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
                         .with_reason("GK_KICKING")
