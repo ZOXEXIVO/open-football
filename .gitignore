@@ -11,9 +11,6 @@ src/web/assets/static/viewer/
 .qwen/
 .agents/
 .claude/
-CLAUDE.md
-
-training_result.json
 
 match_results
 publish
