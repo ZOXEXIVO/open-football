@@ -1,9 +1,12 @@
 use crate::MatchRuntime;
 use crate::context::{GlobalContext, SimulationContext};
+use crate::league::season::SeasonCalendar;
+use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
-    LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMilestones, LeagueNewsroom,
-    LeaguePendingState, LeagueRegulations, LeagueResult, LeagueStatistics, LeagueTable,
-    LeagueTableRow, MatchStorage, PlayerOfTheWeekHistory, Schedule, ScheduleItem,
+    CompetitionLevel, LeagueAwards, LeagueBuildOutput, LeagueDynamics, LeagueMatch,
+    LeagueMilestones, LeagueNewsroom, LeaguePendingState, LeagueRegulations, LeagueResult,
+    LeagueStatistics, LeagueTable, LeagueTableResult, LeagueTableRow, MatchStorage,
+    PlayerOfTheWeekHistory, Schedule, ScheduleItem,
 };
 use crate::r#match::MatchResult;
 use crate::{Club, PlayerFieldPositionGroup, PlayerStatistics, Team};
@@ -41,6 +44,14 @@ pub struct League {
     /// and friendly competitions, which have no league page to read it
     /// on.
     pub newsroom: LeagueNewsroom,
+}
+
+/// A division's matchday after [`League::open_matchday`]: today's fixtures
+/// and the season bookkeeping [`League::build_matchday`] carries on.
+pub(crate) struct OpenedMatchday {
+    scheduled_matches: Vec<LeagueMatch>,
+    table_result: LeagueTableResult,
+    new_season_started: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -110,21 +121,33 @@ impl League {
         }
     }
 
-    /// Prepare today's matchday but do not play it. Mutates the league's
-    /// dynamics / table / schedule up to (and including) schedule
-    /// regeneration, then either:
-    /// - returns a [`LeagueBuildOutput`] with `pending = Some(...)` and
-    ///   the `Match` objects ready for a batched engine dispatch, or
-    /// - runs the non-matchday work and returns `immediate = Some(LeagueResult)`.
+    /// Prepare today's matchday but do not play it: [`open_matchday`]
+    /// followed by [`build_matchday`], with the day's commitments read off
+    /// this league's own schedule. A country builds its divisions through
+    /// the two halves instead, so the commitments it hands every division
+    /// cover all of them.
     ///
     /// The matched second half is [`simulate_process`], which takes the
     /// played [`MatchResult`]s and `LeaguePendingState` back and runs
     /// `process_match_day_results`.
     pub fn simulate_build(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueBuildOutput {
-        let league_name = self.name.clone();
+        let opened = self.open_matchday(clubs, ctx);
+        let commitments = MatchdayCommitments::gather([&self.schedule], ctx.simulation.date.date());
+        self.build_matchday(opened, clubs, ctx, &commitments)
+    }
+
+    /// Everything up to kickoff that decides WHO plays today: dynamics,
+    /// the split-season flip, the table tick and schedule (re)generation.
+    /// On a season's opening day the fixtures are drawn here, so today's
+    /// commitments can only be read after every division has opened.
+    pub(crate) fn open_matchday(
+        &mut self,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+    ) -> OpenedMatchday {
         debug!(
-            "⚽ Building matchday for league: {} (Reputation: {})",
-            league_name, self.reputation
+            "⚽ Opening matchday for league: {} (Reputation: {})",
+            self.name, self.reputation
         );
 
         self.prepare_matchday(ctx, clubs);
@@ -140,6 +163,7 @@ impl League {
 
         let schedule_result = self.schedule.simulate(
             &self.settings,
+            self.competition_level(),
             ctx.with_league(
                 self.id,
                 String::from(&self.slug),
@@ -158,18 +182,42 @@ impl League {
             debug!("📊 League table reset for new season: {}", self.name);
         }
 
-        if schedule_result.is_match_scheduled() {
+        OpenedMatchday {
+            scheduled_matches: schedule_result.scheduled_matches,
+            table_result,
+            new_season_started,
+        }
+    }
+
+    /// Pick today's squads (never borrowing a player `commitments` says is
+    /// playing for his own side today) and return the `Match` objects for a
+    /// batched engine dispatch, or run the non-matchday work.
+    pub(crate) fn build_matchday(
+        &mut self,
+        opened: OpenedMatchday,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        commitments: &MatchdayCommitments,
+    ) -> LeagueBuildOutput {
+        let OpenedMatchday {
+            scheduled_matches,
+            table_result,
+            new_season_started,
+        } = opened;
+
+        if !scheduled_matches.is_empty() {
             let matches = self.build_matchday_matches(
-                &schedule_result.scheduled_matches,
+                &scheduled_matches,
                 clubs,
                 ctx,
                 self.friendly,
                 false,
+                commitments,
             );
             return LeagueBuildOutput {
                 matches,
                 pending: Some(LeaguePendingState {
-                    scheduled_matches: schedule_result.scheduled_matches,
+                    scheduled_matches,
                     table_result,
                     new_season_started,
                 }),
@@ -331,6 +379,16 @@ impl League {
         }
 
         if featured { Some(s) } else { None }
+    }
+
+    /// Friendly leagues are the club sub-leagues the youth sides play in —
+    /// the only friendly competitions the world generates.
+    pub fn competition_level(&self) -> CompetitionLevel {
+        if self.friendly {
+            CompetitionLevel::Development
+        } else {
+            CompetitionLevel::Senior
+        }
     }
 
     /// Split-season leagues: the number of schedule tours that belong to the
@@ -501,6 +559,10 @@ impl PlayoffFormat {
 }
 
 impl LeagueSettings {
+    pub fn season_calendar(&self) -> SeasonCalendar {
+        SeasonCalendar::new(&self.season_starting_half, &self.season_ending_half)
+    }
+
     pub fn is_time_for_new_schedule(&self, context: &SimulationContext) -> bool {
         let season_starting_date = &self.season_starting_half;
         let date = context.date.date();
@@ -579,6 +641,37 @@ impl Schedule {
         self.matches_for_team_in_days(team_id, from_date, days)
             .next()
             .is_some()
+    }
+}
+
+#[cfg(test)]
+mod competition_level_tests {
+    use super::*;
+
+    fn league(friendly: bool) -> League {
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
+            season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+            tier: 1,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+            split_season: false,
+        };
+        League::new(1, "L".into(), "l".into(), 1, 5000, settings, friendly)
+    }
+
+    #[test]
+    fn friendly_league_is_development_football() {
+        assert_eq!(
+            league(true).competition_level(),
+            CompetitionLevel::Development
+        );
+    }
+
+    #[test]
+    fn competitive_league_is_senior_football() {
+        assert_eq!(league(false).competition_level(), CompetitionLevel::Senior);
     }
 }
 

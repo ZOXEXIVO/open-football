@@ -1,61 +1,158 @@
 //! Scalp hair.
 //!
-//! A haircut is a cap that follows the skull — the same outline the head is
-//! drawn with, pushed out by however much volume the style has — with a
-//! front edge shaped by the man's hairline. Inside the cap the mass is not
-//! a flat fill: it darkens at the roots and under the crown, carries one
-//! soft band of sheen where the key light crosses it, and is drawn over
-//! with strands that run the way the style combs. The edge of every cap is
-//! displaced by noise, and wisps cross the hairline onto the forehead, so
-//! nowhere does hair meet skin along a vector curve.
+//! A haircut is a cap over the skull — the head's own outline pushed out by
+//! however much volume the style has — whose front edge is the man's
+//! hairline. Inside the cap the hair is a mass of clumps running the way the
+//! style is combed: every pixel knows which way its strands run, and the
+//! light off them is the light off fibres — two highlights across the grain
+//! rather than a shine on a helmet. The edge against the card and the edge
+//! on the forehead both break up into strands, so nowhere does hair meet
+//! skin or backdrop along a line.
+//!
+//! Short hair is sparse hair: a buzz cut or the sides of a fade are the same
+//! fibres at a density low enough for the scalp to show through.
 
-use super::canvas::{Blur, Canvas, PathBuilder};
-use super::color::Rgb;
+use super::canvas::{Grid, Layer, Outline, Path, Plane, Polyline, Ramp};
+use super::color::Linear;
 use super::geometry::Landmarks;
 use super::identity::{HairStyle, Hairline, Identity};
+use super::noise::Noise;
+use super::relief::{Relief, Volume};
+use super::shading::{Occlusion, Studio, Vec3};
 use super::tones::Tones;
 
-/// How a style combs: the direction its strands run.
-#[derive(Clone, Copy)]
+/// How a style combs: which way its strands run across the page.
+#[derive(Clone, Copy, PartialEq)]
 enum Comb {
-    /// Up and a little back, short — a crop, a fade top
+    /// Up from the hairline, fanning a little — a crop, a fade top
     Up,
-    /// From the part outward across the crown
+    /// From a part line out across the crown
     Part,
-    /// From the hairline straight back over the crown
+    /// Straight back from the hairline
     Back,
-    /// Small arcs every which way
+    /// Coils every which way
     Curl,
-    /// Down the sides, back over the top
+    /// Out and down from the whorl at the crown
     Down,
-    /// Rows converging toward the nape
+    /// Braided rows running back from the hairline
     Rows,
+    /// Cropped to stubble: hairs seen end-on
+    Stubble,
 }
 
+/// One region of hair with one character. A fade is two: the top and the
+/// sides; most cuts are one.
+struct Tuft {
+    outline: Outline,
+    /// The front edge where hair meets forehead, if this tuft has one
+    hairline: Option<Polyline>,
+    /// Thickness of the hair at the crown and over the ears
+    lift: f32,
+    side: f32,
+    comb: Comb,
+    /// How ragged the silhouette is
+    fuzz: f32,
+    /// How much of the scalp the hair hides, by height on the page
+    density: Density,
+    gloss: f32,
+}
+
+#[derive(Clone, Copy)]
+enum Density {
+    Full,
+    /// A fade: thick above `top`, thinning to `floor` at `bottom`
+    Fade {
+        top: f32,
+        bottom: f32,
+        floor: f32,
+        peak: f32,
+    },
+    Even(f32),
+}
+
+impl Density {
+    fn at(self, y: f32) -> f32 {
+        match self {
+            Density::Full => 1.0,
+            Density::Even(d) => d,
+            Density::Fade {
+                top,
+                bottom,
+                floor,
+                peak,
+            } => floor + (peak - floor) * Ramp::smooth(bottom, top, y),
+        }
+    }
+}
+
+/// Everything the hair layer needs to be lit.
+pub struct HairMass {
+    pub cover: Plane,
+    pub z: Plane,
+    /// Which way the strands run across the page
+    pub dir: Vec<(f32, f32)>,
+    /// Clump texture, 0..1: light on the clumps, dark in the gaps
+    pub tex: Plane,
+    pub albedo: Vec<Linear>,
+    pub gloss: f32,
+    /// How much the clumps ruffle the surface
+    pub bump: f32,
+}
+
+impl HairMass {
+    pub fn shade(&self, studio: &Studio, occ: &Occlusion) -> Layer {
+        let grid = self.cover.grid;
+        Layer::shade(&grid, |i, j, x, y| {
+            let k = j * grid.w + i;
+            let a = self.cover.v[k];
+            if a <= 0.0 {
+                return None;
+            }
+            let z = self.z.v[k];
+            let (dx, dy) = self.z.slope(i, j);
+            let (tx, ty) = self.tex.slope(i, j);
+            let n = Vec3::facing(dx - tx * self.bump, dy - ty * self.bump);
+            let (fx, fy) = self.dir[k];
+            let fz = -(n[0] * fx + n[1] * fy) / n[2].max(0.25);
+            let t = Vec3::normalized([fx, fy, fz]);
+            let tex = self.tex.v[k];
+            let shadow = occ.shadow(x, y, z, studio.key.dir, 0.32);
+            // Light reaches the gaps between clumps last
+            let ao = occ.ambient(x, y, z) * (0.55 + 0.45 * tex);
+            // Thin hair at an edge has no sheen to speak of
+            let gloss = self.gloss * a * a;
+            let c = studio.hair(n, t, self.albedo[k], (tex - 0.5) * 0.6, gloss, shadow, ao);
+            Some((c, a))
+        })
+    }
+}
+
+/// Lift above the crown, volume out from the sides, and where the crown's
+/// high point sits.
 struct Cap {
-    /// Lift above the crown, and volume out from the sides
     top: f32,
     side: f32,
-    /// Where the crown's high point sits, off centre
     peak_dx: f32,
-    comb: Comb,
-    /// Strand count
-    strands: usize,
 }
 
 pub struct Hair;
 
 impl Hair {
     /// Whatever hangs behind the head — painted before the neck.
-    pub fn back(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity) {
+    pub fn back(
+        grid: &Grid,
+        l: &Landmarks,
+        t: &Tones,
+        id: &Identity,
+        noise: &Noise,
+    ) -> Option<HairMass> {
         if id.hair != HairStyle::Long {
-            return;
+            return None;
         }
-        let col = t.hair_greyed(id.grey);
         let s = &l.skull;
         let cx = l.cx;
         let w = s.parietal + 4.0;
-        let d = PathBuilder::smooth_closed(
+        let outline = Outline::smooth(
             &[
                 (cx, s.crown - 8.0),
                 (cx + w * 0.7, s.crown - 3.0),
@@ -72,144 +169,419 @@ impl Hair {
             ],
             0.1,
         );
-        c.raw(r#"<g filter="url(#htx)">"#);
-        c.fill(&d, col.shade(0.75), 1.0, Blur::Crisp);
-        // Falling strands
-        for k in 0..26 {
-            let u = id.jitter_signed(k, 60);
-            let x0 = cx + u * w * 0.95;
-            let y0 = s.temple_y + id.jitter(k, 61) * 40.0;
-            let y1 = y0 + 40.0 + id.jitter(k, 62) * 40.0;
-            let d = PathBuilder::arc(
-                (x0, y0),
-                (x0 + u * 3.0, (y0 + y1) / 2.0),
-                (x0 + u * 5.0, y1),
-            );
-            let (colr, op) = if k % 3 == 0 {
-                (col.lift(0.18), 0.30)
-            } else {
-                (col.shade(0.5), 0.35)
-            };
-            c.stroke(&d, colr, 0.8 + id.jitter(k, 63) * 0.6, op, Blur::Hair);
-        }
-        c.raw("</g>");
-        // In shadow where it passes behind the jaw and neck
-        c.ellipse(
-            cx,
-            s.chin + 4.0,
-            w * 0.9,
-            22.0,
-            Rgb::BLACK,
-            0.35,
-            Blur::Broad,
-            0.0,
-        );
+        let tuft = Tuft {
+            outline,
+            hairline: None,
+            lift: 0.0,
+            side: 0.0,
+            comb: Comb::Down,
+            fuzz: 2.5,
+            density: Density::Full,
+            gloss: 0.9,
+        };
+        let floor = Plane::new(*grid, 0.0);
+        Some(Self::mass(grid, l, t, id, noise, &tuft, &floor, Some(14.0)))
     }
 
-    /// The cut, painted last so it overlaps forehead, temples and ears.
-    pub fn scalp(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, age: u8) {
-        let col = t.hair_greyed(id.grey);
-        let hi = col.lift(0.15).toward("#C9A574", 0.06);
-        let dk = col.shade(0.55);
-        let sheen = col.lift(0.42).toward("#A8B8C8", 0.18);
+    /// The cut itself, as the tufts it is made of, back to front.
+    pub fn scalp(
+        grid: &Grid,
+        l: &Landmarks,
+        relief: &Relief,
+        t: &Tones,
+        id: &Identity,
+        noise: &Noise,
+        age: u8,
+    ) -> Vec<HairMass> {
+        let s = &l.skull;
+        let sy = Self::side_y(l);
+        let cap = |top: f32, side: f32, peak_dx: f32| Cap { top, side, peak_dx };
+        // Afro-textured hair coils whatever it is cut to; only a braid or a
+        // clipper keeps its own texture
+        let coily = id.phenotype.afro_hair();
+        let tuft =
+            |c: Cap, lift_hl: f32, comb: Comb, fuzz: f32, density: Density, gloss: f32| Tuft {
+                outline: Self::cap_outline(l, id, age, &c, lift_hl),
+                hairline: Some(Self::hairline(l, id, age, lift_hl)),
+                lift: c.top,
+                side: c.side,
+                comb: if coily && !matches!(comb, Comb::Stubble | Comb::Rows) {
+                    Comb::Curl
+                } else {
+                    comb
+                },
+                fuzz,
+                density,
+                gloss: if coily { gloss.min(0.45) } else { gloss },
+            };
+        // Clipped hair on the sides, fading out toward the ear
+        let sides = |peak: f32, floor: f32| {
+            tuft(
+                cap(0.5, 0.3, 0.0),
+                0.0,
+                Comb::Stubble,
+                0.4,
+                Density::Fade {
+                    top: s.parietal_y - 8.0,
+                    bottom: sy + 2.0,
+                    floor,
+                    peak,
+                },
+                0.3,
+            )
+        };
 
-        // Hair shadow on the forehead and the sideburns come first: they are
-        // skin-side, under the cap's edge
-        if id.hair != HairStyle::Bald {
-            Self::skin_side(c, l, t, id, col, age);
-        }
-
+        let mut tufts: Vec<Tuft> = Vec::new();
         match id.hair {
-            HairStyle::Bald => Self::bald(c, l, t, id),
-            HairStyle::Buzz => Self::buzz(c, l, id, col),
-            HairStyle::Afro => Self::afro(c, l, id, col, hi, dk),
+            HairStyle::Bald => tufts.push(sides(0.28, 0.0)),
+            HairStyle::Buzz => tufts.push(tuft(
+                cap(0.8, 0.4, 0.0),
+                0.0,
+                Comb::Stubble,
+                0.5,
+                Density::Even(0.82),
+                0.35,
+            )),
             HairStyle::Fade => {
-                Self::shaved_sides(c, l, id, col, 0.72);
-                let cap = Cap {
-                    top: 5.0,
-                    side: -3.0,
-                    peak_dx: 0.0,
-                    comb: Comb::Up,
-                    strands: 80,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
+                tufts.push(sides(0.75, 0.06));
+                tufts.push(tuft(
+                    cap(5.0, -3.0, 0.0),
+                    0.0,
+                    Comb::Up,
+                    4.0,
+                    Density::Full,
+                    0.9,
+                ));
             }
             HairStyle::FauxHawk => {
-                Self::shaved_sides(c, l, id, col, 0.70);
-                Self::hawk(c, l, id, col, hi, dk, sheen);
+                tufts.push(sides(0.7, 0.05));
+                tufts.push(Self::hawk(l, id));
             }
-            HairStyle::Crop => {
-                let cap = Cap {
-                    top: 3.0,
-                    side: 1.5,
-                    peak_dx: 0.0,
-                    comb: Comb::Up,
-                    strands: 90,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::SidePart => {
-                let cap = Cap {
-                    top: 5.5,
-                    side: 2.0,
-                    peak_dx: -id.part_side * 9.0,
-                    comb: Comb::Part,
-                    strands: 100,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::Medium => {
-                let cap = Cap {
-                    top: 10.0,
-                    side: 5.0,
-                    peak_dx: -id.part_side * 3.0,
-                    comb: Comb::Down,
-                    strands: 110,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::SweptBack => {
-                let cap = Cap {
-                    top: 9.5,
-                    side: 2.0,
-                    peak_dx: 4.0,
-                    comb: Comb::Back,
-                    strands: 100,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::Curly => {
-                let cap = Cap {
-                    top: 8.5,
-                    side: 4.5,
-                    peak_dx: 0.0,
-                    comb: Comb::Curl,
-                    strands: 130,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::Long => {
-                let cap = Cap {
-                    top: 6.0,
-                    side: 5.0,
-                    peak_dx: -id.part_side * 6.0,
-                    comb: Comb::Down,
-                    strands: 120,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-            }
-            HairStyle::Cornrows => {
-                let cap = Cap {
-                    top: 2.0,
-                    side: 1.0,
-                    peak_dx: 0.0,
-                    comb: Comb::Rows,
-                    strands: 0,
-                };
-                Self::cap(c, l, t, id, &cap, col, hi, dk, sheen);
-                Self::braids(c, l, id, hi, dk);
-            }
+            HairStyle::Crop => tufts.push(tuft(
+                cap(3.0, 1.5, 0.0),
+                0.0,
+                Comb::Up,
+                1.4,
+                Density::Full,
+                0.85,
+            )),
+            HairStyle::SidePart => tufts.push(tuft(
+                cap(5.5, 2.0, -id.part_side * 9.0),
+                0.0,
+                Comb::Part,
+                1.2,
+                Density::Full,
+                1.0,
+            )),
+            HairStyle::Medium => tufts.push(tuft(
+                cap(10.0, 5.0, -id.part_side * 3.0),
+                0.0,
+                Comb::Down,
+                2.2,
+                Density::Full,
+                0.95,
+            )),
+            HairStyle::SweptBack => tufts.push(tuft(
+                cap(9.5, 2.0, 4.0),
+                0.0,
+                Comb::Back,
+                1.4,
+                Density::Full,
+                1.1,
+            )),
+            HairStyle::Curly => tufts.push(tuft(
+                cap(8.5, 4.5, 0.0),
+                0.0,
+                Comb::Curl,
+                3.0,
+                Density::Full,
+                0.45,
+            )),
+            HairStyle::Long => tufts.push(tuft(
+                cap(6.0, 5.0, -id.part_side * 6.0),
+                0.0,
+                Comb::Down,
+                2.0,
+                Density::Full,
+                1.0,
+            )),
+            HairStyle::Afro => tufts.push(tuft(
+                cap(30.0, 14.0, 0.0),
+                -6.0,
+                Comb::Curl,
+                5.0,
+                Density::Full,
+                0.25,
+            )),
+            HairStyle::Cornrows => tufts.push(tuft(
+                cap(2.0, 1.0, 0.0),
+                0.0,
+                Comb::Rows,
+                0.6,
+                Density::Full,
+                0.7,
+            )),
         }
+        if !matches!(id.hair, HairStyle::Bald) {
+            tufts.extend(Self::sideburns(l, id));
+        }
+        tufts
+            .iter()
+            .map(|tuft| {
+                // A mass as big as an afro is a dome of its own; everything
+                // else is a shell laid over the scalp
+                let dome = (tuft.lift > 14.0).then_some(Relief::DEPTH + tuft.lift * 0.9);
+                Self::mass(grid, l, t, id, noise, tuft, &relief.skull, dome)
+            })
+            .collect()
+    }
+
+    /// Lays one tuft over the skull: coverage, depth, strand direction and
+    /// texture, pigment.
+    #[allow(clippy::too_many_arguments)]
+    fn mass(
+        grid: &Grid,
+        l: &Landmarks,
+        t: &Tones,
+        id: &Identity,
+        noise: &Noise,
+        tuft: &Tuft,
+        skull: &Plane,
+        dome: Option<f32>,
+    ) -> HairMass {
+        let cx = l.cx;
+        let s = &l.skull;
+        let dist = tuft.outline.distance(grid);
+        let short = tuft.comb == Comb::Stubble;
+        let seed = (id.seed % 997) as f32 * 0.61;
+        let whorl = (cx - id.part_side * 4.0, s.crown + 14.0);
+        let part_x = cx + id.part_side * 13.0;
+        let hl = l.hairline;
+        // The strand field as a coordinate that is constant along a strand:
+        // its contours are the strands, its gradient points across them
+        let stream = |x: f32, y: f32| -> (f32, f32) {
+            match tuft.comb {
+                Comb::Up | Comb::Rows => ((x - cx) * (0.012 * (y - hl)).exp(), y),
+                Comb::Back => ((x - cx) * (0.024 * (y - hl)).exp(), y),
+                Comb::Part => {
+                    let away = if (x - part_x) * id.part_side > 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    (y - 0.010 * (x - part_x).powi(2) + away * 40.0, x)
+                }
+                Comb::Down => {
+                    let (dx, dy) = (x - whorl.0, y - whorl.1);
+                    (dx.atan2(dy + 6.0) * 30.0, (dx * dx + dy * dy).sqrt())
+                }
+                Comb::Curl | Comb::Stubble => (x, y),
+            }
+        };
+        // Clumps wander: the strand coordinate is warped by a slow field so
+        // no two parallel strands stay parallel for long
+        let warp = |x: f32, y: f32| 2.8 * noise.fbm(x * 0.045 - seed, y * 0.045, 2);
+        let texture = |x: f32, y: f32| -> f32 {
+            match tuft.comb {
+                Comb::Curl => {
+                    let coil = noise.fbm(x * 0.75 + seed, y * 0.75, 3);
+                    let fine = noise.at(x * 1.9 - seed, y * 1.9);
+                    0.5 + 0.38 * coil + 0.2 * fine
+                }
+                Comb::Stubble => 0.5 + 0.5 * noise.at(x * 2.1 + seed, y * 2.1),
+                Comb::Rows => {
+                    let (q, s) = stream(x, y);
+                    let row = (q / 7.0 * std::f32::consts::PI).sin().abs();
+                    let plait = 0.5 + 0.5 * (s * 1.6 + (q / 7.0).floor() * 1.7 + q * 0.4).sin();
+                    Ramp::smooth(0.25, 0.75, row) * (0.6 + 0.4 * plait)
+                }
+                // Cropped hair: short tufts standing up, not long strands
+                Comb::Up => {
+                    let (q, s) = stream(x, y);
+                    let q = q + warp(x, y);
+                    let tuft = noise.at(q * 0.6 + seed, s * 0.22);
+                    let fine = noise.at(q * 1.1 - seed, s * 0.4);
+                    0.5 + 0.26 * tuft + 0.12 * fine
+                }
+                _ => {
+                    let (q, s) = stream(x, y);
+                    let q = q + warp(x, y);
+                    let clump = noise.at(q * 0.45 + seed, s * 0.04);
+                    let strand = noise.at(q * 1.0 - seed, s * 0.09);
+                    0.5 + 0.3 * clump + 0.2 * strand
+                }
+            }
+        };
+
+        let tex = Plane::from_fn(*grid, |x, y| {
+            if (y - s.crown).abs() > 200.0 {
+                0.0
+            } else {
+                texture(x, y)
+            }
+        });
+        let fronts: Vec<f32> = match &tuft.hairline {
+            Some(line) => grid.map(|i, j, x, y| {
+                let k = j * grid.w + i;
+                if dist.v[k] < -3.0 {
+                    50.0
+                } else {
+                    line.foot(x, y).d
+                }
+            }),
+            None => vec![50.0; grid.len()],
+        };
+
+        let cover = dist.map(|k, d| {
+            if d < -4.0 {
+                return 0.0;
+            }
+            let y = grid.y(k / grid.w);
+            let tex = tex.v[k];
+            let edge = Ramp::smooth(-0.7, 1.1 + tuft.fuzz * 0.5, d + (tex - 0.5) * tuft.fuzz);
+            // The front edge thins over a few units, broken up by single
+            // strands running out onto the skin
+            let front = Ramp::smooth(-0.8, 3.2, fronts[k] + (tex - 0.45) * 3.0);
+            // A short cut thins over the temples and ears, where the scalp
+            // shows through
+            let temples = if matches!(tuft.comb, Comb::Up | Comb::Part | Comb::Back) {
+                1.0 - 0.4 * Ramp::smooth(s.temple_y - 4.0, Self::side_y(l), y)
+            } else {
+                1.0
+            };
+            let density = tuft.density.at(y) * temples;
+            let grain = if short || tuft.comb == Comb::Rows {
+                Ramp::smooth(0.25, 0.7, tex)
+            } else {
+                1.0
+            };
+            edge * front * density * grain
+        });
+        let z = if short {
+            skull.map(|k, s| if cover.v[k] > 0.0 { s + 0.35 } else { 0.0 })
+        } else if let Some(depth) = dome {
+            let dome = Volume::raise(
+                grid,
+                &tuft.outline,
+                depth,
+                (38.0 + tuft.lift * 0.6, 1.0),
+                |_| 2.6,
+            );
+            dome.map(|k, d| {
+                if cover.v[k] <= 0.0 {
+                    return 0.0;
+                }
+                let bare = skull.v[k] + 0.35;
+                bare + (d.max(bare) - bare) * Ramp::smooth(0.0, 10.0, fronts[k])
+            })
+        } else {
+            // Thick at the crown, thinner over the ears, thinnest where it
+            // grows out of the forehead — unless it is swept up off it
+            let sy = Self::side_y(l);
+            let thick = Plane::from_pixels(*grid, |i, j| {
+                let k = j * grid.w + i;
+                if skull.v[k] <= 0.5 || dist.v[k] < -0.5 {
+                    return 0.0;
+                }
+                let up = Ramp::smooth(sy + 4.0, s.crown + 12.0, grid.y(j));
+                let t = (tuft.side.max(0.0) + 1.2) * (1.0 - up) + tuft.lift.max(0.8) * up;
+                let front = if tuft.comb == Comb::Back {
+                    0.6 + 0.4 * Ramp::smooth(0.0, 6.0, fronts[k])
+                } else {
+                    0.3 + 0.7 * Ramp::smooth(0.0, 9.0, fronts[k])
+                };
+                // Hair thins out toward the edge of its own cut, so a top
+                // left long runs down into clipped sides rather than
+                // stopping on them
+                t * front * Ramp::smooth(-0.5, 5.0, dist.v[k])
+            });
+            let reach = tuft.lift.max(tuft.side + 1.2) + 0.5;
+            Self::shell(grid, skull, &thick, reach).map(|k, z| {
+                if cover.v[k] > 0.0 {
+                    z.max(skull.v[k] + 0.35)
+                } else {
+                    0.0
+                }
+            })
+        };
+        let dir = grid.map(|i, j, x, y| {
+            let k = j * grid.w + i;
+            if cover.v[k] <= 0.0 {
+                return (0.0, 1.0);
+            }
+            if matches!(tuft.comb, Comb::Curl | Comb::Stubble) {
+                let a = noise.at(x * 0.5 - seed, y * 0.5) * std::f32::consts::TAU;
+                return (a.cos(), a.sin());
+            }
+            let e = 0.3;
+            let gx = stream(x + e, y).0 - stream(x - e, y).0;
+            let gy = stream(x, y + e).0 - stream(x, y - e).0;
+            let len = (gx * gx + gy * gy).sqrt().max(1e-6);
+            let (fx, fy) = (-gy / len, gx / len);
+            let twist = 0.3 * noise.fbm(x * 0.09 + seed, y * 0.09, 2);
+            let (sn, cs) = twist.sin_cos();
+            (fx * cs - fy * sn, fx * sn + fy * cs)
+        });
+        let base = t.hair_greyed(id.grey);
+        let albedo = grid.map(|i, j, x, y| {
+            let k = j * grid.w + i;
+            if cover.v[k] <= 0.0 {
+                return Linear::BLACK;
+            }
+            let tex = tex.v[k];
+            // Grey comes in as whole strands, first at the temples
+            let temples = Ramp::smooth(22.0, 45.0, (x - cx).abs()) * 0.6 + 0.4;
+            let white = Ramp::smooth(0.55, 0.8, 0.5 + 0.5 * noise.at(x * 1.3 + 50.0, y * 0.4))
+                * (id.grey * 1.6 * temples).min(1.0);
+            // The undersides of clumps are darker, their crowns lighter
+            base.mix(t.grey_hair, white) * (0.62 + 0.72 * tex)
+        });
+        let bump = match tuft.comb {
+            Comb::Curl => 2.2,
+            Comb::Rows => 1.4,
+            Comb::Stubble => 0.3,
+            Comb::Up => 0.5,
+            _ => 0.9,
+        };
+        HairMass {
+            cover,
+            z,
+            dir,
+            tex,
+            albedo,
+            gloss: tuft.gloss,
+            bump,
+        }
+    }
+
+    /// The outer surface of hair of the given thickness over the scalp:
+    /// every scalp point pushed out by the hair growing from it in every
+    /// direction, so the shell follows the skull's curvature and rolls over
+    /// its silhouette the way hair does instead of standing on it as a lid.
+    fn shell(grid: &Grid, skull: &Plane, thick: &Plane, reach: f32) -> Plane {
+        let r = (reach * grid.scale).ceil() as isize;
+        let px = grid.px();
+        let disc: Vec<(isize, isize, f32)> = (-r..=r)
+            .flat_map(|dj| (-r..=r).map(move |di| (di, dj)))
+            .map(|(di, dj)| (di, dj, ((di * di + dj * dj) as f32).sqrt() * px))
+            .filter(|&(_, _, d)| d <= reach)
+            .collect();
+        let (w, h) = (grid.w as isize, grid.h as isize);
+        Plane::from_pixels(*grid, |i, j| {
+            let mut best = 0.0f32;
+            for &(di, dj, d) in &disc {
+                let (si, sj) = (i as isize + di, j as isize + dj);
+                if si < 0 || sj < 0 || si >= w || sj >= h {
+                    continue;
+                }
+                let k = (sj * w + si) as usize;
+                let t = thick.v[k];
+                if t > d {
+                    best = best.max(skull.v[k] + (t * t - d * d).sqrt());
+                }
+            }
+            best
+        })
     }
 
     /// Where the sides of the cap stop: the top of the ear.
@@ -217,7 +589,7 @@ impl Hair {
         l.ear.top + 7.0
     }
 
-    /// The front edge, right to left, as points the cap path runs through.
+    /// The front edge, right to left, as the points the cap runs through.
     fn hairline_pts(l: &Landmarks, id: &Identity, age: u8, lift: f32) -> Vec<(f32, f32)> {
         let cx = l.cx;
         let hl = l.hairline - lift;
@@ -256,13 +628,18 @@ impl Hair {
             .collect();
         pts.extend(left);
         // No hairline is a clean curve: every point wanders a little
+        let last = pts.len() - 1;
         for (i, p) in pts.iter_mut().enumerate() {
-            if i > 1 && i + 2 < 2 * n - 1 {
+            if i > 1 && i + 2 <= last {
                 p.1 += id.jitter_signed(i, 85) * 1.4;
                 p.0 += id.jitter_signed(i, 86) * 0.8;
             }
         }
         pts
+    }
+
+    fn hairline(l: &Landmarks, id: &Identity, age: u8, lift: f32) -> Polyline {
+        Path::through(&Self::hairline_pts(l, id, age, lift), 0.2).polyline()
     }
 
     /// The cap's outer edge from the left ear-top over the crown to the
@@ -292,523 +669,80 @@ impl Hair {
         pts
     }
 
-    fn cap_path(l: &Landmarks, id: &Identity, age: u8, cap: &Cap, lift: f32) -> String {
-        let outer = PathBuilder::smooth_open(&Self::outer_pts(l, cap), 0.1);
-        let inner = PathBuilder::smooth_open(&Self::hairline_pts(l, id, age, lift), 0.2);
-        // The inner run starts with its own M; joined with an L so the two
-        // meet in a corner at the sideburn
-        let inner = inner.replacen('M', "L", 1);
-        format!("{outer} {inner}Z")
+    fn cap_outline(l: &Landmarks, id: &Identity, age: u8, cap: &Cap, lift: f32) -> Outline {
+        let mut pts = Path::through(&Self::outer_pts(l, cap), 0.1).points();
+        pts.extend(Path::through(&Self::hairline_pts(l, id, age, lift), 0.2).points());
+        Outline::polygon(pts)
     }
 
-    /// The shadow the cap throws on the forehead, and the sideburns. Both
-    /// sit on skin, under the hair's edge.
-    fn skin_side(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, col: Rgb, age: u8) {
-        let cx = l.cx;
+    /// Sideburns: cropped hair from the cap down past the top of the ear.
+    fn sideburns(l: &Landmarks, id: &Identity) -> Vec<Tuft> {
         let sy = Self::side_y(l);
-        c.clip("hc");
-        let pts = Self::hairline_pts(l, id, age, 0.0);
-        let under: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (*x, y + 3.0)).collect();
-        let d = PathBuilder::smooth_open(&under, 0.2);
-        let op = if id.hair == HairStyle::Buzz {
-            0.10
-        } else {
-            0.22
-        };
-        c.stroke(&d, t.skin_dk2, 5.0, op, Blur::Broad);
-        // Sideburns: cropped hair running from the cap down past the ear
-        let burn_end = match id.hair {
+        let end = match id.hair {
             HairStyle::Fade | HairStyle::FauxHawk => l.ear.top + 8.0,
             _ => l.ear.top + 16.0 + l.maturity * 4.0,
         };
-        for side in [-1.0f32, 1.0] {
-            let d = PathBuilder::smooth_closed(
-                &[
-                    (l.edge_x(sy - 6.0, side) + side * 2.0, sy - 6.0),
-                    (l.edge_x(sy - 6.0, side) - side * 2.4, sy - 4.0),
-                    (l.edge_x(burn_end, side) - side * 1.4, burn_end),
-                    (l.edge_x(burn_end, side) + side * 1.0, burn_end + 2.0),
-                ],
-                0.3,
-            );
-            c.fill(&d, col, 0.38, Blur::Soft);
-            c.raw(&format!(
-                r#"<path d="{d}" fill="{col}" filter="url(#stb)" opacity="0.42"/>"#
-            ));
-        }
-        let _ = cx;
-        c.close("g");
+        [-1.0f32, 1.0]
+            .map(|side| Tuft {
+                outline: Outline::smooth(
+                    &[
+                        (l.edge_x(sy - 8.0, side) + side * 2.0, sy - 8.0),
+                        (l.edge_x(sy - 8.0, side) - side * 2.6, sy - 6.0),
+                        (l.edge_x(end, side) - side * 1.6, end),
+                        (l.edge_x(end, side) + side * 1.0, end + 2.0),
+                    ],
+                    0.3,
+                ),
+                hairline: None,
+                lift: 0.0,
+                side: 0.0,
+                comb: Comb::Stubble,
+                fuzz: 1.2,
+                density: Density::Even(0.75),
+                gloss: 0.4,
+            })
+            .into_iter()
+            .collect()
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn cap(
-        c: &mut Canvas,
-        l: &Landmarks,
-        t: &Tones,
-        id: &Identity,
-        cap: &Cap,
-        col: Rgb,
-        hi: Rgb,
-        dk: Rgb,
-        sheen: Rgb,
-    ) {
-        let cx = l.cx;
-        let s = &l.skull;
-        let age_lift = 0.0;
-        let d = Self::cap_path(l, id, 0, cap, age_lift);
-        c.raw(&format!(
-            r#"<clipPath id="hcap"><path d="{d}"/></clipPath>"#
-        ));
-        c.raw(r#"<g filter="url(#htx)">"#);
-        c.fill_ref(&d, "hg", 1.0, Blur::Hair);
-        c.clip("hcap");
-        c.ellipse(
-            cx - 6.0,
-            s.crown - cap.top * 0.3 + 4.0,
-            s.parietal * 0.7,
-            12.0,
-            hi,
-            0.30,
-            Blur::Vast,
-            -6.0,
-        );
-        // Roots: dark along the hairline and under the sides, where the
-        // hair grows out of shadow
-        let pts = Self::hairline_pts(l, id, 0, age_lift);
-        let root = PathBuilder::smooth_open(&pts, 0.2);
-        c.stroke(&root, dk, 5.0, 0.45, Blur::Soft);
-        let fringe: Vec<(f32, f32)> = pts.iter().map(|(x, y)| (*x, y - 0.8)).collect();
-        c.stroke(
-            &PathBuilder::smooth_open(&fringe, 0.2),
-            t.skin,
-            3.5,
-            0.34,
-            Blur::Soft,
-        );
-        for side in [-1.0f32, 1.0] {
-            c.ellipse(
-                l.edge_x(s.temple_y, side) + side * 2.0,
-                s.temple_y - 4.0,
-                6.0,
-                16.0,
-                dk,
-                if side > 0.0 { 0.5 } else { 0.3 },
-                Blur::Broad,
-                0.0,
-            );
-        }
-        // Sheen: the key light crossing the crown, high and to the left
-        c.ellipse(
-            cx - 10.0 + cap.peak_dx * 0.5,
-            s.crown + 9.0 - cap.top * 0.5,
-            24.0,
-            8.0,
-            sheen,
-            0.26,
-            Blur::Broad,
-            -10.0,
-        );
-        c.ellipse(
-            cx - 12.0 + cap.peak_dx * 0.5,
-            s.crown + 8.0 - cap.top * 0.5,
-            12.0,
-            4.0,
-            sheen,
-            0.22,
-            Blur::Soft,
-            -10.0,
-        );
-        // The far side of the crown turns away
-        c.ellipse(
-            cx + s.parietal - 4.0,
-            s.parietal_y - 6.0,
-            12.0,
-            30.0,
-            dk,
-            0.40,
-            Blur::Vast,
-            0.0,
-        );
-
-        Self::strands(c, l, id, cap, col, hi, dk);
-        if cap.comb as u8 == Comb::Part as u8 {
-            // The part line: a pale line of scalp with a dark edge each side
-            let px = cx + id.part_side * 13.0;
-            let part = PathBuilder::smooth_open(
-                &[
-                    (px, l.hairline + 1.0),
-                    (px + id.part_side * 2.0, s.crown + 14.0),
-                    (px + id.part_side * 6.0, s.crown + 4.0),
-                ],
-                0.2,
-            );
-            c.stroke(&part, dk, 2.4, 0.55, Blur::Fine);
-            c.stroke(&part, t.skin_dk, 0.8, 0.55, Blur::Hair);
-        }
-        c.close("g");
-        c.raw("</g>");
-        Self::wisps(c, l, id, &pts, dk, col);
-        Self::grey_temples(c, l, id, t);
-    }
-
-    /// Strands over the cap, run the way the style combs.
-    fn strands(
-        c: &mut Canvas,
-        l: &Landmarks,
-        id: &Identity,
-        cap: &Cap,
-        col: Rgb,
-        hi: Rgb,
-        dk: Rgb,
-    ) {
-        let cx = l.cx;
-        let s = &l.skull;
-        let sy = Self::side_y(l);
-        let n = cap.strands;
-        for k in 0..n {
-            let jx = id.jitter_signed(k, 70);
-            let jy = id.jitter(k, 71);
-            // Seed points spread over the cap, denser toward the front
-            let x0 = cx + jx * (s.parietal + cap.side);
-            let y0 = s.crown - cap.top + jy * (sy - s.crown + cap.top);
-            let len = 6.0 + id.jitter(k, 72) * 8.0;
-            let (dx, dy, bend) = match cap.comb {
-                Comb::Up => {
-                    let a = -1.35 + jx * 0.35;
-                    (a.cos() * len * 0.7, a.sin() * len * 0.7, jx * 1.5)
-                }
-                Comb::Part => {
-                    let dir = if x0 < cx + id.part_side * 13.0 {
-                        -1.0
-                    } else {
-                        1.0
-                    };
-                    let dir = if id.part_side > 0.0 { -dir } else { dir };
-                    (dir * len, len * 0.25, -dir * 1.5)
-                }
-                Comb::Back => (jx * len * 0.3, -len * 0.9, jx * 2.0),
-                Comb::Curl => {
-                    let a = id.jitter(k, 73) * std::f32::consts::TAU;
-                    (a.cos() * len * 0.45, a.sin() * len * 0.45, 3.0)
-                }
-                Comb::Down => {
-                    let side = if jx < 0.0 { -1.0 } else { 1.0 };
-                    if jx.abs() > 0.5 {
-                        (side * len * 0.15, len * 0.9, side * 1.5)
-                    } else {
-                        (side * len * 0.6, -len * 0.4, side * 1.0)
-                    }
-                }
-                Comb::Rows => (0.0, 0.0, 0.0),
-            };
-            if dx == 0.0 && dy == 0.0 {
-                continue;
-            }
-            let d = format!(
-                "M{x0:.1} {y0:.1} q{:.1} {:.1} {dx:.1} {dy:.1}",
-                dx * 0.5 - dy * 0.15 * bend,
-                dy * 0.5 + dx * 0.15 * bend
-            );
-            let roll = id.jitter(k, 74);
-            let (colr, op) = if id.grey > 0.0 && roll < id.grey * 0.6 {
-                (Rgb::hex("#C9C5BE"), 0.45)
-            } else if roll < 0.35 {
-                (hi, 0.18 + id.jitter(k, 75) * 0.22)
-            } else if roll < 0.8 {
-                (dk, 0.30 + id.jitter(k, 75) * 0.30)
-            } else {
-                (col.lift(0.08), 0.30)
-            };
-            let width = 0.6 + id.jitter(k, 76) * 0.6;
-            c.stroke_butt(&d, colr, width, op, Blur::Hair);
-        }
-    }
-
-    /// Fine hairs crossing the hairline onto the skin.
-    fn wisps(
-        c: &mut Canvas,
-        l: &Landmarks,
-        id: &Identity,
-        hairline: &[(f32, f32)],
-        dk: Rgb,
-        col: Rgb,
-    ) {
-        let n = hairline.len();
-        c.clip("hc");
-        for k in 0..34 {
-            let u = id.jitter(k, 80) * (n as f32 - 1.001);
-            let i = u as usize;
-            let f = u - i as f32;
-            let (x0, y0) = hairline[i];
-            let (x1, y1) = hairline[(i + 1).min(n - 1)];
-            let x = x0 + (x1 - x0) * f;
-            let y = y0 + (y1 - y0) * f - 0.5;
-            let len = 2.5 + id.jitter(k, 81) * 4.5;
-            let lean = (x - l.cx) / 60.0;
-            let d = format!(
-                "M{x:.1} {y:.1} q{:.1} {:.1} {:.1} {len:.1}",
-                lean * 1.5,
-                len * 0.5,
-                lean * 3.0
-            );
-            let colr = if k % 3 == 0 { col } else { dk };
-            c.stroke(
-                &d,
-                colr,
-                0.55 + id.jitter(k, 82) * 0.4,
-                0.45 + id.jitter(k, 83) * 0.35,
-                Blur::Hair,
-            );
-        }
-        c.close("g");
-    }
-
-    /// Grey comes in at the temples first.
-    fn grey_temples(c: &mut Canvas, l: &Landmarks, id: &Identity, t: &Tones) {
-        if id.grey < 0.05 {
-            return;
-        }
-        let s = &l.skull;
-        for side in [-1.0f32, 1.0] {
-            c.raw(&format!(
-                r#"<ellipse cx="{:.1}" cy="{:.1}" rx="9" ry="14" fill="{}" filter="url(#stb)" opacity="{:.2}"/>"#,
-                l.edge_x(s.temple_y - 4.0, side) - side * 3.0,
-                s.temple_y - 6.0,
-                t.grey_hair,
-                (id.grey * 0.9).min(0.6)
-            ));
-        }
-    }
-
-    fn bald(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity) {
-        let cx = l.cx;
-        let s = &l.skull;
-        c.clip("hc");
-        // Scalp sheen, and the ghost of where the hair was around the back
-        c.ellipse(
-            cx - 6.0,
-            s.crown + 16.0,
-            22.0,
-            12.0,
-            t.skin_spec,
-            0.22,
-            Blur::Broad,
-            -8.0,
-        );
-        for side in [-1.0f32, 1.0] {
-            c.raw(&format!(
-                r#"<ellipse cx="{:.1}" cy="{:.1}" rx="8" ry="18" fill="{}" filter="url(#stb)" opacity="0.35"/>"#,
-                l.edge_x(s.temple_y, side),
-                s.temple_y - 2.0,
-                t.hair_greyed(id.grey)
-            ));
-        }
-        c.close("g");
-    }
-
-    fn buzz(c: &mut Canvas, l: &Landmarks, id: &Identity, col: Rgb) {
-        let cap = Cap {
-            top: 0.8,
-            side: 0.4,
-            peak_dx: 0.0,
-            comb: Comb::Up,
-            strands: 0,
-        };
-        let d = Self::cap_path(l, id, 0, &cap, 0.0);
-        c.clip("hc");
-        c.fill(&d, col, 0.45, Blur::Soft);
-        c.raw(&format!(
-            r#"<path d="{d}" fill="{col}" filter="url(#stb)" opacity="0.70"/>"#
-        ));
-        // The scalp still shows through, lighter where the light hits
-        c.ellipse(
-            l.cx - 8.0,
-            l.skull.crown + 14.0,
-            20.0,
-            10.0,
-            col.lift(0.35),
-            0.18,
-            Blur::Broad,
-            -8.0,
-        );
-        c.close("g");
-    }
-
-    /// Shaved sides for a fade or a hawk: speckle on the scalp, clipped to
-    /// the head, densest at the top and fading out toward the ear.
-    fn shaved_sides(c: &mut Canvas, l: &Landmarks, id: &Identity, col: Rgb, op: f32) {
-        let s = &l.skull;
-        let sy = Self::side_y(l);
-        let cap = Cap {
-            top: 0.5,
-            side: 0.3,
-            peak_dx: 0.0,
-            comb: Comb::Up,
-            strands: 0,
-        };
-        let d = Self::cap_path(l, id, 0, &cap, 0.0);
-        c.clip("hc");
-        c.raw(&format!(
-            r#"<path d="{d}" fill="{col}" filter="url(#stb)" opacity="{op:.2}"/>"#
-        ));
-        // Fade: lighter toward the ear
-        for side in [-1.0f32, 1.0] {
-            c.ellipse(
-                l.edge_x(sy - 4.0, side),
-                sy - 2.0,
-                12.0,
-                9.0,
-                col.lift(0.5).mix(Rgb::WHITE, 0.2),
-                0.0,
-                Blur::Broad,
-                0.0,
-            );
-        }
-        let _ = s;
-        c.close("g");
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn hawk(c: &mut Canvas, l: &Landmarks, id: &Identity, col: Rgb, hi: Rgb, dk: Rgb, sheen: Rgb) {
+    /// The strip of a faux-hawk down the middle of the head.
+    fn hawk(l: &Landmarks, id: &Identity) -> Tuft {
         let cx = l.cx;
         let s = &l.skull;
         let half = 23.0;
         let top = s.crown - 8.0;
         let hl = l.hairline + 1.0;
-        let d = PathBuilder::smooth_closed(
-            &[
-                (cx - half, hl + 2.0),
-                (cx - half - 1.0, s.crown + 12.0),
-                (cx - half * 0.7, top + 2.0),
-                (cx, top),
-                (cx + half * 0.7, top + 2.0),
-                (cx + half + 1.0, s.crown + 12.0),
-                (cx + half, hl + 2.0),
-                (cx, hl - 1.0),
-            ],
-            0.15,
-        );
-        c.raw(&format!(
-            r#"<clipPath id="hcap"><path d="{d}"/></clipPath>"#
-        ));
-        c.raw(r#"<g filter="url(#htx)">"#);
-        c.fill_ref(&d, "hg", 1.0, Blur::Crisp);
-        c.clip("hcap");
-        c.stroke(
-            &PathBuilder::line((cx - half, hl + 2.0), (cx + half, hl + 2.0)),
-            dk,
-            5.0,
-            0.4,
-            Blur::Soft,
-        );
-        c.ellipse(
-            cx - 6.0,
-            s.crown - 2.0,
-            14.0,
-            5.0,
-            sheen,
-            0.28,
-            Blur::Soft,
-            -10.0,
-        );
-        let cap = Cap {
-            top: 10.0,
-            side: 0.0,
-            peak_dx: 0.0,
-            comb: Comb::Up,
-            strands: 70,
-        };
-        Self::strands(c, l, id, &cap, col, hi, dk);
-        c.close("g");
-        c.raw("</g>");
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn afro(c: &mut Canvas, l: &Landmarks, id: &Identity, col: Rgb, hi: Rgb, dk: Rgb) {
-        let cx = l.cx;
-        let s = &l.skull;
-        let cap = Cap {
-            top: 30.0,
-            side: 14.0,
-            peak_dx: 0.0,
-            comb: Comb::Curl,
-            strands: 0,
-        };
-        let d = Self::cap_path(l, id, 0, &cap, -6.0);
-        c.raw(r#"<g filter="url(#hfx)">"#);
-        c.fill(&d, col, 1.0, Blur::Crisp);
-        c.raw(&format!(
-            r#"<path d="{d}" fill="{dk}" filter="url(#stb)" opacity="0.45"/>"#
-        ));
-        c.raw(&format!(
-            r#"<path d="{d}" fill="{hi}" filter="url(#stb)" opacity="0.18"/>"#
-        ));
-        c.raw("</g>");
-        // Lit on the upper-left, dark toward the right and the roots
-        c.raw(&format!(
-            r#"<clipPath id="hcap"><path d="{d}"/></clipPath>"#
-        ));
-        c.clip("hcap");
-        c.ellipse(
-            cx - 18.0,
-            s.crown - 12.0,
-            26.0,
-            16.0,
-            hi,
-            0.22,
-            Blur::Vast,
-            -15.0,
-        );
-        c.ellipse(
-            cx + s.parietal + 4.0,
-            s.temple_y - 10.0,
-            20.0,
-            40.0,
-            dk,
-            0.45,
-            Blur::Vast,
-            0.0,
-        );
-        c.ellipse(
-            cx,
-            l.hairline + 2.0,
-            s.temple,
-            8.0,
-            dk,
-            0.45,
-            Blur::Broad,
-            0.0,
-        );
-        c.close("g");
-        let _ = id;
-    }
-
-    fn braids(c: &mut Canvas, l: &Landmarks, id: &Identity, hi: Rgb, dk: Rgb) {
-        let cx = l.cx;
-        let s = &l.skull;
-        c.clip("hcap");
-        for k in 0..9 {
-            let u = (k as f32 - 4.0) / 4.0;
-            let x0 = cx + u * (s.temple - 6.0);
-            let x1 = cx + u * s.parietal * 0.5;
-            let d = PathBuilder::smooth_open(
+        Tuft {
+            outline: Outline::smooth(
                 &[
-                    (x0, l.hairline + 1.0),
-                    (x0 * 0.5 + x1 * 0.5, s.crown + 12.0),
-                    (x1, s.crown + 1.0),
+                    (cx - half, hl + 2.0),
+                    (cx - half - 1.0, s.crown + 12.0),
+                    (cx - half * 0.7, top + 2.0),
+                    (cx, top),
+                    (cx + half * 0.7, top + 2.0),
+                    (cx + half + 1.0, s.crown + 12.0),
+                    (cx + half, hl + 2.0),
+                    (cx, hl - 1.0),
                 ],
-                0.2,
-            );
-            c.stroke(&d, dk, 1.6, 0.55, Blur::Hair);
-            c.stroke(&d, hi, 0.6, 0.35, Blur::Hair);
-            // The braid's knots
-            for j in 0..6 {
-                let f = j as f32 / 6.0;
-                let x = x0 + (x1 - x0) * f + id.jitter_signed(j, 90 + k) * 0.3;
-                let y = l.hairline + 1.0 + (s.crown + 1.0 - l.hairline - 1.0) * f;
-                c.ellipse(x, y, 1.1, 0.7, hi, 0.30, Blur::Hair, u * 30.0);
-            }
+                0.15,
+            ),
+            hairline: Some(
+                Path::through(
+                    &[(cx + half, hl + 2.0), (cx, hl - 1.0), (cx - half, hl + 2.0)],
+                    0.2,
+                )
+                .polyline(),
+            ),
+            lift: 10.0,
+            side: 3.0,
+            comb: if id.phenotype.afro_hair() {
+                Comb::Curl
+            } else {
+                Comb::Up
+            },
+            fuzz: 4.0,
+            density: Density::Full,
+            gloss: 0.9,
         }
-        c.close("g");
     }
 }

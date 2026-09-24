@@ -9,7 +9,7 @@
 //! across, the mouth as wide as the pupils are apart — and then departs from
 //! them by the player's own [`Morph`].
 
-use super::canvas::PathBuilder;
+use super::canvas::{Outline, Path, Polyline};
 use super::identity::{Identity, Morph, Structure};
 
 /// The head's half-widths at named heights, right side, in page units.
@@ -115,15 +115,20 @@ impl Skull {
         s.chin_half += m.chin_w * 2.0 + m.round * 0.5 + heft * 0.5 + grown * 0.7;
         s.crown -= m.length * 1.2;
         s.chin += m.length * 0.9;
+        // A real jaw is about seven tenths of the cheekbones across
+        s.jaw *= 0.93;
 
         // Keep the silhouette an actual head: it widens from the temples to
         // the cheekbones and narrows from there to the chin, and the eye
         // line, chin and face width stay where the viewer expects them
-        s.parietal = s.parietal.clamp(44.0, 58.0);
-        s.temple = s.temple.min(s.parietal + 1.0).max(44.5);
-        s.zygo = s
-            .zygo
-            .clamp((s.temple - 2.5).max(44.5), (s.parietal + 2.0).min(59.0));
+        // A little narrower through the vault and cheekbones than the old
+        // drawn heads, so the eyes sit in a face of human proportions
+        s.parietal = (s.parietal * 0.95).clamp(43.0, 56.0);
+        s.zygo = (s.zygo * 0.96).clamp(44.0, (s.parietal + 2.0).min(57.0));
+        // The temples run straight from the vault down to the cheekbones:
+        // their hollow is a shadow on the face, never a waist in its outline
+        let t = (s.temple_y - s.parietal_y) / (s.zygo_y - s.parietal_y);
+        s.temple = s.parietal + (s.zygo - s.parietal) * t - 0.3;
         s.sub = s.sub.min(s.zygo - 1.0).max(34.0);
         s.jaw = s.jaw.clamp(28.0, s.sub - 2.0);
         s.chin_half = s.chin_half.clamp(11.0, s.jaw - 8.0);
@@ -228,6 +233,129 @@ pub struct Ear {
     pub out: f32,
 }
 
+/// One eye as the lids frame it.
+pub struct Eye {
+    /// −1 for the eye on the left of the page, +1 for the right
+    pub side: f32,
+    pub cx: f32,
+    pub cy: f32,
+    /// The almond between the lids, where the eyeball shows
+    pub opening: Outline,
+    /// The lid margins, both run from the inner corner to the outer
+    pub upper: Polyline,
+    pub lower: Polyline,
+    /// The fold above the lid; a monolid has none
+    pub crease: Option<Polyline>,
+    pub inner: (f32, f32),
+    pub outer: (f32, f32),
+    /// Height of the upper lid at its peak
+    pub top: f32,
+    pub iris: (f32, f32),
+    pub iris_r: f32,
+    pub pupil_r: f32,
+}
+
+/// The mouth: the red of each lip.
+pub struct Lips {
+    pub upper: Outline,
+    pub lower: Outline,
+    /// How far the corners sit below (+) or above (−) the centre of the
+    /// line between the lips
+    pub corner_dy: f32,
+}
+
+impl Eye {
+    /// The lids round one eye centred on `(ex, ey)`: an upper margin that
+    /// peaks off-centre and a flatter lower one, meeting at canthi tilted
+    /// by the shape's canthal tilt.
+    fn frame(ex: f32, ey: f32, side: f32, es: &EyeShape, lid_heavy: f32) -> Eye {
+        let (rx, ry) = (es.rx, es.ry);
+        let inner = (ex - side * rx, ey + es.tilt * 0.35);
+        let outer = (ex + side * rx, ey - es.tilt);
+        let peak_x = inner.0 + side * 2.0 * rx * es.peak;
+        let top = ey - ry;
+        let low = (ex + side * rx * 0.1, ey + ry * es.bottom);
+        // Lids arch over the ball: they leave the corners steeply and run
+        // round over the iris, rather than meeting in two long points
+        let upper = Path::from(inner)
+            .cubic(
+                (inner.0 + side * rx * 0.18, inner.1 - ry * 0.75),
+                (peak_x - side * rx * 0.45, top),
+                (peak_x, top),
+            )
+            .cubic(
+                (peak_x + side * rx * 0.50, top),
+                (outer.0 - side * rx * 0.12, outer.1 - ry * 0.60),
+                outer,
+            );
+        let lower = Path::from(inner)
+            .cubic(
+                (inner.0 + side * rx * 0.20, inner.1 + ry * es.bottom * 0.60),
+                (low.0 - side * rx * 0.45, low.1),
+                low,
+            )
+            .cubic(
+                (low.0 + side * rx * 0.45, low.1),
+                (outer.0 - side * rx * 0.18, outer.1 + ry * es.bottom * 0.80),
+                outer,
+            );
+        let upper = upper.polyline();
+        let lower = lower.polyline();
+        let mut ring: Vec<(f32, f32)> = (0..=24).map(|k| upper.at(k as f32 / 24.0)).collect();
+        ring.extend((1..24).rev().map(|k| lower.at(k as f32 / 24.0)));
+
+        let crease = (es.crease > 0.01).then(|| {
+            let y = top - 3.0 - es.lid_extra * 0.4 - lid_heavy * 0.6;
+            Path::from((inner.0 + side * 1.0, inner.1 - 1.0))
+                .quad((peak_x, y - 1.2), (outer.0 + side * 1.0, outer.1 - 1.6))
+                .polyline()
+        });
+
+        Eye {
+            side,
+            cx: ex,
+            cy: ey,
+            opening: Outline::polygon(ring),
+            upper,
+            lower,
+            crease,
+            inner,
+            outer,
+            top,
+            // Looking a touch inward, like a pair of eyes fixed on the lens
+            iris: (ex - side * 0.25, ey - 0.15),
+            iris_r: es.iris_r,
+            pupil_r: es.pupil_r,
+        }
+    }
+}
+
+impl Lips {
+    fn frame(cx: f32, my: f32, ms: &MouthShape, corner_dy: f32) -> Lips {
+        let half = ms.half;
+        let lip_top = my - ms.upper;
+        let upper = Path::from((cx - half, my + corner_dy))
+            .quad((cx - half * 0.45, lip_top - 0.6), (cx - 3.4, lip_top))
+            .quad((cx, lip_top + ms.bow), (cx + 3.4, lip_top))
+            .quad(
+                (cx + half * 0.45, lip_top - 0.6),
+                (cx + half, my + corner_dy),
+            )
+            .quad((cx, my + 1.0), (cx - half, my + corner_dy))
+            .outline();
+        let side_y = my + 0.6 + corner_dy * 0.6;
+        let lower = Path::from((cx - half + 1.2, side_y))
+            .quad((cx, my + ms.lower * 2.15), (cx + half - 1.2, side_y))
+            .quad((cx, my + 1.2), (cx - half + 1.2, side_y))
+            .outline();
+        Lips {
+            upper,
+            lower,
+            corner_dy,
+        }
+    }
+}
+
 pub struct Landmarks {
     pub cx: f32,
     pub skull: Skull,
@@ -237,13 +365,11 @@ pub struct Landmarks {
     pub nose: f32,
     pub mouth: f32,
     pub sulcus: f32,
-    pub head_path: String,
-    pub neck_path: String,
+    pub head: Outline,
+    pub neck: Outline,
+    pub eyes: [Eye; 2],
+    pub lips: Lips,
     pub neck_half: f32,
-    pub neck_top: f32,
-    /// Eye centres, left and right on the page
-    pub eye_l: f32,
-    pub eye_r: f32,
     pub eye_shape: EyeShape,
     pub nose_shape: NoseShape,
     pub mouth_shape: MouthShape,
@@ -265,7 +391,11 @@ impl Landmarks {
         // asymmetry and the turn so no head is a perfect reflection
         let turn = id.turn * 0.35;
         let right = skull.right_side(cx, 1.0 + turn * 0.09);
-        let mut left = PathBuilder::mirrored(cx, &right);
+        let mut left: Vec<(f32, f32)> = right
+            .iter()
+            .rev()
+            .map(|&(x, y)| (2.0 * cx - x, y))
+            .collect();
         let left_n = left.len();
         for (i, p) in left.iter_mut().enumerate() {
             let t = i as f32 / (left_n - 1) as f32;
@@ -275,7 +405,7 @@ impl Landmarks {
         // point at its end; both are dropped so the outline stays one loop
         let mut pts = right;
         pts.extend(left.into_iter().skip(1).take(left_n - 2));
-        let head_path = PathBuilder::smooth_closed(&pts, 0.05);
+        let head = Outline::smooth(&pts, 0.05);
 
         let eye = 118.0 + id.asym.1 * 0.6 + st.eye_y * 0.3;
         let brow = 107.5 - m.brow_gap * 1.3 + aggr * 1.8 + id.asym.1 * 0.3 + st.brow_h * 1.7;
@@ -294,7 +424,7 @@ impl Landmarks {
 
         // Eyes: an eye is a fifth of the face wide and the pair sit one eye
         // apart, which puts the centres about 20 units either side
-        let eye_off = 20.0 + m.eye_spacing * 1.1;
+        let eye_off = 22.0 + m.eye_spacing * 1.0;
         let eye_l = cx - eye_off + id.asym.0 * 0.8 + turn * 1.5;
         let eye_r = cx + eye_off - id.asym.0 * 0.4 + turn * 1.5;
         let (rx, ry, iris, pupil, bottom, crease, lid_extra, tilt_bias, peak): (
@@ -326,10 +456,16 @@ impl Landmarks {
             _ => (10.2, 4.6, 4.3, 1.7, 0.84, 0.28, -0.4, 0.5, 0.44),
         };
         let es = m.eye_scale * 1.13;
+        let iris_r = iris * (0.55 + 0.55 * es);
+        // A resting eye opens less far than its iris is wide: the upper lid
+        // takes the top off the iris and the lower one touches its foot,
+        // which is the difference between a man and a startled doll
+        let open = ry * es * 0.93 * (1.0 - aggr * 0.08) * (1.0 + bottom);
+        let ry = ry * es * 0.93 * (1.0 - aggr * 0.08) * (iris_r * 1.85 / open).min(1.0);
         let eye_shape = EyeShape {
             rx: rx * es,
-            ry: ry * es * 0.92 * (1.0 - aggr * 0.08),
-            iris_r: iris * (0.5 + 0.5 * es),
+            ry,
+            iris_r,
             pupil_r: pupil * (0.5 + 0.5 * es),
             bottom,
             crease,
@@ -407,22 +543,33 @@ impl Landmarks {
             out: 2.4 + m.ear * 0.8,
         };
 
-        // Neck: nearly as wide as the jaw on an athlete, and thickest of
-        // all on a heavy build — the strongest weight cue in a head shot
-        let neck_half = (skull.jaw * 0.92 + heft * 1.6 + 2.0).clamp(28.0, skull.jaw + 2.0);
-        let neck_top = skull.chin - 24.0;
-        let neck_path = format!(
-            "M{:.1} {neck_top:.1} C{:.1} {:.1} {:.1} 232 {:.1} 250 L{:.1} 250 C{:.1} 232 {:.1} {:.1} {:.1} {neck_top:.1}Z",
-            cx - neck_half,
-            cx - neck_half,
-            neck_top + 26.0,
-            cx - neck_half - 3.0,
-            cx - neck_half - 14.0,
-            cx + neck_half + 14.0,
-            cx + neck_half + 3.0,
-            cx + neck_half,
-            neck_top + 26.0,
-            cx + neck_half,
+        // Neck: an athlete's is most of the width of his face, and thickest
+        // of all on a heavy build — the strongest weight cue in a head shot
+        let neck_half = (skull.zygo * 0.84 + heft * 1.6).clamp(36.0, skull.zygo * 0.94);
+        // It starts up behind the ears, where the head hides where it begins
+        let neck_top = skull.jaw_y - 30.0;
+        // A column, a touch wider at its foot, running on past the bottom
+        // of the page so it ends in the frame rather than in an edge
+        let chin = skull.chin;
+        let foot = |s: f32| {
+            [
+                (cx + s * neck_half, neck_top),
+                (cx + s * neck_half, chin - 4.0),
+                (cx + s * (neck_half + 1.5), chin + 20.0),
+                (cx + s * (neck_half + 3.0), chin + 60.0),
+            ]
+        };
+        let mut rim = Path::through(&foot(-1.0), 0.1).points();
+        rim.extend(Path::through(&foot(1.0), 0.1).points().into_iter().rev());
+        let neck = Outline::polygon(rim);
+
+        let eyes = [(eye_l, -1.0), (eye_r, 1.0)]
+            .map(|(ex, side)| Eye::frame(ex, eye, side, &eye_shape, id.morph.lid_heavy));
+        let lips = Lips::frame(
+            cx,
+            mouth,
+            &mouth_shape,
+            (aggr * 1.3 - 0.9 - st.smile * 1.0).clamp(-2.2, 1.6),
         );
 
         Landmarks {
@@ -434,12 +581,11 @@ impl Landmarks {
             nose,
             mouth,
             sulcus,
-            head_path,
-            neck_path,
+            head,
+            neck,
+            eyes,
+            lips,
             neck_half,
-            neck_top,
-            eye_l,
-            eye_r,
             eye_shape,
             nose_shape,
             mouth_shape,

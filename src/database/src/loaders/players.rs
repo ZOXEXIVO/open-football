@@ -90,6 +90,11 @@ pub struct OdbPlayer {
     #[serde(default)]
     pub history: Vec<OdbHistoryItem>,
 
+    /// Career caps and goals for the nation the player represents, senior and
+    /// U21. Absent means never capped.
+    #[serde(default)]
+    pub international: Option<OdbInternational>,
+
     /// Forced team-type bucket. Set by the compiler when a player is folded
     /// in from a satellite directory (e.g. "Ural 2" → Ural's B team) so the
     /// runtime distributor places them in this bucket regardless of age.
@@ -377,6 +382,20 @@ pub struct OdbHistoryItem {
     pub rating: f32,
 }
 
+/// Senior and U21 international record. The "U21" slot is the nation's main
+/// youth side — U20 for countries that field no U21 team.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct OdbInternational {
+    #[serde(default)]
+    pub apps: u16,
+    #[serde(default)]
+    pub goals: u16,
+    #[serde(default)]
+    pub u21_apps: u16,
+    #[serde(default)]
+    pub u21_goals: u16,
+}
+
 /// In-memory index of players, grouped by the club where they physically
 /// play. Loaned-out players are indexed under the borrower so their squad
 /// lists them in training / matches. Loan metadata rides on the player's
@@ -534,6 +553,7 @@ mod tests {
                 min_appearances: None,
             }),
             history: Vec::new(),
+            international: None,
             team_type_hint: None,
             attrs: None,
         }

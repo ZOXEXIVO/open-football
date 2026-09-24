@@ -12,7 +12,6 @@ src/web/assets/static/viewer/
 .agents/
 .claude/
 CLAUDE.md
-openspec
 
 training_result.json
 

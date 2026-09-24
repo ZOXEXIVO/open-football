@@ -1,39 +1,6 @@
 //! Goalkeeper-only timing derived from the recording; no simulation changes.
 use super::*;
 
-impl Actors {
-    /// Load the legs in the last 150 ms before a recorded take-off. Looking
-    /// beyond that point rejects the tiny split-step hops. Never extrapolate
-    /// across missing chunks or a restart teleport.
-    pub(super) fn keeper_coil(track: &mut Track, now: f64) -> f32 {
-        let Some(here) = track.position_ahead(now) else {
-            return 0.0;
-        };
-        if here[2] > Self::AIRBORNE_FEET {
-            return 0.0;
-        }
-        for step in 1..=5 {
-            let delay = step as f64 * 30.0;
-            let Some(next) = track.position_ahead(now + delay) else {
-                return 0.0;
-            };
-            if next[2] <= Self::AIRBORNE_FEET {
-                continue;
-            }
-            let Some(up) = track.position_ahead(now + delay + 90.0) else {
-                return 0.0;
-            };
-            let distance =
-                Vec2::new(next[0] - here[0], next[1] - here[1]).length() * Field::METERS_PER_UNIT;
-            if up[2] < Self::HOP_CEILING || distance > Self::TELEPORT * delay as f32 * 0.001 {
-                return 0.0;
-            }
-            return 0.65 * Self::ease(1.0 - delay as f32 / 180.0);
-        }
-        0.0
-    }
-}
-
 impl PlayerActor {
     /// Landing ends flight even while the recovery envelope is decaying.
     /// Using `1 - settling()` here revives the flight pose during recovery,
@@ -111,7 +78,6 @@ impl PlayerActor {
 mod tests {
     use super::*;
     use crate::players::body::skeleton::{boot, glove};
-    use crate::recording::replay::Sample;
     use bevy::ecs::system::RunSystemOnce;
     use std::time::Duration;
 
@@ -252,32 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn recorded_takeoff_loads_knees_but_small_hops_and_missing_data_do_not() {
-        let track = |height| {
-            let mut track = Track::default();
-            track.merge(
-                (0..=12)
-                    .map(|i| Sample {
-                        t: i * 30,
-                        x: 20.0,
-                        y: 275.0,
-                        z: if i < 6 { 0.0 } else { height },
-                    })
-                    .collect(),
-            );
-            track
-        };
-        let mut leap = track(0.3);
-        assert_eq!(Actors::keeper_coil(&mut leap, 0.0), 0.0);
-        let early = Actors::keeper_coil(&mut leap, 60.0);
-        let late = Actors::keeper_coil(&mut leap, 120.0);
-        assert!(late > early && late > 0.25);
-        assert_eq!(Actors::keeper_coil(&mut leap, 360.0), 0.0);
-        assert_eq!(Actors::keeper_coil(&mut track(0.05), 120.0), 0.0);
-        assert_eq!(Actors::keeper_coil(&mut Track::default(), 0.0), 0.0);
-    }
-
-    #[test]
     fn save_contact_has_follow_through_without_anticipating_impact() {
         let mut actor = PlayerActor::new(100, true, true);
         actor.save_time = Some(10.0);
@@ -415,7 +355,8 @@ mod tests {
                 actor.declared = Actors::declared(named, position.y, actor.declared);
                 actor.arrival = Actors::next_arrival(&mut tracks.ball, now, position);
                 if position.y <= Actors::AIRBORNE_FEET {
-                    actor.coil = Actors::keeper_coil(tracks.players.get_mut(&keeper).unwrap(), now);
+                    actor.takeoff =
+                        Actors::keeper_takeoff(tracks.players.get_mut(&keeper).unwrap(), now);
                 }
             }
             world.get_mut::<Transform>(entity).unwrap().translation =

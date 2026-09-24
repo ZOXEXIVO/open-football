@@ -16,9 +16,10 @@ fn main() {
     MatchViewer::watch(&crate_dir);
 
     if !MatchViewer::skipped()
-        && let Err(reason) = MatchViewer::stage(&crate_dir, &viewer_dir) {
-            println!("cargo:warning=match viewer not rebuilt: {}", reason);
-        }
+        && let Err(reason) = MatchViewer::stage(&crate_dir, &viewer_dir)
+    {
+        println!("cargo:warning=match viewer not rebuilt: {}", reason);
+    }
 
     // `main.rs` reaches for these with `include_bytes!`, which has to resolve
     // even on a machine with no wasm toolchain. An empty file is the harness's

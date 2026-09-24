@@ -357,7 +357,7 @@ impl PlayerJson {
             photo: (!player.is_generated())
                 .then(|| format!("{}/{}.png", crate::face::PHOTO_LIBRARY, player.id)),
             face: format!(
-                "/api/players/{}/face.svg?cutout=1&v={}",
+                "/api/players/{}/cutout.png?v={}",
                 player.id,
                 crate::face::FACE_VERSION
             ),

@@ -37,12 +37,15 @@ use crate::MatchRuntime;
 use crate::context::GlobalContext;
 use crate::league::core::PlayoffFormat;
 use crate::league::schedule::cup;
+use crate::league::schedule::cup::CupCalendar;
+use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
-    CupHistoryEntry, League, LeagueBuildOutput, LeagueMatch, LeaguePendingState, LeagueResult,
-    LeagueTableResult, MatchStorage, Schedule, ScheduleItem, ScheduleTour,
+    CompetitionLevel, CupHistoryEntry, KickoffClock, League, LeagueBuildOutput, LeagueMatch,
+    LeaguePendingState, LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem,
+    ScheduleTour,
 };
 use crate::r#match::{MatchResult, Score};
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Datelike, Duration, NaiveDate};
 use log::debug;
 use std::collections::{HashMap, HashSet};
 
@@ -394,7 +397,7 @@ impl LeaguePlayoff {
     /// (game 1 at the better seed, game 2 at the worse seed three days
     /// later). Game 3 is added by `advance` only if the series splits.
     fn schedule_initial_games(&mut self, series: &mut PlayoffSeries, current_date: NaiveDate) {
-        let base = cup::next_midweek(current_date + Duration::days(4));
+        let base = CupCalendar::next_midweek(current_date + Duration::days(4));
         if series.best_of >= 3 {
             self.add_game(series, base, false);
             self.add_game(series, base + Duration::days(3), true);
@@ -412,15 +415,7 @@ impl LeaguePlayoff {
         } else {
             (series.home_team_id, series.away_team_id)
         };
-        let dt = NaiveDateTime::new(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-        let item = ScheduleItem::new(
-            self.league.id,
-            self.league.slug.clone(),
-            home,
-            away,
-            dt,
-            None,
-        );
+        let (league_id, league_slug) = (self.league.id, self.league.slug.clone());
         let tour = match self
             .league
             .schedule
@@ -437,7 +432,15 @@ impl LeaguePlayoff {
                 self.league.schedule.tours.last_mut().unwrap()
             }
         };
-        tour.items.push(item);
+        let slot = tour.items.iter().filter(|i| i.date.date() == date).count();
+        tour.items.push(ScheduleItem::new(
+            league_id,
+            league_slug,
+            home,
+            away,
+            KickoffClock::at(date, CompetitionLevel::Senior, slot),
+            None,
+        ));
         series.games_scheduled += 1;
         series.last_game_date = Some(date);
     }
@@ -612,7 +615,7 @@ impl LeaguePlayoff {
         for idx in pending_thirds {
             let mut series = self.series[idx].clone();
             let anchor = series.last_game_date.unwrap_or(current_date);
-            let date = cup::next_midweek(anchor + Duration::days(2));
+            let date = CupCalendar::next_midweek(anchor + Duration::days(2));
             self.add_game(&mut series, date, false);
             self.series[idx] = series;
         }
@@ -892,11 +895,12 @@ impl LeaguePlayoff {
     /// competition's season start, draws the bracket once the relevant
     /// stage of every member group has finished, then collects today's
     /// ties for a batched engine dispatch.
-    pub fn simulate_build(
+    pub(crate) fn simulate_build(
         &mut self,
         clubs: &[Club],
         groups: &[GroupStanding],
         ctx: &GlobalContext<'_>,
+        commitments: &MatchdayCommitments,
     ) -> LeagueBuildOutput {
         let current_date = ctx.simulation.date.date();
 
@@ -934,9 +938,9 @@ impl LeaguePlayoff {
 
         // Knockout: `knockout = true` so a level score is settled by extra
         // time and (if needed) penalties.
-        let matches = self
-            .league
-            .build_matchday_matches(&scheduled, clubs, ctx, false, true);
+        let matches =
+            self.league
+                .build_matchday_matches(&scheduled, clubs, ctx, false, true, commitments);
 
         LeagueBuildOutput {
             matches,
@@ -1022,7 +1026,8 @@ impl LeaguePlayoff {
         ctx: &GlobalContext<'_>,
     ) -> LeagueResult {
         let current_date = ctx.simulation.date.date();
-        let output = self.simulate_build(clubs, groups, ctx);
+        let commitments = MatchdayCommitments::gather([&self.league.schedule], current_date);
+        let output = self.simulate_build(clubs, groups, ctx, &commitments);
         if let Some(immediate) = output.immediate {
             return immediate;
         }
@@ -1254,6 +1259,17 @@ mod tests {
 
         // All single games — no best-of-3 in the Argentine format.
         assert!(r1.iter().all(|s| s.best_of == 1));
+
+        // Midweek games, played in the evening.
+        use chrono::Timelike;
+        for item in pf.league.schedule.tours.iter().flat_map(|t| &t.items) {
+            assert_eq!(item.date.weekday(), chrono::Weekday::Wed, "{}", item.date);
+            assert!(
+                (18..=21).contains(&item.date.hour()),
+                "playoff kickoff {}",
+                item.date
+            );
+        }
     }
 
     #[test]
@@ -1368,6 +1384,35 @@ mod tests {
             );
         }
         assert!(pf.champion().is_some(), "bracket resolves");
+    }
+
+    #[test]
+    fn no_playoff_game_falls_inside_an_international_window() {
+        use crate::InternationalCalendar;
+        // Drawn the week before the October 2026 window (5-13 October), so
+        // the first Wednesday on offer is inside it.
+        let mut pf = playoff(PlayoffFormat::MlsCup, 9);
+        pf.season_start_year = 2026;
+        let members_owned = [group(10, rows(0, 15, 70)), group(20, rows(100, 15, 60))];
+        let members: Vec<&GroupStanding> = members_owned.iter().collect();
+        pf.draw_bracket(&members, NaiveDate::from_ymd_opt(2026, 9, 27).unwrap());
+        play_out(&mut pf, |home, _away| home);
+
+        let days: Vec<NaiveDate> = pf
+            .league
+            .schedule
+            .tours
+            .iter()
+            .flat_map(|t| &t.items)
+            .map(|i| i.date.date())
+            .collect();
+        assert!(days.len() > 20, "the bracket was played out");
+        for day in days {
+            assert!(
+                InternationalCalendar::window_on(day).is_none(),
+                "playoff game on {day} inside a window"
+            );
+        }
     }
 
     #[test]

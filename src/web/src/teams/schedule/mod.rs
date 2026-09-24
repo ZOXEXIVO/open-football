@@ -1,14 +1,15 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::common::year_step::YearStep;
+use crate::common::season_step::SeasonStep;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection, NeighborMenus};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
-use chrono::Datelike;
+use chrono::{NaiveDate, NaiveDateTime};
+use core::league::season::{LeagueSeason, Season};
 use core::SimulatorData;
 use serde::Deserialize;
 
@@ -20,7 +21,7 @@ pub struct TeamScheduleGetRequest {
 
 #[derive(Deserialize)]
 pub struct TeamScheduleQuery {
-    pub year: Option<i32>,
+    pub season: Option<i32>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -47,8 +48,8 @@ pub struct TeamScheduleTemplate {
     pub show_academy_tab: bool,
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
-    pub year_base: String,
-    pub years: Option<YearStep>,
+    pub season_base: String,
+    pub seasons: Option<SeasonStep>,
     pub items: Vec<TeamScheduleItem>,
 }
 
@@ -112,8 +113,17 @@ pub async fn team_schedule_get_action(
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
 
+    // Continental fixtures have no calendar of their own: they are part of
+    // the club's domestic campaign, so they file on the team's league too.
+    let calendar = league.map(|l| l.settings.season_calendar());
+    let campaign = |date: NaiveDate| {
+        calendar
+            .map(|c| c.season_of(date))
+            .unwrap_or_else(|| Season::from_date(date).as_league_season())
+    };
+
     // League matches
-    let mut items: Vec<(chrono::NaiveDateTime, TeamScheduleItem)> = schedule
+    let mut items: Vec<(NaiveDateTime, LeagueSeason, TeamScheduleItem)> = schedule
         .iter()
         .map(|schedule| {
             let is_home = schedule.home_team_id == team.id;
@@ -123,6 +133,7 @@ pub async fn team_schedule_get_action(
 
             (
                 schedule.date,
+                campaign(schedule.date.date()),
                 TeamScheduleItem {
                     date: schedule.date.format("%d.%m.%Y").to_string(),
                     time: schedule.date.format("%H:%M").to_string(),
@@ -178,6 +189,7 @@ pub async fn team_schedule_get_action(
 
         items.push((
             datetime,
+            campaign(date),
             TeamScheduleItem {
                 date: date.format("%d.%m.%Y").to_string(),
                 time: "20:00".to_string(),
@@ -203,6 +215,7 @@ pub async fn team_schedule_get_action(
         .and_then(|country| country.domestic_cup.as_ref())
         .map(|cup| &cup.league)
     {
+        let cup_calendar = cup_league.settings.season_calendar();
         for schedule in cup_league.schedule.get_matches_for_team(team.id) {
             let is_home = schedule.home_team_id == team.id;
 
@@ -211,6 +224,7 @@ pub async fn team_schedule_get_action(
 
             items.push((
                 schedule.date,
+                cup_calendar.season_of(schedule.date.date()),
                 TeamScheduleItem {
                     date: schedule.date.format("%d.%m.%Y").to_string(),
                     time: schedule.date.format("%H:%M").to_string(),
@@ -248,16 +262,16 @@ pub async fn team_schedule_get_action(
     }
 
     // Sort all matches by date
-    items.sort_by_key(|(dt, _)| *dt);
-    let years = YearStep::resolve(
-        items.iter().map(|(dt, _)| dt.year()),
-        query.year,
-        simulator_data.date.date().year(),
+    items.sort_by_key(|(dt, _, _)| *dt);
+    let seasons = SeasonStep::resolve(
+        items.iter().map(|(_, season, _)| *season),
+        query.season,
+        calendar.map(|c| c.season_of(simulator_data.date.date()).opening_year),
     );
-    if let Some(step) = &years {
-        items.retain(|(dt, _)| dt.year() == step.selected);
+    if let Some(step) = &seasons {
+        items.retain(|(_, season, _)| season.opening_year == step.selected);
     }
-    let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, item)| item).collect();
+    let items: Vec<TeamScheduleItem> = items.into_iter().map(|(_, _, item)| item).collect();
 
     let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
     let current_path = format!("/{}/teams/{}/schedule", route_params.lang, team.slug);
@@ -304,8 +318,8 @@ pub async fn team_schedule_get_action(
         show_academy_tab: team.team_type == core::TeamType::Main
             || team.team_type == core::TeamType::U18,
         newspaper_count: NewspaperCounter::count(simulator_data, team),
-        year_base: current_path,
-        years,
+        season_base: current_path,
+        seasons,
         items,
     })
 }

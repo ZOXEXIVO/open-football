@@ -10,6 +10,7 @@
 //! penalty-shootout tally, which `Score::outcome` already encodes — so
 //! `tie_winner` just reads `outcome()`.
 
+use crate::InternationalCalendar;
 use crate::league::{ScheduleItem, ScheduleTour};
 use crate::r#match::MatchResultOutcome;
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
@@ -128,41 +129,46 @@ pub fn cup_champion(tours: &[ScheduleTour], round_one_field: &[u32]) -> Option<u
     }
 }
 
-/// Snap `date` forward to the next Wednesday. Cup ties are midweek so they
-/// never collide with the Saturday league programme (the round-robin
-/// scheduler always lands on Saturdays), which keeps a team off two
-/// fixtures on the same day without any cross-competition date bookkeeping.
-pub fn next_midweek(date: NaiveDate) -> NaiveDate {
-    let mut d = date;
-    while d.weekday() != Weekday::Wed {
-        d = d.succ_opt().unwrap();
-    }
-    d
-}
+/// Where knockout ties fall on the calendar: midweek, and never inside an
+/// international window.
+pub struct CupCalendar;
 
-/// Calendar date for knockout `round` (1-based) of a competition with
-/// `total` rounds, spread across the season window `[season_start,
-/// season_end]`. Generic over any season shape (European autumn-spring or
-/// calendar-year); falls back to fortnightly spacing when the window is too
-/// small to divide. Always returns a midweek (Wednesday) date.
-pub fn cup_round_date(
-    season_start: NaiveDate,
-    season_end: NaiveDate,
-    round: u8,
-    total: u8,
-) -> NaiveDate {
-    // Keep round one out of pre-season and the final just shy of the
-    // season close.
-    let window_start = season_start + Duration::days(30);
-    let window_end = season_end - Duration::days(7);
-    let offset = round.saturating_sub(1) as i64;
-    let date = if total <= 1 || window_end <= window_start {
-        window_start + Duration::days(14 * offset)
-    } else {
-        let span = (window_end - window_start).num_days();
-        window_start + Duration::days(span * offset / (total - 1) as i64)
-    };
-    next_midweek(date)
+impl CupCalendar {
+    /// Snap `date` forward to the next Wednesday outside every international
+    /// window. Cup ties are midweek so they never collide with the Saturday
+    /// league programme.
+    pub fn next_midweek(date: NaiveDate) -> NaiveDate {
+        let mut d = date;
+        while d.weekday() != Weekday::Wed || InternationalCalendar::window_on(d).is_some() {
+            d = d.succ_opt().unwrap();
+        }
+        d
+    }
+
+    /// Calendar date for knockout `round` (1-based) of a competition with
+    /// `total` rounds, spread across the season window `[season_start,
+    /// season_end]`. Generic over any season shape (European autumn-spring
+    /// or calendar-year); falls back to fortnightly spacing when the window
+    /// is too small to divide.
+    pub fn round_date(
+        season_start: NaiveDate,
+        season_end: NaiveDate,
+        round: u8,
+        total: u8,
+    ) -> NaiveDate {
+        // Keep round one out of pre-season and the final just shy of the
+        // season close.
+        let window_start = season_start + Duration::days(30);
+        let window_end = season_end - Duration::days(7);
+        let offset = round.saturating_sub(1) as i64;
+        let date = if total <= 1 || window_end <= window_start {
+            window_start + Duration::days(14 * offset)
+        } else {
+            let span = (window_end - window_start).num_days();
+            window_start + Duration::days(span * offset / (total - 1) as i64)
+        };
+        Self::next_midweek(date)
+    }
 }
 
 #[cfg(test)]
@@ -327,12 +333,46 @@ mod tests {
     fn round_date_is_midweek_and_ordered() {
         let start = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
         let end = NaiveDate::from_ymd_opt(2027, 5, 30).unwrap();
-        let r1 = cup_round_date(start, end, 1, 5);
-        let r3 = cup_round_date(start, end, 3, 5);
-        let r5 = cup_round_date(start, end, 5, 5);
+        let r1 = CupCalendar::round_date(start, end, 1, 5);
+        let r3 = CupCalendar::round_date(start, end, 3, 5);
+        let r5 = CupCalendar::round_date(start, end, 5, 5);
         assert_eq!(r1.weekday(), Weekday::Wed);
         assert_eq!(r5.weekday(), Weekday::Wed);
         assert!(r1 < r3 && r3 < r5, "rounds must move forward in time");
         assert!(r1 >= start && r5 <= end);
+    }
+
+    #[test]
+    fn no_cup_round_falls_inside_an_international_window() {
+        let d = |y: i32, m: u32, day: u32| NaiveDate::from_ymd_opt(y, m, day).unwrap();
+        for year in 2026..=2060 {
+            let seasons = [(d(year, 8, 1), d(year + 1, 5, 30)), (d(year, 2, 1), d(year, 12, 5))];
+            for (start, end) in seasons {
+                for total in 1..=8u8 {
+                    let dates: Vec<NaiveDate> = (1..=total)
+                        .map(|round| CupCalendar::round_date(start, end, round, total))
+                        .collect();
+                    for date in &dates {
+                        assert_eq!(date.weekday(), Weekday::Wed, "{date}");
+                        assert!(
+                            InternationalCalendar::window_on(*date).is_none(),
+                            "round on {date} inside a window ({total} rounds from {start})"
+                        );
+                    }
+                    for pair in dates.windows(2) {
+                        assert!(pair[0] < pair[1], "{} not after {}", pair[1], pair[0]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_wednesday_inside_a_window_waits_for_the_one_after_it() {
+        // The October 2027 window runs Monday 4 to Tuesday 12 October.
+        let d = |m: u32, day: u32| NaiveDate::from_ymd_opt(2027, m, day).unwrap();
+        assert_eq!(CupCalendar::next_midweek(d(10, 4)), d(10, 13));
+        assert_eq!(CupCalendar::next_midweek(d(10, 13)), d(10, 13));
+        assert_eq!(CupCalendar::next_midweek(d(9, 28)), d(9, 29));
     }
 }

@@ -1,13 +1,14 @@
 use super::{
-    CHAMPIONS_LEAGUE_ID, CompetitionStage, CompetitionTier, ContinentalMatch,
-    ContinentalMatchResult, GroupTable, KnockoutTie,
+    CHAMPIONS_LEAGUE_ID, CompetitionStage, ContinentalMatch, ContinentalMatchweek, GroupTable,
+    KnockoutTie,
 };
 use crate::continent::ContinentalRankings;
-use crate::league::simulation::matchday::MatchdayPool;
+use crate::league::Season;
+use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use crate::{Club, MatchRuntime, TeamType};
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Weekday};
 use log::{debug, info};
 use std::collections::HashMap;
 
@@ -33,6 +34,9 @@ impl Default for ChampionsLeague {
 }
 
 impl ChampionsLeague {
+    /// Tuesday and Wednesday nights, the groups split between them.
+    const MATCH_WEEKDAYS: [Weekday; 2] = [Weekday::Tue, Weekday::Wed];
+
     pub fn new() -> Self {
         ChampionsLeague {
             participating_clubs: Vec::new(),
@@ -81,17 +85,9 @@ impl ChampionsLeague {
 
         // Generate group stage fixtures (6 matchdays)
         self.matches.clear();
-        let year = date.year();
-        let matchday_dates = [
-            NaiveDate::from_ymd_opt(year, 9, 17).unwrap(),  // MD1
-            NaiveDate::from_ymd_opt(year, 10, 1).unwrap(),  // MD2
-            NaiveDate::from_ymd_opt(year, 10, 22).unwrap(), // MD3
-            NaiveDate::from_ymd_opt(year, 11, 5).unwrap(),  // MD4
-            NaiveDate::from_ymd_opt(year, 11, 26).unwrap(), // MD5
-            NaiveDate::from_ymd_opt(year, 12, 10).unwrap(), // MD6
-        ];
+        let season = Season::new(self.season_year);
 
-        for group in &self.groups {
+        for (group_idx, group) in self.groups.iter().enumerate() {
             let teams: Vec<u32> = group.rows.iter().map(|r| r.team_id).collect();
             if teams.len() < 4 {
                 continue;
@@ -111,7 +107,12 @@ impl ChampionsLeague {
                 self.matches.push(ContinentalMatch {
                     home_team: teams[h1],
                     away_team: teams[a1],
-                    date: matchday_dates[md],
+                    date: ContinentalMatchweek::day(
+                        &season,
+                        ContinentalMatchweek::LEAGUE_PHASE[md],
+                        &Self::MATCH_WEEKDAYS,
+                        group_idx,
+                    ),
                     stage: CompetitionStage::GroupStage,
                     match_id: String::new(),
                     result: None,
@@ -119,7 +120,12 @@ impl ChampionsLeague {
                 self.matches.push(ContinentalMatch {
                     home_team: teams[h2],
                     away_team: teams[a2],
-                    date: matchday_dates[md],
+                    date: ContinentalMatchweek::day(
+                        &season,
+                        ContinentalMatchweek::LEAGUE_PHASE[md],
+                        &Self::MATCH_WEEKDAYS,
+                        group_idx,
+                    ),
                     stage: CompetitionStage::GroupStage,
                     match_id: String::new(),
                     result: None,
@@ -131,7 +137,7 @@ impl ChampionsLeague {
     }
 
     /// Generate knockout round fixtures after group stage completes.
-    pub fn generate_knockout_fixtures(&mut self, year: i32) {
+    pub fn generate_knockout_fixtures(&mut self) {
         // Collect group winners and runners-up
         let mut winners = Vec::new();
         let mut runners_up = Vec::new();
@@ -155,22 +161,21 @@ impl ChampionsLeague {
         }
 
         // Schedule R16 matches
-        let r16_dates_leg1 = [
-            NaiveDate::from_ymd_opt(year + 1, 2, 18).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 2, 19).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 2, 25).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 2, 26).unwrap(),
-        ];
-        let r16_dates_leg2 = [
-            NaiveDate::from_ymd_opt(year + 1, 3, 11).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 3, 12).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 3, 18).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 3, 19).unwrap(),
-        ];
+        let season = Season::new(self.season_year);
 
         for (i, tie) in self.knockout_round.iter().enumerate() {
-            let leg1_date = r16_dates_leg1[i % r16_dates_leg1.len()];
-            let leg2_date = r16_dates_leg2[i % r16_dates_leg2.len()];
+            let leg1_date = ContinentalMatchweek::leg(
+                &season,
+                &ContinentalMatchweek::ROUND_OF_16_FIRST_LEGS,
+                &Self::MATCH_WEEKDAYS,
+                i,
+            );
+            let leg2_date = ContinentalMatchweek::leg(
+                &season,
+                &ContinentalMatchweek::ROUND_OF_16_SECOND_LEGS,
+                &Self::MATCH_WEEKDAYS,
+                i,
+            );
 
             self.matches.push(ContinentalMatch {
                 home_team: tie.home_team,
@@ -205,10 +210,11 @@ impl ChampionsLeague {
 
     /// Play today's matches using the real match engine.
     /// Returns MatchResults that flow through the standard stat pipeline.
-    pub fn play_matches(
+    pub(crate) fn play_matches(
         &mut self,
         clubs: &HashMap<u32, &Club>,
         date: NaiveDate,
+        commitments: &MatchdayCommitments,
     ) -> Vec<MatchResult> {
         let todays_matches: Vec<ContinentalMatch> = self
             .matches
@@ -246,6 +252,7 @@ impl ChampionsLeague {
                     false,
                     home_team.team_type == TeamType::Main,
                     date,
+                    commitments,
                 );
                 let away_force = MatchdayPool::offer(
                     away_club,
@@ -253,6 +260,7 @@ impl ChampionsLeague {
                     false,
                     away_team.team_type == TeamType::Main,
                     date,
+                    commitments,
                 );
 
                 let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
@@ -407,30 +415,10 @@ impl ChampionsLeague {
 
         if group_stage_complete {
             info!("Champions League group stage complete -- generating R16 draw");
-            self.generate_knockout_fixtures(date.year());
+            self.generate_knockout_fixtures();
         }
 
         results
-    }
-
-    pub fn simulate_round(
-        &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
-    ) -> Vec<ContinentalMatchResult> {
-        // Play real matches and convert to ContinentalMatchResult for financial processing
-        let match_results = self.play_matches(clubs, date);
-
-        match_results
-            .iter()
-            .map(|r| ContinentalMatchResult {
-                home_team: r.home_team_id,
-                away_team: r.away_team_id,
-                home_score: r.score.home_team.get(),
-                away_score: r.score.away_team.get(),
-                competition: CompetitionTier::ChampionsLeague,
-            })
-            .collect()
     }
 
     pub fn get_club_points(&self, club_id: u32) -> f32 {
@@ -446,16 +434,6 @@ impl ChampionsLeague {
         }
 
         10.0
-    }
-
-    /// Get the MatchResults from today's matches for stat processing.
-    /// Called separately from simulate_round to feed into LeagueResult pipeline.
-    pub fn take_match_results(
-        &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
-    ) -> Vec<MatchResult> {
-        self.play_matches(clubs, date)
     }
 
     /// Final-result accessor used by the season-end happiness pipeline to
@@ -477,5 +455,68 @@ impl ChampionsLeague {
             tie.home_team
         };
         Some((winner, loser))
+    }
+}
+
+#[cfg(test)]
+mod weekday_tests {
+    use super::*;
+
+    #[test]
+    fn every_fixture_is_played_on_the_competitions_night_in_any_year() {
+        for year in [2026, 2027, 2028] {
+            let mut comp = ChampionsLeague::new();
+            comp.conduct_draw(
+                &(1..=32).collect::<Vec<u32>>(),
+                &ContinentalRankings::new(),
+                NaiveDate::from_ymd_opt(year, 8, 15).unwrap(),
+            );
+            comp.generate_knockout_fixtures();
+
+            assert!(!comp.matches.is_empty());
+            for m in &comp.matches {
+                assert!(
+                    ChampionsLeague::MATCH_WEEKDAYS.contains(&m.date.weekday()),
+                    "{year}: {:?} fixture on a {}",
+                    m.stage,
+                    m.date.weekday()
+                );
+            }
+
+            // Each group keeps its night all autumn, and both nights are used.
+            for group in &comp.groups {
+                let nights: std::collections::HashSet<Weekday> = comp
+                    .matches
+                    .iter()
+                    .filter(|m| matches!(m.stage, CompetitionStage::GroupStage))
+                    .filter(|m| group.rows.iter().any(|r| r.team_id == m.home_team))
+                    .map(|m| m.date.weekday())
+                    .collect();
+                assert_eq!(nights.len(), 1, "{year}: a group moved nights");
+            }
+            let all_nights: std::collections::HashSet<Weekday> =
+                comp.matches.iter().map(|m| m.date.weekday()).collect();
+            assert_eq!(all_nights.len(), 2, "{year}: both nights are used");
+
+            // Both legs of every tie on the competition's nights, the return
+            // leg after the first.
+            for tie in &comp.knockout_round {
+                let leg = |home: u32, away: u32| {
+                    comp.matches
+                        .iter()
+                        .find(|m| {
+                            matches!(m.stage, CompetitionStage::RoundOf16)
+                                && m.home_team == home
+                                && m.away_team == away
+                        })
+                        .map(|m| m.date)
+                        .unwrap()
+                };
+                assert!(
+                    leg(tie.home_team, tie.away_team) < leg(tie.away_team, tie.home_team),
+                    "{year}: return leg before the first leg"
+                );
+            }
+        }
     }
 }

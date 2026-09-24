@@ -1,0 +1,15 @@
+{% if let Some(nav) = seasons %}
+<div class="fm-seasonstep">
+    {% if let Some(previous) = nav.previous %}
+    <a class="fm-seasonstep-arrow" href="{{ season_base }}?season={{ previous }}" aria-label="{{ i18n.t("previous_season") }}"></a>
+    {% else %}
+    <span class="fm-seasonstep-arrow is-end" aria-hidden="true"></span>
+    {% endif %}
+    <span class="fm-seasonstep-value">{{ nav.label }}</span>
+    {% if let Some(next) = nav.next %}
+    <a class="fm-seasonstep-arrow" href="{{ season_base }}?season={{ next }}" aria-label="{{ i18n.t("next_season") }}"></a>
+    {% else %}
+    <span class="fm-seasonstep-arrow is-end" aria-hidden="true"></span>
+    {% endif %}
+</div>
+{% endif %}

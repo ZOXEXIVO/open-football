@@ -193,10 +193,6 @@ impl League {
         if self.is_winter_break(current_date) {
             self.process_winter_break(clubs);
         }
-
-        if self.is_international_break(current_date) {
-            debug!("International break - no league matches");
-        }
     }
 
     fn is_season_end(&self, date: NaiveDate) -> bool {
@@ -206,13 +202,6 @@ impl League {
 
     fn is_winter_break(&self, date: NaiveDate) -> bool {
         date.month() == 12 && date.day() >= 20 && date.day() <= 31
-    }
-
-    fn is_international_break(&self, date: NaiveDate) -> bool {
-        (date.month() == 9 && date.day() >= 4 && date.day() <= 12)
-            || (date.month() == 10 && date.day() >= 9 && date.day() <= 17)
-            || (date.month() == 11 && date.day() >= 13 && date.day() <= 21)
-            || (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
     }
 
     fn process_season_end(&mut self, clubs: &[Club], current_date: NaiveDate) {

@@ -2478,6 +2478,7 @@ fn build_player_attributes(
 
     let physical = PhysicalProfile::for_position(primary, record.country_id, rng);
     let state = FitnessState::for_age(age, rng);
+    let caps = record.international.unwrap_or_default();
 
     PlayerAttributes {
         is_banned: false,
@@ -2495,10 +2496,10 @@ fn build_player_attributes(
         ability_marker: 0,
         ability_marked_on_day: 0,
         potential_ability,
-        international_apps: 0,
-        international_goals: 0,
-        under_21_international_apps: 0,
-        under_21_international_goals: 0,
+        international_apps: caps.apps,
+        international_goals: caps.goals,
+        under_21_international_apps: caps.u21_apps,
+        under_21_international_goals: caps.u21_goals,
         injury_days_remaining: 0,
         injury_type: None,
         injury_proneness: (rng.int_range(1, 10) + rng.int_range(1, 10)) as u8,
@@ -4057,6 +4058,7 @@ mod odb_hydration_tests {
             }),
             loan: None,
             history: Vec::new(),
+            international: None,
             team_type_hint: None,
             attrs: None,
         }
@@ -4286,6 +4288,21 @@ mod odb_hydration_tests {
         r.club_id = 0;
         r.history = history(vec![(2024, 400, false), (2025, 400, false)]);
         assert_eq!(ClubJoinAnchor::resolve(&r, WORLD_SEASON), None);
+    }
+
+    #[test]
+    fn hydrated_player_carries_the_recorded_caps() {
+        use crate::loaders::OdbInternational;
+        let data = empty_data();
+        let mut r = record(900_009, 150, 160, vec![("ST", 20)]);
+        r.international = Some(OdbInternational { apps: 121, goals: 85, u21_apps: 14, u21_goals: 8 });
+        let a = PlayerGenerator::generate_from_odb(&r, 1, "gb", &data).player_attributes;
+        assert_eq!((a.international_apps, a.international_goals), (121, 85));
+        assert_eq!((a.under_21_international_apps, a.under_21_international_goals), (14, 8));
+
+        let uncapped = record(900_010, 150, 160, vec![("ST", 20)]);
+        let a = PlayerGenerator::generate_from_odb(&uncapped, 1, "gb", &data).player_attributes;
+        assert_eq!((a.international_apps, a.under_21_international_apps), (0, 0));
     }
 
     #[test]

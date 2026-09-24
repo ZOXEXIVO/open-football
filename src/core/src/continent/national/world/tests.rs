@@ -938,3 +938,39 @@ fn u21_release_clears_only_u21_status() {
         "U21 status must be cleared by the U21 release"
     );
 }
+
+/// The window's call-up keeps a player away from the opening Monday
+/// through the closing Tuesday, and the club has him back the day after.
+#[test]
+fn a_called_up_player_is_away_for_the_whole_window() {
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::{InternationalCalendar, SimulatorData};
+    use chrono::Duration;
+
+    let player = make_player(401, 1, PlayerPositionType::Striker);
+    let club = make_club(1, vec![player]);
+    let country = make_country(1, 1, "Brazil", vec![club], 8000);
+    let window = InternationalCalendar::window_on(d(2027, 10, 4)).unwrap();
+    let mut data = SimulatorData::new(
+        window.opens.and_hms_opt(0, 0, 0).unwrap(),
+        vec![make_continent(1, vec![country])],
+        GlobalCompetitions::new(Vec::new()),
+    );
+    let away = |data: &SimulatorData| {
+        data.continents[0].countries[0].clubs[0].teams.teams[0]
+            .players
+            .players[0]
+            .statuses
+            .has(PlayerStatusType::Int)
+    };
+
+    let mut day = window.opens;
+    while day <= window.closes + Duration::days(1) {
+        data.date = day.and_hms_opt(0, 0, 0).unwrap();
+        data.process_world_national_team_callups();
+        assert_eq!(away(&data), day <= window.closes, "{day} before the release pass");
+        data.process_world_national_team_release();
+        assert_eq!(away(&data), day < window.closes, "{day} after the release pass");
+        day += Duration::days(1);
+    }
+}

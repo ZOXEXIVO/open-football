@@ -13,6 +13,7 @@ use crate::art::textures::FaceLayout;
 use crate::players::actors::Actors;
 use crate::players::kit::{Outfit, Swatch};
 
+mod dive;
 mod garment;
 #[cfg(test)]
 mod hand_review;
@@ -2225,16 +2226,29 @@ impl BodyParts {
     /// the way hands do. A negative scale would have done it in one mesh and
     /// would also have turned every triangle inside out.
     fn hand(grain: Grain, side: f32) -> Mesh {
-        /// One finger, root at the knuckle and pointing down its own −y.
-        const FINGER: [Ring; 7] = [
+        /// One finger in its two parts, each pointing down its own −y: root
+        /// at the knuckle out to the middle joint, and from there to the tip.
+        /// Two because a curl is a bend and not a tilt — one straight lathe
+        /// can only lean, and every outfielder ran with his fingers splayed.
+        const PROXIMAL: [Ring; 4] = [
             Ring::oval(0.012, 0.0096, 0.0100),
             Ring::oval(-0.014, 0.0100, 0.0104),
             Ring::oval(-0.040, 0.0092, 0.0095),
-            Ring::oval(-0.062, 0.0084, 0.0087),
-            Ring::oval(-0.078, 0.0074, 0.0076),
-            Ring::oval(-0.087, 0.0058, 0.0060),
-            Ring::oval(-0.092, 0.0028, 0.0029),
+            Ring::oval(-0.050, 0.0090, 0.0093),
         ];
+        const DISTAL: [Ring; 5] = [
+            Ring::oval(0.006, 0.0091, 0.0094),
+            Ring::oval(-0.018, 0.0084, 0.0087),
+            Ring::oval(-0.034, 0.0074, 0.0076),
+            Ring::oval(-0.043, 0.0058, 0.0060),
+            Ring::oval(-0.048, 0.0028, 0.0029),
+        ];
+        /// Where the middle joint is along the first part, and how much of a
+        /// digit's curl each of the two joints takes — the second more than
+        /// the first, which is what rounds a relaxed hand.
+        const MIDDLE: f32 = -0.044;
+        const KNUCKLE_CURL: f32 = 1.4;
+        const JOINT_CURL: f32 = 1.9;
         /// Index, middle, ring, little: where along the knuckle line it sits,
         /// how far down the knuckle is, how long the digit is against the
         /// middle one, and how far it is curled.
@@ -2281,18 +2295,29 @@ impl BodyParts {
             ],
         );
         for (along, drop, length, curl) in DIGITS {
-            let digit: Vec<Ring> = FINGER
-                .iter()
-                .map(|ring| Ring {
-                    y: ring.y * length,
-                    ..*ring
-                })
-                .collect();
+            let scaled = |rings: &[Ring]| -> Vec<Ring> {
+                rings
+                    .iter()
+                    .map(|ring| Ring {
+                        y: ring.y * length,
+                        ..*ring
+                    })
+                    .collect()
+            };
+            let knuckle = Transform::from_translation(Vec3::new(0.0, drop, along))
+                .with_rotation(Quat::from_rotation_z(-side * curl * KNUCKLE_CURL));
+            let joint = knuckle
+                * Transform::from_translation(Vec3::new(0.0, MIDDLE * length, 0.0))
+                    .with_rotation(Quat::from_rotation_z(-side * curl * JOINT_CURL));
             hand = Sculptor::placed(
                 hand,
-                Sculptor::part_at(grain, &digit, grain.blob_sides),
-                Transform::from_translation(Vec3::new(0.0, drop, along))
-                    .with_rotation(Quat::from_rotation_z(-side * curl)),
+                Sculptor::part_at(grain, &scaled(&PROXIMAL), grain.blob_sides),
+                knuckle,
+            );
+            hand = Sculptor::placed(
+                hand,
+                Sculptor::part_at(grain, &scaled(&DISTAL), grain.blob_sides),
+                joint,
             );
         }
         Sculptor::placed(
@@ -2717,6 +2742,13 @@ pub struct Gait {
     /// 0..1 over a keeper throwing the ball out, which is the same swing
     /// routed to his shoulder instead of his hip. Peaks at the release.
     pub throwing: f32,
+    /// **How hard a keeper's throw or a throw-in is**, 0..1 — the size of
+    /// the sweep, where [`Self::throwing`] and [`Self::throw_in`] are only
+    /// how much of the pose it has. Both sweeps go past half a turn, and a
+    /// pose half a turn away has no halfway point: carried as a share of the
+    /// blend, a gentle throw snapped nearly three radians in one frame as it
+    /// went over the top. See [`Joint::heaved`].
+    pub heft: f32,
     /// −1..1: driving off the mark at +1, pulling up short at −1.
     ///
     /// A footballer changes pace far more often than he changes direction,
@@ -2743,6 +2775,20 @@ pub struct Gait {
     pub jump_foot: f32,
     /// Give through the chest and elbows just after a standing save.
     pub save_recoil: f32,
+    /// 0..1: **how much of a dive's take-off is still in his legs** — 1 as
+    /// he leaves the ground, gone by the time he is stretched out. See
+    /// [`Joint::dive_leg`].
+    pub push: f32,
+    /// 0..1: how far in FRONT of him a dive reaches rather than over his
+    /// head — 0 for one flat across his goal, 1 for one at a man's feet.
+    pub smother: f32,
+    /// The landing of a dive, as a spring: positive pressed into the turf,
+    /// negative rebounding off it.
+    pub thud: f32,
+    /// **The take-off he is loading for**, in his own frame: the way it
+    /// goes, scaled by how far into the load he is. Zero for anybody not
+    /// about to leave the ground.
+    pub coil: Vec2,
     /// 0..1: he is heading the ball rather than kicking it, read together
     /// with `swing` exactly as `power` is.
     ///
@@ -3063,6 +3109,10 @@ impl Gait {
             jump_phase: 0.0,
             jump_foot: 1.0,
             save_recoil: 0.0,
+            push: 0.0,
+            smother: 0.0,
+            thud: 0.0,
+            coil: Vec2::ZERO,
             swing: 0.0,
             power: 0.0,
             foot: 0.0,
@@ -3071,6 +3121,7 @@ impl Gait {
             lean: 0.0,
             toes: 0.0,
             throwing: 0.0,
+            heft: 0.0,
             header: 0.0,
             throw_in: 0.0,
             trap: 0.0,
@@ -3159,6 +3210,29 @@ impl Gait {
             .clamp(0.0, 1.0)
             .min(1.0 - self.kneeling())
             .max(0.0)
+    }
+
+    /// **How much of him a throw has**, `amount` being its amplitude: all of
+    /// it from the wind-up to the release, and back to the run cycle over the
+    /// end of the follow-through. A throw comes out of the hold rather than
+    /// out of a stride — the amplitude itself brings it on, over the second
+    /// he stands holding the ball — and tapered at the far end of the swing
+    /// as well, the ball went over his head in two frames. See
+    /// [`Joint::taper`].
+    fn wound(self, amount: f32) -> f32 {
+        amount
+            * if self.swing < 0.0 {
+                1.0
+            } else {
+                Joint::taper(self.swing)
+            }
+    }
+
+    /// **The drive as it shows on him**: none of it while a throw-in has him.
+    /// He has planted for it, and on top of the brakes he was still pulling
+    /// up on, the arch read as a man falling over backwards.
+    fn driving(self) -> f32 {
+        self.drive * (1.0 - self.wound(self.throw_in))
     }
 }
 
@@ -3267,7 +3341,9 @@ impl Joint {
     /// by. See [`Gait::elbows`].
     const ELBOW_SPREAD: f32 = 0.40;
     const LEAN_SPREAD: f32 = 0.34;
-    const ELBOW_FLEX: (f32, f32) = (0.25, 1.25);
+    /// **How bent he carries his elbows**, in radians: standing, walking,
+    /// and running — see [`Joint::elbow_flex`].
+    const ELBOW_FLEX: (f32, f32, f32) = (0.25, 0.50, 1.45);
     /// **How far the elbow opens behind him and closes in front**, in
     /// radians at a flat sprint.
     ///
@@ -3347,8 +3423,8 @@ impl Joint {
     /// out. A keeper leaves the ground with his elbows still bent and his
     /// hands in front of his chest — the reach happens in the air, which is
     /// the whole reason [`Gait::stretch`] exists.
-    const LAUNCH_SHOULDER: f32 = -1.05;
-    const LAUNCH_ELBOW: f32 = -1.00;
+    const LAUNCH_SHOULDER: f32 = -0.55;
+    const LAUNCH_ELBOW: f32 = -1.45;
     /// The reach, as rotations in the shoulder's and elbow's own frames. The
     /// leading arm goes past the head and its elbow comes nearly straight — a
     /// keeper at full stretch is measured from his fingertips, and every
@@ -4065,9 +4141,15 @@ impl Joint {
     /// is taken with both of them on the ball.
     const TOSS_SPREAD: f32 = -0.10;
     /// The trunk arches back over the wind-up and whips forward through the
-    /// release, and the knees give a little under it.
-    const TOSS_CHEST: (f32, f32, f32) = (-0.40, 0.16, 0.44);
+    /// release, and the knees give a little under it. The arch is one a
+    /// thrower holds, standing with the ball behind his head for as long as
+    /// the wind-up has him there, rather than the extreme of a swing he
+    /// passes through — held at 23° it read as a man falling over backwards.
+    const TOSS_CHEST: (f32, f32, f32) = (-0.24, 0.16, 0.44);
     const TOSS_KNEE: (f32, f32, f32) = (0.34, 0.20, 0.10);
+    /// How much of the sweep the gentlest throw-in keeps: the Laws want the
+    /// ball from behind the head however far it is going.
+    const TOSS_LEAST: f32 = 0.85;
     /// A keeper's throw: the same three keys as a kick, sent to his shoulder
     /// instead of his hip — cocked behind the ear, over the top, and down
     /// across the follow through.
@@ -4079,6 +4161,12 @@ impl Joint {
     /// an underarm bowl.
     const THROW_SHOULDER: (f32, f32, f32) = (2.35, 4.30, 5.15);
     const THROW_ELBOW: (f32, f32, f32) = (-1.60, -0.25, -0.15);
+    /// …and of a keeper's: a short one is pushed from over his head.
+    const THROW_LEAST: f32 = 0.6;
+    /// **How far behind him a shoulder goes**, in radians — about eighty
+    /// degrees, past every arm this rig draws behind a man. See
+    /// [`Self::lifted`].
+    const SHOULDER_BACK: f32 = 1.4;
     /// Driving off the mark and pulling up short: how far the chest goes over
     /// the toes at full acceleration, and how far it sits back at a full
     /// stop. Braking is the bigger angle — stopping is more violent than
@@ -4137,9 +4225,24 @@ impl Joint {
             // than hung off a socket.
             Limb::Hip => self.place_body(gait) + Vec3::Y * Self::hip_list(gait, self.side),
             Limb::Pelvis | Limb::Torso => self.place_body(gait),
+            Limb::Shoulder => self.origin + self.girdle(gait),
             _ => self.origin,
         }
     }
+
+    /// **The shoulder blade under the arm**: forward as the arm comes
+    /// forward, back as it goes back, up as it goes over his head. A socket
+    /// welded to the chest swings every arm from a fixed pin, which is a
+    /// mannequin's shoulder; a man's reaches with the arm. Read off the arm's
+    /// own pose, so every layer that moves an arm moves the girdle with it.
+    fn girdle(&self, gait: Gait) -> Vec3 {
+        let arm = self.pose(gait) * Vec3::NEG_Y;
+        Vec3::new(0.0, Self::SHRUG * arm.y.max(0.0), Self::GLIDE * arm.z)
+    }
+    /// How far the girdle glides fore and aft with the arm, and how far it
+    /// rises with an arm straight overhead, in metres.
+    const GLIDE: f32 = 0.022;
+    const SHRUG: f32 = 0.035;
 
     /// Where the hips ride this frame, before anything that is about one leg
     /// rather than about the body.
@@ -4297,12 +4400,12 @@ impl Joint {
         // not the moment of contact — which is to say, all of it.
         let taper = Self::taper(gait.swing);
         let kicking = gait.power * taper;
-        let throwing = gait.throwing * taper;
+        let throwing = gait.wound(gait.throwing);
         // The two strikes a footballer makes that are not kicks. Same phase,
         // same taper, different limbs — which is the whole reason `swing` is
         // one number and the amplitudes are several.
         let heading = gait.header * taper;
-        let tossing = gait.throw_in * taper;
+        let tossing = gait.wound(gait.throw_in);
         let trapping = gait.trap * taper;
         // +1 if this is the kicking side of the body, −1 if it is the standing
         // side. Zero for everybody not kicking, which leaves both halves equal
@@ -4413,6 +4516,7 @@ impl Joint {
                 // for twenty-one players out of twenty-two every term after
                 // the first is identity.
                 running
+                    * Self::coiling(gait)
                     * Quat::from_rotation_x(
                         Self::SET_LEAN * Self::crouched(gait) * (1.0 - gait.save * gait.save_aim.y.max(0.0)),
                     )
@@ -4425,6 +4529,7 @@ impl Joint {
                     )
                     * Quat::from_rotation_x(
                         Self::DOWN_CURL * gait.grounded
+                            + Self::thud_curl(gait)
                             // Curled tighter by having conceded, and still
                             // folded as he comes up off it.
                             + Self::BEATEN_CURL * gait.beaten
@@ -4450,8 +4555,8 @@ impl Joint {
                     // the same sign as [`Joint::SHUFFLE_LEAN`]: toward
                     // travel on his right is a negative turn about Z.
                     * {
-                        let lean = Self::DRIVE_LEAN.0 * gait.drive.max(0.0)
-                            + Self::DRIVE_LEAN.1 * (-gait.drive).max(0.0);
+                        let lean = Self::DRIVE_LEAN.0 * gait.driving().max(0.0)
+                            + Self::DRIVE_LEAN.1 * (-gait.driving()).max(0.0);
                         let way = Self::course_of_chest(gait);
                         Quat::from_rotation_x(lean * way.y + Self::CARRY_LEAN * gait.carrying)
                             * Quat::from_rotation_z(-lean * way.x)
@@ -4509,7 +4614,11 @@ impl Joint {
                     // making them, which is twenty-two players out of
                     // twenty-two for most of a match.
                     * Quat::from_rotation_x(Self::through(Self::NOD_CHEST, gait.swing) * heading)
-                    * Quat::from_rotation_x(Self::through(Self::TOSS_CHEST, gait.swing) * tossing)
+                    * Quat::from_rotation_x(
+                        Self::through(Self::TOSS_CHEST, gait.swing)
+                            * tossing
+                            * (0.55 + 0.45 * gait.heft),
+                    )
                     // And how he took the goal. Composed on the end rather
                     // than blended in like the arms: this is a fold at the
                     // waist ON TOP of whatever else the trunk is doing, and
@@ -4656,7 +4765,7 @@ impl Joint {
                 // and UNDER everything else — a mood is a modification of
                 // standing about, and anything he is actually doing (a save,
                 // a throw, a kick) has to beat it.
-                let slumped = Self::held(
+                let slumped = Self::lifted(
                     swinging,
                     Quat::from_rotation_z(self.side * Self::SLUMP_LIMP_SPREAD)
                         * Quat::from_rotation_x(Self::SLUMP_LIMP_SHOULDER),
@@ -4667,7 +4776,7 @@ impl Joint {
                 // hanging arm outward and a raised one inward, so signing
                 // these like the pose above crosses his own wrists over his
                 // head instead of putting the elbows out.
-                let slumped = Self::held(
+                let slumped = Self::lifted(
                     slumped,
                     Quat::from_rotation_z(-self.side * Self::SLUMP_HEAD_SPREAD)
                         * Quat::from_rotation_x(Self::SLUMP_HEAD_SHOULDER),
@@ -4678,7 +4787,7 @@ impl Joint {
                 // its socket rather than swinging it. See
                 // [`Self::HIPS_TURN`] — this is the pose the rig could not
                 // reach until the standing save gave the shoulder a yaw.
-                let slumped = Self::held(
+                let slumped = Self::lifted(
                     slumped,
                     Quat::from_rotation_z(self.side * Self::HIPS_SPREAD)
                         * Quat::from_rotation_x(Self::HIPS_SHOULDER)
@@ -4688,7 +4797,7 @@ impl Joint {
                 // …and bent double, where the arms hang vertically out of a
                 // chest that is horizontal, which relative to that chest is
                 // a positive pitch.
-                let slumped = Self::held(
+                let slumped = Self::lifted(
                     slumped,
                     Quat::from_rotation_z(self.side * Self::DOUBLED_SPREAD)
                         * Quat::from_rotation_x(Self::DOUBLED_SHOULDER),
@@ -4698,20 +4807,20 @@ impl Joint {
                 // Above the slump, below everything he might actually be
                 // doing — which is right, because they are what he does when
                 // there is nothing to do.
-                let barking = Self::held(
+                let barking = Self::lifted(
                     slumped,
                     Quat::from_rotation_y(
                         -self.side * (Self::URGE_YAW - Self::CLAP_OPEN * Self::clap(gait)),
                     ) * Quat::from_rotation_x(Self::URGE_SHOULDER),
                     urging,
                 );
-                let organising = Self::held(
+                let organising = Self::lifted(
                     barking,
                     Quat::from_rotation_y(self.side * Self::POINT_YAW)
                         * Quat::from_rotation_x(Self::POINT_SHOULDER),
                     pointing,
                 );
-                let cheering = Self::held(
+                let cheering = Self::lifted(
                     organising,
                     Quat::from_rotation_z(-self.side * Self::CHEER_SPREAD)
                         * Quat::from_rotation_x(Self::CHEER_SHOULDER),
@@ -4722,7 +4831,7 @@ impl Joint {
                 // with his gloves high and narrow, another low and wide, and
                 // two goalkeepers in identical postures is the same lockstep
                 // the run cycle was fixed for.
-                let ready = Self::held(
+                let ready = Self::lifted(
                     cheering,
                     Quat::from_rotation_z(
                         self.side * Self::SET_SPREAD * (1.0 + 0.22 * gait.signature),
@@ -4776,7 +4885,7 @@ impl Joint {
                 // below the leap, the hold and the reach, all three of which
                 // are a keeper who is no longer on his feet.
                 let leading_hand = 0.55 + 0.45 * (self.side * gait.save_aim.x).clamp(-1.0, 1.0);
-                let saving = Self::held(
+                let saving = Self::lifted(
                     ready,
                     Quat::from_rotation_y(
                         Self::SAVE_ACROSS * gait.save_aim.x * leading_hand
@@ -4788,13 +4897,13 @@ impl Joint {
                     ),
                     gait.save,
                 );
-                let leaping = Self::held(
+                let leaping = Self::lifted(
                     saving,
                     Quat::from_rotation_z(self.side * Self::JUMP_SPREAD)
                         * Quat::from_rotation_x(Self::JUMP_SHOULDER),
                     gait.jump,
                 );
-                let holding = Self::held(
+                let holding = Self::lifted(
                     leaping,
                     Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
                         * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
@@ -4805,15 +4914,16 @@ impl Joint {
                 // apex — and this arm only gets all the way there if it is
                 // the leading one.
                 let shoulder = Self::LAUNCH_SHOULDER
-                    + (Self::REACH_SHOULDER - Self::LAUNCH_SHOULDER) * gait.stretch
-                    + Self::TRAIL_SHOULDER * trailing * gait.stretch;
+                    + (Self::reach_shoulder(gait) - Self::LAUNCH_SHOULDER) * gait.stretch
+                    + Self::TRAIL_SHOULDER * trailing * gait.stretch.max(0.5);
                 let spread = (Self::REACH_SPREAD + Self::TRAIL_SPREAD * trailing)
+                    * Self::reach_span(gait)
                     * (1.0 - gait.claimed)
                     + Self::CLAIM_SPREAD * gait.claimed;
                 // Reach after the cradle, so a keeper who takes the ball
                 // cleanly at the top of a leap has his arms come down into
                 // the hold rather than stay up around a ball he already has.
-                let out = Self::held(
+                let out = Self::lifted(
                     holding,
                     Quat::from_rotation_z(-self.side * spread) * Quat::from_rotation_x(shoulder),
                     gait.reach,
@@ -4824,13 +4934,13 @@ impl Joint {
                 // inversion [`Self::REACH_SPREAD`] documents — a roll about
                 // +Z carries a hanging arm outward and a raised one inward,
                 // and this one is raised.
-                let down = Self::held(
+                let down = Self::lifted(
                     out,
                     Quat::from_rotation_z(self.side * Self::DOWN_SPREAD)
                         * Quat::from_rotation_x(Self::DOWN_SHOULDER),
                     bracing,
                 );
-                let down = Self::held(
+                let down = Self::lifted(
                     down,
                     Quat::from_rotation_z(self.side * Self::GRASS_SPREAD)
                         * Quat::from_rotation_x(Self::GRASS_SHOULDER),
@@ -4838,7 +4948,7 @@ impl Joint {
                 );
                 // Face in his hands on the turf: the TOP arm only, since the
                 // other one is underneath him and the ground has it.
-                let down = Self::held(
+                let down = Self::lifted(
                     down,
                     Quat::from_rotation_z(self.side * Self::BEATEN_SPREAD)
                         * Quat::from_rotation_x(Self::BEATEN_SHOULDER),
@@ -4848,7 +4958,7 @@ impl Joint {
                 // it. Above the landing poses because it is what replaces
                 // them: an arm folded across his chest cannot take his
                 // weight.
-                let down = Self::held(
+                let down = Self::lifted(
                     down,
                     Quat::from_rotation_z(self.side * Self::RISE_SPREAD)
                         * Quat::from_rotation_x(-gait.over),
@@ -4857,24 +4967,30 @@ impl Joint {
                 // And a keeper's throw, which is the same swing as a kick sent
                 // to the arm instead: cocked behind his ear and hurled
                 // overarm. Only the throwing side moves.
-                let hurled = Self::held(
+                let hurled = Self::lifted(
                     down,
-                    Quat::from_rotation_x(Self::through(Self::THROW_SHOULDER, gait.swing)),
+                    Quat::from_rotation_x(Self::through(
+                        Self::heaved(Self::THROW_SHOULDER, gait.heft, Self::THROW_LEAST),
+                        gait.swing,
+                    )),
                     throwing * striking.max(0.0),
                 );
                 // Attacking a cross: both arms out, holding the space he is
                 // about to jump into.
-                let attacking = Self::held(
+                let attacking = Self::lifted(
                     hurled,
                     Quat::from_rotation_z(self.side * Self::NOD_SPREAD)
                         * Quat::from_rotation_x(Self::NOD_SHOULDER),
                     heading,
                 );
                 // A throw-in, where BOTH arms go over the head together.
-                Self::held(
+                Self::lifted(
                     attacking,
                     Quat::from_rotation_z(self.side * Self::TOSS_SPREAD)
-                        * Quat::from_rotation_x(Self::through(Self::TOSS_SHOULDER, gait.swing)),
+                        * Quat::from_rotation_x(Self::through(
+                            Self::heaved(Self::TOSS_SHOULDER, gait.heft, Self::TOSS_LEAST),
+                            gait.swing,
+                        )),
                     tossing,
                 )
             }
@@ -4882,7 +4998,7 @@ impl Joint {
             // some hold them almost straight, some at a right angle.
             Limb::Elbow => {
                 let running = Quat::from_rotation_x(
-                    -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + Self::ELBOW_SPREAD * gait.elbows)
+                    -Self::elbow_flex(gait) * (1.0 + Self::ELBOW_SPREAD * gait.elbows)
                         // **The elbow OPENS behind him and closes in front**,
                         // which is what an arm drive is and is most of how
                         // far a hand actually travels.
@@ -4948,10 +5064,14 @@ impl Joint {
                     gait.carry,
                 );
                 let elbow = Self::LAUNCH_ELBOW
-                    + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * gait.stretch
+                    + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * Self::unfolding(gait)
                     + Self::TRAIL_ELBOW * trailing * gait.stretch;
                 let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
-                let down = Self::held(out, Quat::from_rotation_x(Self::DOWN_ELBOW), bracing);
+                let down = Self::held(
+                    out,
+                    Quat::from_rotation_x(Self::DOWN_ELBOW + Self::thud_elbow(gait)),
+                    bracing,
+                );
                 let down = Self::held(down, Quat::from_rotation_x(Self::GRASS_ELBOW), grassed);
                 let down = Self::held(
                     down,
@@ -4967,13 +5087,19 @@ impl Joint {
                 );
                 let hurled = Self::held(
                     down,
-                    Quat::from_rotation_x(Self::through(Self::THROW_ELBOW, gait.swing)),
+                    Quat::from_rotation_x(Self::through(
+                        Self::heaved(Self::THROW_ELBOW, gait.heft, Self::THROW_LEAST),
+                        gait.swing,
+                    )),
                     throwing * striking.max(0.0),
                 );
                 let attacking = Self::held(hurled, Quat::from_rotation_x(Self::NOD_ELBOW), heading);
                 Self::held(
                     attacking,
-                    Quat::from_rotation_x(Self::through(Self::TOSS_ELBOW, gait.swing)),
+                    Quat::from_rotation_x(Self::through(
+                        Self::heaved(Self::TOSS_ELBOW, gait.heft, Self::TOSS_LEAST),
+                        gait.swing,
+                    )),
                     tossing,
                 )
             }
@@ -5186,7 +5312,7 @@ impl Joint {
                         // …signed with the course for the same reason the
                         // trunk's lean is: a man driving off backwards
                         // plants his feet out in FRONT of himself.
-                        + Self::DRIVE_HIP * gait.drive * gait.course.y
+                        + Self::DRIVE_HIP * gait.driving() * gait.course.y
                         + Self::SHUFFLE_HIP_PICKUP * picking,
                 );
                 // …and under him when he is bent over them. ⚠ The knee
@@ -5250,14 +5376,14 @@ impl Joint {
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
                 // swinging up over it.
+                // ⚠ …and NOT over a leap. `dive` means "off his feet" and
+                // stays 1 for a keeper who went straight up, so without the
+                // gate the trail slerps away the push the jump above just
+                // drew. See `PlayerActor::gait` and [`Self::diving_legs`].
                 let diving = Self::held(
                     leaping,
-                    Quat::from_rotation_x(Self::DIVE_HIP + Self::DIVE_SCISSOR_HIP * leading),
-                    // ⚠ …and NOT over a leap. `dive` means "off his feet"
-                    // and stays 1 for a keeper who went straight up, so
-                    // without this the trail slerps away the push the jump
-                    // above just drew. See `PlayerActor::gait`.
-                    gait.dive * gait.stretch * (1.0 - gait.jump),
+                    Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).0),
+                    Self::diving_legs(gait),
                 );
                 let down = Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded);
                 // Knees drawn under him to push off, held at a constant
@@ -5361,12 +5487,12 @@ impl Joint {
                 );
                 let diving = Self::held(
                     leaping,
-                    Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
-                    gait.dive * gait.stretch * (1.0 - gait.jump),
+                    Quat::from_rotation_x(Self::dive_leg(gait, leading, trailing).1),
+                    Self::diving_legs(gait),
                 );
                 let down = Self::held(
                     diving,
-                    Quat::from_rotation_x(Self::DOWN_KNEE),
+                    Quat::from_rotation_x(Self::DOWN_KNEE + Self::thud_knee(gait)),
                     gait.grounded,
                 );
                 let down = Self::held(
@@ -5405,7 +5531,10 @@ impl Joint {
                 // do the same thing as each other.
                 Self::held(
                     braced,
-                    Quat::from_rotation_x(Self::through(Self::TOSS_KNEE, gait.swing)),
+                    Quat::from_rotation_x(Self::through(
+                        Self::heaved(Self::TOSS_KNEE, gait.heft, 0.55),
+                        gait.swing,
+                    )),
                     tossing,
                 )
             }
@@ -5552,6 +5681,20 @@ impl Joint {
 
     fn blend(range: (f32, f32), run: f32) -> f32 {
         range.0 + range.1 * run
+    }
+
+    /// **The elbow a man carries at this pace.** A straight line in `run`
+    /// — a share of a SPRINT — left a jogging footballer's arms hanging at
+    /// fifty degrees and swinging like sticks, bent to a runner's right
+    /// angle only once he was flat out. A body changes its arm carriage when
+    /// it changes gait, so the running bend arrives on the walk-to-run
+    /// transition the legs change on: a man breaking into a jog carries his
+    /// arms like a runner.
+    fn elbow_flex(gait: Gait) -> f32 {
+        let (standing, walking, running) = Self::ELBOW_FLEX;
+        let walk = (gait.run / Self::LOADING.0).min(1.0);
+        let run = Actors::ease((gait.run - Self::LOADING.0) / (Self::LOADING.1 - Self::LOADING.0));
+        standing + (walking - standing) * walk + (running - walking) * run
     }
 
     /// **How far a running body is tipped forward**, in radians, and **how
@@ -5824,7 +5967,7 @@ impl Joint {
             return free;
         }
         let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * stepping + gait.stance;
-        let shin = (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.drive)
+        let shin = (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.driving())
             * gait.course.y
             + Self::tucking(gait, leg)
             + Self::CARRY_KNEE * gait.carrying;
@@ -6003,8 +6146,8 @@ impl Joint {
     /// drop under the roll of the boot.
     fn shortfall(gait: Gait, leg: f32) -> f32 {
         let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait) + gait.stance;
-        let thigh =
-            (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.drive) * gait.course.y;
+        let thigh = (Self::swinging(gait, leg, amplitude) + Self::DRIVE_HIP * gait.driving())
+            * gait.course.y;
         let shin = thigh + Self::tucking(gait, leg) + Self::CARRY_KNEE * gait.carrying;
         let sole = shin + Self::ankle_pitch(gait, leg);
         let reach = Self::THIGH_LINK * thigh.cos() - Physique::ANKLE.y * shin.cos()
@@ -6753,16 +6896,74 @@ impl Joint {
         }
     }
 
+    /// **A throw's three keys at `heft`**: the same sweep over the top,
+    /// shortened at both ends toward the release by what a gentler one does
+    /// not need — `least` of it at no heft, all of it at full. Never scaled
+    /// toward his side, which for a sweep past half a turn is no pose at all.
+    fn heaved(keys: (f32, f32, f32), heft: f32, least: f32) -> (f32, f32, f32) {
+        let reach = least + (1.0 - least) * heft.clamp(0.0, 1.0);
+        (
+            keys.1 + (keys.0 - keys.1) * reach,
+            keys.1,
+            keys.1 + (keys.2 - keys.1) * reach,
+        )
+    }
+
     /// Fades a limb off the run cycle and onto the hold as a keeper gathers
     /// the ball. Short-circuited at zero because twenty-one players out of
     /// twenty-two are never holding anything, and a slerp per joint per frame
-    /// for all of them is a cost with nothing to show for it.
+    /// for all of them is a cost with nothing to show for it. ⚠ Through the
+    /// rest side and never the shortest arc, which picks its way round a pose
+    /// half a turn off by which side of it the swing happens to be on — see
+    /// [`Self::arc`].
     fn held(swinging: Quat, cradle: Quat, carry: f32) -> Quat {
-        if carry <= 1e-3 {
-            swinging
-        } else {
-            swinging.slerp(cradle, carry.min(1.0))
+        Self::arc(Quat::IDENTITY, swinging, cradle, carry)
+    }
+
+    /// **The same at the shoulder, whose middle is in front of him.** A
+    /// shoulder reaches [`Self::SHOULDER_BACK`] behind a man and goes most of
+    /// a turn up in front and over, so the pose a blend there has no way
+    /// round is an arm straight out behind him, which nothing asks for. A
+    /// throw cocked behind the ear is got to by lifting the ball up past the
+    /// face; measured round the back, a throw picked up late carried it down
+    /// past his hip on the way.
+    fn lifted(swinging: Quat, pose: Quat, weight: f32) -> Quat {
+        Self::arc(
+            Quat::from_rotation_x(Self::SHOULDER_BACK - PI),
+            swinging,
+            pose,
+            weight,
+        )
+    }
+
+    /// Both ends put on the side of the double cover that `middle` is on,
+    /// then slerped straight between with no shortest-arc flip: the ends are
+    /// continuous in time as quaternions, so the blend is too. The flip made
+    /// a keeper sprinting at a shot jump a radian at the shoulder as his
+    /// swinging arm passed half a turn from the reach.
+    fn arc(middle: Quat, from: Quat, to: Quat, weight: f32) -> Quat {
+        if weight <= 1e-3 {
+            return from;
         }
+        let weight = weight.min(1.0);
+        let sided = |rotation: Quat| {
+            if rotation.dot(middle) < 0.0 {
+                -rotation
+            } else {
+                rotation
+            }
+        };
+        let (from, to) = (sided(from), sided(to));
+        let cos = from.dot(to).clamp(-1.0, 1.0);
+        if cos > 0.9995 {
+            return (from * (1.0 - weight) + to * weight).normalize();
+        }
+        let angle = cos.acos();
+        let sin = angle.sin();
+        if sin < 1e-4 {
+            return if weight < 0.5 { from } else { to };
+        }
+        from * (((1.0 - weight) * angle).sin() / sin) + to * ((weight * angle).sin() / sin)
     }
 }
 
@@ -7322,6 +7523,7 @@ pub(crate) mod skeleton {
         let mut gait = still();
         gait.swing = swing;
         gait.throw_in = 1.0;
+        gait.heft = 1.0;
         gait
     }
 
@@ -7876,6 +8078,18 @@ pub(crate) mod preview {
             let foot = lower * skeleton::step(Limb::Ankle, side, Physique::ANKLE, gait);
             draw(&parts.boot, foot, BOOTS);
         }
+    }
+
+    /// The ball, at `at` in the same space as the figure it is drawn beside.
+    pub fn ball(canvas: &mut Canvas, lens: &Lens, at: Vec3) {
+        let mesh = Sphere::new(Actors::BALL_RADIUS).mesh().uv(16, 10);
+        part_mesh(
+            canvas,
+            lens,
+            &mesh,
+            Transform::from_translation(at),
+            Vec3::splat(0.95),
+        );
     }
 
     /// Shades and projects one mesh at one transform.
@@ -9838,6 +10052,7 @@ mod tests {
             gait.swing = swing;
             gait.foot = 1.0;
             gait.throwing = 1.0;
+            gait.heft = 1.0;
             gait
         };
         let cocked = glove(1.0, throwing(-0.8));
@@ -9859,6 +10074,70 @@ mod tests {
         }
         // And his legs are not involved.
         assert!((boot(1.0, throwing(0.0)) - boot(1.0, still())).length() < 1e-4);
+    }
+
+    /// **A blend onto a pose over his head never flips its way round** as
+    /// the arm swinging underneath it passes half a turn from it — which a
+    /// shortest-arc slerp does, and did: a keeper sprinting at a shot had his
+    /// shoulder jump a radian between two frames. See [`Joint::lifted`].
+    #[test]
+    fn an_overhead_reach_never_flips_its_way_round() {
+        let shoulder = Vec3::new(Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
+        for save in [0.15f32, 0.3, 0.6] {
+            let mut last: Option<Quat> = None;
+            for step in 0..=720 {
+                let mut gait = running(1.0);
+                gait.phase = step as f32 * TAU / 720.0;
+                gait.save = save;
+                gait.save_aim = Vec2::new(0.2, 1.0);
+                let rotation = step_of(Limb::Shoulder, 1.0, shoulder, gait).rotation;
+                if let Some(was) = last {
+                    assert!(
+                        was.angle_between(rotation) < 0.05,
+                        "at {save} of a save the shoulder turns {:.2} rad in one step of the stride",
+                        was.angle_between(rotation)
+                    );
+                }
+                last = Some(rotation);
+            }
+        }
+    }
+
+    /// **…and a gentle one is a smaller sweep, not a jump.** Carried as a
+    /// share of the blend, the gentlest throw went over the top in a single
+    /// step of the swing, both hands a metre from where they had been.
+    #[test]
+    fn a_gentle_throw_is_a_smaller_sweep_not_a_jump() {
+        for heft in [0.0f32, 0.3, 0.6, 1.0] {
+            for throw_in in [false, true] {
+                let mut last: Option<Vec3> = None;
+                for step in 0..=400 {
+                    let swing = -1.0 + step as f32 / 200.0;
+                    let mut gait = still();
+                    gait.swing = swing;
+                    gait.foot = 1.0;
+                    gait.heft = heft;
+                    if throw_in {
+                        gait.throw_in = 1.0;
+                    } else {
+                        gait.throwing = 1.0;
+                    }
+                    let hand = glove(1.0, gait);
+                    if let Some(was) = last {
+                        assert!(
+                            hand.distance(was) < 0.12,
+                            "the {} at heft {heft} jumps {:.2} m at {swing}",
+                            if throw_in { "throw-in" } else { "throw" },
+                            hand.distance(was)
+                        );
+                    }
+                    if (-0.8..=0.8).contains(&swing) {
+                        assert!(hand.y > 1.05, "underarm at heft {heft}, {swing}: {hand:?}");
+                    }
+                    last = Some(hand);
+                }
+            }
+        }
     }
 
     /// Driving off the mark and pulling up short both bend a player, and in

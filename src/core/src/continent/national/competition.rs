@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use log::info;
 
 use super::config::*;
-use super::schedule;
+use super::schedule::{NationalBookings, QualifyingSchedule};
 
 /// Phase of a national team competition cycle
 #[derive(Debug, Clone, PartialEq)]
@@ -291,6 +291,25 @@ impl NationalTeamCompetition {
         &self.config.short_name
     }
 
+    /// Every date each side still has to play in this campaign — its
+    /// qualifiers, its tournament group games and its knockout ties.
+    pub fn unplayed_dates(&self) -> impl Iterator<Item = (u32, NaiveDate)> + '_ {
+        let groups = self
+            .qualifying_groups
+            .iter()
+            .chain(&self.tournament_groups)
+            .flat_map(|g| &g.fixtures)
+            .filter(|f| f.result.is_none())
+            .flat_map(|f| [(f.home_country_id, f.date), (f.away_country_id, f.date)]);
+        let knockouts = self
+            .knockout
+            .iter()
+            .flat_map(|b| &b.fixtures)
+            .filter(|f| f.result.is_none())
+            .flat_map(|f| [(f.home_country_id, f.date), (f.away_country_id, f.date)]);
+        groups.chain(knockouts)
+    }
+
     /// The two countries who reached the final, once one has been
     /// played: `(champion, runner_up)`.
     ///
@@ -325,6 +344,7 @@ impl NationalTeamCompetition {
         country_ids_by_reputation: &[u32],
         start_year: i32,
         zone_config: &QualifyingZoneConfig,
+        booked: &NationalBookings,
     ) {
         if country_ids_by_reputation.is_empty() {
             return;
@@ -349,10 +369,11 @@ impl NationalTeamCompetition {
             .enumerate()
             .map(|(idx, team_ids)| {
                 let mut group = QualifyingGroup::new(idx as u8, team_ids.clone());
-                group.fixtures = schedule::generate_group_qualifying_fixtures_from_config(
+                group.fixtures = QualifyingSchedule::group_fixtures(
                     &team_ids,
                     start_year,
                     &self.config.schedule,
+                    booked,
                 );
                 group
             })

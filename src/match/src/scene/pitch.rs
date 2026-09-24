@@ -818,12 +818,7 @@ impl Sward {
         let stripe = Field::LENGTH / Pitch::STRIPES as f32;
         for (line, &roll) in rolled.iter().enumerate() {
             let from = -Field::HALF_LENGTH + stripe * line as f32;
-            sward.block(
-                from,
-                from + stripe,
-                Pass::mown(line, turned, roll),
-                tile,
-            );
+            sward.block(from, from + stripe, Pass::mown(line, turned, roll), tile);
         }
         sward.build()
     }

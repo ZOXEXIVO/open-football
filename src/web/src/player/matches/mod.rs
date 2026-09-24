@@ -3,7 +3,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::common::year_step::YearStep;
+use crate::common::season_step::SeasonStep;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::matches::collector::PlayerMatchCollector;
 use crate::player::newspaper::PlayerNewsCounter;
@@ -12,7 +12,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
-use chrono::Datelike;
+use core::league::season::LeagueSeason;
 use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
 
@@ -24,7 +24,7 @@ pub struct PlayerMatchesRequest {
 
 #[derive(Deserialize)]
 pub struct PlayerMatchesQuery {
-    pub year: Option<i32>,
+    pub season: Option<i32>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -58,13 +58,13 @@ pub struct PlayerMatchesTemplate {
     pub interested_clubs_count: usize,
     pub awards_count: u32,
     pub news_count: usize,
-    pub year_base: String,
-    pub years: Option<YearStep>,
+    pub season_base: String,
+    pub seasons: Option<SeasonStep>,
     pub items: Vec<PlayerMatchItem>,
 }
 
 pub struct PlayerMatchItem {
-    pub year: i32,
+    pub season: LeagueSeason,
     pub date: String,
     pub time: String,
     pub opponent_slug: String,
@@ -125,16 +125,15 @@ pub async fn player_matches_action(
     // everything played before a move, and the whole table for a player who
     // is between clubs.
     let mut items = PlayerMatchCollector::collect(simulator_data, &i18n, player, team_opt);
-    let years = YearStep::resolve(
-        items.iter().map(|item| item.year),
-        query.year,
-        simulator_data.date.date().year(),
-    );
-    if let Some(step) = &years {
-        items.retain(|item| item.year == step.selected);
+    // Only played matches are listed, so the newest season holding one is
+    // already the season under way — or the one just finished while the new
+    // campaign has yet to kick off.
+    let seasons = SeasonStep::resolve(items.iter().map(|item| item.season), query.season, None);
+    if let Some(step) = &seasons {
+        items.retain(|item| item.season.opening_year == step.selected);
     }
 
-    let year_base = format!("/{}/players/{}/matches", route_params.lang, canonical);
+    let season_base = format!("/{}/players/{}/matches", route_params.lang, canonical);
 
     let title = format!(
         "{} {}",
@@ -204,8 +203,8 @@ pub async fn player_matches_action(
         interested_clubs_count: simulator_data.clubs_interested_in_player(player.id).len(),
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
-        year_base,
-        years,
+        season_base,
+        seasons,
         items,
     }
     .into_response())

@@ -6,10 +6,12 @@ use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
 use crate::country::{CountryPendingState, CountryResult};
+use crate::league::FixtureRest;
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
 use crate::utils::PerformanceProfiler;
+use chrono::{Duration, NaiveDate};
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
 use rayon::prelude::{IntoParallelRefIterator, IntoParallelRefMutIterator};
@@ -84,6 +86,24 @@ impl Continent {
 
     /// True when this continent hosts the UEFA club competitions
     /// (Champions / Europa / Conference League).
+    /// How far ahead a league looks when it rearranges a club's domestic
+    /// fixtures around its continental nights.
+    const CONTINENTAL_HORIZON_DAYS: i64 = 21;
+
+    /// Every country rearranges its clubs' domestic fixtures for rest —
+    /// off their continental nights, and knockout ties off each side's other
+    /// fixtures — before anybody names a team for them. Ties just played still count: a
+    /// Sunday game two days after one is no rest.
+    fn rearrange_for_rest(&mut self, today: NaiveDate) {
+        let commitments = self.continental_competitions.commitments(
+            today - Duration::days(FixtureRest::MIN_REST_DAYS),
+            today + Duration::days(Self::CONTINENTAL_HORIZON_DAYS),
+        );
+        self.countries
+            .par_iter_mut()
+            .for_each(|country| country.rearrange_for_rest(&commitments, today));
+    }
+
     pub fn is_europe(&self) -> bool {
         self.id == CONTINENT_EUROPE_ID || self.name == "Europe"
     }
@@ -119,6 +139,8 @@ impl Continent {
             continent_name,
             self.countries.len()
         );
+
+        self.rearrange_for_rest(ctx.simulation.date.date());
 
         // National-team competition matches and the related call-up /
         // release flow run at the world level (see
@@ -263,5 +285,83 @@ impl Continent {
 
         debug!("Continent {} simulation complete", continent_name);
         ContinentResult::new(self.id, country_results, Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod continental_night_tests {
+    use super::*;
+    use crate::context::SimulationContext;
+    use crate::country::core::country::fixture_calendar_tests::september_country;
+    use crate::transfers::market::PlacementReachIndex;
+    use crate::transfers::market::map::MarketMap;
+    use std::collections::HashMap;
+
+    fn d(m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, m, day).unwrap()
+    }
+
+    #[test]
+    fn a_europa_league_club_plays_its_league_game_on_the_sunday_after_its_thursday_tie() {
+        let mut continent =
+            Continent::new(1, "Europe".into(), vec![september_country()], Vec::new());
+
+        // Club 100 (first team 10) is drawn into the Europa League with 31
+        // clubs from elsewhere. Matchday one's nominal date is Saturday the
+        // 19th — the same day as its league round.
+        let field: Vec<u32> = std::iter::once(100).chain(9_001..=9_031).collect();
+        continent
+            .continental_competitions
+            .europa_league
+            .conduct_draw(&field, &ContinentalRankings::new(), d(8, 20));
+        let nights: Vec<NaiveDate> = continent
+            .continental_competitions
+            .commitments(d(9, 12), d(9, 27))
+            .dates(100)
+            .to_vec();
+        assert_eq!(nights, vec![d(9, 17)], "matchday one is Thursday the 17th");
+
+        let country_info = HashMap::new();
+        let market_map = MarketMap::default();
+        let placement_reach = PlacementReachIndex::default();
+        let mut first_team_days = Vec::new();
+        for day in 12..=27 {
+            let date = d(9, day).and_hms_opt(0, 0, 0).unwrap();
+            let world = WorldSnapshot {
+                date,
+                country_info: &country_info,
+                indexes: None,
+                world_pool: &[],
+                global_free_agents: &[],
+                market_map: &market_map,
+                placement_reach: &placement_reach,
+            };
+            let ctx = GlobalContext::new(SimulationContext::new(date)).with_continent(1);
+            let output = continent.simulate(ctx, world);
+            if output
+                .matches
+                .iter()
+                .any(|m| m.home_squad.team_id == 10 || m.away_squad.team_id == 10)
+            {
+                first_team_days.push(d(9, day));
+            }
+        }
+
+        assert_eq!(
+            first_team_days,
+            vec![d(9, 12), d(9, 20), d(9, 26)],
+            "the league game after the Thursday tie is played on Sunday"
+        );
+
+        let mut calendar: Vec<NaiveDate> = first_team_days.iter().chain(&nights).copied().collect();
+        calendar.sort_unstable();
+        for pair in calendar.windows(2) {
+            assert!(
+                (pair[1] - pair[0]).num_days() >= FixtureRest::MIN_REST_DAYS,
+                "{} and {} are too close",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 }

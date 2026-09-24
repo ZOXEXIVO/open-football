@@ -3,6 +3,7 @@ use crate::club::academy::result::ClubAcademyResult;
 use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
 use crate::context::GlobalContext;
 use crate::context::{HomeLeagueTable, TournamentClocks};
+use crate::continent::ContinentalCommitments;
 use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
@@ -14,6 +15,8 @@ use crate::league::result::{
     ClubProcessCtx, CountryLookupIndex, CountryProcessCtx, DeferredContractInteraction,
     DeferredGlobalOps, StagedClubOps, WorldSnapshot,
 };
+use crate::league::simulation::matchday::MatchdayCommitments;
+use crate::league::{CompetitionLevel, FixtureRest, KickoffClock, OpenedMatchday, Schedule};
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
@@ -334,6 +337,155 @@ impl Country {
             .unwrap_or_default()
     }
 
+    /// Every fixture list the country keeps: its divisions (youth included),
+    /// the domestic cup and the grouped-competition playoffs.
+    pub(crate) fn schedules(&self) -> impl Iterator<Item = &Schedule> {
+        self.leagues
+            .leagues
+            .iter()
+            .map(|l| &l.schedule)
+            .chain(self.domestic_cup.iter().map(|c| &c.league.schedule))
+            .chain(self.playoffs.iter().map(|p| &p.league.schedule))
+    }
+
+    /// The competitions a first team plays in — every schedule but the
+    /// youth divisions — with each one's position in [`schedules`].
+    fn competitive_schedules(&self) -> impl Iterator<Item = (usize, &Schedule)> {
+        let friendly: Vec<bool> = self.leagues.leagues.iter().map(|l| l.friendly).collect();
+        self.schedules()
+            .enumerate()
+            .filter(move |(index, _)| !friendly.get(*index).copied().unwrap_or(false))
+    }
+
+    /// The schedule at `index` in [`schedules`] order.
+    fn schedule_mut(&mut self, index: usize) -> &mut Schedule {
+        let leagues = self.leagues.leagues.len();
+        let cup = self.domestic_cup.is_some() as usize;
+        if index < leagues {
+            &mut self.leagues.leagues[index].schedule
+        } else if index < leagues + cup {
+            &mut self.domestic_cup.as_mut().unwrap().league.schedule
+        } else {
+            &mut self.playoffs[index - leagues - cup].league.schedule
+        }
+    }
+
+    /// Rearrange unplayed domestic fixtures that leave a first team short of
+    /// rest. Any fixture inside the rest gap of one of its club's continental
+    /// nights moves: the Saturday game after a Thursday tie goes to Sunday, a
+    /// cup tie on a Champions League night to the next free midweek. A cup or
+    /// playoff tie inside the rest gap of any other fixture of either side
+    /// moves too; league fixtures give way to nothing domestic. Both sides'
+    /// other fixtures are respected; the fixture keeps its id, round and
+    /// venue.
+    pub(crate) fn rearrange_for_rest(
+        &mut self,
+        commitments: &ContinentalCommitments,
+        today: NaiveDate,
+    ) {
+        let continental: HashMap<u32, &[NaiveDate]> = self
+            .clubs
+            .iter()
+            .filter(|club| !commitments.dates(club.id).is_empty())
+            .filter_map(|club| {
+                club.teams
+                    .main_team_id()
+                    .map(|team_id| (team_id, commitments.dates(club.id)))
+            })
+            .collect();
+        let leagues = self.leagues.leagues.len();
+        let knockout_pending = self.schedules().skip(leagues).any(|schedule| {
+            schedule
+                .tours
+                .iter()
+                .flat_map(|t| &t.items)
+                .any(|item| item.result.is_none() && item.date.date() >= today)
+        });
+        if continental.is_empty() && !knockout_pending {
+            return;
+        }
+
+        let mut busy: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        for (_, schedule) in self.competitive_schedules() {
+            for item in schedule.tours.iter().flat_map(|t| &t.items) {
+                let day = item.date.date();
+                busy.entry(item.home_team_id).or_default().push(day);
+                busy.entry(item.away_team_id).or_default().push(day);
+            }
+        }
+
+        let mut clashes: Vec<(NaiveDate, String, usize, u32, u32)> = Vec::new();
+        for (index, schedule) in self.competitive_schedules() {
+            for item in schedule.tours.iter().flat_map(|t| &t.items) {
+                let day = item.date.date();
+                if item.result.is_some() || day < today {
+                    continue;
+                }
+                let sides = [item.home_team_id, item.away_team_id];
+                let clashes_with_europe = sides
+                    .iter()
+                    .filter_map(|team| continental.get(team))
+                    .any(|nights| !FixtureRest::is_rested(day, nights));
+                // Its own date is among the side's days, so a second one
+                // inside the gap is the clash.
+                let crowded_knockout = index >= leagues
+                    && sides.iter().filter_map(|team| busy.get(team)).any(|days| {
+                        days.iter()
+                            .filter(|d| (day - **d).num_days().abs() < FixtureRest::MIN_REST_DAYS)
+                            .count()
+                            > 1
+                    });
+                if clashes_with_europe || crowded_knockout {
+                    clashes.push((day, item.id.clone(), index, sides[0], sides[1]));
+                }
+            }
+        }
+        if clashes.is_empty() {
+            return;
+        }
+        for (team, nights) in &continental {
+            busy.entry(*team).or_default().extend(nights.iter());
+        }
+        clashes.sort();
+
+        for (nominal, id, index, home, away) in clashes {
+            let others = |team: u32| -> Vec<NaiveDate> {
+                let mut dates = busy.get(&team).cloned().unwrap_or_default();
+                if let Some(own) = dates.iter().position(|d| *d == nominal) {
+                    dates.swap_remove(own);
+                }
+                dates
+            };
+            let (home_busy, away_busy) = (others(home), others(away));
+            if FixtureRest::is_rested(nominal, &home_busy)
+                && FixtureRest::is_rested(nominal, &away_busy)
+            {
+                continue;
+            }
+            let day = FixtureRest::best_day(nominal, today, &home_busy, &away_busy);
+            if day == nominal {
+                continue;
+            }
+
+            let schedule = self.schedule_mut(index);
+            let slot = schedule.teams_playing_on(day).count() / 2;
+            schedule.move_fixture(&id, KickoffClock::at(day, CompetitionLevel::Senior, slot));
+            debug!("📅 fixture {id} rearranged from {nominal} to {day} for rest");
+
+            for team in [home, away] {
+                let dates = busy.entry(team).or_default();
+                if let Some(own) = dates.iter().position(|d| *d == nominal) {
+                    dates[own] = day;
+                }
+            }
+        }
+    }
+
+    /// Every one of the country's teams with a fixture on `date`.
+    pub(crate) fn matchday_commitments(&self, date: NaiveDate) -> MatchdayCommitments {
+        MatchdayCommitments::gather(self.schedules(), date)
+    }
+
     /// Build (but do not play) today's matches across every league and
     /// the domestic cup. Mutates each league's state up to (and
     /// including) schedule regeneration, then hands the assembled
@@ -370,34 +522,55 @@ impl Country {
             }
         }
 
-        // Every division prepares its own matchday: `League::simulate_build`
-        // takes `&mut League` and reads the club list, so the divisions of
-        // one country are disjoint and only `self.clubs` is shared. This
-        // used to be the country's longest strictly serial stretch — squad
-        // selection for a whole matchday, one division after another — and
-        // on a deep pyramid it alone bounded how short the build phase could
-        // get (measured at 133 ms for the fattest country while the rest of
-        // the box idled). `par_iter_mut().map().collect()` keeps the outputs
-        // in league order, so `pending_leagues` stays index-parallel with
+        // Every division prepares its own matchday: the halves take
+        // `&mut League` and read the club list, so the divisions of one
+        // country are disjoint and only `self.clubs` is shared. This used to
+        // be the country's longest strictly serial stretch — squad selection
+        // for a whole matchday, one division after another — and on a deep
+        // pyramid it alone bounded how short the build phase could get
+        // (measured at 133 ms for the fattest country while the rest of the
+        // box idled). `par_iter_mut().map().collect()` keeps the outputs in
+        // league order, so `pending_leagues` stays index-parallel with
         // `self.leagues.leagues` and the match batch is ordered exactly as
         // the serial loop left it.
+        //
+        // Opening comes first for every division: a season's opening day
+        // draws its fixtures there, and who is playing today has to be read
+        // off every division before any squad borrows from another.
+        let clubs = &self.clubs;
+        let league_ctx = |league: &League| {
+            let league_team_ids: &[u32] = teams_by_league
+                .get(&league.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+            ctx.with_league(
+                league.id,
+                league.slug.clone(),
+                league_team_ids,
+                league.reputation,
+            )
+        };
+        let opened: Vec<OpenedMatchday> = self
+            .leagues
+            .leagues
+            .par_iter_mut()
+            .map(|league| {
+                let league_ctx = league_ctx(league);
+                league.open_matchday(clubs, &league_ctx)
+            })
+            .collect();
+
+        let commitments = self.matchday_commitments(ctx.simulation.date.date());
+
         let clubs = &self.clubs;
         let league_outputs: Vec<LeagueBuildOutput> = self
             .leagues
             .leagues
             .par_iter_mut()
-            .map(|league| {
-                let league_team_ids: &[u32] = teams_by_league
-                    .get(&league.id)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
-                let league_ctx = ctx.with_league(
-                    league.id,
-                    league.slug.clone(),
-                    league_team_ids,
-                    league.reputation,
-                );
-                league.simulate_build(clubs, &league_ctx)
+            .zip(opened)
+            .map(|(league, opened)| {
+                let league_ctx = league_ctx(league);
+                league.build_matchday(opened, clubs, &league_ctx, &commitments)
             })
             .collect();
 
@@ -424,7 +597,7 @@ impl Country {
         if let Some((cup_id, cup_slug, cup_rep)) = cup_ctx_args {
             let cup_ctx = ctx.with_league(cup_id, cup_slug, &[], cup_rep);
             let cup = self.domestic_cup.as_mut().expect("cup checked above");
-            let output = cup.simulate_build(&self.clubs, &cup_ctx);
+            let output = cup.simulate_build(&self.clubs, &cup_ctx, &commitments);
             all_matches.extend(output.matches);
             if let Some(p) = output.pending {
                 cup_pending = Some(p);
@@ -475,7 +648,8 @@ impl Country {
                     &[],
                     playoff.league.reputation,
                 );
-                let output = playoff.simulate_build(&self.clubs, &group_snaps, &pf_ctx);
+                let output =
+                    playoff.simulate_build(&self.clubs, &group_snaps, &pf_ctx, &commitments);
                 all_matches.extend(output.matches);
                 playoff_pending.push(output.pending);
                 if let Some(r) = output.immediate {
@@ -1058,6 +1232,415 @@ impl Country {
                 team.fixture_window.upcoming = up;
                 team.fixture_window.recent = rec;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod fixture_calendar_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::context::SimulationContext;
+    use crate::league::{DayMonthPeriod, LeagueSettings, ScheduleItem, ScheduleTour};
+    use crate::shared::Location;
+    use crate::transfers::market::PlacementReachIndex;
+    use crate::transfers::market::map::MarketMap;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData,
+        PlayerCollection, PlayerGenerator, PlayerPositionType, PlayerSkills, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveDateTime, NaiveTime};
+    use std::collections::HashSet;
+
+    fn names() -> PeopleNameGeneratorData {
+        PeopleNameGeneratorData {
+            first_names: vec!["Test".to_string()],
+            last_names: vec!["Player".to_string()],
+            nicknames: Vec::new(),
+        }
+    }
+
+    fn players(ids: std::ops::RangeInclusive<u32>) -> Vec<Player> {
+        let now = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        ids.map(|id| {
+            let position = if id % 11 == 0 {
+                PlayerPositionType::Goalkeeper
+            } else {
+                PlayerPositionType::MidfielderCenter
+            };
+            let mut p = PlayerGenerator::generate(1, now, position, 15, &names());
+            p.id = id;
+            p.player_attributes.current_ability = 100;
+            p.skills = PlayerSkills::flat_for_ability(100);
+            p
+        })
+        .collect()
+    }
+
+    fn team(
+        id: u32,
+        club_id: u32,
+        league_id: u32,
+        team_type: TeamType,
+        squad: Vec<Player>,
+    ) -> Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(league_id))
+            .club_id(club_id)
+            .name(format!("team-{id}"))
+            .slug(format!("team-{id}"))
+            .team_type(team_type)
+            .players(PlayerCollection::new(squad))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 100))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn club(id: u32, teams: Vec<Team>) -> Club {
+        Club::new(
+            id,
+            format!("club-{id}"),
+            Location::new(1),
+            ClubFinances::new(10_000_000, Vec::new()),
+            ClubAcademy::new(3),
+            ClubStatus::Professional,
+            ClubColors::default(),
+            TeamCollection::new(teams),
+            ClubFacilities::default(),
+        )
+    }
+
+    fn league(id: u32, tier: u8) -> League {
+        League::new(
+            id,
+            format!("league-{id}"),
+            format!("league-{id}"),
+            1,
+            5000,
+            LeagueSettings {
+                season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                tier,
+                promotion_spots: 0,
+                relegation_spots: 0,
+                league_group: None,
+                split_season: false,
+            },
+            false,
+        )
+    }
+
+    #[test]
+    fn a_first_team_and_its_second_team_never_share_a_player_on_opening_day() {
+        // Thin first teams (nine men) against full second teams, both
+        // divisions opening on Saturday 1 August 2026: the schedule is
+        // drawn that morning and both sides play that afternoon, so the
+        // first team's shortfall borrow would reach straight into its own
+        // second team's dressing room.
+        let clubs: Vec<Club> = (1..=6)
+            .map(|n: u32| {
+                let base = n * 1_000;
+                club(
+                    n * 100,
+                    vec![
+                        team(
+                            n * 10,
+                            n * 100,
+                            10,
+                            TeamType::Main,
+                            players(base + 1..=base + 9),
+                        ),
+                        team(
+                            n * 10 + 1,
+                            n * 100,
+                            20,
+                            TeamType::Second,
+                            players(base + 101..=base + 116),
+                        ),
+                        // An academy squad with no fixture of its own: both
+                        // playing sides would reach for it.
+                        team(
+                            n * 10 + 2,
+                            n * 100,
+                            99,
+                            TeamType::U20,
+                            players(base + 201..=base + 216),
+                        ),
+                    ],
+                )
+            })
+            .collect();
+        let mut country = Country::builder()
+            .id(1)
+            .code("XX".to_string())
+            .slug("xx".to_string())
+            .name("Testland".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![league(10, 1), league(20, 2)]))
+            .clubs(clubs)
+            .build()
+            .unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let ctx = GlobalContext::new(SimulationContext::new(date)).with_country(1);
+        let country_info = HashMap::new();
+        let market_map = MarketMap::default();
+        let placement_reach = PlacementReachIndex::default();
+        let world = WorldSnapshot {
+            date,
+            country_info: &country_info,
+            indexes: None,
+            world_pool: &[],
+            global_free_agents: &[],
+            market_map: &market_map,
+            placement_reach: &placement_reach,
+        };
+
+        let (matches, _) = country.simulate_build(&ctx, world);
+        assert_eq!(matches.len(), 6, "both divisions play on opening day");
+
+        let mut named: HashSet<u32> = HashSet::new();
+        for m in &matches {
+            for squad in [&m.home_squad, &m.away_squad] {
+                for p in squad.main_squad.iter().chain(&squad.substitutes) {
+                    assert!(
+                        named.insert(p.id),
+                        "player {} named in two squads on one day",
+                        p.id
+                    );
+                }
+            }
+        }
+    }
+
+    fn d(m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, m, day).unwrap()
+    }
+
+    /// `count` clubs, first team only (club `n*100`, team `n*10`), all in
+    /// one top division (league 10) with no schedule yet.
+    pub(crate) fn country_with_first_teams(count: u32) -> Country {
+        let clubs: Vec<Club> = (1..=count)
+            .map(|n: u32| {
+                club(
+                    n * 100,
+                    vec![team(
+                        n * 10,
+                        n * 100,
+                        10,
+                        TeamType::Main,
+                        players(n * 1_000 + 1..=n * 1_000 + 18),
+                    )],
+                )
+            })
+            .collect();
+        Country::builder()
+            .id(1)
+            .code("XX".to_string())
+            .slug("xx".to_string())
+            .name("Testland".to_string())
+            .continent_id(1)
+            .leagues(LeagueCollection::new(vec![league(10, 1)]))
+            .clubs(clubs)
+            .build()
+            .unwrap()
+    }
+
+    /// Six first teams in one division, three Saturday rounds in September.
+    pub(crate) fn september_country() -> Country {
+        let mut country = country_with_first_teams(6);
+        let tours = [(1, d(9, 12)), (2, d(9, 19)), (3, d(9, 26))]
+            .into_iter()
+            .map(|(num, day)| {
+                let mut tour = ScheduleTour::new(num, 3);
+                for (slot, (home, away)) in [(10, 20), (30, 40), (50, 60)].into_iter().enumerate() {
+                    tour.items.push(ScheduleItem::new(
+                        10,
+                        "league-10".into(),
+                        home,
+                        away,
+                        KickoffClock::at(day, CompetitionLevel::Senior, slot),
+                        None,
+                    ));
+                }
+                tour
+            })
+            .collect();
+        country.leagues.leagues[0].schedule = Schedule { tours };
+        country
+    }
+
+    #[test]
+    fn a_cup_tie_the_day_after_a_midweek_league_round_moves_and_the_league_stays() {
+        // Tuesday 22 September 2026 is a midweek league round; clubs 100 and
+        // 300 meet in the cup the next day. No club here is in Europe.
+        let mut country = country_with_first_teams(6);
+        let league_day = d(9, 22);
+        let mut league_tour = ScheduleTour::new(1, 3);
+        for (slot, (home, away)) in [(10, 20), (30, 40), (50, 60)].into_iter().enumerate() {
+            league_tour.items.push(ScheduleItem::new(
+                10,
+                "league-10".into(),
+                home,
+                away,
+                KickoffClock::at(league_day, CompetitionLevel::Senior, slot),
+                None,
+            ));
+        }
+        country.leagues.leagues[0].schedule = Schedule {
+            tours: vec![league_tour],
+        };
+        let mut cup = DomesticCup::new(league(20, 1));
+        let mut cup_tour = ScheduleTour::new(1, 1);
+        cup_tour.items.push(ScheduleItem::new(
+            20,
+            "cup-20".into(),
+            10,
+            30,
+            KickoffClock::at(d(9, 23), CompetitionLevel::Senior, 0),
+            None,
+        ));
+        cup.league.schedule = Schedule {
+            tours: vec![cup_tour],
+        };
+        country.domestic_cup = Some(cup);
+
+        country.rearrange_for_rest(&ContinentalCommitments::default(), d(9, 1));
+
+        for item in country.leagues.leagues[0].schedule.tours.iter().flat_map(|t| &t.items) {
+            assert_eq!(item.date.date(), league_day, "league fixture {} kept its day", item.id);
+        }
+        let tie = &country.domestic_cup.as_ref().unwrap().league.schedule.tours[0].items[0];
+        assert_eq!(
+            tie.date.date(),
+            d(9, 25),
+            "the nearest day with two clear days after Tuesday"
+        );
+        assert!(FixtureRest::is_rested(tie.date.date(), &[league_day]));
+    }
+
+    #[test]
+    fn a_cup_round_drawn_the_day_after_the_last_one_waits_for_rest() {
+        use crate::r#match::{Score, TeamScore};
+
+        // Round two was played on Tuesday 25 August; round three is drawn
+        // for the next day.
+        let mut country = country_with_first_teams(6);
+        let tie = |day: NaiveDate, played: bool| {
+            let mut item = ScheduleItem::new(
+                20,
+                "cup-20".into(),
+                10,
+                30,
+                KickoffClock::at(day, CompetitionLevel::Senior, 0),
+                None,
+            );
+            if played {
+                item.result = Some(Score {
+                    home_team: TeamScore::new_with_score(10, 1),
+                    away_team: TeamScore::new_with_score(30, 0),
+                    details: Vec::new(),
+                    home_shootout: 0,
+                    away_shootout: 0,
+                });
+            }
+            item
+        };
+        let mut cup = DomesticCup::new(league(20, 1));
+        let mut round_two = ScheduleTour::new(2, 1);
+        round_two.items.push(tie(d(8, 25), true));
+        let mut round_three = ScheduleTour::new(3, 1);
+        round_three.items.push(tie(d(8, 26), false));
+        cup.league.schedule = Schedule {
+            tours: vec![round_two, round_three],
+        };
+        country.domestic_cup = Some(cup);
+
+        country.rearrange_for_rest(&ContinentalCommitments::default(), d(8, 26));
+
+        let moved = &country.domestic_cup.as_ref().unwrap().league.schedule.tours[1].items[0];
+        assert_eq!(moved.date.date(), d(8, 28), "the first day two clear days after the 25th");
+        let played = &country.domestic_cup.as_ref().unwrap().league.schedule.tours[0].items[0];
+        assert_eq!(played.date.date(), d(8, 25), "a played tie never moves");
+    }
+
+    #[test]
+    fn a_thursday_europa_league_club_plays_its_saturday_game_on_sunday() {
+        use crate::continent::{CompetitionStage, ContinentalCompetitions, ContinentalMatch};
+        use chrono::{Datelike, Timelike, Weekday};
+
+        let mut country = september_country();
+        let before: HashMap<String, NaiveDateTime> = country.leagues.leagues[0]
+            .schedule
+            .tours
+            .iter()
+            .flat_map(|t| &t.items)
+            .map(|i| (i.id.clone(), i.date))
+            .collect();
+
+        // Club 100 (first team 10) plays in Europe on Thursday 17th.
+        let mut competitions = ContinentalCompetitions::new();
+        competitions.europa_league.matches.push(ContinentalMatch {
+            home_team: 100,
+            away_team: 9_999,
+            date: d(9, 17),
+            stage: CompetitionStage::GroupStage,
+            match_id: String::new(),
+            result: None,
+        });
+        let commitments = competitions.commitments(d(9, 1), d(9, 22));
+
+        country.rearrange_for_rest(&commitments, d(9, 1));
+
+        let items: Vec<&ScheduleItem> = country.leagues.leagues[0]
+            .schedule
+            .tours
+            .iter()
+            .flat_map(|t| &t.items)
+            .collect();
+        let moved = items
+            .iter()
+            .find(|i| {
+                i.home_team_id == 10
+                    && i.away_team_id == 20
+                    && i.date.date() > d(9, 15)
+                    && i.date.date() < d(9, 24)
+            })
+            .expect("the round-two fixture of the Europa League club");
+        assert_eq!(
+            moved.date.date(),
+            d(9, 20),
+            "Thursday tie, Sunday league game"
+        );
+        assert_eq!(moved.date.weekday(), Weekday::Sun);
+        assert!(
+            (12..=21).contains(&moved.date.hour()),
+            "a Sunday kickoff: {}",
+            moved.date
+        );
+        assert_eq!(
+            before.get(&moved.id).map(|dt| dt.date()),
+            Some(d(9, 19)),
+            "same fixture, same id"
+        );
+
+        for item in items.iter().filter(|i| i.id != moved.id) {
+            assert_eq!(
+                Some(&item.date),
+                before.get(&item.id),
+                "{} was not the clashing fixture and must not move",
+                item.id
+            );
         }
     }
 }

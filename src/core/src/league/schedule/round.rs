@@ -1,13 +1,10 @@
 use crate::league::{
-    LeagueSettings, ScheduleError, ScheduleGenerator, ScheduleItem, ScheduleTour, Season,
+    CompetitionLevel, KickoffClock, LeagueSettings, RoundCalendar, ScheduleError,
+    ScheduleGenerator, ScheduleItem, ScheduleTour, Season,
 };
 use crate::utils::DateUtils;
-use chrono::Duration;
-use chrono::NaiveDate;
-use chrono::prelude::*;
+use chrono::{Datelike, NaiveDate};
 use log::warn;
-
-// const DAY_PLAYING_TIMES: [(u8, u8); 4] = [(13, 0), (14, 0), (16, 0), (18, 0)];
 
 pub struct RoundSchedule;
 
@@ -18,8 +15,145 @@ impl Default for RoundSchedule {
 }
 
 impl RoundSchedule {
+    /// Bye seat for odd team counts. Real team ids are allocated
+    /// sequentially and never reach it.
+    const BYE: u32 = u32::MAX;
+
     pub fn new() -> Self {
         RoundSchedule {}
+    }
+
+    /// One tour per date in `round_days`, in order.
+    fn tours(
+        league_id: u32,
+        league_slug: String,
+        teams: &[u32],
+        round_days: &[NaiveDate],
+        level: CompetitionLevel,
+    ) -> Vec<ScheduleTour> {
+        if teams.len() < 2 {
+            return Vec::new();
+        }
+
+        // Odd team counts carry a bye seat, so every round keeps the same
+        // stride of slots; the bye pair is skipped when building tours.
+        let games_per_round = teams.len().div_ceil(2);
+
+        let mut result = Vec::with_capacity(round_days.len());
+        let games = Self::game_pairs(teams);
+        if games.is_empty() {
+            return result;
+        }
+
+        for (tour_idx, round_day) in round_days.iter().enumerate() {
+            let mut tour = ScheduleTour::new((tour_idx + 1) as u8, games_per_round);
+            let games_offset = tour_idx * games_per_round;
+
+            for game_idx in 0..games_per_round {
+                let pos = games_offset + game_idx;
+                if pos >= games.len() {
+                    break;
+                }
+                let (home_team_id, away_team_id) = games[pos];
+                if home_team_id == Self::BYE || away_team_id == Self::BYE {
+                    continue;
+                }
+                let kickoff = KickoffClock::at(*round_day, level, tour.items.len());
+                tour.items.push(ScheduleItem::new(
+                    league_id,
+                    String::from(&league_slug),
+                    home_team_id,
+                    away_team_id,
+                    kickoff,
+                    None,
+                ));
+            }
+
+            result.push(tour);
+        }
+
+        result
+    }
+
+    /// A double round-robin's rounds; an odd team count adds a bye seat, so
+    /// every team sits one round out in each half.
+    fn round_count(team_count: usize) -> usize {
+        if team_count.is_multiple_of(2) {
+            team_count.saturating_sub(1) * 2
+        } else {
+            team_count * 2
+        }
+    }
+
+    /// The first `month`/`day` on or after `from`.
+    fn on_or_after(from: NaiveDate, month: u8, day: u8) -> NaiveDate {
+        let on = |year: i32| NaiveDate::from_ymd_opt(year, month as u32, day as u32).unwrap();
+        let this_year = on(from.year());
+        if this_year >= from {
+            this_year
+        } else {
+            on(from.year() + 1)
+        }
+    }
+
+    /// Double round-robin via the circle method: every team plays every
+    /// other team exactly twice, once at home and once away. Odd team counts
+    /// seat a bye; its pairs stay in the sequence as `(BYE, BYE)` so the
+    /// per-round stride stays fixed, and `tours` skips them.
+    fn game_pairs(teams: &[u32]) -> Vec<(u32, u32)> {
+        let n = teams.len();
+        if n < 2 {
+            return Vec::new();
+        }
+
+        let mut seats: Vec<u32> = teams.to_vec();
+        if !n.is_multiple_of(2) {
+            seats.push(Self::BYE);
+        }
+        let seats_len = seats.len();
+        let half = seats_len / 2;
+        let rounds_per_half = seats_len - 1;
+
+        let mut first_half: Vec<(u32, u32)> = Vec::with_capacity(rounds_per_half * half);
+        for round in 0..rounds_per_half {
+            // Home side alternates on the round alone: a `(round + seat)`
+            // parity cancels with the seat rotation and strings a team's
+            // home games together.
+            let top_is_home = round % 2 == 0;
+            for i in 0..half {
+                let top = seats[i];
+                let bottom = seats[seats_len - 1 - i];
+                let (home, away) = if top_is_home {
+                    (top, bottom)
+                } else {
+                    (bottom, top)
+                };
+                first_half.push((home, away));
+            }
+            // Rotate seats 1..n clockwise; seat 0 is fixed.
+            let last = seats[seats_len - 1];
+            for j in (2..seats_len).rev() {
+                seats[j] = seats[j - 1];
+            }
+            seats[1] = last;
+        }
+
+        let mut result = Vec::with_capacity(first_half.len() * 2);
+        result.extend(first_half.iter().map(|&(h, a)| {
+            if h == Self::BYE || a == Self::BYE {
+                (Self::BYE, Self::BYE)
+            } else {
+                (h, a)
+            }
+        }));
+        for &(h, a) in &first_half {
+            if h == Self::BYE || a == Self::BYE {
+                result.push((Self::BYE, Self::BYE));
+            } else {
+                result.push((a, h));
+            }
+        }
+        result
     }
 }
 
@@ -31,6 +165,7 @@ impl ScheduleGenerator for RoundSchedule {
         season: Season,
         teams: &[u32],
         league_settings: &LeagueSettings,
+        level: CompetitionLevel,
     ) -> Result<Vec<ScheduleTour>, ScheduleError> {
         let teams_len = teams.len();
 
@@ -39,225 +174,56 @@ impl ScheduleGenerator for RoundSchedule {
             ScheduleError::new("team_len is empty");
         }
 
-        let season_year_start = season.start_year;
+        let round_weekday = level.round_weekday();
+        let starting = &league_settings.season_starting_half;
+        let ending = &league_settings.season_ending_half;
+        let opening = NaiveDate::from_ymd_opt(
+            season.start_year as i32,
+            starting.from_month as u32,
+            starting.from_day as u32,
+        )
+        .unwrap();
+        let rounds = Self::round_count(teams_len);
 
-        let current_date = DateUtils::next_saturday(
-            NaiveDate::from_ymd_opt(
-                season_year_start as i32,
-                league_settings.season_starting_half.from_month as u32,
-                league_settings.season_starting_half.from_day as u32,
-            )
-            .unwrap(),
-        );
+        // The first round day on or after the window opens — never before
+        // it, since the schedule is generated on the opening day itself.
+        let first_round = DateUtils::next_weekday(opening, round_weekday);
 
-        let current_date_time =
-            NaiveDateTime::new(current_date, NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-
-        let tours_count = (teams_len * teams_len - teams_len) / (teams_len / 2);
-
-        // Split seasons (Apertura/Clausura) restart the mirrored second
-        // round-robin on the second tournament's own opening weekend
-        // instead of running straight through the mid-year break.
-        let second_half_start = if league_settings.split_season {
-            let start_month = league_settings.season_starting_half.from_month;
-            let second = &league_settings.season_ending_half;
-            let year = if second.from_month >= start_month {
-                season_year_start as i32
-            } else {
-                season_year_start as i32 + 1
-            };
-            NaiveDate::from_ymd_opt(year, second.from_month as u32, second.from_day as u32)
-                .map(DateUtils::next_saturday)
-                .map(|d| NaiveDateTime::new(d, NaiveTime::from_hms_opt(0, 0, 0).unwrap()))
-        } else {
-            None
+        let plan = |first: NaiveDate, closing: NaiveDate, rounds: usize| {
+            let days = RoundCalendar::dates(first, closing, rounds, level);
+            let late = days.iter().filter(|day| **day > closing).count();
+            if late > 0 {
+                warn!("schedule: {league_slug} plays {late} of {rounds} rounds after {closing}");
+            }
+            days
         };
 
-        let mut result = Vec::with_capacity(tours_count);
+        // Split seasons (Apertura/Clausura) play the mirrored second
+        // round-robin inside the second tournament's own window.
+        let round_days = if league_settings.split_season {
+            let first_close = Self::on_or_after(opening, starting.to_month, starting.to_day);
+            let mut days = plan(first_round, first_close, rounds / 2);
 
-        result.extend(generate_tours(
+            let second_open = Self::on_or_after(opening, ending.from_month, ending.from_day);
+            let second_close = Self::on_or_after(second_open, ending.to_month, ending.to_day);
+            let after_first = days.last().map_or(second_open, |last| last.succ_opt().unwrap());
+            let second_round = DateUtils::next_weekday(second_open.max(after_first), round_weekday);
+            days.extend(plan(second_round, second_close, rounds - rounds / 2));
+            days
+        } else {
+            let closing = Self::on_or_after(opening, ending.to_month, ending.to_day);
+            plan(first_round, closing, rounds)
+        };
+
+        Ok(Self::tours(
             league_id,
             String::from(league_slug),
             teams,
-            tours_count,
-            current_date_time,
-            second_half_start,
-        ));
-
-        Ok(result)
+            &round_days,
+            level,
+        ))
     }
 }
-
-fn generate_tours(
-    league_id: u32,
-    league_slug: String,
-    teams: &[u32],
-    tours_count: usize,
-    mut current_date: NaiveDateTime,
-    second_half_start: Option<NaiveDateTime>,
-) -> Vec<ScheduleTour> {
-    if teams.len() < 2 {
-        return Vec::new();
-    }
-
-    // For even team counts the circle method emits `(n/2) * (n-1) * 2`
-    // fixtures laid out as `n-1` rounds per half-season × `n/2` games.
-    // For odd team counts we include a bye seat; each round still has
-    // the same stride but one slot is a `(BYE, BYE)` pair that must be
-    // skipped when building tours.
-    let games_per_round = if teams.len().is_multiple_of(2) {
-        teams.len() / 2
-    } else {
-        teams.len().div_ceil(2)
-    };
-    let total_rounds = if teams.len().is_multiple_of(2) {
-        (teams.len() - 1) * 2
-    } else {
-        teams.len() * 2
-    };
-
-    // Prefer the internally-computed round count — the caller's
-    // `tours_count` can drift from the algorithm when the team count
-    // is odd (integer division loses matches). Honour the smaller of
-    // the two so we never over-run the generated pair vector.
-    let rounds_to_emit = total_rounds.min(tours_count.max(total_rounds));
-
-    let mut result = Vec::with_capacity(rounds_to_emit);
-    let games = generate_game_pairs(teams, tours_count);
-    if games.is_empty() {
-        return result;
-    }
-
-    let mut games_offset = 0;
-    for tour_idx in 0..rounds_to_emit {
-        // Second tournament of a split season: jump to its own window
-        // (but never backwards, in case the halves overlap in config).
-        if tour_idx == rounds_to_emit / 2
-            && let Some(second_start) = second_half_start
-            && second_start > current_date
-        {
-            current_date = second_start;
-        }
-        let mut tour = ScheduleTour::new((tour_idx + 1) as u8, games_per_round);
-
-        for game_idx in 0..games_per_round {
-            let pos = games_offset + game_idx;
-            if pos >= games.len() {
-                break;
-            }
-            let (home_team_id, away_team_id) = games[pos];
-            // Skip bye fixtures — the team scheduled for a bye just
-            // rests this round.
-            if home_team_id == SCHEDULE_BYE || away_team_id == SCHEDULE_BYE {
-                continue;
-            }
-            tour.items.push(ScheduleItem::new(
-                league_id,
-                String::from(&league_slug),
-                home_team_id,
-                away_team_id,
-                current_date,
-                None,
-            ));
-        }
-
-        games_offset += games_per_round;
-        current_date += Duration::days(7);
-
-        result.push(tour);
-    }
-
-    result
-}
-
-/// Double round-robin via the circle method. Every team plays every
-/// other team exactly twice (once home, once away). Odd team counts
-/// use a bye placeholder; the round that would have paired a team
-/// with the bye becomes a rest round for that team, and the bye is
-/// padded out with a self-pair so the tour layout stays a flat grid
-/// of `games_count` slots per round (the upstream caller expects a
-/// fixed stride).
-///
-/// The previous hand-rolled `rotate` did not produce a valid round
-/// robin — it duplicated ~180 of the 380 ordered pairs for a 20-team
-/// league and left ~200 matchups missing entirely. Tallies like
-/// "team X never plays team Y all season, team X plays team Z twice
-/// at home" came from that. Switching to the standard circle method
-/// guarantees every real ordered (home, away) pair occurs exactly
-/// once across the full double round-robin.
-fn generate_game_pairs(teams: &[u32], _tours_count: usize) -> Vec<(u32, u32)> {
-    let n = teams.len();
-    if n < 2 {
-        return Vec::new();
-    }
-
-    // For odd team counts, append a bye sentinel and strip matches
-    // that involve it at the end. `u32::MAX` is safe: real team ids
-    // are allocated sequentially and never reach that range.
-    const BYE: u32 = u32::MAX;
-    let mut seats: Vec<u32> = teams.to_vec();
-    if !n.is_multiple_of(2) {
-        seats.push(BYE);
-    }
-    let seats_len = seats.len();
-    let half = seats_len / 2;
-    let rounds_per_half = seats_len - 1;
-
-    let mut first_half: Vec<(u32, u32)> = Vec::with_capacity(rounds_per_half * half);
-    for round in 0..rounds_per_half {
-        // Flip the "which row is home" decision each round so a team
-        // rotating through seats doesn't end up on the same side every
-        // week. The previous `(round + i) % 2` scheme cancelled with
-        // the rotation (a team moves i++ each round, so round + i
-        // stayed at the same parity), producing the "10 consecutive
-        // home games" clustering seen in schedules. Alternating purely
-        // on `round` gives a proper H/A/H/A pattern as a team traverses
-        // the top row, and flips cleanly when it crosses into the
-        // bottom row.
-        let top_is_home = round % 2 == 0;
-        for i in 0..half {
-            let top = seats[i];
-            let bottom = seats[seats_len - 1 - i];
-            let (home, away) = if top_is_home {
-                (top, bottom)
-            } else {
-                (bottom, top)
-            };
-            first_half.push((home, away));
-        }
-        // Rotate seats 1..n clockwise; seat 0 is fixed.
-        let last = seats[seats_len - 1];
-        for j in (2..seats_len).rev() {
-            seats[j] = seats[j - 1];
-        }
-        seats[1] = last;
-    }
-
-    // Build full double round-robin: first_half + mirrored second half.
-    // Bye pairs stay in the sequence as `(BYE, BYE)` so the caller's
-    // fixed `games_count` stride per tour still indexes correctly;
-    // `generate_tours` skips them so they never reach a ScheduleTour.
-    let mut result = Vec::with_capacity(first_half.len() * 2);
-    result.extend(first_half.iter().map(|&(h, a)| {
-        if h == BYE || a == BYE {
-            (BYE, BYE)
-        } else {
-            (h, a)
-        }
-    }));
-    for &(h, a) in &first_half {
-        if h == BYE || a == BYE {
-            result.push((BYE, BYE));
-        } else {
-            result.push((a, h));
-        }
-    }
-    result
-}
-
-/// Sentinel for a bye fixture emitted by `generate_game_pairs` for
-/// odd team counts. Kept internal to this module.
-const SCHEDULE_BYE: u32 = u32::MAX;
 
 #[cfg(test)]
 mod tests {
@@ -278,7 +244,14 @@ mod tests {
             split_season: false,
         };
         let tours = RoundSchedule::new()
-            .generate(1, "t", Season::new(2026), &teams, &settings)
+            .generate(
+                1,
+                "t",
+                Season::new(2026),
+                &teams,
+                &settings,
+                CompetitionLevel::Senior,
+            )
             .unwrap();
 
         let mut home_count: HashMap<u32, u32> = HashMap::new();
@@ -337,7 +310,14 @@ mod tests {
             split_season: false,
         };
         let tours = RoundSchedule::new()
-            .generate(1, "t", Season::new(2026), &teams, &settings)
+            .generate(
+                1,
+                "t",
+                Season::new(2026),
+                &teams,
+                &settings,
+                CompetitionLevel::Senior,
+            )
             .unwrap();
 
         for &tid in &teams {
@@ -395,10 +375,17 @@ mod tests {
             split_season: false,
         };
         let tours = RoundSchedule::new()
-            .generate(1, "t", Season::new(2026), &teams, &settings)
+            .generate(
+                1,
+                "t",
+                Season::new(2026),
+                &teams,
+                &settings,
+                CompetitionLevel::Senior,
+            )
             .unwrap();
 
-        // Odd team counts produce a bye slot per round; `generate_tours`
+        // Odd team counts produce a bye slot per round; `tours`
         // drops those before they reach a tour. Total matches should be
         // n * (n-1) = 15 * 14 = 210, split across ~30 rounds.
         let mut home_count: HashMap<u32, u32> = HashMap::new();
@@ -438,6 +425,7 @@ mod tests {
 
     #[test]
     fn split_season_second_tournament_starts_in_its_own_window() {
+        use crate::InternationalCalendar;
         use std::collections::HashMap;
         // Argentine shape: 15 teams, Apertura Feb-Jun, Clausura from Jul 15.
         let teams: Vec<u32> = (1..=15).collect();
@@ -451,25 +439,40 @@ mod tests {
             split_season: true,
         };
         let tours = RoundSchedule::new()
-            .generate(1, "t", Season::new(2026), &teams, &settings)
+            .generate(
+                1,
+                "t",
+                Season::new(2026),
+                &teams,
+                &settings,
+                CompetitionLevel::Senior,
+            )
             .unwrap();
 
         assert_eq!(tours.len(), 30, "two 15-round single round-robins");
 
+        let apertura_close = NaiveDate::from_ymd_opt(2026, 6, 30).unwrap();
         let clausura_start = NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();
+        let clausura_close = NaiveDate::from_ymd_opt(2026, 12, 15).unwrap();
         for (idx, tour) in tours.iter().enumerate() {
             let date = tour.items.first().map(|i| i.date.date()).unwrap();
+            assert!(
+                InternationalCalendar::window_on(date).is_none(),
+                "tour {} on {} inside an international window",
+                idx + 1,
+                date
+            );
             if idx < 15 {
                 assert!(
-                    date < clausura_start,
-                    "Apertura tour {} on {} leaked into the Clausura window",
+                    date <= apertura_close,
+                    "Apertura tour {} on {} after the Apertura closes",
                     idx + 1,
                     date
                 );
             } else {
                 assert!(
-                    date >= clausura_start,
-                    "Clausura tour {} on {} starts before July 15",
+                    date >= clausura_start && date <= clausura_close,
+                    "Clausura tour {} on {} outside July 15 - December 15",
                     idx + 1,
                     date
                 );
@@ -521,6 +524,7 @@ mod tests {
                 Season::new(2020),
                 &teams,
                 &league_settings,
+                CompetitionLevel::Senior,
             )
             .unwrap();
 
@@ -554,6 +558,146 @@ mod tests {
                     tour.num
                 );
             }
+        }
+    }
+
+    fn august_settings() -> LeagueSettings {
+        LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
+            season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+            tier: 1,
+            promotion_spots: 0,
+            relegation_spots: 0,
+            league_group: None,
+            split_season: false,
+        }
+    }
+
+    fn fixtures(level: CompetitionLevel, teams: &[u32]) -> Vec<ScheduleItem> {
+        RoundSchedule::new()
+            .generate(1, "t", Season::new(2026), teams, &august_settings(), level)
+            .unwrap()
+            .into_iter()
+            .flat_map(|t| t.items)
+            .collect()
+    }
+
+    #[test]
+    fn senior_rounds_are_saturday_afternoons_never_midnight() {
+        use chrono::{Datelike, Timelike, Weekday};
+        let teams: Vec<u32> = (1..=18).collect();
+        for item in fixtures(CompetitionLevel::Senior, &teams) {
+            assert_eq!(item.date.weekday(), Weekday::Sat, "{}", item.date);
+            assert!(
+                (12..=21).contains(&item.date.hour()),
+                "senior kickoff {}",
+                item.date
+            );
+        }
+    }
+
+    #[test]
+    fn development_rounds_are_fridays() {
+        use chrono::{Datelike, Timelike, Weekday};
+        let teams: Vec<u32> = (101..=118).collect();
+        for item in fixtures(CompetitionLevel::Development, &teams) {
+            assert_eq!(item.date.weekday(), Weekday::Fri, "{}", item.date);
+            assert!(
+                (10..=14).contains(&item.date.hour()),
+                "youth kickoff {}",
+                item.date
+            );
+        }
+    }
+
+    #[test]
+    fn league_rounds_stop_for_international_windows() {
+        use crate::InternationalCalendar;
+        let items = fixtures(CompetitionLevel::Senior, &(1..=20).collect::<Vec<_>>());
+        assert_eq!(items.len(), 380);
+        for item in &items {
+            assert!(
+                InternationalCalendar::window_on(item.date.date()).is_none(),
+                "senior fixture on {} inside a window",
+                item.date
+            );
+        }
+        let youth = fixtures(CompetitionLevel::Development, &(101..=120).collect::<Vec<_>>());
+        for item in &youth {
+            assert!(
+                InternationalCalendar::window_on(item.date.date()).is_none(),
+                "youth fixture on {} inside a window",
+                item.date
+            );
+        }
+    }
+
+    #[test]
+    fn a_crowded_senior_league_adds_tuesdays_and_still_ends_on_time() {
+        use chrono::{Datelike, Weekday};
+        // 24 clubs, 46 rounds, from 9 August to 3 May.
+        let settings = LeagueSettings {
+            season_starting_half: DayMonthPeriod::new(9, 8, 31, 12),
+            season_ending_half: DayMonthPeriod::new(1, 1, 3, 5),
+            ..august_settings()
+        };
+        let tours = RoundSchedule::new()
+            .generate(
+                1,
+                "t",
+                Season::new(2027),
+                &(1..=24).collect::<Vec<_>>(),
+                &settings,
+                CompetitionLevel::Senior,
+            )
+            .unwrap();
+        assert_eq!(tours.len(), 46);
+        let close = NaiveDate::from_ymd_opt(2028, 5, 3).unwrap();
+        let mut last = None;
+        for tour in &tours {
+            let day = tour.items[0].date.date();
+            assert!(tour.items.iter().all(|i| i.date.date() == day), "one day per round");
+            assert!(day <= close, "round {} on {day} after the close", tour.num);
+            assert!(matches!(day.weekday(), Weekday::Sat | Weekday::Tue), "{day}");
+            if let Some(previous) = last {
+                assert!(day > previous, "round {} not after the one before", tour.num);
+            }
+            last = Some(day);
+        }
+    }
+
+    #[test]
+    fn saturday_season_start_puts_youth_round_one_on_the_next_friday() {
+        // 1 Aug 2026 is a Saturday: the senior league opens that day, and
+        // the Friday before it is already gone when the schedule is drawn.
+        let senior = fixtures(CompetitionLevel::Senior, &[1, 2, 3, 4]);
+        let youth = fixtures(CompetitionLevel::Development, &[101, 102, 103, 104]);
+        let opening = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+
+        let senior_first = senior.iter().map(|i| i.date.date()).min().unwrap();
+        let youth_first = youth.iter().map(|i| i.date.date()).min().unwrap();
+        assert_eq!(senior_first, opening);
+        assert_eq!(youth_first, NaiveDate::from_ymd_opt(2026, 8, 7).unwrap());
+        assert!(youth.iter().all(|i| i.date.date() >= opening));
+    }
+
+    #[test]
+    fn a_youth_league_never_shares_a_day_with_its_parent_league() {
+        use std::collections::HashSet;
+        let senior_days: HashSet<NaiveDate> =
+            fixtures(CompetitionLevel::Senior, &(1..=16).collect::<Vec<_>>())
+                .iter()
+                .map(|i| i.date.date())
+                .collect();
+        for item in fixtures(
+            CompetitionLevel::Development,
+            &(101..=116).collect::<Vec<_>>(),
+        ) {
+            assert!(
+                !senior_days.contains(&item.date.date()),
+                "youth fixture on senior day {}",
+                item.date
+            );
         }
     }
 }

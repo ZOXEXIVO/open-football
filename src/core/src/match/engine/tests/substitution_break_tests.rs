@@ -701,3 +701,42 @@ fn a_change_waits_for_the_ball_to_be_dead() {
     field.ball.awaiting_restart.as_mut().unwrap().settled = true;
     assert!(Substitutions::play_is_stopped(&field));
 }
+
+/// A change made at the interval is made at the first stoppage after the
+/// restart, where there is play to show it in: walked on and played out like
+/// any other, and still the interval's — it costs none of the three windows,
+/// and the first look spends the interval whether or not anybody changed.
+#[test]
+fn an_interval_change_is_walked_on_and_costs_no_window() {
+    let (mut field, mut context) = kickoff();
+    context.total_match_time = 46 * 60_000;
+    context.substitution_windows.open_interval();
+    let out_id = injure_the_furthest_man(&mut field);
+
+    let today = context.today;
+    Substitutions::process(&mut field, &mut context, 3, today);
+
+    assert!(
+        context
+            .substitution_break
+            .as_ref()
+            .is_some_and(|window| window.changes().iter().any(|c| c.player_out_id == out_id)),
+        "an interval change must be walked on like any other"
+    );
+    assert_eq!(
+        context.substitution_windows.spent(true),
+        0,
+        "the interval is free"
+    );
+    assert!(
+        !context.substitution_windows.at_interval(),
+        "the first look after the restart spends the interval"
+    );
+
+    // The same change with the interval gone is an ordinary stoppage.
+    let (mut field, mut context) = kickoff();
+    context.total_match_time = 46 * 60_000;
+    injure_the_furthest_man(&mut field);
+    Substitutions::process(&mut field, &mut context, 3, today);
+    assert_eq!(context.substitution_windows.spent(true), 1);
+}

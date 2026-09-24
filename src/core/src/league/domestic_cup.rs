@@ -17,12 +17,14 @@ use crate::MatchRuntime;
 use crate::TeamType;
 use crate::context::GlobalContext;
 use crate::league::schedule::cup;
+use crate::league::schedule::cup::CupCalendar;
+use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{
-    League, LeagueBuildOutput, LeagueMatch, LeaguePendingState, LeagueResult, LeagueTableResult,
-    MatchStorage, Schedule, ScheduleItem, ScheduleTour,
+    CompetitionLevel, KickoffClock, League, LeagueBuildOutput, LeagueMatch, LeaguePendingState,
+    LeagueResult, LeagueTableResult, MatchStorage, Schedule, ScheduleItem, ScheduleTour,
 };
 use crate::r#match::{MatchResult, MatchResultOutcome};
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime};
+use chrono::{Datelike, Duration, NaiveDate};
 use log::debug;
 use std::collections::{HashMap, HashSet};
 
@@ -175,15 +177,15 @@ impl DomesticCup {
         (start, end)
     }
 
-    fn build_tour(&self, round: u8, pairings: &[(u32, u32)], date: NaiveDateTime) -> ScheduleTour {
+    fn build_tour(&self, round: u8, pairings: &[(u32, u32)], date: NaiveDate) -> ScheduleTour {
         let mut tour = ScheduleTour::new(round, pairings.len());
-        for (home, away) in pairings {
+        for (slot, (home, away)) in pairings.iter().enumerate() {
             tour.items.push(ScheduleItem::new(
                 self.league.id,
                 self.league.slug.clone(),
                 *home,
                 *away,
-                date,
+                KickoffClock::at(date, CompetitionLevel::Senior, slot),
                 None,
             ));
         }
@@ -267,17 +269,16 @@ impl DomesticCup {
         let (pairings, _byes) = cup::pair_knockout_round(&field);
         let total = cup::total_rounds(field.len());
         let (season_start, season_end) = self.season_window();
-        let mut date = cup::cup_round_date(season_start, season_end, 1, total);
+        let mut date = CupCalendar::round_date(season_start, season_end, 1, total);
         // If the game begins mid-season (e.g. a calendar-year league whose
         // campaign already started before the world's August kick-off), the
         // evenly-spaced round-one slot can land in the past and never play.
         // Push it to the next midweek so the cup still runs this season.
         let today = ctx.simulation.date.date();
         if date <= today {
-            date = cup::next_midweek(today + Duration::days(7));
+            date = CupCalendar::next_midweek(today + Duration::days(7));
         }
-        let dt = NaiveDateTime::new(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-        let tour = self.build_tour(1, &pairings, dt);
+        let tour = self.build_tour(1, &pairings, date);
         self.league.schedule.tours.push(tour);
         debug!(
             "🏆 Cup {} round 1 drawn: {} ties, {} entrants, first leg {}",
@@ -314,14 +315,13 @@ impl DomesticCup {
         let next_round = (self.league.schedule.tours.len() + 1) as u8;
         let total = cup::total_rounds(field.len());
         let (season_start, season_end) = self.season_window();
-        let mut date = cup::cup_round_date(season_start, season_end, next_round, total);
+        let mut date = CupCalendar::round_date(season_start, season_end, next_round, total);
         // Never schedule into the past: the previous round may have run long
         // enough that the evenly-spaced slot has already elapsed.
         if date <= current_date {
-            date = cup::next_midweek(current_date + Duration::days(7));
+            date = CupCalendar::next_midweek(current_date + Duration::days(7));
         }
-        let dt = NaiveDateTime::new(date, NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-        let tour = self.build_tour(next_round, &pairings, dt);
+        let tour = self.build_tour(next_round, &pairings, date);
         debug!(
             "🏆 Cup {} round {} drawn: {} ties on {}",
             self.league.name,
@@ -338,7 +338,12 @@ impl DomesticCup {
     /// `Match` objects ready for a batched engine dispatch alongside a
     /// `LeaguePendingState` so [`simulate_process`] can resume cup-side
     /// bookkeeping once the engine returns the results.
-    pub fn simulate_build(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueBuildOutput {
+    pub(crate) fn simulate_build(
+        &mut self,
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        commitments: &MatchdayCommitments,
+    ) -> LeagueBuildOutput {
         let current_date = ctx.simulation.date.date();
 
         let new_schedule = self.league.schedule.tours.is_empty()
@@ -366,9 +371,9 @@ impl DomesticCup {
         // Knockout: build via the inner league's matchday builder with
         // `knockout = true`, so a level score is settled by extra time
         // and (if needed) penalties.
-        let matches = self
-            .league
-            .build_matchday_matches(&scheduled, clubs, ctx, false, true);
+        let matches =
+            self.league
+                .build_matchday_matches(&scheduled, clubs, ctx, false, true, commitments);
 
         LeagueBuildOutput {
             matches,
@@ -472,7 +477,8 @@ impl DomesticCup {
     /// single global dispatch batch via `WorldMatchdayResult::process`.
     pub fn simulate(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> LeagueResult {
         let current_date = ctx.simulation.date.date();
-        let output = self.simulate_build(clubs, ctx);
+        let commitments = MatchdayCommitments::gather([&self.league.schedule], current_date);
+        let output = self.simulate_build(clubs, ctx, &commitments);
         if let Some(immediate) = output.immediate {
             return immediate;
         }
@@ -701,6 +707,15 @@ mod tests {
         let tie_date = cup.league.schedule.tours[0].items[0].date.date();
         assert!(tie_date > date.date());
         assert_eq!(tie_date.weekday(), chrono::Weekday::Wed);
+        // …and kick off in the evening, never at midnight.
+        for item in &cup.league.schedule.tours[0].items {
+            use chrono::Timelike;
+            assert!(
+                (18..=21).contains(&item.date.hour()),
+                "cup kickoff {}",
+                item.date
+            );
+        }
     }
 
     #[test]

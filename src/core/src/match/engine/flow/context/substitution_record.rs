@@ -46,6 +46,7 @@ pub struct SubstitutionRecord {
 pub struct SubstitutionWindows {
     home: u8,
     away: u8,
+    interval: bool,
 }
 
 impl SubstitutionWindows {
@@ -68,6 +69,30 @@ impl SubstitutionWindows {
             &mut self.away
         };
         *slot = slot.saturating_add(1);
+    }
+
+    /// The half-time whistle: the free opportunity is open.
+    ///
+    /// It is taken at the first stoppage of the second half rather than at
+    /// the break itself, because the break has no play to show a change in —
+    /// the period boundary re-forms both sides ten milliseconds later, so an
+    /// interval change was never walked, never recorded, and its marker on
+    /// the replay led nowhere. On that stoppage it is walked on and clipped
+    /// like every other change, and it is still the interval's: free, and
+    /// priced as one.
+    pub fn open_interval(&mut self) {
+        self.interval = true;
+    }
+
+    /// Whether the interval is still waiting to be taken.
+    pub fn at_interval(&self) -> bool {
+        self.interval
+    }
+
+    /// Taken by the first substitution pass after the restart, whether or
+    /// not either side changed on it — the manager has had his look.
+    pub fn close_interval(&mut self) {
+        self.interval = false;
     }
 }
 

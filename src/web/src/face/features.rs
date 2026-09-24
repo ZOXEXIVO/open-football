@@ -1,783 +1,653 @@
-//! Ears, eyes, brows, nose and mouth — the parts drawn over the lit skin.
+//! What lives on and in the skin of the head: its colouring, the brows,
+//! lips and nostrils painted into it, the eyes set in it, the lashes over
+//! them, and the ears standing off it.
 //!
-//! None of it is outlined. A feature is a stack of soft shapes: the plane
-//! that faces the light, the plane that turns from it, the crease where two
-//! meet, and the one or two crisp marks a camera would resolve — a lash
-//! line, a nostril, the line between the lips, a catchlight.
+//! Pigment is kept apart from light. Everything in [`Complexion`] is what
+//! the surface is — the studio decides what it looks like — which is why a
+//! brow or a freckle keeps its edge when the skin's shading is softened by
+//! scattering, exactly as it does in a photograph.
 
-use super::canvas::{Blur, Canvas, PathBuilder};
-use super::color::Rgb;
-use super::geometry::Landmarks;
+use std::f32::consts::{PI, TAU};
+
+use super::beard::Growth;
+use super::canvas::{Grid, Outline, Path, Plane, Polyline, Ramp};
+use super::color::Linear;
+use super::geometry::{Eye, Landmarks};
 use super::identity::Identity;
+use super::noise::Noise;
+use super::relief::{Eyeball, Form};
+use super::shading::{Occlusion, Studio, Vec3};
 use super::tones::Tones;
+
+/// The head's skin as pigment and sheen, pixel by pixel.
+pub struct Complexion {
+    pub albedo: Vec<Linear>,
+    /// 0 matte .. 1 oily: how strongly and how tightly it reflects
+    pub oil: Vec<f32>,
+    /// Surface grain too fine to model, for the specular to catch
+    pub micro: Plane,
+}
+
+/// One brow: the spine its hairs grow along, and how thick it is.
+struct Brow {
+    spine: Polyline,
+    side: f32,
+    thick: f32,
+    sparse: f32,
+    seed: f32,
+}
+
+impl Brow {
+    fn new(l: &Landmarks, id: &Identity, eye: &Eye, aggr: f32) -> Brow {
+        let bs = &l.brow_shape;
+        let side = eye.side;
+        // Aggression knits the heads of the brows toward each other and
+        // down; no pair sits level, and whose rides higher is the id's
+        let inner_x = eye.cx - side * (bs.len - 5.0 - aggr * 1.2);
+        let outer_x = eye.cx + side * (bs.len + 3.0);
+        let raise = id.jitter_signed(3, 77) * 0.9 * side;
+        // Brows lie along the lower edge of the brow ridge, close over the
+        // fold of the lid
+        let y0 = l.brow + 3.4 + aggr * 2.2 + raise;
+        let yc = l.brow + 1.8 - bs.arch * 1.5 * (1.0 - aggr * 0.35) + raise;
+        let y1 = l.brow + 2.6 + bs.tilt * 2.4 + raise;
+        let peak_x = inner_x + (outer_x - inner_x) * 0.62;
+        let spine = Path::from((inner_x, y0))
+            .quad((peak_x, yc), (outer_x, y1))
+            .polyline();
+        Brow {
+            spine,
+            side,
+            thick: bs.thickness,
+            sparse: if bs.strands < 30 { 0.72 } else { 1.0 },
+            seed: side * 31.7 + id.seed as f32 * 0.013,
+        }
+    }
+
+    /// Hair cover at a point, 0..1.
+    fn density(&self, x: f32, y: f32, noise: &Noise) -> f32 {
+        if !self.spine.near(x, y, 4.5) {
+            return 0.0;
+        }
+        let foot = self.spine.foot(x, y);
+        let u = foot.u;
+        let below = foot.d * self.side;
+        let half = self.thick * (3.6 - 2.2 * u.powf(0.8));
+        // Hairs grow up and out at the head, flatten across the arch and
+        // lie along the tail
+        let a: f32 = if u < 0.28 {
+            1.25 - u * 1.6
+        } else if u < 0.7 {
+            0.80 - (u - 0.28) * 0.9
+        } else {
+            0.42 - (u - 0.7) * 0.8
+        };
+        let s = u * self.spine.len();
+        let q = -below * a.cos() - s * a.sin();
+        let strand = 0.5 + 0.5 * noise.at(q * 1.25 + self.seed, s * 0.22 + below * 0.3);
+        let fine = 0.5 + 0.5 * noise.at(q * 2.1 - self.seed, s * 0.5);
+        let edge = if below > 0.0 {
+            below / half
+        } else {
+            -below / (half * 1.15)
+        } - (strand - 0.5) * 0.55;
+        let body = 1.0 - Ramp::smooth(0.55, 1.15, edge);
+        let ends = Ramp::smooth(0.0, 0.07, u) * (1.0 - Ramp::smooth(0.80, 1.02, u));
+        body * ends * (0.6 + 0.26 * strand + 0.14 * fine) * self.sparse
+    }
+}
+
+/// Where colour gathers on a face, as soft weights.
+struct Zones {
+    flush: Vec<Form>,
+    pale: Vec<Form>,
+    orbit: Vec<Form>,
+    oil: Vec<Form>,
+    nostrils: Vec<Form>,
+    /// Where pores are coarse — the nose and the cheeks beside it — and,
+    /// negatively, where the skin is fine — round the eyes
+    pores: Vec<Form>,
+}
+
+impl Zones {
+    fn new(l: &Landmarks, id: &Identity) -> Zones {
+        let cx = l.cx;
+        let s = &l.skull;
+        let ns = &l.nose_shape;
+        let nx = cx + id.turn * 0.35 * 3.0;
+        let mut flush = vec![
+            Form::blob(nx, l.nose - 5.0, ns.tip * 1.2, 12.0, 0.0, 0.38),
+            Form::blob(
+                nx,
+                l.nose - ns.ball,
+                ns.ball * 1.3,
+                ns.ball * 1.2,
+                0.0,
+                0.12,
+            ),
+            Form::blob(cx, s.chin - 9.0, 10.0, 7.0, 0.0, 0.25),
+        ];
+        let mut orbit = Vec::new();
+        let mut nostrils = Vec::new();
+        for eye in &l.eyes {
+            let side = eye.side;
+            flush.push(Form::blob(
+                cx + side * s.zygo * 0.50,
+                s.zygo_y + 10.0,
+                30.0,
+                26.0,
+                -side * 10.0,
+                0.3,
+            ));
+            orbit.push(Form::blob(
+                eye.cx,
+                l.eye + 3.5,
+                l.eye_shape.rx * 1.25,
+                6.5,
+                0.0,
+                0.18 + l.maturity * 0.25 + id.morph.lid_heavy * 0.1,
+            ));
+            orbit.push(Form::blob(
+                eye.inner.0 - side * 1.5,
+                eye.inner.1,
+                3.5,
+                4.5,
+                0.0,
+                0.45,
+            ));
+            // The upper lid: thin skin, a shade deeper than the brow above
+            orbit.push(Form::blob(
+                eye.cx + side * 0.5,
+                eye.top - 2.8,
+                l.eye_shape.rx * 1.1,
+                3.6,
+                0.0,
+                0.3,
+            ));
+            nostrils.push(Form::blob(
+                nx + side * ns.tip * 0.40,
+                l.nose + 0.3,
+                ns.nostril * 0.95,
+                1.5,
+                -side * 18.0,
+                1.0,
+            ));
+        }
+        let pale = vec![
+            Form::blob(cx, l.hairline + 20.0, 34.0, 20.0, 0.0, 0.7),
+            Form::blob(nx, l.eye + 4.0, 4.5, 11.0, 0.0, 0.35),
+        ];
+        let oil = vec![
+            Form::blob(cx, l.hairline + 20.0, 30.0, 16.0, 0.0, 0.4),
+            Form::blob(nx, l.nose - 12.0, 7.0, 14.0, 0.0, 0.45),
+            Form::blob(cx, s.chin - 9.0, 10.0, 7.0, 0.0, 0.40),
+        ];
+        let mut pores = vec![
+            Form::blob(nx, l.nose - 6.0, ns.tip * 1.4, 14.0, 0.0, 0.8),
+            Form::blob(cx, l.hairline + 22.0, 26.0, 14.0, 0.0, 0.25),
+            Form::blob(cx, s.chin - 9.0, 11.0, 8.0, 0.0, 0.35),
+        ];
+        for eye in &l.eyes {
+            pores.push(Form::blob(
+                cx + eye.side * s.zygo * 0.45,
+                s.zygo_y + 12.0,
+                18.0,
+                15.0,
+                0.0,
+                0.55,
+            ));
+            pores.push(Form::blob(eye.cx, l.eye, 15.0, 9.0, 0.0, -0.9));
+        }
+        Zones {
+            flush,
+            pale,
+            orbit,
+            oil,
+            nostrils,
+            pores,
+        }
+    }
+
+    fn sum(forms: &[Form], x: f32, y: f32) -> f32 {
+        forms.iter().map(|f| f.at(x, y)).sum::<f32>().min(1.0)
+    }
+
+    /// How coarse the pores are at a point, 0 (fine) .. 1 (open).
+    fn coarse(forms: &[Form], x: f32, y: f32) -> f32 {
+        (0.4 + forms.iter().map(|f| f.at(x, y)).sum::<f32>()).clamp(0.0, 1.0)
+    }
+}
 
 pub struct Features;
 
 impl Features {
-    /// Ears go on before the head so the head overlaps their root.
-    ///
-    /// Seen from the front an ear is not an oval and not a blade: what
-    /// reads is the rolled helix standing clear of the skull, the scapha
-    /// groove shadowed just inside it, the antihelix ridge inside that, the
-    /// concha in deep shadow against the head, and a small soft lobe. All
-    /// of that has to live in the strip that is actually OUTSIDE the head
-    /// outline — anything drawn further in is painted over by the head a
-    /// moment later, which is how an ear ends up a flat pale plate.
-    ///
-    /// The two references matter separately. The ear HANGS off the side of
-    /// the skull and does not follow the jaw: below the cheekbone the face
-    /// narrows away in front of it, which is what lets a lobe stand clear
-    /// of the cheek, so the outer edge is measured from the widest the head
-    /// gets behind it. The root is measured from the outline at its own
-    /// height instead, so it is always tucked under the head and no gap of
-    /// background can open between the lobe and the jaw.
-    pub fn ears(c: &mut Canvas, l: &Landmarks, t: &Tones) {
+    /// Pigment and sheen over the whole head, the razor's work included.
+    #[allow(clippy::too_many_arguments)]
+    pub fn complexion(
+        grid: &Grid,
+        l: &Landmarks,
+        id: &Identity,
+        t: &Tones,
+        noise: &Noise,
+        cover: &Plane,
+        growth: &Growth,
+        aggr: f32,
+        grey: f32,
+    ) -> Complexion {
+        let zones = Zones::new(l, id);
+        let brows = l.eyes.each_ref().map(|eye| Brow::new(l, id, eye, aggr));
+        let brow_col = t
+            .hair_greyed(grey)
+            .mix(Linear::new(0.02, 0.015, 0.012), 0.62);
+        let upper = l.lips.upper.distance(grid);
+        let lower = l.lips.lower.distance(grid);
+        let flush_k = 0.45 + id.morph.redness * 0.45;
+        let freckles = if t.fairness > 0.55 {
+            id.morph.freckles
+        } else {
+            0.0
+        };
+        let mole = (id.marks == 4).then(|| {
+            (
+                l.cx + id.jitter_signed(11, 5) * 24.0,
+                130.0 + id.jitter(7, 9) * 48.0,
+            )
+        });
+
+        let albedo = grid.map(|i, j, x, y| {
+            let k = j * grid.w + i;
+            if cover.v[k] <= 0.0 {
+                return Linear::BLACK;
+            }
+            let mut a = t.skin;
+            // Blood shows in clouds, not ellipses
+            let cloud = 0.65 + 0.7 * (0.5 + 0.5 * noise.fbm(x * 0.09 - 7.0, y * 0.09, 3));
+            a = a.mix(
+                t.flush,
+                (0.06 + Zones::sum(&zones.flush, x, y) * flush_k * cloud).min(1.0),
+            );
+            a = a.mix(t.pale, Zones::sum(&zones.pale, x, y));
+            a = a.mix(t.orbit, Zones::sum(&zones.orbit, x, y));
+            a = a.mix(t.shaved, growth.veil.v[k]);
+            // Skin is never one flat colour: broad blotches of warmth and
+            // pallor, then the fine mottle of pores
+            let blotch = noise.fbm(x * 0.06 + 11.0, y * 0.06, 3);
+            let mottle = noise.fbm(x * 0.35 - 4.0, y * 0.35, 2);
+            a = a * (1.0 + 0.08 * blotch + 0.05 * mottle);
+            a = a.mix(
+                t.flush,
+                (noise.fbm(x * 0.11, y * 0.11 + 5.0, 2) * 0.22
+                    + noise.fbm(x * 0.4 + 9.0, y * 0.4, 2) * 0.06)
+                    .max(0.0),
+            );
+            // Pores hold a little pigment and a little shadow, and melanin
+            // lies in faint specks that no complexion is free of
+            let pit = Self::pore(noise, x, y, Zones::coarse(&zones.pores, x, y));
+            let speck = Ramp::smooth(0.45, 0.8, noise.at(x * 0.85 + 21.0, y * 0.85));
+            a = a * (1.0 - 0.10 * pit - 0.05 * speck);
+            if freckles > 0.0 {
+                let w = Ramp::smooth(10.0, 0.0, (y - (l.eye + 14.0)).abs())
+                    * Ramp::smooth(38.0, 10.0, (x - l.cx).abs());
+                let spot = Ramp::smooth(0.35, 0.62, noise.at(x * 1.1 + 40.0, y * 1.1));
+                a = a.mix(t.mark, spot * w * freckles * 0.55);
+            }
+            if let Some((mx, my)) = mole {
+                let d = ((x - mx).powi(2) + (y - my).powi(2)).sqrt();
+                a = a.mix(t.mark.deepen(1.3), Ramp::smooth(1.1, 0.5, d) * 0.85);
+            }
+
+            // Lips: the vermilion with its fine vertical creases, the upper
+            // a shade deeper than the lower
+            let lip_u = Ramp::smooth(-0.8, 0.8, upper.v[k]);
+            let lip_l = Ramp::smooth(-0.8, 0.8, lower.v[k]);
+            if lip_u + lip_l > 0.0 {
+                let creases = Ramp::smooth(0.1, 0.7, noise.at(x * 1.7 + 9.0, y * 0.28));
+                let lip = t.lip * (1.0 - 0.14 * creases);
+                a = a.mix(lip * 0.78, lip_u).mix(lip, lip_l);
+            }
+            let nostril = Zones::sum(&zones.nostrils, x, y);
+            a = a * (1.0 - 0.55 * nostril);
+
+            a = a.mix(growth.color, growth.stubble.v[k]);
+            let brow = brows
+                .iter()
+                .map(|b| b.density(x, y, noise))
+                .fold(0.0, f32::max);
+            a.mix(brow_col, brow * 0.94)
+        });
+
+        let oil = grid.map(|i, j, x, y| {
+            let k = j * grid.w + i;
+            if cover.v[k] <= 0.0 {
+                return 0.0;
+            }
+            let lips = Ramp::smooth(-0.3, 0.6, upper.v[k].max(lower.v[k]));
+            (0.18 + Zones::sum(&zones.oil, x, y))
+                .max(lips * 0.85)
+                .min(1.0)
+        });
+        // The skin's own surface: pores sunk into it, a fine grain across
+        // it and a gentle unevenness under both
+        let micro = Plane::from_fn(*grid, |x, y| {
+            let pit = Self::pore(noise, x, y, Zones::coarse(&zones.pores, x, y));
+            -0.09 * pit
+                + 0.02 * noise.at(x * 2.2 + 5.0, y * 2.2)
+                + 0.07 * noise.fbm(x * 0.55 + 71.0, y * 0.55, 2)
+        });
+
+        Complexion { albedo, oil, micro }
+    }
+
+    /// How deep a pore pit is at a point, 0..1: one pore to a cell of
+    /// about eight tenths of a unit, opening wider where the skin is coarse.
+    fn pore(noise: &Noise, x: f32, y: f32, coarse: f32) -> f32 {
+        let (d, own) = noise.cells(x * 1.25, y * 1.25);
+        let r = (0.16 + 0.22 * coarse) * (0.7 + 0.6 * own);
+        Ramp::smooth(r, r * 0.3, d) * (0.3 + 0.7 * coarse)
+    }
+
+    /// Skin with nothing on it but its own mottle — the neck, the ears.
+    /// `flush` is how much blood shows through: ear cartilage is thin.
+    pub fn plain_skin(
+        grid: &Grid,
+        cover: &Plane,
+        t: &Tones,
+        noise: &Noise,
+        flush: f32,
+    ) -> Vec<Linear> {
+        let base = t.skin.mix(t.flush, flush);
+        grid.map(|i, j, x, y| {
+            let k = j * grid.w + i;
+            if cover.v[k] <= 0.0 {
+                return Linear::BLACK;
+            }
+            let blotch = noise.fbm(x * 0.06 + 11.0, y * 0.06, 3);
+            let pit = Self::pore(noise, x, y, 0.3);
+            base * ((1.0 + 0.07 * blotch) * (1.0 - 0.08 * pit))
+        })
+    }
+
+    /// The eyeball at a point inside the opening, lit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn eye(
+        x: f32,
+        y: f32,
+        z: f32,
+        eye: &Eye,
+        ball: &Eyeball,
+        t: &Tones,
+        noise: &Noise,
+        studio: &Studio,
+        occ: &Occlusion,
+        seed: f32,
+    ) -> Linear {
+        let n = ball.normal(x, y);
+        let (ix, iy) = eye.iris;
+        let (dx, dy) = (x - ix, y - iy);
+        let r = (dx * dx + dy * dy).sqrt();
+        let ir = eye.iris_r;
+
+        // The sclera: not white, and redder and greyer into the corners
+        let reach = (eye.outer.0 - eye.cx).abs().max(1.0);
+        let across = ((x - eye.cx) / reach).abs();
+        let veins = Ramp::smooth(0.45, 0.8, noise.at(x * 1.6 + seed, y * 1.6));
+        let mut albedo = t.sclera.mix(
+            Linear::new(0.52, 0.26, 0.24),
+            Ramp::smooth(0.35, 1.05, across) * (0.40 + 0.25 * veins),
+        );
+        let caruncle = Ramp::smooth(
+            2.6,
+            1.2,
+            ((x - eye.inner.0).powi(2) + (y - eye.inner.1).powi(2)).sqrt(),
+        );
+        albedo = albedo.mix(t.caruncle, caruncle);
+
+        if r < ir + 0.5 {
+            let iris = Self::iris(dx, dy, r, eye, t, noise, seed);
+            albedo = albedo.mix(iris, Ramp::smooth(ir + 0.35, ir - 0.2, r));
+        }
+
+        // The iris is a disc facing out under the cornea, not the ball's
+        // curve: flatten the normal over it
+        let over_iris = Ramp::smooth(ir + 0.4, ir - 0.4, r);
+        let n_lit = Vec3::normalized([
+            n[0] * (1.0 - 0.6 * over_iris),
+            n[1] * (1.0 - 0.6 * over_iris),
+            n[2],
+        ]);
+        let shadow = occ.shadow(x, y, z, studio.key.dir, 0.32);
+        let ao = occ.ambient(x, y, z);
+        // The lid and its lashes shade the top of the ball
+        let below_lid = eye.upper.foot(x, y).d * eye.side;
+        let lash_shade = 0.45 + 0.55 * Ramp::smooth(0.0, 3.0, below_lid);
+        let mut c = albedo * studio.skin_light(n_lit, shadow, ao) * lash_shade;
+
+        // A wet surface: the broad sheen of the ball, then the sharp image
+        // of the soft box in the cornea
+        c += studio.specular(n, 0.14, 0.03, shadow) * 1.4;
+        let rc = ir * 1.5;
+        if r < rc {
+            let (cx_, cy_) = (dx / rc, dy / rc);
+            let cz = (1.0 - cx_ * cx_ - cy_ * cy_).max(0.0).sqrt();
+            let refl = [2.0 * cz * cx_, 2.0 * cz * cy_, 2.0 * cz * cz - 1.0];
+            for (lamp, (wx, wy), gain, vis) in [
+                (&studio.key, (0.11, 0.13), 2.6, shadow.max(0.25)),
+                (&studio.fill, (0.07, 0.09), 1.0, 1.0),
+            ] {
+                let bx = ((refl[0] - lamp.dir[0]) / wx).abs();
+                let by = ((refl[1] - lamp.dir[1]) / wy).abs();
+                let hit = 1.0 - Ramp::smooth(0.75, 1.0, bx.max(by));
+                c += lamp.color * (hit * gain * vis * lash_shade.max(0.7));
+            }
+        }
+        // The tear line along the lower lid catches the light
+        let above_lower = -eye.lower.foot(x, y).d * eye.side;
+        let wet = Ramp::smooth(0.0, 0.25, above_lower) * Ramp::smooth(0.75, 0.3, above_lower);
+        c + Linear::new(0.5, 0.36, 0.34) * (wet * 0.10 * shadow.max(0.3))
+    }
+
+    fn iris(dx: f32, dy: f32, r: f32, eye: &Eye, t: &Tones, noise: &Noise, seed: f32) -> Linear {
+        let ir = eye.iris_r;
+        let rn = r / ir;
+        let pupil = eye.pupil_r / ir;
+        let ang = dy.atan2(dx);
+        // Radial fibres: a handful of angular frequencies with this eye's
+        // own phases, so the stroma never repeats and never seams
+        let mut fib = 0.0;
+        for (m, w) in [(7.0f32, 0.30f32), (13.0, 0.25), (23.0, 0.25), (41.0, 0.20)] {
+            fib += w * (m * ang + seed * m * 0.37 + rn * 2.0 * (m * 0.11).sin()).sin();
+        }
+        let crypt = Ramp::smooth(0.35, 0.7, noise.at(dx * 1.4 + seed, dy * 1.4));
+        let base = t.iris.saturate(-0.2);
+        let light = base.saturate(0.25) * 1.9 + Linear::new(0.02, 0.015, 0.0);
+        let dark = base.deepen(1.35) * 0.55;
+        let mut c = base
+            .mix(light, (0.5 + 0.5 * fib) * 0.55)
+            .mix(dark, crypt * 0.5);
+        // The collarette ring round the pupil, and the dark limbal ring at
+        // the rim that makes an iris read as a lens rather than a spot
+        let collar = pupil + (1.0 - pupil) * 0.28;
+        c = c.mix(
+            light.mix(Linear::new(0.20, 0.13, 0.05), 0.35),
+            Ramp::smooth(0.14, 0.0, (rn - collar).abs()) * 0.45,
+        );
+        c = c * (1.0 - 0.72 * Ramp::smooth(0.74, 1.0, rn));
+        let black = Linear::new(0.006, 0.005, 0.005);
+        c.mix(black, Ramp::smooth(pupil + 0.05, pupil - 0.04, rn))
+    }
+
+    /// Lashes along both lids, laid over the shaded head: `(colour, cover)`.
+    pub fn lashes(
+        x: f32,
+        y: f32,
+        eye: &Eye,
+        t: &Tones,
+        noise: &Noise,
+        seed: f32,
+    ) -> Option<(Linear, f32)> {
+        if !eye.upper.near(x, y, 4.0) {
+            return None;
+        }
+        let top = eye.upper.foot(x, y);
+        let up = -top.d * eye.side;
+        let u = top.u;
+        let mut cover = 0.0f32;
+        if (-0.7..3.4).contains(&up) {
+            // The root line thickens toward the outer corner; its top edge
+            // is lashes, not a line
+            let th = 0.30 + 0.28 * (u * (1.3 - u)).max(0.0);
+            let ragged = 0.35 * noise.line(u * 23.0 + seed);
+            let root = Ramp::smooth(-0.55, -0.1, up)
+                * (1.0 - Ramp::smooth(th * 0.35, th * 1.25 + ragged, up));
+            // Lashes sweep up and out, longest past the middle
+            let len = 0.7 + 1.9 * u * (1.2 - u * 0.5);
+            let s = u * eye.upper.len();
+            let q = s - up * (0.2 + 1.0 * u);
+            let strand = Ramp::smooth(0.05, 0.55, noise.line(q * 1.9 + seed));
+            let lash =
+                strand * (1.0 - Ramp::smooth(len * 0.25, len, up)) * Ramp::smooth(-0.2, 0.2, up);
+            // The lash line ends at the corner, it does not flick past it
+            cover = (root * 0.68).max(lash * 0.55)
+                * Ramp::smooth(0.0, 0.12, u)
+                * Ramp::smooth(0.5, 0.0, top.past);
+        }
+        let bottom = eye.lower.foot(x, y);
+        let down = bottom.d * eye.side;
+        if (-0.3..1.4).contains(&down) {
+            let s = bottom.u * eye.lower.len();
+            let strand = Ramp::smooth(0.1, 0.6, noise.line(s * 1.7 - seed));
+            let lash =
+                strand * Ramp::smooth(-0.2, 0.1, down) * (1.0 - Ramp::smooth(0.2, 1.1, down));
+            cover = cover.max(lash * 0.40 * Ramp::smooth(0.15, 0.4, bottom.u));
+        }
+        (cover > 0.002).then_some((t.lash, cover))
+    }
+
+    /// Both ears: `(cover, depth, how far out along the ear)` — the ear
+    /// hangs off the side of the skull and stands forward of the plane
+    /// behind it, angled so its bowl faces the camera.
+    pub fn ears(grid: &Grid, l: &Landmarks) -> (Plane, Plane) {
         let e = &l.ear;
-        let top = e.top;
-        let bottom = e.bottom;
+        let (top, bottom) = (e.top, e.bottom);
         let mid = (top + bottom) / 2.0;
         let h = (bottom - top) / 2.0;
         let w = e.width;
         let anchor = l.half_width_at(mid);
-        // Cartilage is thin: light comes through it, so an ear is redder
-        // than the cheek beside it, and a shade darker because none of it
-        // faces the key light square on
-        let base = t.skin.mix(t.skin_warm, 0.30).shade(0.93);
+        let mut cover = Plane::new(*grid, 0.0);
+        let mut depth = Plane::new(*grid, 0.0);
         for side in [-1.0f32, 1.0] {
             // `f` is in ear widths out from the head's edge: 0 is the
             // silhouette, 1 the furthest the helix stands off it
-            let o = |f: f32, y: f32| {
-                l.cx + side * (l.half_width_at(y).max(anchor) + (e.out - 2.4) + w * f)
-            };
-            // The root, under the head whatever the jaw is doing
-            let r = |f: f32, y: f32| l.edge_x(y, side) + side * w * f;
-            let outline = PathBuilder::smooth_closed(
+            let off = |y: f32| l.half_width_at(y).max(anchor) + (e.out - 2.4);
+            let o = |f: f32, y: f32| (l.cx + side * (off(y) + w * f), y);
+            let r = |f: f32, y: f32| (l.edge_x(y, side) + side * w * f, y);
+            let outline = Outline::smooth(
                 &[
-                    (o(-0.04, top), top),
-                    (o(0.30, top + h * 0.18), top + h * 0.18),
-                    (o(0.56, top + h * 0.46), top + h * 0.46),
-                    (o(0.72, top + h * 0.82), top + h * 0.82),
-                    (o(0.68, mid + h * 0.14), mid + h * 0.14),
-                    (o(0.58, mid + h * 0.46), mid + h * 0.46),
-                    (o(0.44, bottom - h * 0.34), bottom - h * 0.34),
-                    (o(0.42, bottom - h * 0.16), bottom - h * 0.16),
-                    (o(0.20, bottom), bottom),
-                    (r(-0.16, bottom - h * 0.10), bottom - h * 0.10),
-                    (r(-0.34, mid + h * 0.30), mid + h * 0.30),
-                    (r(-0.36, top + h * 0.50), top + h * 0.50),
-                    (r(-0.20, top + 2.0), top + 2.0),
+                    o(-0.04, top),
+                    o(0.30, top + h * 0.18),
+                    o(0.56, top + h * 0.46),
+                    o(0.72, top + h * 0.82),
+                    o(0.68, mid + h * 0.14),
+                    o(0.58, mid + h * 0.46),
+                    o(0.44, bottom - h * 0.34),
+                    o(0.42, bottom - h * 0.16),
+                    o(0.20, bottom),
+                    r(-0.16, bottom - h * 0.10),
+                    r(-0.34, mid + h * 0.30),
+                    r(-0.36, top + h * 0.50),
+                    r(-0.20, top + 2.0),
                 ],
                 0.25,
             );
-            c.fill(&outline, base, 1.0, Blur::Crisp);
-            let id = if side < 0.0 { "earl" } else { "earr" };
-            c.raw(&format!(
-                r#"<clipPath id="{id}"><path d="{outline}"/></clipPath>"#
-            ));
-            c.clip(id);
-            // The ear stands in the same light as the head, and this is the
-            // one piece of skin the form gradients never reached: without
-            // them it reads as a pale plate stuck to the silhouette. Held
-            // back from the head's own strength, and laid down before the
-            // anatomy so the anatomy still reads through it
-            c.rect(0.0, 0.0, 200.0, 250.0, "url(#lat)", 0.55);
-            c.rect(0.0, 0.0, 200.0, 250.0, "url(#vert)", 0.45);
-            // The concha: the hollow against the head, deepest at the
-            // canal. It is the darkest thing on an ear and it is what tells
-            // the eye the ear stands off the cheek rather than lying on it
-            c.ellipse(
-                o(0.20, mid),
-                mid,
-                w * 0.17,
-                h * 0.44,
-                t.skin_shadow,
-                0.46,
-                Blur::Fine,
-                0.0,
-            );
-            c.ellipse(
-                o(0.13, mid + h * 0.08),
-                mid + h * 0.08,
-                w * 0.10,
-                h * 0.22,
-                t.skin_shadow,
-                0.48,
-                Blur::Hair,
-                0.0,
-            );
-            // The antihelix: the ridge between that hollow and the groove,
-            // catching a little light along its crest
-            let anti = PathBuilder::smooth_open(
-                &[
-                    (o(0.18, top + h * 0.62), top + h * 0.62),
-                    (o(0.38, mid - h * 0.12), mid - h * 0.12),
-                    (o(0.40, mid + h * 0.35), mid + h * 0.35),
-                    (o(0.27, mid + h * 0.78), mid + h * 0.78),
-                ],
-                0.2,
-            );
-            c.stroke(&anti, t.skin_hi, 1.6, 0.38, Blur::Hair);
-            // The scapha: the groove between that ridge and the rolled rim
-            let scapha = PathBuilder::smooth_open(
-                &[
-                    (o(0.24, top + h * 0.16), top + h * 0.16),
-                    (o(0.50, top + h * 0.52), top + h * 0.52),
-                    (o(0.52, mid + h * 0.06), mid + h * 0.06),
-                    (o(0.42, mid + h * 0.50), mid + h * 0.50),
-                    (o(0.28, bottom - h * 0.40), bottom - h * 0.40),
-                ],
-                0.2,
-            );
-            c.stroke(&scapha, t.skin_dk2, 2.0, 0.42, Blur::Hair);
-            // The helix: the rolled rim itself, lit down its outside
-            let helix = PathBuilder::smooth_open(
-                &[
-                    (o(0.15, top + 1.6), top + 1.6),
-                    (o(0.50, top + h * 0.24), top + h * 0.24),
-                    (o(0.64, top + h * 0.70), top + h * 0.70),
-                    (o(0.59, mid + h * 0.16), mid + h * 0.16),
-                    (o(0.47, mid + h * 0.46), mid + h * 0.46),
-                    (o(0.33, bottom - h * 0.34), bottom - h * 0.34),
-                ],
-                0.2,
-            );
-            c.stroke(&helix, t.skin_hi, 1.9, 0.52, Blur::Hair);
-            c.stroke(&helix, t.skin_spec, 0.7, 0.15, Blur::Hair);
-            // The tragus, the little flap that closes the canal off in
-            // front, and the notch under it
-            c.ellipse(
-                o(0.09, mid - h * 0.04),
-                mid - h * 0.04,
-                w * 0.08,
-                h * 0.16,
-                t.skin_dk,
-                0.34,
-                Blur::Hair,
-                0.0,
-            );
-            // The lobe: small, soft and warm, lit from above
-            let ly = bottom - h * 0.26;
-            c.ellipse(
-                o(0.24, ly),
-                ly,
-                w * 0.20,
-                h * 0.26,
-                t.skin_warm,
-                0.44,
-                Blur::Soft,
-                0.0,
-            );
-            c.ellipse(
-                o(0.26, ly - h * 0.06),
-                ly - h * 0.06,
-                w * 0.10,
-                h * 0.11,
-                t.skin_hi,
-                0.24,
-                Blur::Fine,
-                0.0,
-            );
-            // Where the ear tucks under the temple, and where the rim
-            // turns away from the light on its outer edge
-            c.ellipse(
-                o(0.16, top + 2.0),
-                top + 2.0,
-                w * 0.45,
-                3.5,
-                t.skin_dk2,
-                0.30,
-                Blur::Soft,
-                0.0,
-            );
-            let ey = mid - h * 0.2;
-            c.ellipse(
-                o(0.70, ey),
-                ey,
-                w * 0.12,
-                h * 0.72,
-                t.skin_dk2,
-                0.30,
-                Blur::Fine,
-                0.0,
-            );
-            c.close("g");
-        }
-    }
-
-    pub fn eyes(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, aggr: f32) {
-        let es = &l.eye_shape;
-        let ey = l.eye;
-        let lash = Rgb::hex("#1A100C");
-        for (i, (ex, side)) in [(l.eye_l, -1.0f32), (l.eye_r, 1.0)].into_iter().enumerate() {
-            let rx = es.rx;
-            let ry = es.ry;
-            let inner = (ex - side * rx, ey + es.tilt * 0.35);
-            let outer = (ex + side * rx, ey - es.tilt);
-            let peak_x = inner.0 + side * 2.0 * rx * es.peak;
-            let top = ey - ry;
-            let low = (ex + side * rx * 0.1, ey + ry * es.bottom);
-            let upper = format!(
-                "M{:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}",
-                inner.0,
-                inner.1,
-                inner.0 + side * rx * 0.30,
-                inner.1 - ry * 0.55,
-                peak_x - side * rx * 0.35,
-                top,
-                peak_x,
-                top,
-                peak_x + side * rx * 0.40,
-                top,
-                outer.0 - side * rx * 0.22,
-                outer.1 - ry * 0.40,
-                outer.0,
-                outer.1,
-            );
-            let lower = format!(
-                "C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1} C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}",
-                outer.0 - side * rx * 0.28,
-                outer.1 + ry * es.bottom * 0.70,
-                low.0 + side * rx * 0.38,
-                low.1,
-                low.0,
-                low.1,
-                low.0 - side * rx * 0.40,
-                low.1,
-                inner.0 + side * rx * 0.28,
-                inner.1 + ry * es.bottom * 0.45,
-                inner.0,
-                inner.1,
-            );
-            let almond = format!("{upper} {lower}Z");
-            let lower_edge = format!("M{:.1} {:.1} {lower}", outer.0, outer.1);
-
-            // Socket floor: the sclera and everything in it
-            c.fill_ref(&almond, "scg", 1.0, Blur::Crisp);
-            c.raw(&format!(
-                r#"<clipPath id="ec{i}"><path d="{almond}"/></clipPath>"#
-            ));
-            c.clip(&format!("ec{i}"));
-            // The sclera is a ball: darker into both corners and under the
-            // upper lid, where the lashes throw a shadow
-            c.ellipse(
-                inner.0,
-                ey + 0.5,
-                3.5,
-                ry * 1.4,
-                t.sclera_dk,
-                0.45,
-                Blur::Fine,
-                0.0,
-            );
-            c.ellipse(
-                outer.0,
-                ey,
-                3.0,
-                ry * 1.3,
-                t.sclera_dk,
-                0.35,
-                Blur::Fine,
-                0.0,
-            );
-            // Iris, looking a touch inward like a pair of eyes fixed on the
-            // lens
-            let ix = ex - side * 0.25;
-            let iy = ey - 0.15;
-            let ir = es.iris_r;
-            c.circle(ix, iy, ir, t.iris_rim, 1.0, Blur::Crisp);
-            c.ellipse_ref(ix, iy, ir - 0.35, ir - 0.35, "irg", 1.0, Blur::Crisp, 0.0);
-            // Fibres: radial strands of the stroma, alternating light and
-            // dark, no two eyes the same
-            for k in 0..14 {
-                let a = (k as f32 / 14.0) * std::f32::consts::TAU + id.jitter(k, 30 + i) * 0.4;
-                let r0 = es.pupil_r + 0.4;
-                let r1 = ir - 0.5;
-                let d = PathBuilder::line(
-                    (ix + a.cos() * r0, iy + a.sin() * r0),
-                    (ix + a.cos() * r1, iy + a.sin() * r1),
-                );
-                let (col, op) = if k % 2 == 0 {
-                    (t.iris_hi, 0.22 + id.jitter(k, 40) * 0.2)
-                } else {
-                    (t.iris_dk, 0.20 + id.jitter(k, 41) * 0.2)
-                };
-                c.stroke(&d, col, 0.35, op, Blur::Hair);
-            }
-            // Light passing through the iris lights the side opposite the
-            // key, the collarette ring round the pupil
-            c.ellipse(
-                ix + 1.1,
-                iy + 1.3,
-                ir * 0.55,
-                ir * 0.42,
-                t.iris_hi,
-                0.32,
-                Blur::Fine,
-                0.0,
-            );
-            c.circle(ix, iy, es.pupil_r + 0.8, t.iris_dk, 0.45, Blur::Fine);
-            c.circle(
-                ix,
-                iy,
-                es.pupil_r + 0.25,
-                Rgb::hex("#0A0806"),
-                0.6,
-                Blur::Hair,
-            );
-            c.circle(ix, iy, es.pupil_r, Rgb::hex("#0A0806"), 1.0, Blur::Crisp);
-            // The upper lid's shadow across the top of the eye
-            let lid_cap = if es.lid_extra > 0.3 { ry } else { ry * 0.62 };
-            let lid_ry = (ry * 0.34 + id.morph.lid_heavy * 0.9 + es.lid_extra * 0.7 + aggr * 0.5)
-                .clamp(1.0, lid_cap);
-            let lid_op =
-                (0.30 + id.morph.lid_heavy * 0.14 + es.lid_extra * 0.08 + aggr * 0.08).min(0.55);
-            c.ellipse(
-                ex,
-                top - 0.2,
-                rx * 1.05,
-                lid_ry + 0.8,
-                Rgb::hex("#241713"),
-                lid_op,
-                Blur::Fine,
-                0.0,
-            );
-            // Catchlights: the studio softbox, upper-left, and its bounce
-            c.ellipse(
-                ix - ir * 0.42,
-                iy - ir * 0.50,
-                0.95,
-                0.75,
-                Rgb::WHITE,
-                0.92,
-                Blur::Crisp,
-                -20.0,
-            );
-            c.circle(
-                ix + ir * 0.38,
-                iy + ir * 0.42,
-                0.35,
-                Rgb::WHITE,
-                0.35,
-                Blur::Crisp,
-            );
-            c.close("g");
-
-            // Lash line: a soft dark mass along the upper lid, heavier and
-            // thicker toward the outer corner, with a crisp edge under it
-            c.stroke(&upper, lash, 1.9, 0.42, Blur::Soft);
-            c.stroke(&upper, lash, 1.15, 0.88, Blur::Hair);
-            let tail = PathBuilder::arc(
-                (peak_x + side * rx * 0.3, top - 0.2),
-                (outer.0 - side * 1.5, outer.1 - 1.4),
-                (outer.0 + side * 1.6, outer.1 - 0.4),
-            );
-            c.stroke(&tail, lash, 1.3, 0.70, Blur::Hair);
-            // Lower lid: its own thickness catches light, lashes below it
-            c.stroke(
-                &lower_edge,
-                t.skin_hi.mix(t.sclera, 0.4),
-                0.7,
-                0.50,
-                Blur::Hair,
-            );
-            c.stroke(&lower_edge, t.skin_dk2, 0.9, 0.30, Blur::Fine);
-            c.ellipse(ex, low.1 + 1.6, rx * 0.8, 1.1, lash, 0.16, Blur::Fine, 0.0);
-
-            // Crease: the fold above the lid, absent on a monolid, hidden
-            // under the hood on a hooded eye
-            let crease_y = top - 3.0 - es.lid_extra * 0.4 - id.morph.lid_heavy * 0.6;
-            if es.crease > 0.01 {
-                let d = format!(
-                    "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-                    inner.0 + side * 1.0,
-                    inner.1 - 1.0,
-                    peak_x,
-                    crease_y - 1.2,
-                    outer.0 + side * 1.0,
-                    outer.1 - 1.6,
-                );
-                c.stroke(&d, t.skin_dk2, 1.0, es.crease + 0.1, Blur::Fine);
-                c.stroke(&d, t.skin_hi, 0.6, 0.2, Blur::Hair);
-            }
-            if id.eye_st == 1 {
-                // Hooded: skin folds over the outer half of the lash line
-                let hood = PathBuilder::arc(
-                    (peak_x - side * 2.0, top - 1.6),
-                    (outer.0 - side * 3.0, top - 0.6),
-                    (outer.0 + side * 1.8, outer.1 + 0.4),
-                );
-                c.stroke(&hood, t.skin, 3.0, 0.90, Blur::Fine);
-                c.stroke(&hood, t.skin_dk2, 0.8, 0.30, Blur::Fine);
-            }
-            if id.eye_st == 3 {
-                // Epicanthic fold: skin covers the inner corner
-                let fold = PathBuilder::arc(
-                    (inner.0 - side * 1.0, inner.1 - 2.6),
-                    (inner.0 - side * 0.2, inner.1 + 0.2),
-                    (inner.0 + side * 3.0, inner.1 + 1.8),
-                );
-                c.stroke(&fold, t.skin, 2.0, 0.90, Blur::Fine);
-                c.stroke(&fold, t.skin_dk2, 0.6, 0.25, Blur::Hair);
-            } else {
-                // Tear duct
-                c.ellipse(
-                    inner.0 + side * 0.6,
-                    inner.1 + 0.3,
+            let run = |pts: &[(f32, f32)]| pts.to_vec();
+            let forms = [
+                // The concha, the bowl against the head
+                Form::blob(
+                    o(0.20, mid).0,
+                    mid + h * 0.02,
+                    w * 0.22,
+                    h * 0.46,
+                    0.0,
+                    -3.6,
+                ),
+                Form::blob(
+                    o(0.24, top + h * 0.72).0,
+                    top + h * 0.72,
+                    w * 0.18,
+                    h * 0.20,
+                    0.0,
+                    -1.8,
+                ),
+                // Antihelix ridge, scapha groove, the rolled helix rim
+                Form::crease(
+                    &run(&[
+                        o(0.18, top + h * 0.62),
+                        o(0.38, mid - h * 0.12),
+                        o(0.40, mid + h * 0.35),
+                        o(0.27, mid + h * 0.78),
+                    ]),
+                    1.2,
+                    1.2,
+                    0.2,
+                ),
+                Form::crease(
+                    &run(&[
+                        o(0.24, top + h * 0.16),
+                        o(0.50, top + h * 0.52),
+                        o(0.52, mid + h * 0.06),
+                        o(0.42, mid + h * 0.50),
+                        o(0.28, bottom - h * 0.40),
+                    ]),
                     1.1,
-                    0.8,
-                    t.canthus,
-                    0.75,
-                    Blur::Hair,
+                    -1.2,
+                    0.2,
+                ),
+                Form::crease(
+                    &run(&[
+                        o(0.15, top + 1.6),
+                        o(0.50, top + h * 0.24),
+                        o(0.64, top + h * 0.70),
+                        o(0.59, mid + h * 0.16),
+                        o(0.47, mid + h * 0.46),
+                        o(0.33, bottom - h * 0.34),
+                    ]),
+                    1.3,
+                    1.5,
+                    0.15,
+                ),
+                // Tragus and lobe
+                Form::blob(o(0.08, mid).0, mid - h * 0.04, w * 0.10, h * 0.17, 0.0, 1.4),
+                Form::blob(
+                    o(0.24, bottom - h * 0.26).0,
+                    bottom - h * 0.26,
+                    w * 0.22,
+                    h * 0.26,
                     0.0,
-                );
-                c.circle(
-                    inner.0 + side * 0.9,
-                    inner.1 + 0.1,
-                    0.35,
-                    Rgb::WHITE,
-                    0.35,
-                    Blur::Crisp,
-                );
+                    1.1,
+                ),
+            ];
+            let c = outline.coverage(grid);
+            let (x0, y0, x1, y1) = outline.bounds();
+            for j in grid.rows(y0 - 1.0, y1 + 1.0) {
+                for i in grid.cols(x0 - 1.0, x1 + 1.0) {
+                    let k = j * grid.w + i;
+                    if c.v[k] <= 0.0 {
+                        continue;
+                    }
+                    let (x, y) = (grid.x(i), grid.y(j));
+                    let f = (side * (x - l.cx) - off(y)) / w;
+                    let z = 12.0 * (1.0 - 0.85 * f.clamp(-0.5, 1.0))
+                        + forms.iter().map(|m| m.at(x, y)).sum::<f32>();
+                    cover.v[k] = cover.v[k].max(c.v[k]);
+                    depth.v[k] = z.max(0.5);
+                }
             }
         }
+        (cover, depth)
     }
 
-    pub fn brows(
-        c: &mut Canvas,
-        l: &Landmarks,
-        t: &Tones,
-        id: &Identity,
-        aggr: f32,
-        hair_col: Rgb,
-    ) {
-        let bs = &l.brow_shape;
-        let brow_col = hair_col.shade(0.85).desaturate(0.1);
-        let brow_lt = brow_col.lift(0.18);
-        for (bi, (ex, side)) in [(l.eye_l, -1.0f32), (l.eye_r, 1.0)].into_iter().enumerate() {
-            let inner_x = ex - side * (bs.len - 5.0);
-            let outer_x = ex + side * (bs.len + 3.0);
-            // No pair of brows sits level: one rides a little higher, and
-            // whose it is belongs to the id
-            let raise = id.jitter_signed(3, 77) * 0.9 * side;
-            let y0 = l.brow + 1.6 + aggr * 2.2 + raise;
-            let yc = l.brow - bs.arch * 1.5 * (1.0 - aggr * 0.35) + raise;
-            let y1 = l.brow + 0.8 + bs.tilt * 2.4 + raise;
-            let peak_x = inner_x + (outer_x - inner_x) * 0.62;
-            let along = |u: f32| -> (f32, f32) {
-                // Quadratic through head, arch, tail
-                let x = inner_x + (outer_x - inner_x) * u;
-                let y = (1.0 - u) * (1.0 - u) * y0 + 2.0 * u * (1.0 - u) * yc + u * u * y1;
-                (x, y)
-            };
-            let spine = format!(
-                "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-                inner_x, y0, peak_x, yc, outer_x, y1
-            );
-            // The brow bone's light just above the hair
-            let bone = format!(
-                "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-                inner_x + side * 2.0,
-                y0 - 3.0,
-                peak_x,
-                yc - 3.2,
-                outer_x,
-                y1 - 2.4
-            );
-            c.stroke(
-                &bone,
-                t.skin_hi,
-                2.4,
-                0.14 + id.morph.brow_ridge * 0.06,
-                Blur::Soft,
-            );
-            // Mass: thick at the head, thinning to the tail
-            let thick = bs.thickness;
-            c.stroke(&spine, brow_col, 4.6 * thick, 0.66, Blur::Soft);
-            let head = format!(
-                "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-                inner_x,
-                y0,
-                along(0.3).0,
-                along(0.3).1 - 0.4,
-                along(0.55).0,
-                along(0.55).1
-            );
-            c.stroke(&head, brow_col, 3.2 * thick, 0.72, Blur::Fine);
-            // Strands: the head grows upward, the arch outward, the tail
-            // down and out, each a short tapered stroke
-            let n = bs.strands;
-            for k in 0..n {
-                let u = k as f32 / (n - 1) as f32;
-                let (sx, sy) = along(u);
-                let spread = if u < 0.5 { 1.4 } else { 0.9 } * thick;
-                let sx = sx + side * (id.jitter(k, bi) - 0.5) * 1.5;
-                let sy = sy + (id.jitter(k, bi + 2) - 0.5) * spread * 2.2;
-                let angle = if u < 0.30 {
-                    -1.15 + u * 1.2
-                } else if u < 0.70 {
-                    -0.45 + (u - 0.3) * 0.8
-                } else {
-                    -0.13 + (u - 0.7) * 1.3
-                };
-                let len = 2.4 + id.jitter(k, bi + 4) * 1.4 - u * 0.6;
-                let dx = side * angle.cos() * len;
-                let dy = angle.sin() * len;
-                let col = if id.jitter(k, bi + 6) > 0.72 {
-                    brow_lt
-                } else {
-                    brow_col
-                };
-                let op = 0.45 + id.jitter(k, bi + 8) * 0.40;
-                let d = format!(
-                    "M{sx:.1} {sy:.1} q{:.1} {:.1} {dx:.1} {dy:.1}",
-                    dx * 0.4,
-                    dy * 0.6 - 0.3
-                );
-                c.stroke(&d, col, 0.62 * thick, op, Blur::Hair);
-            }
-        }
-        // Glabella: frown lines on a genuinely hard face
-        if aggr > 0.5 {
-            let gop = (aggr - 0.5) * 0.5 + l.maturity * 0.06;
-            for gx in [l.cx - 2.6, l.cx + 2.6] {
-                let d =
-                    PathBuilder::line((gx, l.brow - 2.5), (gx + (l.cx - gx) * 0.2, l.brow + 4.0));
-                c.stroke(&d, t.skin_dk2, 0.9, gop, Blur::Fine);
-            }
-        }
-    }
-
-    pub fn nose(c: &mut Canvas, l: &Landmarks, t: &Tones) {
-        let cx = l.cx;
-        let ns = &l.nose_shape;
-        let ny = l.nose;
-        let dark = Rgb::hex("#1A0E0A");
-        for side in [-1.0f32, 1.0] {
-            let nx = cx + side * ns.tip * 0.55;
-            // Nostril: a dark comma angled with the ala, softened at the rim
-            c.ellipse(
-                nx,
-                ny - 0.2,
-                ns.nostril * 1.25,
-                2.2,
-                dark,
-                0.32,
-                Blur::Soft,
-                side * -22.0,
-            );
-            c.ellipse(
-                nx,
-                ny - 0.2,
-                ns.nostril * 1.1,
-                1.7,
-                dark,
-                0.80,
-                Blur::Fine,
-                side * -22.0,
-            );
-            // Alar groove: the crease where the wing meets the cheek
-            let groove = PathBuilder::arc(
-                (cx + side * ns.tip * 0.85, ny - 6.5),
-                (cx + side * (ns.tip + 1.4), ny - 1.5),
-                (cx + side * ns.tip * 0.72, ny + 2.6),
-            );
-            let op = if side > 0.0 { 0.55 } else { 0.38 };
-            c.stroke(&groove, t.skin_dk2, 1.6, op, Blur::Fine);
-            // The wing itself, lit on the near side
-            if side < 0.0 {
-                c.ellipse(
-                    cx + side * ns.tip * 0.62,
-                    ny - 3.6,
-                    2.6,
-                    1.8,
-                    t.skin_hi,
-                    0.30,
-                    Blur::Fine,
-                    0.0,
-                );
-            }
-        }
-        // Columella between the nostrils, and the shadow under the tip
-        c.ellipse(cx, ny + 0.8, 1.7, 1.5, t.skin_hi, 0.30, Blur::Fine, 0.0);
-        c.ellipse(cx, ny + 2.9, 2.6, 1.2, t.skin_dk2, 0.34, Blur::Fine, 0.0);
-    }
-
-    pub fn mouth(c: &mut Canvas, l: &Landmarks, t: &Tones, id: &Identity, aggr: f32) {
-        let cx = l.cx;
-        let ms = &l.mouth_shape;
-        let my = l.mouth;
-        let half = ms.half;
-        let lip_top = my - ms.upper;
-        // The resting set of the mouth is the man's own before it is the
-        // temperament's: corners lifted on a sunny face, dropped on a dour
-        // one, and aggression pulls them down on top of that
-        let corner_dy = (aggr * 1.9 - 0.7 - id.structure.smile * 1.2).clamp(-2.2, 2.4);
-        let upper = format!(
-            "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1}Z",
-            cx - half,
-            my + corner_dy,
-            cx - half * 0.45,
-            lip_top - 0.6,
-            cx - 3.4,
-            lip_top,
-            lip_top + ms.bow,
-            cx + 3.4,
-            lip_top,
-            cx + half * 0.45,
-            lip_top - 0.6,
-            cx + half,
-            my + corner_dy,
-            my + 1.0,
-            cx - half,
-            my + corner_dy,
-        );
-        let lower = format!(
-            "M{:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1}Z",
-            cx - half + 1.2,
-            my + 0.6 + corner_dy * 0.6,
-            my + ms.lower * 2.15,
-            cx + half - 1.2,
-            my + 0.6 + corner_dy * 0.6,
-            my + 1.2,
-            cx - half + 1.2,
-            my + 0.6 + corner_dy * 0.6,
-        );
-        // The upper lip faces down, away from the light; the lower faces up
-        c.fill(&upper, t.lip_dk, 0.80, Blur::Fine);
-        c.fill(&lower, t.lip, 0.88, Blur::Fine);
-        c.fill(&lower, t.lip_dk, 0.22, Blur::Soft);
-        // White roll: the vermilion border catching light
-        let roll = format!(
-            "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-            cx - half + 1.0,
-            my - 0.4,
-            cx - half * 0.45,
-            lip_top - 1.1,
-            cx - 3.4,
-            lip_top - 0.5,
-            lip_top + ms.bow - 0.5,
-            cx + 3.4,
-            lip_top - 0.5,
-            cx + half * 0.45,
-            lip_top - 1.1,
-            cx + half - 1.0,
-            my - 0.4,
-        );
-        c.stroke(&roll, t.skin_hi, 0.7, 0.40, Blur::Hair);
-        // Lower lip: a highlight band, and the vertical grain of lip skin
-        c.ellipse(
-            cx - 1.5,
-            my + ms.lower * 0.95,
-            half * 0.42,
-            ms.lower * 0.48,
-            t.lip_hi,
-            0.36,
-            Blur::Fine,
-            0.0,
-        );
-        c.ellipse(
-            cx - 3.0,
-            my + ms.lower * 0.8,
-            half * 0.2,
-            ms.lower * 0.28,
-            t.lip_hi.lift(0.25),
-            0.28,
-            Blur::Fine,
-            0.0,
-        );
-        c.ellipse(
-            cx,
-            my + ms.lower * 1.7,
-            half * 0.7,
-            ms.lower * 0.5,
-            t.lip_dk,
-            0.30,
-            Blur::Fine,
-            0.0,
-        );
-        for k in 0..7 {
-            let u = (k as f32 - 3.0) / 3.0;
-            let lx = cx + u * half * 0.7 + id.jitter_signed(k, 50) * 1.0;
-            let d = PathBuilder::line((lx, my + 1.4), (lx + u * 0.6, my + ms.lower * 1.9));
-            c.stroke(
-                &d,
-                t.lip_dk,
-                0.35,
-                0.18 + id.jitter(k, 51) * 0.15,
-                Blur::Hair,
-            );
-        }
-        // The line between the lips: the darkest mark on the lower face,
-        // its corners tucked into small shadows
-        let line = format!(
-            "M{:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1} Q{:.1} {:.1} {:.1} {:.1}",
-            cx - half,
-            my + corner_dy,
-            cx - half * 0.5,
-            my + 1.0,
-            cx - 3.6,
-            my + 0.2,
-            my + 1.3,
-            cx + 3.6,
-            my + 0.2,
-            cx + half * 0.5,
-            my + 1.0,
-            cx + half,
-            my + corner_dy,
-        );
-        c.stroke(&line, t.mouth_line, 1.8, 0.30, Blur::Fine);
-        c.stroke(&line, t.mouth_line, 0.8, 0.72, Blur::Hair);
-        let mid = format!(
-            "M{:.1} {:.1} Q{cx:.1} {:.1} {:.1} {:.1}",
-            cx - half * 0.55,
-            my + 0.7,
-            my + 0.7,
-            cx + half * 0.55,
-            my + 0.7
-        );
-        c.stroke(&mid, t.mouth_line, 1.0, 0.55, Blur::Hair);
-        for side in [-1.0f32, 1.0] {
-            c.ellipse(
-                cx + side * (half + 0.8),
-                my + corner_dy + 0.2,
-                1.6,
-                1.1,
-                t.skin_shadow,
-                0.40,
-                Blur::Fine,
-                0.0,
-            );
-            c.ellipse(
-                cx + side * (half + 2.4),
-                my + corner_dy - 0.6,
-                1.8,
-                1.0,
-                t.skin_hi,
-                0.18,
-                Blur::Fine,
-                0.0,
-            );
-        }
-        // Under the lower lip
-        c.ellipse(
-            cx + 1.0,
-            my + ms.lower * 2.15 + 1.5,
-            half * 0.62,
-            2.6,
-            t.skin_dk2,
-            0.46,
-            Blur::Soft,
-            0.0,
-        );
-        c.ellipse(
-            cx - 1.0,
-            my + ms.lower * 2.15 + 5.0,
-            half * 0.45,
-            2.4,
-            t.skin_hi,
-            0.16,
-            Blur::Soft,
-            0.0,
-        );
+    /// The per-eye seed for strand and fibre noise.
+    pub fn eye_seed(id: &Identity, side: f32) -> f32 {
+        (id.seed as f32 * 0.37 + side * 17.0).rem_euclid(TAU * 40.0) + PI
     }
 }

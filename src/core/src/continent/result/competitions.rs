@@ -2,11 +2,12 @@ use super::{ContinentResult, ContinentalCompetitionResults};
 use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalQualification};
 use crate::league::League;
 use crate::league::LeagueResult;
+use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::world::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl ContinentResult {
     pub(crate) fn is_competition_draw_period(&self, date: NaiveDate) -> bool {
@@ -38,12 +39,16 @@ impl ContinentResult {
             let is_south_america = continent.is_south_america();
 
             let countries = ContinentalQualification::ranked_countries(continent);
+            let already_drawn = continent
+                .continental_competitions
+                .drawn_this_season(date.year() as u16);
 
             match (date.month(), date.day()) {
                 (8, 15) if is_europe => {
                     let cl = Self::collect_qualified_clubs(
                         &countries,
                         &CompetitionTier::ChampionsLeague,
+                        &already_drawn,
                     );
                     if cl.is_empty() {
                         return;
@@ -54,6 +59,7 @@ impl ContinentResult {
                     let copa = Self::collect_qualified_clubs(
                         &countries,
                         &CompetitionTier::CopaLibertadores,
+                        &already_drawn,
                     );
                     if copa.is_empty() {
                         return;
@@ -61,8 +67,11 @@ impl ContinentResult {
                     (Vec::new(), Vec::new(), Vec::new(), copa, 3u8)
                 }
                 (8, 20) if is_europe => {
-                    let el =
-                        Self::collect_qualified_clubs(&countries, &CompetitionTier::EuropaLeague);
+                    let el = Self::collect_qualified_clubs(
+                        &countries,
+                        &CompetitionTier::EuropaLeague,
+                        &already_drawn,
+                    );
                     if el.is_empty() {
                         return;
                     }
@@ -72,6 +81,7 @@ impl ContinentResult {
                     let conf = Self::collect_qualified_clubs(
                         &countries,
                         &CompetitionTier::ConferenceLeague,
+                        &already_drawn,
                     );
                     if conf.is_empty() {
                         return;
@@ -143,7 +153,15 @@ impl ContinentResult {
         league.table.rows.iter().any(|r| r.played > 0)
     }
 
-    fn collect_qualified_clubs(countries: &[&Country], tier: &CompetitionTier) -> Vec<u32> {
+    /// The clubs a league table sends to `tier`. A club already drawn into
+    /// another of the season's competitions is passed over and its place
+    /// goes to the next club down, so a side that moved between two August
+    /// draws is never in two competitions.
+    fn collect_qualified_clubs(
+        countries: &[&Country],
+        tier: &CompetitionTier,
+        already_drawn: &HashSet<u32>,
+    ) -> Vec<u32> {
         let cap = ContinentalQualification::field_cap(tier).unwrap_or(usize::MAX);
         let mut qualified = Vec::new();
 
@@ -158,13 +176,17 @@ impl ContinentResult {
                 continue;
             };
 
-            for row in league.table.rows.iter().skip(skip).take(take) {
-                if row.team_id == 0 {
-                    continue;
-                }
-                if let Some(club) = country.clubs.iter().find(|c| c.teams.contains(row.team_id))
-                    && !qualified.contains(&club.id)
-                {
+            let band = league
+                .table
+                .rows
+                .iter()
+                .skip(skip)
+                .filter(|row| row.team_id != 0)
+                .filter_map(|row| country.clubs.iter().find(|c| c.teams.contains(row.team_id)))
+                .filter(|club| !already_drawn.contains(&club.id))
+                .take(take);
+            for club in band {
+                if !qualified.contains(&club.id) {
                     qualified.push(club.id);
                 }
             }
@@ -193,6 +215,12 @@ impl ContinentResult {
         let mut results = ContinentalCompetitionResults::new();
 
         let clubs_map = Self::get_clubs_map(&continent.countries);
+        // Domestic fixtures dated today were played in the morning's batch;
+        // a squad playing one lends nobody to a continental tie.
+        let commitments = MatchdayCommitments::gather(
+            continent.countries.iter().flat_map(|c| c.schedules()),
+            date,
+        );
 
         // Simulate Champions League matches with real engine
         if continent
@@ -203,7 +231,7 @@ impl ContinentResult {
             let real_results = continent
                 .continental_competitions
                 .champions_league
-                .play_matches(&clubs_map, date);
+                .play_matches(&clubs_map, date, &commitments);
             let cl_results: Vec<ContinentalMatchResult> = real_results
                 .iter()
                 .map(|r| ContinentalMatchResult {
@@ -227,7 +255,7 @@ impl ContinentResult {
             let real_results = continent
                 .continental_competitions
                 .europa_league
-                .play_matches(&clubs_map, date);
+                .play_matches(&clubs_map, date, &commitments);
             let el_results: Vec<ContinentalMatchResult> = real_results
                 .iter()
                 .map(|r| ContinentalMatchResult {
@@ -251,7 +279,7 @@ impl ContinentResult {
             let real_results = continent
                 .continental_competitions
                 .conference_league
-                .play_matches(&clubs_map, date);
+                .play_matches(&clubs_map, date, &commitments);
             let conf_results: Vec<ContinentalMatchResult> = real_results
                 .iter()
                 .map(|r| ContinentalMatchResult {
@@ -278,7 +306,7 @@ impl ContinentResult {
             let real_results = continent
                 .continental_competitions
                 .copa_libertadores
-                .play_matches(&clubs_map, date);
+                .play_matches(&clubs_map, date, &commitments);
             let copa_results: Vec<ContinentalMatchResult> = real_results
                 .iter()
                 .map(|r| ContinentalMatchResult {
@@ -505,5 +533,53 @@ impl ContinentResult {
             .flat_map(|c| &c.clubs)
             .map(|club| (club.id, club))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod qualification_tests {
+    use super::*;
+    use crate::country::core::country::fixture_calendar_tests::country_with_first_teams;
+    use crate::league::LeagueTableRow;
+
+    #[test]
+    fn a_club_already_in_europe_passes_its_conference_place_down_the_table() {
+        // The continent's top-ranked country: its Conference League place
+        // is eighth. Clubs finish in id order, club n*100 in place n.
+        let mut country = country_with_first_teams(10);
+        country.leagues.leagues[0].table.rows = (1..=10u32)
+            .map(|n| LeagueTableRow {
+                team_id: n * 10,
+                played: 3,
+                win: 0,
+                draft: 0,
+                lost: 0,
+                goal_scored: 0,
+                goal_concerned: 0,
+                points: (30 - n) as u8,
+                points_deduction: 0,
+            })
+            .collect();
+        let countries = vec![&country];
+
+        let fresh = ContinentResult::collect_qualified_clubs(
+            &countries,
+            &CompetitionTier::ConferenceLeague,
+            &HashSet::new(),
+        );
+        assert_eq!(
+            fresh,
+            vec![800],
+            "eighth place goes to the Conference League"
+        );
+
+        // Club 800 was seventh on Europa League draw day and is already in.
+        let in_europe: HashSet<u32> = [800].into_iter().collect();
+        let passed_down = ContinentResult::collect_qualified_clubs(
+            &countries,
+            &CompetitionTier::ConferenceLeague,
+            &in_europe,
+        );
+        assert_eq!(passed_down, vec![900], "the place passes to ninth");
     }
 }

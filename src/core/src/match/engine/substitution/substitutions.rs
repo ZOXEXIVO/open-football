@@ -12,7 +12,7 @@ use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, Substitu
 use crate::r#match::field::MatchField;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::{Bench, MATCH_TIME_MS, MatchContext, MatchPlayer, MatchState};
+use crate::r#match::{Bench, MATCH_TIME_MS, MatchContext, MatchPlayer};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 /// In-match youth-protection thresholds and the candidate predicate.
@@ -557,7 +557,7 @@ impl Substitutions {
             // team-mate has already caused, or by interrupting play — and
             // the three cost the manager very different things. See
             // [`ChangeOpportunity`].
-            let at_half_time = context.state.match_state == MatchState::HalfTime;
+            let at_half_time = context.substitution_windows.at_interval();
             let windows_spent = context.substitution_windows.spent(is_home);
             loop {
                 if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
@@ -649,6 +649,7 @@ impl Substitutions {
                 }
             }
         }
+        context.substitution_windows.close_interval();
     }
 }
 
@@ -860,13 +861,7 @@ impl Substitutions {
         // the same point — he waits on it and the man he is replacing runs to
         // it — so it is worked out once, here, where the window is in reach.
         let is_home = team_id == field.home_team_id;
-        // Nobody walks anywhere at the interval: both sides are indoors, the
-        // period boundary resets every position ten milliseconds later, and
-        // a `SubstitutionBreak` staged here would arm a pause in a state
-        // that runs no ticks to serve it.
-        let walked =
-            !MatchContext::sub_walk_off() && context.state.match_state != MatchState::HalfTime;
-        let waits_at = walked.then(|| {
+        let waits_at = (!MatchContext::sub_walk_off()).then(|| {
             let waiting = context
                 .substitution_break
                 .as_ref()
@@ -917,7 +912,7 @@ impl Substitutions {
         // means the window is open and this man rides it — which is what a
         // double change is, and why five changes fit into three windows.
         // The interval is free, in the Law and here.
-        if context.state.match_state != MatchState::HalfTime {
+        if !context.substitution_windows.at_interval() {
             let now = context.total_match_time;
             let already_in_window = context
                 .substitutions

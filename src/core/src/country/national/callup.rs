@@ -28,14 +28,14 @@
 
 use super::NationalTeam;
 use super::types::{
-    BREAK_WINDOWS, CallUpCandidate, CallUpContext, CallUpReason, CallUpWindowType,
+    CallUpCandidate, CallUpContext, CallUpReason, CallUpWindowType,
     NationalCoachProfile, NationalSelectionPolicy, NationalSquadPlayer, NationalTeamLevel,
     TOURNAMENT_SQUAD_SIZE,
 };
 use crate::club::staff::perception::PotentialEstimator;
 use crate::{
-    Country, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatistics,
-    PlayerStatusType, Tactics,
+    Country, InternationalCalendar, Player, PlayerFieldPositionGroup, PlayerPositionType,
+    PlayerStatistics, PlayerStatusType, Tactics,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, warn};
@@ -584,7 +584,7 @@ impl NationalTeam {
         // Schedule retention rules:
         //   - completed fixtures (with results) are permanent history
         //   - pending fixtures in the past never played → drop (stale)
-        //   - pending fixtures in the current break window → drop so we
+        //   - pending fixtures in the current window → drop so we
         //     can re-add fresh friendlies without duplicates
         //   - pending fixtures in a future window stay untouched
         self.schedule.retain(|f| {
@@ -594,7 +594,7 @@ impl NationalTeam {
             if f.date < date {
                 return false;
             }
-            if Self::dates_in_same_break_window(f.date, date) {
+            if InternationalCalendar::window_on(f.date).is_some_and(|w| w.contains(date)) {
                 return false;
             }
             true
@@ -613,19 +613,6 @@ impl NationalTeam {
             self.generated_squad.len(),
             window_type
         );
-    }
-
-    /// True iff `a` and `b` fall in the same scheduled break window.
-    fn dates_in_same_break_window(a: NaiveDate, b: NaiveDate) -> bool {
-        BREAK_WINDOWS.iter().any(|(month, start, end)| {
-            a.year() == b.year()
-                && a.month() == *month
-                && b.month() == *month
-                && a.day() >= *start
-                && a.day() <= *end
-                && b.day() >= *start
-                && b.day() <= *end
-        })
     }
 
     // ---------- Component score helpers (each returns 0..100) ----------

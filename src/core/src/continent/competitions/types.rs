@@ -1,4 +1,5 @@
-use chrono::NaiveDate;
+use crate::league::Season;
+use chrono::{Duration, NaiveDate, Weekday};
 
 /// Reserved league_id values for continental competitions.
 /// Used in match result processing to identify competition type.
@@ -262,9 +263,185 @@ pub struct TransferNegotiation {
     pub current_offer: f64,
 }
 
+/// Where a continental fixture falls. A competition's calendar names the
+/// season WEEK of each matchday or leg, on the same grid as the
+/// international windows so no continental night lands inside one; the
+/// competition's own weekday inside that week is the day it is played.
+/// `index` (a group or tie) spreads a round across the competition's
+/// weekdays.
+pub struct ContinentalMatchweek;
+
+impl ContinentalMatchweek {
+    /// League-phase matchdays 1-6, shared by every competition so the
+    /// three UEFA nights of one matchday fall in the same week.
+    pub const LEAGUE_PHASE: [u32; 6] = [2, 4, 7, 9, 12, 14];
+    pub const ROUND_OF_16_FIRST_LEGS: [u32; 2] = [24, 25];
+    pub const ROUND_OF_16_SECOND_LEGS: [u32; 2] = [27, 28];
+    pub const QUARTER_FINAL_LEGS: ([u32; 1], [u32; 1]) = ([31], [32]);
+    pub const SEMI_FINAL_LEGS: ([u32; 1], [u32; 1]) = ([35], [36]);
+    pub const FINAL: u32 = 38;
+
+    /// True when the Monday-to-Sunday week holding `date` carries
+    /// continental club football.
+    pub fn is_matchweek(date: NaiveDate) -> bool {
+        let season = Season::from_date(date);
+        let start = season.week(0);
+        if date < start {
+            return false;
+        }
+        let week = ((date - start).num_days() / 7) as u32;
+        Self::weeks().any(|matchweek| matchweek == week)
+    }
+
+    fn weeks() -> impl Iterator<Item = u32> {
+        Self::LEAGUE_PHASE
+            .into_iter()
+            .chain(Self::ROUND_OF_16_FIRST_LEGS)
+            .chain(Self::ROUND_OF_16_SECOND_LEGS)
+            .chain(Self::QUARTER_FINAL_LEGS.0)
+            .chain(Self::QUARTER_FINAL_LEGS.1)
+            .chain(Self::SEMI_FINAL_LEGS.0)
+            .chain(Self::SEMI_FINAL_LEGS.1)
+            .chain([Self::FINAL])
+    }
+
+    pub fn day(season: &Season, week: u32, weekdays: &[Weekday], index: usize) -> NaiveDate {
+        let weekday = weekdays[index % weekdays.len()];
+        season.week(week) + Duration::days(weekday.num_days_from_monday() as i64)
+    }
+
+    /// A knockout leg spread over several weeks: ties fill one week's
+    /// weekdays before the next week is used.
+    pub fn leg(season: &Season, weeks: &[u32], weekdays: &[Weekday], index: usize) -> NaiveDate {
+        let week = weeks[(index / weekdays.len()) % weeks.len()];
+        Self::day(season, week, weekdays, index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn the_first_europa_league_matchday_of_2026_is_thursday_17_september() {
+        let season = Season::new(2026);
+        assert_eq!(
+            ContinentalMatchweek::day(&season, ContinentalMatchweek::LEAGUE_PHASE[0], &[Weekday::Thu], 0),
+            d(2026, 9, 17)
+        );
+    }
+
+    #[test]
+    fn the_index_spreads_a_round_across_the_weekdays() {
+        let season = Season::new(2026);
+        let weekdays = [Weekday::Tue, Weekday::Wed];
+        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 0), d(2026, 9, 15));
+        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 1), d(2026, 9, 16));
+        assert_eq!(ContinentalMatchweek::day(&season, 2, &weekdays, 2), d(2026, 9, 15));
+    }
+
+    #[test]
+    fn knockout_ties_fill_a_weeks_nights_before_the_next_week() {
+        let season = Season::new(2026);
+        let weekdays = [Weekday::Tue, Weekday::Wed];
+        let weeks = ContinentalMatchweek::ROUND_OF_16_FIRST_LEGS;
+        let days: Vec<NaiveDate> = (0..4)
+            .map(|i| ContinentalMatchweek::leg(&season, &weeks, &weekdays, i))
+            .collect();
+        assert_eq!(
+            days,
+            vec![d(2027, 2, 16), d(2027, 2, 17), d(2027, 2, 23), d(2027, 2, 24)]
+        );
+    }
+
+    #[test]
+    fn no_continental_night_falls_inside_an_international_window() {
+        use crate::InternationalCalendar;
+        for year in 2026..=2060 {
+            let season = Season::new(year);
+            for week in ContinentalMatchweek::weeks() {
+                for weekday in [Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Sat] {
+                    let day = ContinentalMatchweek::day(&season, week, &[weekday], 0);
+                    assert!(
+                        InternationalCalendar::window_on(day).is_none(),
+                        "{year}: week {week} {weekday:?} ({day}) inside a window"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_free_saturday_follows_every_window() {
+        use crate::InternationalCalendar;
+        for year in 2026..=2060 {
+            let season = Season::new(year);
+            let first_nights: Vec<NaiveDate> = ContinentalMatchweek::weeks()
+                .map(|week| ContinentalMatchweek::day(&season, week, &[Weekday::Tue], 0))
+                .collect();
+            for window in InternationalCalendar::windows(&season) {
+                let Some(next) = first_nights.iter().filter(|n| **n > window.closes).min() else {
+                    continue;
+                };
+                let saturday = (1..(*next - window.closes).num_days())
+                    .map(|k| window.closes + Duration::days(k))
+                    .any(|day| day.weekday() == Weekday::Sat);
+                assert!(saturday, "{year}: no Saturday between {} and {next}", window.closes);
+            }
+        }
+    }
+
+    #[test]
+    fn a_matchweek_is_the_whole_monday_to_sunday_week() {
+        // Week 2 of 2026 runs Monday 14 to Sunday 20 September.
+        assert!(!ContinentalMatchweek::is_matchweek(d(2026, 9, 13)));
+        assert!(ContinentalMatchweek::is_matchweek(d(2026, 9, 14)));
+        assert!(ContinentalMatchweek::is_matchweek(d(2026, 9, 20)));
+        assert!(!ContinentalMatchweek::is_matchweek(d(2026, 9, 21)));
+        assert!(!ContinentalMatchweek::is_matchweek(d(2026, 8, 20)), "before week 0");
+    }
+
+    #[test]
+    fn the_three_uefa_competitions_share_their_weeks() {
+        use crate::continent::{
+            ChampionsLeague, ConferenceLeague, ContinentalMatch, ContinentalRankings, EuropaLeague,
+        };
+        use std::collections::BTreeSet;
+
+        let weeks = |matches: &[ContinentalMatch], knockout: bool| -> BTreeSet<NaiveDate> {
+            matches
+                .iter()
+                .filter(|m| matches!(m.stage, CompetitionStage::RoundOf16) == knockout)
+                .map(|m| m.date - Duration::days(m.date.weekday().num_days_from_monday() as i64))
+                .collect()
+        };
+        let clubs: Vec<u32> = (1..=32).collect();
+        let rankings = ContinentalRankings::new();
+        for year in [2026, 2027, 2033] {
+            let draw = NaiveDate::from_ymd_opt(year, 8, 15).unwrap();
+            let mut cl = ChampionsLeague::new();
+            cl.conduct_draw(&clubs, &rankings, draw);
+            cl.generate_knockout_fixtures();
+            let mut el = EuropaLeague::new();
+            el.conduct_draw(&clubs, &rankings, draw);
+            el.generate_knockout_fixtures();
+            let mut uecl = ConferenceLeague::new();
+            uecl.conduct_draw(&clubs, &rankings, draw);
+            uecl.generate_knockout_fixtures();
+
+            for knockout in [false, true] {
+                let cl_weeks = weeks(&cl.matches, knockout);
+                assert_eq!(cl_weeks, weeks(&el.matches, knockout), "{year} CL v EL");
+                assert_eq!(cl_weeks, weeks(&uecl.matches, knockout), "{year} CL v UECL");
+            }
+            assert_eq!(weeks(&cl.matches, false).len(), 6, "{year}: six league-phase weeks");
+        }
+    }
 
     #[test]
     fn continental_reserved_ids_are_distinct() {

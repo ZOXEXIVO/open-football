@@ -4,11 +4,11 @@
 //!
 //! | Submodule        | Concern                                                    |
 //! |------------------|------------------------------------------------------------|
-//! | [`types`]        | Free types and constants (staff/squad records, fixture/result, candidate, break/tournament windows) |
+//! | [`types`]        | Free types and constants (staff/squad records, fixture/result, candidate, tournament window) |
 //! | [`callup`]       | Candidate collection, scoring, balanced selection, reason derivation |
 //! | [`synthetic`]    | Synthetic-squad and synthetic-player generation             |
 //! | [`world_status`] | World-wide `PlayerStatusType::Int` apply/release passes     |
-//! | [`calendar`]     | International-break and tournament-window predicates        |
+//! | [`calendar`]     | International windows and tournament-window predicates      |
 
 mod calendar;
 mod callup;
@@ -17,6 +17,7 @@ mod synthetic;
 mod types;
 mod world_status;
 
+pub use calendar::{InternationalCalendar, InternationalWindow};
 pub use callup::{
     NationalCallupConstraints, NationalEligibilityIssue, NationalSquadStage,
     NationalTournamentRequirements,

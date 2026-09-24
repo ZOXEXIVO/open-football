@@ -1,18 +1,18 @@
 use crate::world::SimulatorData;
-use crate::{NationalSelectionPolicy, NationalTeam};
+use crate::{InternationalCalendar, NationalSelectionPolicy, NationalTeam};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
 impl SimulatorData {
-    /// World-level national-team call-ups. Runs at the start of each
-    /// break/tournament window, before any continent simulates, so
+    /// World-level national-team call-ups. Runs on the opening day of each
+    /// international or tournament window, before any continent simulates, so
     /// candidate visibility spans the entire world — a Brazilian
     /// playing at a Spanish club is reachable from Brazil's selection
     /// pool without per-continent plumbing.
     pub fn process_world_national_team_callups(&mut self) {
         let date = self.date.date();
         let need_callups =
-            NationalTeam::is_break_start(date) || NationalTeam::is_tournament_start(date);
+            InternationalCalendar::opens_on(date) || NationalTeam::is_tournament_start(date);
         if !need_callups {
             return;
         }
@@ -116,7 +116,7 @@ impl SimulatorData {
     pub fn process_world_national_team_release(&mut self) {
         let date = self.date.date();
         let need_release =
-            NationalTeam::is_break_end(date) || NationalTeam::is_tournament_end(date);
+            InternationalCalendar::closes_on(date) || NationalTeam::is_tournament_end(date);
         if !need_release {
             return;
         }

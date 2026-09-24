@@ -5,8 +5,9 @@ use crate::loaders::{
 };
 use core::transfers::{CorridorWeight, CountryTransferProfile, DiasporaShare};
 use core::{
-    CompetitionScope, NationalCompetitionConfig, NationalTeamLevel, QualifyingConfig,
-    QualifyingPosition, QualifyingZoneConfig, ScheduleConfig, ScheduleDate, TournamentConfig,
+    CompetitionScope, InternationalCalendar, InternationalWindow, NationalCompetitionConfig,
+    NationalTeamLevel, QualifyingConfig, QualifyingPosition, QualifyingZoneConfig,
+    ScheduleConfig, ScheduleDate, TournamentConfig,
 };
 
 /// Convert a database NationalCompetitionEntity to a runtime NationalCompetitionConfig
@@ -61,6 +62,27 @@ pub fn convert_national_competition(
         advance_per_group: entity.tournament.advance_per_group,
         best_third_placed: entity.tournament.best_third_placed,
     };
+
+    // A qualifying date names its international window by month; the
+    // simulator trusts that the window exists and has a matchday for it.
+    let mut per_window: HashMap<(i32, u32), usize> = HashMap::new();
+    for sd in &entity.schedule.qualifying_dates {
+        assert!(
+            InternationalCalendar::names_window(sd.month),
+            "national competition {}: qualifying month {} has no international window",
+            entity.name,
+            sd.month
+        );
+        let dates = per_window.entry((sd.year_offset, sd.month)).or_default();
+        *dates += 1;
+        assert!(
+            *dates <= InternationalWindow::MATCHDAYS,
+            "national competition {}: more than {} qualifying dates in the month {} window",
+            entity.name,
+            InternationalWindow::MATCHDAYS,
+            sd.month
+        );
+    }
 
     let schedule = ScheduleConfig {
         qualifying_dates: entity
@@ -119,8 +141,8 @@ const UEFA_CONTINENT_ID: u32 = 1;
 /// is no data-driven U21 competition to load yet. This helper supplies a
 /// single example so U21 squads, schedules, and stats have something to
 /// exercise in-sim. Two-year cycle starting on the next even year;
-/// qualifying matchdays land inside the regular September/October/
-/// November/March international breaks, finals in the June window.
+/// qualifying matchdays land inside the September/October/November/March
+/// international windows, finals in the June window.
 pub fn uefa_u21_championship_config() -> NationalCompetitionConfig {
     let qualifying = QualifyingConfig {
         zones: vec![QualifyingZoneConfig {
@@ -149,8 +171,8 @@ pub fn uefa_u21_championship_config() -> NationalCompetitionConfig {
     };
 
     let schedule = ScheduleConfig {
-        // Qualifying matchdays inside the regular break windows
-        // (Sep 4-12, Oct 9-17, Nov 13-21, Mar 20-28).
+        // Each pair names its month's window and takes its Thursday and
+        // Sunday.
         qualifying_dates: vec![
             qd(9, 6, 0),
             qd(9, 9, 0),
@@ -310,5 +332,74 @@ mod transfer_profile_tests {
         };
         let profile = convert_country_transfers(Some(&entity), &codes());
         assert_eq!(profile.import.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod shipped_national_calendar_tests {
+    use super::*;
+    use crate::loaders::{NationalCompetitionLoader, ScheduleDateEntity};
+
+    fn world_cup_with(qualifying_dates: Vec<(u32, u32)>) -> NationalCompetitionEntity {
+        let mut entity = NationalCompetitionLoader::load()
+            .into_iter()
+            .find(|c| c.name == "FIFA World Cup")
+            .expect("the World Cup ships");
+        entity.schedule.qualifying_dates = qualifying_dates
+            .into_iter()
+            .map(|(month, day)| ScheduleDateEntity {
+                month,
+                day,
+                year_offset: 0,
+            })
+            .collect();
+        entity
+    }
+
+    #[test]
+    fn every_shipped_qualifying_calendar_names_real_windows() {
+        for entity in NationalCompetitionLoader::load() {
+            convert_national_competition(&entity);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "qualifying month 6 has no international window")]
+    fn a_june_qualifying_date_is_rejected() {
+        convert_national_competition(&world_cup_with(vec![(9, 6), (6, 10)]));
+    }
+
+    #[test]
+    #[should_panic(expected = "more than 3 qualifying dates in the month 10 window")]
+    fn a_window_holds_at_most_three_qualifying_dates() {
+        let four_in_october = vec![(10, 5), (10, 8), (10, 11), (10, 14)];
+        convert_national_competition(&world_cup_with(four_in_october));
+    }
+
+    #[test]
+    fn the_euro_and_the_world_cup_never_open_qualifying_in_the_same_year() {
+        let configs: Vec<_> = NationalCompetitionLoader::load()
+            .iter()
+            .map(convert_national_competition)
+            .collect();
+        let world_cup = configs
+            .iter()
+            .find(|c| c.name == "FIFA World Cup")
+            .expect("the World Cup ships");
+        let euro = configs
+            .iter()
+            .find(|c| c.name == "UEFA European Championship")
+            .expect("the Euro ships");
+
+        let euro_years: Vec<i32> = (2026..=2040)
+            .filter(|y| euro.should_start_cycle(*y))
+            .collect();
+        assert_eq!(euro_years, vec![2026, 2030, 2034, 2038]);
+        for year in 2026..=2040 {
+            assert!(
+                !(world_cup.should_start_cycle(year) && euro.should_start_cycle(year)),
+                "{year}: both campaigns open for Europe"
+            );
+        }
     }
 }

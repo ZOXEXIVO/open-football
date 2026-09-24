@@ -6,7 +6,6 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
-use core::league::LeagueSettings;
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -55,18 +54,6 @@ pub struct PlayoffHistoryRow {
     pub runner_up_name: String,
     pub runner_up_slug: String,
     pub has_runner_up: bool,
-}
-
-/// Season label for a playoff edition anchored at `start_year`. Autumn-
-/// spring campaigns wrap into the next year and render as `2025/26`;
-/// calendar-year competitions show the single year.
-fn season_label(settings: &LeagueSettings, start_year: i32) -> String {
-    let wraps = settings.season_ending_half.to_month <= settings.season_starting_half.from_month;
-    if wraps {
-        format!("{}/{:02}", start_year, (start_year + 1).rem_euclid(100))
-    } else {
-        start_year.to_string()
-    }
 }
 
 pub async fn playoff_history_action(
@@ -119,6 +106,8 @@ pub async fn playoff_history_action(
             .unwrap_or_default()
     };
 
+    let calendar = playoff.league.settings.season_calendar();
+
     // Newest edition first.
     let mut rows: Vec<PlayoffHistoryRow> = Vec::new();
     let mut winners: HashSet<u32> = HashSet::new();
@@ -129,7 +118,7 @@ pub async fn playoff_history_action(
             entry.runner_up_team_id.map(&team_info).unwrap_or_default();
         let has_runner_up = !runner_up_name.is_empty();
         rows.push(PlayoffHistoryRow {
-            season_label: season_label(&playoff.league.settings, entry.season_start_year),
+            season_label: calendar.season_opening_in(entry.season_start_year).label(),
             champion_name,
             champion_slug,
             runner_up_name,
@@ -145,7 +134,7 @@ pub async fn playoff_history_action(
         .map(|entry| {
             let (champion_name, champion_slug) = team_info(entry.champion_team_id);
             PlayoffHistoryRow {
-                season_label: season_label(&playoff.league.settings, entry.season_start_year),
+                season_label: calendar.season_opening_in(entry.season_start_year).label(),
                 champion_name,
                 champion_slug,
                 runner_up_name: String::new(),

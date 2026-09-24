@@ -137,11 +137,10 @@ impl TeamType {
         }
     }
 
-    /// Sort priority for the parent club's left-menu listing. Lower comes
-    /// first, so Main appears at the top, Second right after, then B,
-    /// Reserve, and youth squads in descending age. Reputation tiebreaks
-    /// between teams of the same type within a single club (rare).
-    pub fn menu_order(&self) -> u8 {
+    /// Place on the club's pathway, lower is more senior: Main, Second, B,
+    /// Reserve, then the youth squads in descending age. On a day several
+    /// of a club's sides play, the most senior one is served first.
+    pub fn seniority(&self) -> u8 {
         match self {
             TeamType::Main => 0,
             TeamType::Second => 1,
@@ -153,6 +152,13 @@ impl TeamType {
             TeamType::U19 => 7,
             TeamType::U18 => 8,
         }
+    }
+
+    /// Sort priority for the parent club's left-menu listing: the pathway
+    /// order. Reputation tiebreaks between teams of the same type within a
+    /// single club (rare).
+    pub fn menu_order(&self) -> u8 {
+        self.seniority()
     }
 
     /// Youth team progression order: U18 → U19 → U20 → U21 → U23
@@ -202,5 +208,18 @@ impl FromStr for TeamType {
             "Second" => Ok(TeamType::Second),
             _ => Err(format!("'{}' is not a valid value for WSType", s)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_team_is_the_most_senior_side() {
+        assert!(TeamType::Main.seniority() < TeamType::Second.seniority());
+        assert!(TeamType::Main.seniority() < TeamType::B.seniority());
+        assert!(TeamType::Second.seniority() < TeamType::U23.seniority());
+        assert!(TeamType::U23.seniority() < TeamType::U18.seniority());
     }
 }

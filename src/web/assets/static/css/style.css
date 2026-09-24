@@ -786,18 +786,18 @@ a:active {
     gap: 8px;
 }
 
-/* Year stepper — flat: the year IS the control. The chevrons are drawn
+/* Season stepper — flat: the season IS the control. The chevrons are drawn
    rather than typeset, so their stroke matches its weight and their height
    matches its digits instead of inheriting the font's own thin glyph. The
    margin re-centres a rotated square, whose drawn mass sits off to one
    side of its box. */
-.fm-yearstep {
+.fm-seasonstep {
     display: inline-flex;
     align-items: center;
     gap: 3px;
 }
 
-.fm-yearstep-value {
+.fm-seasonstep-value {
     font-size: 14px;
     font-weight: 700;
     color: #dfe7ee;
@@ -805,7 +805,7 @@ a:active {
     letter-spacing: 0.4px;
 }
 
-.fm-yearstep-arrow {
+.fm-seasonstep-arrow {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -815,7 +815,7 @@ a:active {
     transition: color 0.12s ease;
 }
 
-.fm-yearstep-arrow::before {
+.fm-seasonstep-arrow::before {
     content: "";
     width: 7px;
     height: 7px;
@@ -823,26 +823,26 @@ a:active {
     border-bottom: 2px solid currentColor;
 }
 
-.fm-yearstep-arrow:first-child::before {
+.fm-seasonstep-arrow:first-child::before {
     transform: rotate(45deg);
     margin-left: 3px;
 }
 
-.fm-yearstep-arrow:last-child::before {
+.fm-seasonstep-arrow:last-child::before {
     transform: rotate(-135deg);
     margin-right: 3px;
 }
 
-a.fm-yearstep-arrow:hover {
+a.fm-seasonstep-arrow:hover {
     color: #5cb86c;
 }
 
-.fm-yearstep-arrow:focus-visible {
+.fm-seasonstep-arrow:focus-visible {
     outline: 2px solid #4a9d5b;
     outline-offset: -2px;
 }
 
-.fm-yearstep-arrow.is-end {
+.fm-seasonstep-arrow.is-end {
     color: #37454f;
 }
 
@@ -8690,7 +8690,7 @@ html.match-scroll-locked body {
     /* The panel scrolls sideways here and its head stretches to the table's
        full width, so anything right-aligned lands past the first screen.
        Keep the stepper beside the title, inside the sticky zone. */
-    .fm-panel-head:has(.fm-yearstep) {
+    .fm-panel-head:has(.fm-seasonstep) {
         justify-content: flex-start;
         gap: 12px;
     }

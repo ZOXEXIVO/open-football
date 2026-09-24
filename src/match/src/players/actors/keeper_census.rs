@@ -227,19 +227,22 @@ fn keeper_glide() {
             // ——— what he is drawn doing with his legs ———
             let (left, right) = (boot(-1.0, gait), boot(1.0, gait));
             if let Some((was_left, was_right)) = boots
-                && !airborne && actor.speed > RUNNING && ground > 1e-4 {
-                    let travelled =
-                        |now: Vec3, then: Vec3| Vec2::new(now.x - then.x, now.z - then.z).length();
-                    let legs = travelled(left, was_left) + travelled(right, was_right);
-                    let band = if gait.save > 0.3 {
-                        0
-                    } else if actor.dive > 0.3 {
-                        1
-                    } else {
-                        2
-                    };
-                    work[band].note(legs, ground);
-                }
+                && !airborne
+                && actor.speed > RUNNING
+                && ground > 1e-4
+            {
+                let travelled =
+                    |now: Vec3, then: Vec3| Vec2::new(now.x - then.x, now.z - then.z).length();
+                let legs = travelled(left, was_left) + travelled(right, was_right);
+                let band = if gait.save > 0.3 {
+                    0
+                } else if actor.dive > 0.3 {
+                    1
+                } else {
+                    2
+                };
+                work[band].note(legs, ground);
+            }
             boots = Some((left, right));
 
             // ——— which way the trunk leans into a change of pace ———

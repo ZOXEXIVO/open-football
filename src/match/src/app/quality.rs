@@ -810,10 +810,12 @@ impl Quality {
         // reports `Radeon RX 6700 XT` and stops. The trailing "graphics" is the
         // whole tell, and `rx` is the guard against the handful of discrete
         // Vegas that would otherwise match on the second clause.
-        if name.contains("radeon") && !name.contains(" rx")
-            && (name.contains("graphics") || name.contains("vega")) {
-                return true;
-            }
+        if name.contains("radeon")
+            && !name.contains(" rx")
+            && (name.contains("graphics") || name.contains("vega"))
+        {
+            return true;
+        }
 
         // Phones and tablets, which are integrated by construction. Apple's own
         // parts are deliberately absent: they share memory too, and they have

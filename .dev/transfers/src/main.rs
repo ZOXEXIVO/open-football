@@ -495,12 +495,14 @@ impl PathwayCensus {
             *self.in_by_band.entry(to.band()).or_insert(0) += 1;
         }
         if let (Some(from), Some(to)) = (from, to)
-            && from.league_reputation > 0 && to.league_reputation > 0 {
-                self.loans_with_leagues += 1;
-                if from.league_reputation as f32 > to.league_reputation as f32 * Self::DEEP_DROP {
-                    self.deep_drops += 1;
-                }
+            && from.league_reputation > 0
+            && to.league_reputation > 0
+        {
+            self.loans_with_leagues += 1;
+            if from.league_reputation as f32 > to.league_reputation as f32 * Self::DEEP_DROP {
+                self.deep_drops += 1;
             }
+        }
         if let Some(age) = age {
             self.loanees_aged += 1;
             if age <= Self::YOUNG {
@@ -981,14 +983,15 @@ impl MarketCensus {
                             // that is the market whose price level and
                             // budgets it reflects.
                             if let Some(buyer) = to
-                                && let Some(league_id) = buyer.league_id {
-                                    let row = report
-                                        .live
-                                        .gross_spend_by_league
-                                        .entry(league_id)
-                                        .or_insert_with(|| (buyer.league_name.clone(), 0.0));
-                                    row.1 += t.fee.amount;
-                                }
+                                && let Some(league_id) = buyer.league_id
+                            {
+                                let row = report
+                                    .live
+                                    .gross_spend_by_league
+                                    .entry(league_id)
+                                    .or_insert_with(|| (buyer.league_name.clone(), 0.0));
+                                row.1 += t.fee.amount;
+                            }
                             // The headline band: real markets put its
                             // median age at about 24, with 90 % between 19
                             // and 29. A drift upward means clubs are buying
@@ -997,9 +1000,9 @@ impl MarketCensus {
                                 && let Some(age) = birth_dates
                                     .get(&t.player_id)
                                     .map(|b| DateUtils::age(*b, t.transfer_date))
-                                {
-                                    report.live.big_move_ages.push(age);
-                                }
+                            {
+                                report.live.big_move_ages.push(age);
+                            }
                             report.flow.record(FlowMove {
                                 season: t.season_year,
                                 from_band: from.map(|c| c.band()).unwrap_or("unknown"),
@@ -1140,9 +1143,11 @@ impl MarketCensus {
                         main.players.iter().filter(|p| !p.is_on_loan()).collect();
                     report.live.squad_sizes.push(senior.len());
                     if let Some(cap) = club.board.season_targets.as_ref().map(|t| t.max_squad_size)
-                        && cap > 0 && senior.len() > cap as usize {
-                            report.live.squads_over_cap += 1;
-                        }
+                        && cap > 0
+                        && senior.len() > cap as usize
+                    {
+                        report.live.squads_over_cap += 1;
+                    }
                     if !country
                         .regulations
                         .omitted_for_foreign_limit(&senior, country.id)
@@ -2738,14 +2743,16 @@ impl PlayerSideCensus {
                                 .entry(CensusFacts::refusal_label(cause))
                                 .or_insert(0) += 1;
                             if let (Some(reservation), Some(offered)) = (reservation, offered)
-                                && offered > 0 {
-                                    cell.demand_ratios.push(reservation as f64 / offered as f64);
-                                }
+                                && offered > 0
+                            {
+                                cell.demand_ratios.push(reservation as f64 / offered as f64);
+                            }
                             if let (Some(reservation), Some(level)) = (reservation, level)
-                                && level > 0 {
-                                    cell.reservation_over_level
-                                        .push(reservation as f64 / level as f64);
-                                }
+                                && level > 0
+                            {
+                                cell.reservation_over_level
+                                    .push(reservation as f64 / level as f64);
+                            }
                         }
                     } else if matches!(
                         negotiation.phase,
@@ -2832,14 +2839,15 @@ impl PlayerSideCensus {
             funnel.posted += 1;
         }
         if let Some(candidate) = candidate
-            && matches!(candidate.reason, LoanOutReason::UnsettledAbroad) {
-                funnel.candidates += 1;
-                match candidate.preferred_destination {
-                    LoanDestinationPreference::HomeCountry => funnel.prefers_country += 1,
-                    LoanDestinationPreference::HomeRegion => funnel.prefers_region += 1,
-                    LoanDestinationPreference::Any => funnel.prefers_any += 1,
-                }
+            && matches!(candidate.reason, LoanOutReason::UnsettledAbroad)
+        {
+            funnel.candidates += 1;
+            match candidate.preferred_destination {
+                LoanDestinationPreference::HomeCountry => funnel.prefers_country += 1,
+                LoanDestinationPreference::HomeRegion => funnel.prefers_region += 1,
+                LoanDestinationPreference::Any => funnel.prefers_any += 1,
             }
+        }
     }
 
     /// Compare a player against yesterday, and bank whatever the
@@ -4821,16 +4829,18 @@ impl MandatePrinter {
             cell.0 += 1;
             cell.1 += row.loss_share.unwrap_or(0.0);
             if let Some((promised, delivered)) = row.promised_24
-                && promised > 0.0 && delivered < promised * MandateOutcome::DELIVERED_BAR {
-                    unrealised += 1;
-                    match row.exit {
-                        Some("loaned") => unrealised_loaned += 1,
-                        Some("sold") if row.loss_share.unwrap_or(0.0) > 0.5 => {
-                            unrealised_sold_below += 1
-                        }
-                        _ => {}
+                && promised > 0.0
+                && delivered < promised * MandateOutcome::DELIVERED_BAR
+            {
+                unrealised += 1;
+                match row.exit {
+                    Some("loaned") => unrealised_loaned += 1,
+                    Some("sold") if row.loss_share.unwrap_or(0.0) > 0.5 => {
+                        unrealised_sold_below += 1
                     }
+                    _ => {}
                 }
+            }
         }
         println!("\n  exits");
         for (exit, (n, loss)) in &by_exit {
@@ -6398,10 +6408,11 @@ impl CorridorCensus {
                         break;
                     }
                     if let Some(next_rep) = reputations.get(out_to)
-                        && to_rep - next_rep >= Self::DUMP_DOWN {
-                            dumped += 1;
-                            days.push(elapsed);
-                        }
+                        && to_rep - next_rep >= Self::DUMP_DOWN
+                    {
+                        dumped += 1;
+                        days.push(elapsed);
+                    }
                     break;
                 }
             }

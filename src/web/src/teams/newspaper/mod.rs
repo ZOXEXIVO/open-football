@@ -2573,7 +2573,7 @@ mod render_tests {
         // in two pieces with the anchor between them.
         assert!(html.contains("cordoba\" title=\"Córdoba\">Córdoba</a> tear Sevilla apart"));
         assert!(html.contains("np-folio-mood-triumph np-stamp"));
-        assert!(html.contains("/api/players/17/face.svg"));
+        assert!(html.contains("/api/players/17/face.jpg"));
         assert!(html.contains("np-result np-result-w"));
         assert!(html.contains("/en/teams/sevilla"));
         assert!(html.contains("np-brief-link"));

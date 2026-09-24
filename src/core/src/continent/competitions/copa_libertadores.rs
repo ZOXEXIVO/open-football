@@ -1,14 +1,15 @@
 use super::{
-    COPA_LIBERTADORES_ID, CompetitionStage, CompetitionTier, ContinentalMatch,
-    ContinentalMatchResult, GroupTable, KnockoutTie,
+    COPA_LIBERTADORES_ID, CompetitionStage, ContinentalMatch, ContinentalMatchweek, GroupTable,
+    KnockoutTie,
 };
 use crate::Club;
 use crate::continent::ContinentalRankings;
-use crate::league::simulation::matchday::MatchdayPool;
+use crate::league::Season;
+use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
 use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
 use crate::{MatchRuntime, TeamType};
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Weekday};
 use log::{debug, info};
 use std::collections::HashMap;
 
@@ -40,6 +41,11 @@ impl Default for CopaLibertadores {
 }
 
 impl CopaLibertadores {
+    /// Tuesday to Thursday nights, the groups spread across them.
+    const MATCH_WEEKDAYS: [Weekday; 3] = [Weekday::Tue, Weekday::Wed, Weekday::Thu];
+    /// The single-match final is a Saturday showpiece.
+    const FINAL_WEEKDAY: [Weekday; 1] = [Weekday::Sat];
+
     pub fn new() -> Self {
         CopaLibertadores {
             participating_clubs: Vec::new(),
@@ -89,17 +95,9 @@ impl CopaLibertadores {
         // Generate group stage fixtures (6 matchdays). Thursday cadence,
         // one day after the UEFA midweek slate.
         self.matches.clear();
-        let year = date.year();
-        let matchday_dates = [
-            NaiveDate::from_ymd_opt(year, 9, 18).unwrap(),  // MD1
-            NaiveDate::from_ymd_opt(year, 10, 2).unwrap(),  // MD2
-            NaiveDate::from_ymd_opt(year, 10, 23).unwrap(), // MD3
-            NaiveDate::from_ymd_opt(year, 11, 6).unwrap(),  // MD4
-            NaiveDate::from_ymd_opt(year, 11, 27).unwrap(), // MD5
-            NaiveDate::from_ymd_opt(year, 12, 11).unwrap(), // MD6
-        ];
+        let season = Season::new(self.season_year);
 
-        for group in &self.groups {
+        for (group_idx, group) in self.groups.iter().enumerate() {
             let teams: Vec<u32> = group.rows.iter().map(|r| r.team_id).collect();
             if teams.len() < 4 {
                 continue;
@@ -119,7 +117,12 @@ impl CopaLibertadores {
                 self.matches.push(ContinentalMatch {
                     home_team: teams[h1],
                     away_team: teams[a1],
-                    date: matchday_dates[md],
+                    date: ContinentalMatchweek::day(
+                        &season,
+                        ContinentalMatchweek::LEAGUE_PHASE[md],
+                        &Self::MATCH_WEEKDAYS,
+                        group_idx,
+                    ),
                     stage: CompetitionStage::GroupStage,
                     match_id: String::new(),
                     result: None,
@@ -127,7 +130,12 @@ impl CopaLibertadores {
                 self.matches.push(ContinentalMatch {
                     home_team: teams[h2],
                     away_team: teams[a2],
-                    date: matchday_dates[md],
+                    date: ContinentalMatchweek::day(
+                        &season,
+                        ContinentalMatchweek::LEAGUE_PHASE[md],
+                        &Self::MATCH_WEEKDAYS,
+                        group_idx,
+                    ),
                     stage: CompetitionStage::GroupStage,
                     match_id: String::new(),
                     result: None,
@@ -139,7 +147,7 @@ impl CopaLibertadores {
     }
 
     /// Generate knockout round fixtures after group stage completes.
-    pub fn generate_knockout_fixtures(&mut self, year: i32) {
+    pub fn generate_knockout_fixtures(&mut self) {
         // Collect group winners and runners-up
         let mut winners = Vec::new();
         let mut runners_up = Vec::new();
@@ -163,18 +171,21 @@ impl CopaLibertadores {
         }
 
         // Schedule R16 matches (Thursday cadence, next calendar year).
-        let r16_dates_leg1 = [
-            NaiveDate::from_ymd_opt(year + 1, 2, 19).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 2, 26).unwrap(),
-        ];
-        let r16_dates_leg2 = [
-            NaiveDate::from_ymd_opt(year + 1, 3, 12).unwrap(),
-            NaiveDate::from_ymd_opt(year + 1, 3, 19).unwrap(),
-        ];
+        let season = Season::new(self.season_year);
 
         for (i, tie) in self.knockout_round.iter().enumerate() {
-            let leg1_date = r16_dates_leg1[i % r16_dates_leg1.len()];
-            let leg2_date = r16_dates_leg2[i % r16_dates_leg2.len()];
+            let leg1_date = ContinentalMatchweek::leg(
+                &season,
+                &ContinentalMatchweek::ROUND_OF_16_FIRST_LEGS,
+                &Self::MATCH_WEEKDAYS,
+                i,
+            );
+            let leg2_date = ContinentalMatchweek::leg(
+                &season,
+                &ContinentalMatchweek::ROUND_OF_16_SECOND_LEGS,
+                &Self::MATCH_WEEKDAYS,
+                i,
+            );
 
             self.matches.push(ContinentalMatch {
                 home_team: tie.home_team,
@@ -209,10 +220,11 @@ impl CopaLibertadores {
 
     /// Play today's matches using the real match engine.
     /// Returns MatchResults that flow through the standard stat pipeline.
-    pub fn play_matches(
+    pub(crate) fn play_matches(
         &mut self,
         clubs: &HashMap<u32, &Club>,
         date: NaiveDate,
+        commitments: &MatchdayCommitments,
     ) -> Vec<MatchResult> {
         let todays_matches: Vec<ContinentalMatch> = self
             .matches
@@ -250,6 +262,7 @@ impl CopaLibertadores {
                     false,
                     home_team.team_type == TeamType::Main,
                     date,
+                    commitments,
                 );
                 let away_force = MatchdayPool::offer(
                     away_club,
@@ -257,6 +270,7 @@ impl CopaLibertadores {
                     false,
                     away_team.team_type == TeamType::Main,
                     date,
+                    commitments,
                 );
 
                 let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
@@ -389,7 +403,7 @@ impl CopaLibertadores {
 
         if group_stage_complete {
             info!("Copa Libertadores group stage complete -- generating R16 draw");
-            self.generate_knockout_fixtures(date.year());
+            self.generate_knockout_fixtures();
         }
 
         // Advance the knockout bracket if today's results completed the
@@ -522,8 +536,7 @@ impl CopaLibertadores {
         &mut self,
         winners: &[u32],
         stage: CompetitionStage,
-        leg1_dates: &[NaiveDate],
-        leg2_dates: &[NaiveDate],
+        (leg1_weeks, leg2_weeks): ([u32; 1], [u32; 1]),
     ) {
         let ties: Vec<KnockoutTie> = winners
             .as_chunks::<2>()
@@ -532,9 +545,12 @@ impl CopaLibertadores {
             .map(|pair| KnockoutTie::new(pair[0], pair[1]))
             .collect();
 
+        let season = Season::new(self.season_year);
         for (i, tie) in ties.iter().enumerate() {
-            let leg1_date = leg1_dates[i % leg1_dates.len()];
-            let leg2_date = leg2_dates[i % leg2_dates.len()];
+            let leg1_date =
+                ContinentalMatchweek::leg(&season, &leg1_weeks, &Self::MATCH_WEEKDAYS, i);
+            let leg2_date =
+                ContinentalMatchweek::leg(&season, &leg2_weeks, &Self::MATCH_WEEKDAYS, i);
 
             self.matches.push(ContinentalMatch {
                 home_team: tie.home_team,
@@ -561,7 +577,7 @@ impl CopaLibertadores {
     /// Schedule the single-match final between the two semifinal winners and
     /// move the bracket to `Final`. The winner is recorded later, when the
     /// match is played (see `apply_match_result`).
-    fn schedule_final(&mut self, finalists: &[u32], date: NaiveDate) {
+    fn schedule_final(&mut self, finalists: &[u32]) {
         if finalists.len() < 2 {
             debug!(
                 "Copa Libertadores: cannot schedule final with {} finalist(s)",
@@ -574,7 +590,12 @@ impl CopaLibertadores {
         self.matches.push(ContinentalMatch {
             home_team: finalists[0],
             away_team: finalists[1],
-            date,
+            date: ContinentalMatchweek::day(
+                &Season::new(self.season_year),
+                ContinentalMatchweek::FINAL,
+                &Self::FINAL_WEEKDAY,
+                0,
+            ),
             stage: CompetitionStage::Final,
             match_id: String::new(),
             result: None,
@@ -584,11 +605,9 @@ impl CopaLibertadores {
 
     /// Advance the knockout bracket when today's results finish the current
     /// round: R16 -> QF -> SF -> Final, two legs each except the one-match
-    /// final. Knockout dates land in the season after the group stage
-    /// (`season_year + 1`) on the Aug-Jul simulation calendar. A round with
-    /// an undecided tie holds the next draw (logged) instead of advancing.
+    /// final. A round with an undecided tie holds the next draw (logged)
+    /// instead of advancing.
     fn maybe_advance_knockout(&mut self) {
-        let next_year = self.season_year as i32 + 1;
         match self.current_stage {
             CompetitionStage::RoundOf16 => {
                 if self.knockout_stage_complete(CompetitionStage::RoundOf16) {
@@ -596,8 +615,7 @@ impl CopaLibertadores {
                     self.schedule_two_leg_round(
                         &winners,
                         CompetitionStage::QuarterFinals,
-                        &[NaiveDate::from_ymd_opt(next_year, 4, 9).unwrap()],
-                        &[NaiveDate::from_ymd_opt(next_year, 4, 16).unwrap()],
+                        ContinentalMatchweek::QUARTER_FINAL_LEGS,
                     );
                     info!(
                         "Copa Libertadores QF: {} ties scheduled",
@@ -613,8 +631,7 @@ impl CopaLibertadores {
                     self.schedule_two_leg_round(
                         &winners,
                         CompetitionStage::SemiFinals,
-                        &[NaiveDate::from_ymd_opt(next_year, 5, 7).unwrap()],
-                        &[NaiveDate::from_ymd_opt(next_year, 5, 14).unwrap()],
+                        ContinentalMatchweek::SEMI_FINAL_LEGS,
                     );
                     info!(
                         "Copa Libertadores SF: {} ties scheduled",
@@ -627,10 +644,7 @@ impl CopaLibertadores {
             CompetitionStage::SemiFinals => {
                 if self.knockout_stage_complete(CompetitionStage::SemiFinals) {
                     let finalists = self.completed_winners();
-                    self.schedule_final(
-                        &finalists,
-                        NaiveDate::from_ymd_opt(next_year, 5, 28).unwrap(),
-                    );
+                    self.schedule_final(&finalists);
                     info!("Copa Libertadores Final scheduled");
                 } else if self.stage_matches_played(&CompetitionStage::SemiFinals) {
                     debug!("Copa Libertadores: SF legs done but a tie is undecided; final held");
@@ -638,26 +652,6 @@ impl CopaLibertadores {
             }
             _ => {}
         }
-    }
-
-    pub fn simulate_round(
-        &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
-    ) -> Vec<ContinentalMatchResult> {
-        // Play real matches and convert to ContinentalMatchResult for financial processing
-        let match_results = self.play_matches(clubs, date);
-
-        match_results
-            .iter()
-            .map(|r| ContinentalMatchResult {
-                home_team: r.home_team_id,
-                away_team: r.away_team_id,
-                home_score: r.score.home_team.get(),
-                away_score: r.score.away_team.get(),
-                competition: CompetitionTier::CopaLibertadores,
-            })
-            .collect()
     }
 
     pub fn get_club_points(&self, club_id: u32) -> f32 {
@@ -676,16 +670,6 @@ impl CopaLibertadores {
         }
 
         9.0
-    }
-
-    /// Get the MatchResults from today's matches for stat processing.
-    /// Called separately from simulate_round to feed into LeagueResult pipeline.
-    pub fn take_match_results(
-        &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
-    ) -> Vec<MatchResult> {
-        self.play_matches(clubs, date)
     }
 
     /// Final-result accessor used by the season-end happiness pipeline to
@@ -746,6 +730,64 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn every_fixture_is_midweek_except_the_saturday_final_in_any_year() {
+        for year in [2026, 2027, 2028] {
+            let mut copa = CopaLibertadores::new();
+            copa.conduct_draw(
+                &thirty_two_clubs(),
+                &ContinentalRankings::new(),
+                NaiveDate::from_ymd_opt(year, 8, 16).unwrap(),
+            );
+            copa.generate_knockout_fixtures();
+            for _ in 0..3 {
+                resolve_current_round(&mut copa);
+                copa.maybe_advance_knockout();
+            }
+            assert!(matches!(copa.current_stage, CompetitionStage::Final));
+
+            for m in &copa.matches {
+                let day = m.date.weekday();
+                if matches!(m.stage, CompetitionStage::Final) {
+                    assert_eq!(day, Weekday::Sat, "{year}: the final is a Saturday");
+                } else {
+                    assert!(
+                        CopaLibertadores::MATCH_WEEKDAYS.contains(&day),
+                        "{year}: {:?} fixture on a {}",
+                        m.stage,
+                        day
+                    );
+                }
+            }
+
+            // Every two-legged tie plays its return leg after the first. A
+            // round is scheduled first leg, then return leg, tie by tie.
+            for stage in [
+                CompetitionStage::RoundOf16,
+                CompetitionStage::QuarterFinals,
+                CompetitionStage::SemiFinals,
+            ] {
+                let want = std::mem::discriminant(&stage);
+                let legs: Vec<&ContinentalMatch> = copa
+                    .matches
+                    .iter()
+                    .filter(|m| std::mem::discriminant(&m.stage) == want)
+                    .collect();
+                for pair in legs.chunks(2) {
+                    let (first, ret) = (pair[0], pair[1]);
+                    assert_eq!(
+                        (first.home_team, first.away_team),
+                        (ret.away_team, ret.home_team)
+                    );
+                    assert!(
+                        first.date < ret.date,
+                        "{year}: return leg not after the first"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn conduct_draw_creates_eight_groups_and_ninety_six_matches() {
         let mut copa = CopaLibertadores::new();
         copa.conduct_draw(
@@ -776,7 +818,7 @@ mod lifecycle_tests {
 
         // The R16 draw reads the current group standings; with mocked-complete
         // tables it yields one knockout berth pairing per group.
-        copa.generate_knockout_fixtures(draw_date().year());
+        copa.generate_knockout_fixtures();
 
         assert_eq!(copa.knockout_round.len(), 8);
         let r16_matches = copa
@@ -796,7 +838,7 @@ mod lifecycle_tests {
             &ContinentalRankings::new(),
             draw_date(),
         );
-        copa.generate_knockout_fixtures(draw_date().year());
+        copa.generate_knockout_fixtures();
 
         // R16 -> QF: 8 winners draw into 4 two-legged ties.
         resolve_current_round(&mut copa);
@@ -847,7 +889,7 @@ mod lifecycle_tests {
     fn final_result_returns_winner_and_loser_after_final_recorded() {
         let mut copa = CopaLibertadores::new();
         copa.season_year = 2025;
-        copa.schedule_final(&[7, 13], NaiveDate::from_ymd_opt(2026, 5, 28).unwrap());
+        copa.schedule_final(&[7, 13]);
         assert!(matches!(copa.current_stage, CompetitionStage::Final));
         assert!(copa.final_result().is_none());
 
@@ -859,7 +901,7 @@ mod lifecycle_tests {
     #[test]
     fn final_result_reads_shootout_winner_on_level_score() {
         let mut copa = CopaLibertadores::new();
-        copa.schedule_final(&[7, 13], NaiveDate::from_ymd_opt(2026, 5, 28).unwrap());
+        copa.schedule_final(&[7, 13]);
         // Level after extra time; the away finalist wins the shootout.
         copa.apply_match_result(&CompetitionStage::Final, 7, 13, 1, 1, Some((4, 5)));
         assert_eq!(copa.final_result(), Some((13, 7)));
@@ -873,7 +915,7 @@ mod lifecycle_tests {
             &ContinentalRankings::new(),
             draw_date(),
         );
-        copa.generate_knockout_fixtures(draw_date().year());
+        copa.generate_knockout_fixtures();
 
         // Each leg is a 1-0 home win → aggregate level, no shootout → the
         // tie has no winner.

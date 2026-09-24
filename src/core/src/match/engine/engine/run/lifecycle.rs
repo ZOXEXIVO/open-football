@@ -348,23 +348,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         //
         // `HalfTime` is a state that runs no ticks — `increment_time` returns
         // false for it on the first call, so the loop below never executes a
-        // body — which makes this the only place a change can be made at the
-        // break. And a change at the break is worth making: it is the single
+        // body. A change at the break is still worth making: it is the single
         // most common substitution minute in real football, because it costs
-        // the manager nothing. No stoppage, no walk across the pitch, none of
-        // his three windows, and a dressing room to explain it in. It is also
-        // the only kind of change the old model could not make at all, subs
-        // having been gated to the second half.
+        // the manager nothing — none of his three windows, and a dressing room
+        // to explain it in.
         //
-        // Position resets, the squad swap and the second-half kickoff all
-        // happen in `StateManager::handle_state_finish` *after* this returns,
-        // so a man who comes on here is placed by the same code that places
-        // everybody else. Nothing is drawn and nothing is clipped: there is
-        // no play to interrupt and no moment to show.
+        // It is not MADE here, though. There is no play here to show it in,
+        // so the whistle only opens the interval and the look below spends it
+        // at the first stoppage of the second half, walked on and clipped like
+        // any other change — see [`SubstitutionWindows::open_interval`].
         if context.state.match_state == MatchState::HalfTime {
-            let per_pass_cap = context.max_substitutions_per_pass;
-            let today = context.today;
-            Substitutions::process(field, context, per_pass_cap, today);
+            context.substitution_windows.open_interval();
             return result;
         }
 

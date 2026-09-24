@@ -589,6 +589,7 @@ mod placement_tests {
                 contract: None,
                 loan: None,
                 history: Vec::new(),
+                international: None,
                 team_type_hint: None,
                 attrs: None,
             }

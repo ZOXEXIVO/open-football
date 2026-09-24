@@ -6,7 +6,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Redirect, Response};
-use core::league::{DomesticCup, LeagueSettings};
+use core::league::DomesticCup;
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -53,19 +53,6 @@ pub struct CupHistoryRow {
     pub runner_up_name: String,
     pub runner_up_slug: String,
     pub has_runner_up: bool,
-}
-
-/// Season label for a cup edition anchored at `start_year`. Autumn-spring
-/// campaigns (the end month falls on or before the start month) wrap into
-/// the next year and render as `2025/26`; calendar-year competitions show
-/// the single year.
-fn season_label(settings: &LeagueSettings, start_year: i32) -> String {
-    let wraps = settings.season_ending_half.to_month <= settings.season_starting_half.from_month;
-    if wraps {
-        format!("{}/{:02}", start_year, (start_year + 1).rem_euclid(100))
-    } else {
-        start_year.to_string()
-    }
 }
 
 pub async fn cup_history_action(
@@ -132,7 +119,11 @@ pub async fn cup_history_action(
                 .unwrap_or_default();
             let has_runner_up = !runner_up_name.is_empty();
             rows.push(CupHistoryRow {
-                season_label: season_label(&league.settings, entry.season_start_year),
+                season_label: league
+                    .settings
+                    .season_calendar()
+                    .season_opening_in(entry.season_start_year)
+                    .label(),
                 champion_name,
                 champion_slug,
                 runner_up_name,

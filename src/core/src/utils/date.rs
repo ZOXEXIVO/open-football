@@ -35,10 +35,11 @@ impl DateUtils {
         date.day() == 1
     }
 
-    pub fn next_saturday(date: NaiveDate) -> NaiveDate {
+    /// `date` itself when it already falls on `weekday`.
+    pub fn next_weekday(date: NaiveDate, weekday: Weekday) -> NaiveDate {
         let mut current_date = date;
 
-        while current_date.weekday() != Weekday::Sat {
+        while current_date.weekday() != weekday {
             current_date = current_date.succ_opt().unwrap();
         }
 
@@ -75,20 +76,28 @@ mod tests {
     }
 
     #[test]
-    fn test_next_saturday() {
-        let date = NaiveDate::from_ymd_opt(2024, 3, 12).unwrap(); // A Tuesday
-        let next_saturday = DateUtils::next_saturday(date);
+    fn test_next_weekday() {
+        let tuesday = NaiveDate::from_ymd_opt(2024, 3, 12).unwrap();
+        assert_eq!(
+            DateUtils::next_weekday(tuesday, Weekday::Sat),
+            NaiveDate::from_ymd_opt(2024, 3, 16).unwrap()
+        );
+        assert_eq!(
+            DateUtils::next_weekday(tuesday, Weekday::Fri),
+            NaiveDate::from_ymd_opt(2024, 3, 15).unwrap()
+        );
 
-        assert_eq!(next_saturday, NaiveDate::from_ymd_opt(2024, 3, 16).unwrap());
+        let saturday = NaiveDate::from_ymd_opt(2024, 3, 16).unwrap();
+        assert_eq!(DateUtils::next_weekday(saturday, Weekday::Sat), saturday);
+        assert_eq!(
+            DateUtils::next_weekday(saturday, Weekday::Fri),
+            NaiveDate::from_ymd_opt(2024, 3, 22).unwrap()
+        );
 
-        let date = NaiveDate::from_ymd_opt(2024, 3, 17).unwrap(); // A Saturday
-        let next_saturday = DateUtils::next_saturday(date);
-
-        assert_eq!(next_saturday, NaiveDate::from_ymd_opt(2024, 3, 23).unwrap());
-
-        let date = NaiveDate::from_ymd_opt(2024, 3, 18).unwrap(); // A Sunday
-        let next_saturday = DateUtils::next_saturday(date);
-
-        assert_eq!(next_saturday, NaiveDate::from_ymd_opt(2024, 3, 23).unwrap());
+        let sunday = NaiveDate::from_ymd_opt(2024, 3, 17).unwrap();
+        assert_eq!(
+            DateUtils::next_weekday(sunday, Weekday::Sat),
+            NaiveDate::from_ymd_opt(2024, 3, 23).unwrap()
+        );
     }
 }

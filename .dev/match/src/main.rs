@@ -1732,9 +1732,7 @@ fn pos_group_of(id: u32) -> u8 {
 type PlayerRow = (u32, u16, u16, f32, u8, f32, u16, u16);
 
 /// Collect per-player (id, goals, shots, xg, pos_group, rating, minutes, assists) rows.
-fn per_player_rows(
-    result: &core::r#match::MatchResultRaw,
-) -> Vec<PlayerRow> {
+fn per_player_rows(result: &core::r#match::MatchResultRaw) -> Vec<PlayerRow> {
     let mut rows = Vec::new();
     for (id, s) in result.player_stats.iter() {
         rows.push((
@@ -5137,8 +5135,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     for o in &outcomes {
         let h = &o.home;
         let a = &o.away;
-        let h_acc = (h.passes_completed * 100).checked_div(h.passes_attempted).unwrap_or(0);
-        let a_acc = (a.passes_completed * 100).checked_div(a.passes_attempted).unwrap_or(0);
+        let h_acc = (h.passes_completed * 100)
+            .checked_div(h.passes_attempted)
+            .unwrap_or(0);
+        let a_acc = (a.passes_completed * 100)
+            .checked_div(a.passes_attempted)
+            .unwrap_or(0);
 
         println!(
             "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3}    {:>3}/{:>3}    {:>4.1}/{:>4.1}    {:>3}/{:>3}    {:>3}/{:>3}    {:>3}/{:>3}     {:>4}/{:>4}  {:>2}/{:>2}%",
@@ -5545,8 +5547,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     for ((lo, hi), count) in scoreline_sorted.iter().take(15) {
         let pct = *count as f32 / total_n * 100.0;
         let kind = if lo == hi { "DRAW" } else { "DEC " };
-        let bar: String = std::iter::repeat_n('#', (pct.round() as usize).min(40))
-            .collect();
+        let bar: String = std::iter::repeat_n('#', (pct.round() as usize).min(40)).collect();
         println!(
             "  {}-{}  {}  {:>4} ({:>5.1}%) {}",
             lo, hi, kind, count, pct, bar
@@ -5692,9 +5693,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     None
                 };
                 if let Some(now) = now_leader
-                    && now != prev_leader {
-                        lead_flips += 1;
-                    }
+                    && now != prev_leader
+                {
+                    lead_flips += 1;
+                }
             }
             if post_diff > 0 {
                 last_leader = Some(true);
@@ -6135,8 +6137,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         // sitters: xG/shot inflates, forwards post huge ratings off
         // tap-ins, and shot VOLUME has to be suppressed artificially to
         // keep the scoreline sane.
-        let [dshots, dxg, drolls, dcalls, dposs, dappr, dlost, dot, dgoals] =
-            core::time_band_diag::distance_snapshot();
+        let [
+            dshots,
+            dxg,
+            drolls,
+            dcalls,
+            dposs,
+            dappr,
+            dlost,
+            dot,
+            dgoals,
+        ] = core::time_band_diag::distance_snapshot();
         let rolltotal: u64 = drolls.iter().sum();
         let calltotal: u64 = dcalls.iter().sum();
         let posstotal: u64 = dposs.iter().sum();
@@ -12232,13 +12243,7 @@ fn run_trace(matches: usize, level: u8) {
     println!("--- STATE LOOPS (A -> B -> A, by return-leg source) ---");
     println!("  {:>9}  {:<14}  loop", "count", "source");
     for (n, a, b, src) in pong.iter().take(18) {
-        println!(
-            "  {:>9}  {:<14}  {}  <->  {}",
-            n,
-            src.as_tag(),
-            a,
-            b
-        );
+        println!("  {:>9}  {:<14}  {}  <->  {}", n, src.as_tag(), a, b);
     }
 
     // ── self-transitions: the timer-reset trap ─────────────────────────
@@ -12907,13 +12912,14 @@ fn run_paths(matches: usize, level: u8) {
                 for (id, pos) in &snap {
                     if let (Some(start), Some(path)) =
                         (window_start.get(id), window_path.get(id).copied())
-                        && path > 1.0 {
-                            let net = (((pos.0 - start.0).powi(2) + (pos.1 - start.1).powi(2))
-                                .sqrt()) as f64;
-                            let s = &mut lines[line_of(*id)];
-                            s.straightness += net / path;
-                            s.straight_windows += 1;
-                        }
+                        && path > 1.0
+                    {
+                        let net =
+                            (((pos.0 - start.0).powi(2) + (pos.1 - start.1).powi(2)).sqrt()) as f64;
+                        let s = &mut lines[line_of(*id)];
+                        s.straightness += net / path;
+                        s.straight_windows += 1;
+                    }
                 }
                 window_start.clear();
                 window_path.clear();

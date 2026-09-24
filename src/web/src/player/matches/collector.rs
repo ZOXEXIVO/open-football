@@ -32,8 +32,9 @@
 //! from his present registration.
 
 use super::{PlayerMatchItem, PlayerMatchResult};
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{NaiveDate, NaiveDateTime};
 use core::league::League;
+use core::league::season::{Season, SeasonCalendar};
 use core::r#match::{FieldSquad, MatchResult};
 use crate::I18n;
 use core::{Country, Player, SimulatorData, Team};
@@ -44,6 +45,11 @@ use std::collections::{HashMap, HashSet};
 struct DatedItem {
     kickoff: NaiveDateTime,
     match_id: String,
+    /// A row with no club calendar of its own — a cap, or a continental tie
+    /// whose club has no league — carries only a fallback in `item.season`
+    /// until [`PlayerMatchCollector::file_borrowed_seasons`] files it beside
+    /// the club football around it.
+    borrows_season: bool,
     item: PlayerMatchItem,
 }
 
@@ -102,6 +108,7 @@ impl PlayerMatchCollector {
         Self::collect_international(data, player, &footprint, &mut dated, &mut seen);
 
         dated.sort_by(|a, b| a.kickoff.cmp(&b.kickoff).then(a.match_id.cmp(&b.match_id)));
+        Self::file_borrowed_seasons(&mut dated);
         dated.into_iter().map(|d| d.item).collect()
     }
 
@@ -235,6 +242,7 @@ impl PlayerMatchCollector {
         seen: &mut HashSet<String>,
     ) {
         let mut kickoffs: Option<HashMap<&str, NaiveDateTime>> = None;
+        let calendar = league.settings.season_calendar();
 
         for match_result in league.matches.iter() {
             if !Self::appeared(match_result, player.id) {
@@ -278,8 +286,9 @@ impl PlayerMatchCollector {
             out.push(DatedItem {
                 kickoff,
                 match_id: match_result.id.clone(),
+                borrows_season: false,
                 item: PlayerMatchItem {
-                    year: kickoff.year(),
+                    season: calendar.season_of(kickoff.date()),
                     date: kickoff.format("%d.%m.%Y").to_string(),
                     // Only a kickoff the schedule vouched for carries a
                     // clock; the id fallback knows the day and nothing more.
@@ -352,11 +361,17 @@ impl PlayerMatchCollector {
 
             let kickoff = date.and_hms_opt(20, 0, 0).unwrap_or_default();
 
+            // A continental run reads as part of the club's domestic
+            // campaign, so it is filed on that league's calendar.
+            let club_season = Self::club_calendar(data, side_club_id)
+                .map(|calendar| calendar.season_of(date));
+
             out.push(DatedItem {
                 kickoff,
                 match_id: match_id.to_string(),
+                borrows_season: club_season.is_none(),
                 item: PlayerMatchItem {
-                    year: date.year(),
+                    season: club_season.unwrap_or_else(|| Season::from_date(date).as_league_season()),
                     date: date.format("%d.%m.%Y").to_string(),
                     time: "20:00".to_string(),
                     opponent_slug,
@@ -395,6 +410,13 @@ impl PlayerMatchCollector {
         let Some(country) = country else {
             return;
         };
+        let top_division = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|league| !league.friendly)
+            .min_by_key(|league| league.settings.tier)
+            .map(|league| league.settings.season_calendar());
 
         for fixture in [&country.national_team, &country.u21_national_team]
             .iter()
@@ -419,8 +441,11 @@ impl PlayerMatchCollector {
             out.push(DatedItem {
                 kickoff,
                 match_id: fixture.match_id.clone(),
+                borrows_season: true,
                 item: PlayerMatchItem {
-                    year: fixture.date.year(),
+                    season: top_division
+                        .map(|calendar| calendar.season_of(fixture.date))
+                        .unwrap_or_else(|| Season::from_date(fixture.date).as_league_season()),
                     date: fixture.date.format("%d.%m.%Y").to_string(),
                     time: "20:00".to_string(),
                     opponent_slug: String::new(),
@@ -435,6 +460,35 @@ impl PlayerMatchCollector {
                 },
             });
         }
+    }
+
+    /// File every borrowed row under the season of the nearest club match
+    /// before it, or — ahead of the first club match — the one after it. A
+    /// cap lines up with the club football the player was playing at the
+    /// time; the national team's own league calendar would put a March cap
+    /// of a player abroad beside the wrong campaign.
+    fn file_borrowed_seasons(dated: &mut [DatedItem]) {
+        let mut surrounding = dated
+            .iter()
+            .find(|row| !row.borrows_season)
+            .map(|row| row.item.season);
+        for row in dated.iter_mut() {
+            if !row.borrows_season {
+                surrounding = Some(row.item.season);
+            } else if let Some(season) = surrounding {
+                row.item.season = season;
+            }
+        }
+    }
+
+    /// The calendar of the league a club's first team plays in.
+    fn club_calendar(data: &SimulatorData, club_id: u32) -> Option<SeasonCalendar> {
+        data.club(club_id)
+            .and_then(|club| club.teams.main_team_id())
+            .and_then(|team_id| data.team(team_id))
+            .and_then(|team| team.league_id)
+            .and_then(|league_id| data.league(league_id))
+            .map(|league| league.settings.season_calendar())
     }
 
     /// Did the player take the field? The engine writes a stat line for
@@ -526,6 +580,7 @@ impl PlayerMatchCollector {
 mod tests {
     use super::*;
     use core::PlayerFieldPositionGroup;
+    use core::league::season::LeagueSeason;
     use core::r#match::{MatchResultRaw, PlayerMatchEndStats, Score, TeamScore};
 
     fn stat_line() -> PlayerMatchEndStats {
@@ -684,6 +739,56 @@ mod tests {
             PlayerMatchCollector::kickoff_from_id("not-a-date_1_2"),
             None
         );
+    }
+
+    fn row(borrows_season: bool, opening_year: i32, crosses_new_year: bool) -> DatedItem {
+        DatedItem {
+            kickoff: NaiveDateTime::default(),
+            match_id: String::new(),
+            borrows_season,
+            item: PlayerMatchItem {
+                season: LeagueSeason {
+                    opening_year,
+                    crosses_new_year,
+                },
+                date: String::new(),
+                time: String::new(),
+                opponent_slug: String::new(),
+                opponent_name: String::new(),
+                is_home: true,
+                competition_name: String::new(),
+                result: None,
+            },
+        }
+    }
+
+    fn seasons(rows: &[DatedItem]) -> Vec<(i32, bool)> {
+        rows.iter()
+            .map(|r| (r.item.season.opening_year, r.item.season.crosses_new_year))
+            .collect()
+    }
+
+    #[test]
+    fn a_cap_between_club_matches_joins_the_campaign_before_it() {
+        // February club match in 2026/27, a March cap whose national league
+        // would call it 2027, then the next campaign's opener.
+        let mut rows = [row(false, 2026, true), row(true, 2027, false), row(false, 2027, true)];
+        PlayerMatchCollector::file_borrowed_seasons(&mut rows);
+        assert_eq!(seasons(&rows), [(2026, true), (2026, true), (2027, true)]);
+    }
+
+    #[test]
+    fn a_cap_before_any_club_match_joins_the_first_campaign_after_it() {
+        let mut rows = [row(true, 2019, false), row(false, 2020, true)];
+        PlayerMatchCollector::file_borrowed_seasons(&mut rows);
+        assert_eq!(seasons(&rows), [(2020, true), (2020, true)]);
+    }
+
+    #[test]
+    fn caps_without_any_club_football_keep_their_fallback() {
+        let mut rows = [row(true, 2025, false), row(true, 2026, false)];
+        PlayerMatchCollector::file_borrowed_seasons(&mut rows);
+        assert_eq!(seasons(&rows), [(2025, false), (2026, false)]);
     }
 
     #[test]

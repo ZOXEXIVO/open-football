@@ -401,7 +401,7 @@ mod tests {
         assert!(html.contains("np-splits"));
         assert!(html.contains("np-run"));
         assert!(
-            html.contains("/api/players/7/face.svg"),
+            html.contains("/api/players/7/face.jpg"),
             "the photograph block is the club page's, so the face comes from the same route"
         );
     }

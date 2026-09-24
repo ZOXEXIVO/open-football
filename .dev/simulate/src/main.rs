@@ -29,9 +29,12 @@ use core::club::staff::perception::{
 };
 use core::r#match::FieldSquad;
 use core::utils::DateUtils;
+use core::continent::{
+    CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
+};
 use core::{
-    FootballSimulator, PerformanceProfiler, SimulationResult, SimulatorData,
-    TeamType,
+    FootballSimulator, InternationalCalendar, PerformanceProfiler, SimulationResult,
+    SimulatorData, TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
@@ -44,7 +47,8 @@ use mimalloc::MiMalloc;
 static GLOBAL: MiMalloc = MiMalloc;
 use env_logger::Env;
 use std::cmp::Reverse;
-use std::collections::HashMap;
+use chrono::{Datelike, NaiveDate, Timelike};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
@@ -310,7 +314,410 @@ fn main() {
         return;
     }
 
+    // `dev_simulate clash [days]` — the fixture-calendar census: players
+    // named twice on one day, teams playing twice on one day, first teams
+    // inside the rest gap, and when the day's domestic fixtures kick off.
+    if args.first().map(|a| a == "clash").unwrap_or(false) {
+        let mut census = ClashCensus::new(&harness.data);
+        for _ in 0..days {
+            let date = harness.data.date.date();
+            census.before_tick(&harness.data);
+            let result = harness.tick();
+            census.record(date, &result, &harness.data);
+        }
+        census.print();
+        return;
+    }
+
     harness.bench(days);
+}
+
+/// The fixture-calendar census: everything the real game would never
+/// publish. A player in two matchday squads on one date, a club side with
+/// two matches on one date, a first team with two fixtures inside the
+/// three-day rest gap, and fixtures kicking off at midnight.
+///
+/// Reads every result the tick produced (league, cup, playoff, continental
+/// and national) and, for the kickoff columns, the domestic schedules as
+/// they stand after the tick — so a fixture moved off its nominal day is
+/// counted on the day it was actually played.
+struct ClashCensus {
+    days: u32,
+    matches: u64,
+    /// Player-days named in two or more squads on the same date, by cause:
+    /// a national-team match among them, two sides of one club, or two
+    /// different clubs.
+    double_booked_players: BTreeMap<&'static str, u64>,
+    /// Club team-days with two or more matches on the same date.
+    double_booked_teams: u64,
+    /// Consecutive first-team matches fewer than `MIN_REST_DAYS` apart.
+    short_rest_pairs: u64,
+    /// Every club side: its club and its type.
+    club_teams: HashMap<u32, (u32, TeamType)>,
+    first_teams: HashSet<u32>,
+    first_team_last_match: HashMap<u32, NaiveDate>,
+    /// Domestic fixtures by (development?, weekday, kickoff hour).
+    kickoffs: BTreeMap<(bool, u32, u32), u32>,
+    /// Club fixtures played on a day inside an international window, by
+    /// competition.
+    in_window: BTreeMap<&'static str, u64>,
+    /// First-team fixtures played while players registered to that team
+    /// were away on international duty, by competition: (fixtures, players
+    /// missing summed over them).
+    played_short: BTreeMap<&'static str, (u64, u64)>,
+    /// League fixtures played after their season's closing day.
+    after_close: BTreeMap<&'static str, u64>,
+    /// First teams' players on international duty when the day began.
+    /// Call-ups land inside the tick before the matches and releases after
+    /// them, so a window's first and last day are only seen by reading the
+    /// statuses on both sides of the tick.
+    away_before_tick: HashMap<u32, HashSet<u32>>,
+    examples: Vec<(&'static str, String)>,
+}
+
+/// Which competition a club fixture belongs to, and for a league, the
+/// closing day of the season its current schedule covers.
+struct CensusCompetition {
+    kind: &'static str,
+    closing_day: Option<NaiveDate>,
+}
+
+impl ClashCensus {
+    /// Two clear days between first-team matches — Thursday to Sunday.
+    const MIN_REST_DAYS: i64 = 3;
+    const MAX_EXAMPLES_PER_CAUSE: usize = 4;
+
+    fn new(data: &SimulatorData) -> Self {
+        let mut club_teams = HashMap::new();
+        let mut first_teams = HashSet::new();
+        for club in data
+            .continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|c| &c.clubs)
+        {
+            for team in &club.teams.teams {
+                club_teams.insert(team.id, (club.id, team.team_type));
+                if team.team_type == TeamType::Main {
+                    first_teams.insert(team.id);
+                }
+            }
+        }
+        ClashCensus {
+            days: 0,
+            matches: 0,
+            double_booked_players: BTreeMap::new(),
+            double_booked_teams: 0,
+            short_rest_pairs: 0,
+            club_teams,
+            first_teams,
+            first_team_last_match: HashMap::new(),
+            kickoffs: BTreeMap::new(),
+            in_window: BTreeMap::new(),
+            played_short: BTreeMap::new(),
+            after_close: BTreeMap::new(),
+            away_before_tick: HashMap::new(),
+            examples: Vec::new(),
+        }
+    }
+
+    fn before_tick(&mut self, data: &SimulatorData) {
+        self.away_before_tick = self.away_on_duty(data);
+    }
+
+    fn away_on_duty(&self, data: &SimulatorData) -> HashMap<u32, HashSet<u32>> {
+        data.continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|c| &c.clubs)
+            .flat_map(|c| &c.teams.teams)
+            .filter(|t| self.first_teams.contains(&t.id))
+            .map(|t| {
+                let away: HashSet<u32> = t
+                    .players
+                    .iter()
+                    .filter(|p| p.statuses.is_on_international_duty())
+                    .map(|p| p.id)
+                    .collect();
+                (t.id, away)
+            })
+            .filter(|(_, away)| !away.is_empty())
+            .collect()
+    }
+
+    fn competitions(data: &SimulatorData) -> HashMap<u32, CensusCompetition> {
+        let mut competitions = HashMap::new();
+        for id in [CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID] {
+            competitions.insert(id, CensusCompetition { kind: "continental", closing_day: None });
+        }
+        for country in data.continents.iter().flat_map(|c| &c.countries) {
+            for league in &country.leagues.leagues {
+                let end = &league.settings.season_ending_half;
+                let closing_day = league
+                    .schedule
+                    .tours
+                    .iter()
+                    .flat_map(|t| &t.items)
+                    .map(|i| i.date.date())
+                    .min()
+                    .map(|first| {
+                        Self::first_on_or_after(first, end.to_month as u32, end.to_day as u32)
+                    });
+                let kind = if league.friendly { "development league" } else { "league" };
+                competitions.insert(league.id, CensusCompetition { kind, closing_day });
+            }
+            if let Some(cup) = &country.domestic_cup {
+                competitions.insert(
+                    cup.league.id,
+                    CensusCompetition { kind: "domestic cup", closing_day: None },
+                );
+            }
+            for playoff in &country.playoffs {
+                competitions.insert(
+                    playoff.league.id,
+                    CensusCompetition { kind: "playoff", closing_day: None },
+                );
+            }
+        }
+        competitions
+    }
+
+    fn first_on_or_after(from: NaiveDate, month: u32, day: u32) -> NaiveDate {
+        let on = |year: i32| {
+            NaiveDate::from_ymd_opt(year, month, day)
+                .or_else(|| NaiveDate::from_ymd_opt(year, month, 28))
+                .unwrap()
+        };
+        let this_year = on(from.year());
+        if this_year >= from { this_year } else { on(from.year() + 1) }
+    }
+
+    fn record(&mut self, date: NaiveDate, result: &SimulationResult, data: &SimulatorData) {
+        self.days += 1;
+        self.matches += result.match_results.len() as u64;
+        self.record_windows(date, result, data);
+
+        let mut player_squads: HashMap<u32, Vec<(&str, u32)>> = HashMap::new();
+        let mut team_matches: HashMap<u32, u32> = HashMap::new();
+        for m in &result.match_results {
+            if let Some(details) = &m.details {
+                for squad in [&details.left_team_players, &details.right_team_players] {
+                    for id in squad.main.iter().chain(&squad.substitutes) {
+                        player_squads
+                            .entry(*id)
+                            .or_default()
+                            .push((&m.id, squad.team_id));
+                    }
+                }
+            }
+            for team_id in [m.home_team_id, m.away_team_id] {
+                if self.club_teams.contains_key(&team_id) {
+                    *team_matches.entry(team_id).or_default() += 1;
+                }
+            }
+        }
+
+        for (player_id, squads) in &player_squads {
+            if squads.len() < 2 {
+                continue;
+            }
+            let sides: Vec<Option<&(u32, TeamType)>> =
+                squads.iter().map(|(_, team)| self.club_teams.get(team)).collect();
+            let cause = if sides.iter().any(|side| side.is_none()) {
+                "national-team match"
+            } else if sides.windows(2).all(|w| w[0].map(|s| s.0) == w[1].map(|s| s.0)) {
+                "two sides of one club"
+            } else {
+                "two different clubs"
+            };
+            *self.double_booked_players.entry(cause).or_default() += 1;
+            let described: Vec<String> = squads
+                .iter()
+                .zip(&sides)
+                .map(|((id, team), side)| match side {
+                    Some((club, kind)) => format!("{id} as {kind:?} {team} of club {club}"),
+                    None => format!("{id} as {team}"),
+                })
+                .collect();
+            let registered = data
+                .continents
+                .iter()
+                .flat_map(|c| &c.countries)
+                .flat_map(|c| &c.clubs)
+                .flat_map(|c| &c.teams.teams)
+                .find(|t| t.players.iter().any(|p| p.id == *player_id))
+                .map(|t| format!("{:?} {}", t.team_type, t.id))
+                .unwrap_or_else(|| "nowhere".to_string());
+            self.example(
+                cause,
+                format!(
+                    "{date} [{cause}] player {player_id} (registered to {registered}): {}",
+                    described.join(" + ")
+                ),
+            );
+        }
+        for (team_id, n) in &team_matches {
+            if *n >= 2 {
+                self.double_booked_teams += 1;
+                self.example("team", format!("{date} team {team_id} played {n} matches"));
+            }
+            if self.first_teams.contains(team_id) {
+                if let Some(last) = self.first_team_last_match.insert(*team_id, date) {
+                    let gap = (date - last).num_days();
+                    if gap < Self::MIN_REST_DAYS {
+                        self.short_rest_pairs += 1;
+                        self.example(
+                            "rest",
+                            format!("{date} first team {team_id} played again {gap} day(s) after {last}"),
+                        );
+                    }
+                }
+            }
+        }
+
+        for country in data.continents.iter().flat_map(|c| &c.countries) {
+            let schedules = country
+                .leagues
+                .leagues
+                .iter()
+                .map(|l| (l.friendly, &l.schedule))
+                .chain(country.domestic_cup.iter().map(|c| (false, &c.league.schedule)))
+                .chain(country.playoffs.iter().map(|p| (false, &p.league.schedule)));
+            for (development, schedule) in schedules {
+                for item in schedule.tours.iter().flat_map(|t| &t.items) {
+                    if item.date.date() == date {
+                        let key = (
+                            development,
+                            item.date.weekday().num_days_from_monday(),
+                            item.date.hour(),
+                        );
+                        *self.kickoffs.entry(key).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn record_windows(&mut self, date: NaiveDate, result: &SimulationResult, data: &SimulatorData) {
+        let competitions = Self::competitions(data);
+        let mut away = self.away_on_duty(data);
+        for (team, players) in std::mem::take(&mut self.away_before_tick) {
+            away.entry(team).or_default().extend(players);
+        }
+        let in_window = InternationalCalendar::window_on(date).is_some();
+
+        for m in &result.match_results {
+            let sides = [m.home_team_id, m.away_team_id];
+            if !sides.iter().any(|t| self.club_teams.contains_key(t)) {
+                continue;
+            }
+            let Some(competition) = competitions.get(&m.league_id) else {
+                continue;
+            };
+            let kind = competition.kind;
+
+            if in_window {
+                *self.in_window.entry(kind).or_default() += 1;
+                self.example("window", format!("{date} {kind} fixture {} inside a window", m.id));
+            }
+
+            for team in sides {
+                if !self.first_teams.contains(&team) {
+                    continue;
+                }
+                if let Some(players) = away.get(&team) {
+                    let short = self.played_short.entry(kind).or_default();
+                    short.0 += 1;
+                    short.1 += players.len() as u64;
+                    let missing = players.len();
+                    self.example(
+                        "short",
+                        format!("{date} {kind} first team {team} played without {missing} international(s)"),
+                    );
+                }
+            }
+
+            if let Some(closing_day) = competition.closing_day
+                && date > closing_day
+            {
+                *self.after_close.entry(kind).or_default() += 1;
+                self.example(
+                    "close",
+                    format!(
+                        "{date} {kind} fixture {} of {} after its closing day {closing_day}",
+                        m.id, m.league_slug
+                    ),
+                );
+            }
+        }
+    }
+
+    fn example(&mut self, cause: &'static str, line: String) {
+        let seen = self.examples.iter().filter(|(c, _)| *c == cause).count();
+        if seen < Self::MAX_EXAMPLES_PER_CAUSE {
+            self.examples.push((cause, line));
+        }
+    }
+
+    fn print(&self) {
+        const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        println!("\n--- FIXTURE CALENDAR CENSUS ({} days, {} matches) ---", self.days, self.matches);
+        let booked: u64 = self.double_booked_players.values().sum();
+        println!("player-days in two or more squads : {booked}");
+        for (cause, n) in &self.double_booked_players {
+            println!("    {cause:<24}: {n}");
+        }
+        println!("team-days with two or more matches: {}", self.double_booked_teams);
+        println!(
+            "first-team matches < {} days apart: {}",
+            Self::MIN_REST_DAYS,
+            self.short_rest_pairs
+        );
+        println!(
+            "club fixtures inside an international window: {}",
+            self.in_window.values().sum::<u64>()
+        );
+        for (kind, n) in &self.in_window {
+            println!("    {kind:<24}: {n}");
+        }
+        println!(
+            "first-team fixtures played short of internationals: {} ({} players missing)",
+            self.played_short.values().map(|(f, _)| f).sum::<u64>(),
+            self.played_short.values().map(|(_, p)| p).sum::<u64>()
+        );
+        for (kind, (fixtures, players)) in &self.played_short {
+            println!("    {kind:<24}: {fixtures} ({players} players missing)");
+        }
+        println!(
+            "league fixtures after their season's closing day: {}",
+            self.after_close.values().sum::<u64>()
+        );
+        for (kind, n) in &self.after_close {
+            println!("    {kind:<24}: {n}");
+        }
+        for (_, line) in &self.examples {
+            println!("  e.g. {line}");
+        }
+
+        for (development, label) in [(false, "senior"), (true, "development")] {
+            let rows: Vec<(&(bool, u32, u32), &u32)> = self
+                .kickoffs
+                .iter()
+                .filter(|((d, _, _), _)| *d == development)
+                .collect();
+            let total: u32 = rows.iter().map(|(_, n)| **n).sum();
+            println!("\n{label} domestic fixtures by weekday / kickoff ({total}):");
+            for ((_, weekday, hour), n) in rows {
+                println!(
+                    "  {} {:02}:00  {:>6}  {:>5.1}%",
+                    WEEKDAYS[*weekday as usize],
+                    hour,
+                    n,
+                    *n as f64 / total.max(1) as f64 * 100.0
+                );
+            }
+        }
+    }
 }
 
 /// Every counter the census keeps, for one bucket of team-matches.

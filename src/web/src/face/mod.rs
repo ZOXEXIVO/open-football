@@ -7,15 +7,17 @@ mod generator;
 mod geometry;
 mod hair;
 mod identity;
+mod noise;
+mod relief;
 pub mod routes;
 mod shading;
 pub mod skin;
 mod tones;
 
-/// Cache-busting version for /face.svg URLs. Responses are served
-/// `immutable`, so bump this whenever generator output changes — every
-/// template injects it via `{{ crate::face::FACE_VERSION }}`.
-pub const FACE_VERSION: u32 = 13;
+/// Cache-busting version for face URLs. Responses are served `immutable`,
+/// so bump this whenever generator output changes — every template injects
+/// it via `{{ crate::face::FACE_VERSION }}`.
+pub const FACE_VERSION: u32 = 14;
 
 /// Where the real head shots live: the picture library every `<img>` on the
 /// site already points at, and the first thing the match viewer tries for a
@@ -26,13 +28,13 @@ pub const FACE_VERSION: u32 = 13;
 /// library is one edit.
 pub const PHOTO_LIBRARY: &str = "https://open-football.org/player";
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use core::utils::DateUtils;
-use generator::{FaceFrame, generate_face_svg};
+use generator::{FaceFrame, Portrait, Sitter};
 use skin::CountrySkin;
 
 use crate::GameAppData;
@@ -47,19 +49,21 @@ struct FacePathParams {
     player_id: u32,
 }
 
-/// `?cutout=1` asks for the head alone on transparent ground — see
-/// [`FaceFrame::Cutout`]. The match viewer is the only caller that wants it;
-/// every page on the site takes the portrait, which is what no query means.
-#[derive(Deserialize, Default)]
-struct FaceQuery {
-    #[serde(default)]
-    cutout: u8,
+/// The profile-page portrait: studio card, shoulders in the club's shirt.
+async fn portrait_action(state: State<GameAppData>, path: Path<FacePathParams>) -> Response {
+    face_response(state, path, FaceFrame::Portrait).await
 }
 
-async fn face_action(
+/// The head alone on transparent ground, for the match viewer — see
+/// [`FaceFrame::Cutout`].
+async fn cutout_action(state: State<GameAppData>, path: Path<FacePathParams>) -> Response {
+    face_response(state, path, FaceFrame::Cutout).await
+}
+
+async fn face_response(
     State(state): State<GameAppData>,
     Path(path): Path<FacePathParams>,
-    Query(query): Query<FaceQuery>,
+    frame: FaceFrame,
 ) -> Response {
     let guard = state.data.read().await;
     let Some(simulator_data) = guard.as_ref() else {
@@ -72,7 +76,7 @@ async fn face_action(
 
     let age = DateUtils::age(player.birth_date, simulator_data.date.date());
 
-    let skin_dist = CountrySkin::for_country(simulator_data, player.country_id);
+    let skin = CountrySkin::for_country(simulator_data, player.country_id);
 
     // Weight-for-height drives facial fullness; fall back to an average
     // build when the record carries no plausible body data
@@ -95,35 +99,33 @@ async fn face_action(
         (((20.0 - player.attributes.temperament) * 0.6 + player.attributes.dirtiness * 0.4) / 20.0)
             .clamp(0.0, 1.0);
 
-    // Real club shirt color; free agents keep the per-player fallback hue
-    let jersey = simulator_data
-        .indexes
-        .as_ref()
-        .and_then(|idx| idx.get_player_location(path.player_id))
-        .and_then(|(_, _, club_id, _)| simulator_data.club(club_id))
-        .map(|club| club.colors.background.clone());
+    drop(guard);
 
-    let svg = generate_face_svg(
-        path.player_id,
-        age,
-        skin_dist,
-        heft,
-        aggression,
-        jersey.as_deref(),
-        if query.cutout == 1 {
-            FaceFrame::Cutout
-        } else {
-            FaceFrame::Portrait
-        },
-    );
+    // A render is tens of milliseconds of arithmetic: off the async
+    // workers, and after the world lock is let go
+    let player_id = path.player_id;
+    let rendered = tokio::task::spawn_blocking(move || {
+        let sitter = Sitter {
+            player_id,
+            age,
+            skin,
+            heft,
+            aggression,
+        };
+        Portrait::take(&sitter, frame)
+    })
+    .await;
+    let Ok(bytes) = rendered else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
 
     (
         StatusCode::OK,
         [
-            (header::CONTENT_TYPE, "image/svg+xml"),
+            (header::CONTENT_TYPE, frame.mime()),
             (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
         ],
-        svg,
+        bytes,
     )
         .into_response()
 }

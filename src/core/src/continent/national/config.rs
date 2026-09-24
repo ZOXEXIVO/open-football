@@ -1,5 +1,7 @@
-use crate::NationalTeamLevel;
+use crate::league::Season;
+use crate::{InternationalCalendar, NationalTeamLevel};
 use chrono::NaiveDate;
+use std::collections::HashMap;
 
 /// Scope of a national team competition
 #[derive(Debug, Clone, PartialEq)]
@@ -105,16 +107,30 @@ pub struct ScheduleDate {
 }
 
 impl ScheduleConfig {
-    /// Generate actual qualifying dates from a start year
-    pub fn generate_qualifying_dates(&self, start_year: i32) -> Vec<(u8, NaiveDate)> {
-        self.qualifying_dates
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, sd)| {
-                let year = start_year + sd.year_offset;
-                NaiveDate::from_ymd_opt(year, sd.month, sd.day).map(|date| ((idx + 1) as u8, date))
+    /// The qualifying calendar from `start_year` on: each configured date
+    /// names, by its month, an international window of its season, and the
+    /// dates naming one window take its matchdays in configured order. Then
+    /// the same windows a year later, and so on for as long as a campaign
+    /// needs rounds. Empty when no window is configured.
+    pub fn qualifying_calendar(&self, start_year: i32) -> impl Iterator<Item = NaiveDate> + '_ {
+        let years = if self.qualifying_dates.is_empty() {
+            0
+        } else {
+            i32::MAX
+        };
+        (0..years).flat_map(move |cycle| {
+            let mut taken: HashMap<NaiveDate, usize> = HashMap::new();
+            self.qualifying_dates.iter().filter_map(move |sd| {
+                let named =
+                    NaiveDate::from_ymd_opt(start_year + sd.year_offset + cycle, sd.month, sd.day)?;
+                let window =
+                    InternationalCalendar::window_for(&Season::from_date(named), sd.month)?;
+                let slot = taken.entry(window.opens).or_default();
+                let date = window.matchday(*slot);
+                *slot += 1;
+                Some(date)
             })
-            .collect()
+        })
     }
 
     /// Generate tournament group stage dates from a start year

@@ -352,7 +352,9 @@ onmessage = async (event) => {
             .and_then(|value| value.dyn_into::<js_sys::Uint32Array>().ok())
             .map(|array| array.to_vec())
             .unwrap_or_default()
-            .as_chunks::<3>().0.iter()
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|triple| (triple[0], triple[1] as usize, triple[2] as usize))
             .collect();
         let residue: Residue = take("meta")
@@ -546,10 +548,11 @@ impl ChunkLoader {
                         // Open on the first goal rather than on kickoff, which
                         // is now a part of the match nobody recorded.
                         if let Some(start) = spans.next_start(playback.time_ms)
-                            && !spans.covers(playback.time_ms) {
-                                playback.time_ms = start;
-                                playback.seeked = true;
-                            }
+                            && !spans.covers(playback.time_ms)
+                        {
+                            playback.time_ms = start;
+                            playback.seeked = true;
+                        }
                     }
                 }
                 Delivery::MetadataMissing => {

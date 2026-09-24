@@ -8,6 +8,7 @@ pub use config::*;
 
 use crate::NationalTeamLevel;
 use chrono::{Datelike, NaiveDate};
+use schedule::NationalBookings;
 
 /// Phase of a national competition fixture
 #[derive(Debug, Clone, PartialEq)]
@@ -126,10 +127,28 @@ impl NationalTeamCompetitions {
 
             let tournament_year = config.tournament_year_for(year);
             let config_clone = config.clone();
+            let booked = self.bookings(config_clone.team_level);
             let mut comp = NationalTeamCompetition::new(config_clone, tournament_year);
-            comp.draw_qualifying_groups(country_ids_by_reputation, year, &zone);
+            comp.draw_qualifying_groups(country_ids_by_reputation, year, &zone, &booked);
             self.competitions.push(comp);
         }
+    }
+
+    /// Every date a side at `level` is already committed to across the
+    /// campaigns still running — a newly drawn campaign never books a side
+    /// twice on one date.
+    fn bookings(&self, level: NationalTeamLevel) -> NationalBookings {
+        let mut booked = NationalBookings::new();
+        for comp in self
+            .competitions
+            .iter()
+            .filter(|c| c.config.team_level == level && c.phase != CompetitionPhase::Completed)
+        {
+            for (country_id, date) in comp.unplayed_dates() {
+                booked.entry(country_id).or_default().insert(date);
+            }
+        }
+        booked
     }
 
     /// Get all match pairings scheduled for today across all competitions
@@ -357,6 +376,128 @@ mod tournament_clock_tests {
         assert!(
             both.months_to_next_tournament(date) <= global_only.months_to_next_tournament(date),
             "the nearer of the two is the one he is playing for"
+        );
+    }
+}
+
+#[cfg(test)]
+mod booking_tests {
+    use super::*;
+    use crate::continent::national::config::{
+        CompetitionScope, QualifyingConfig, QualifyingPosition, QualifyingZoneConfig,
+        ScheduleConfig, ScheduleDate, TournamentConfig,
+    };
+    use std::collections::HashSet;
+
+    fn qd(month: u32, day: u32, year_offset: i32) -> ScheduleDate {
+        ScheduleDate {
+            month,
+            day,
+            year_offset,
+        }
+    }
+
+    /// A 2-year cycle starting in even years, groups of five, drawn in
+    /// continent 1 on the shipped eight-date calendar.
+    fn campaign(id: u32, team_level: NationalTeamLevel) -> NationalCompetitionConfig {
+        NationalCompetitionConfig {
+            id,
+            name: format!("Campaign {id}"),
+            short_name: format!("C{id}"),
+            scope: CompetitionScope::Continental,
+            continent_id: Some(1),
+            team_level,
+            cycle_years: 2,
+            cycle_offset: 0,
+            qualifying: QualifyingConfig {
+                zones: vec![QualifyingZoneConfig {
+                    continent_id: 1,
+                    spots: 4,
+                    max_groups: 4,
+                    teams_per_group_target: 5,
+                    qualifiers_per_group: vec![QualifyingPosition::Winner],
+                    best_runners_up: 0,
+                    best_third_placed: 0,
+                }],
+            },
+            tournament: TournamentConfig {
+                total_teams: 8,
+                group_count: 2,
+                teams_per_group: 4,
+                advance_per_group: 2,
+                best_third_placed: 0,
+            },
+            schedule: ScheduleConfig {
+                qualifying_dates: vec![
+                    qd(9, 6, 0),
+                    qd(9, 9, 0),
+                    qd(10, 11, 0),
+                    qd(10, 14, 0),
+                    qd(11, 15, 0),
+                    qd(11, 18, 0),
+                    qd(3, 22, 1),
+                    qd(3, 25, 1),
+                ],
+                tournament_group_dates: Vec::new(),
+                tournament_knockout_dates: Vec::new(),
+            },
+        }
+    }
+
+    fn drawn(configs: Vec<NationalCompetitionConfig>) -> NationalTeamCompetitions {
+        let mut comps = NationalTeamCompetitions::new(configs);
+        let countries: Vec<u32> = (1..=20).collect();
+        comps.check_new_cycles(NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(), &countries, 1);
+        comps
+    }
+
+    fn fixtures_of(
+        comps: &NationalTeamCompetitions,
+        level: NationalTeamLevel,
+    ) -> Vec<(u32, NaiveDate)> {
+        comps
+            .competitions
+            .iter()
+            .filter(|c| c.config.team_level == level)
+            .flat_map(|c| c.unplayed_dates())
+            .collect()
+    }
+
+    #[test]
+    fn two_campaigns_drawn_the_same_day_never_double_book_a_side() {
+        let comps = drawn(vec![
+            campaign(1, NationalTeamLevel::Senior),
+            campaign(2, NationalTeamLevel::Senior),
+        ]);
+        assert_eq!(comps.competitions.len(), 2, "both campaigns are drawn");
+
+        let bookings = fixtures_of(&comps, NationalTeamLevel::Senior);
+        let mut seen: HashSet<(u32, NaiveDate)> = HashSet::new();
+        for booking in &bookings {
+            assert!(
+                seen.insert(*booking),
+                "side {} has two senior fixtures on {}",
+                booking.0,
+                booking.1
+            );
+        }
+    }
+
+    #[test]
+    fn an_under_21_campaign_ignores_senior_bookings() {
+        let comps = drawn(vec![
+            campaign(1, NationalTeamLevel::Senior),
+            campaign(2, NationalTeamLevel::Under21),
+        ]);
+        let first_u21 = fixtures_of(&comps, NationalTeamLevel::Under21)
+            .into_iter()
+            .map(|(_, date)| date)
+            .min()
+            .unwrap();
+        assert_eq!(
+            first_u21,
+            NaiveDate::from_ymd_opt(2026, 9, 3).unwrap(),
+            "the U21 side is not the senior side and opens on the first window date"
         );
     }
 }
