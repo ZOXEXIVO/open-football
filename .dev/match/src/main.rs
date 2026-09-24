@@ -545,6 +545,7 @@ struct ViewerColorsJson {
 /// the walk-out.
 #[derive(Serialize)]
 struct VenueJson {
+    field_style: u8,
     capacity: u32,
     attendance: u32,
     reputation: u16,
@@ -554,8 +555,15 @@ struct VenueJson {
 
 impl VenueJson {
     fn from_env() -> Self {
+        // Inspect a catalogue entry directly; otherwise use the harness home ID.
+        let field_style = std::env::var("OF_FIELD_STYLE")
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|id| (1..=20).contains(id))
+            .unwrap_or_else(|| shared::field::for_home_team(1));
         if std::env::var("OF_SMALL_GROUND").is_ok() {
             VenueJson {
+                field_style,
                 capacity: 1_400,
                 attendance: 620,
                 reputation: 2_100,
@@ -564,6 +572,7 @@ impl VenueJson {
             }
         } else {
             VenueJson {
+                field_style,
                 capacity: 62_000,
                 attendance: 54_000,
                 reputation: 9_400,

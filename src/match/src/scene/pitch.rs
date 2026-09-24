@@ -12,6 +12,12 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+#[cfg(test)]
+mod field_review;
+
+mod surface;
+use surface::Surface;
+
 /// One bank of seating, as the box it fills and the turn that points it at
 /// the pitch.
 ///
@@ -518,9 +524,9 @@ impl Upkeep {
     /// way down and then goes. That is the right shape and not a fudge: the
     /// stripe is the cheapest thing a groundsman does — the mower is going up
     /// and down the pitch either way — so it is nearly the last thing to go,
-    /// and every professional ground in the world has one. It reaches nought
-    /// only where `keeping` does, which is the training ground and the
-    /// non-league club.
+    /// reaching zero where maintenance does. This is the maintenance factor
+    /// for the reference stripe; `Surface` applies the selected style's own
+    /// contrast, including zero for well-kept, non-striped fields.
     fn mow(&self) -> Vec3 {
         let great = Srgba::from(Pitch::MOWN);
         let against = Srgba::from(Pitch::AGAINST);
@@ -1381,18 +1387,27 @@ impl Pitch {
         // off one reading of one document and no two courses can disagree
         // about what kind of ground this is.
         let upkeep = Upkeep::of(Stature::of(&config.venue));
+        let surface = Surface::from_id(config.venue.field_style);
 
         // The one green in the scene, and every other surface is a tint on
         // it: the stripes, the worn patches, the ground beyond the touchlines.
         // So grading the pitch is grading THIS, and nothing downstream has to
         // know that a ladder exists.
         let grass = Textures::turf(&mut images, upkeep.sward());
-        Self::spawn_playing_surface(&mut commands, &mut meshes, &mut materials, &grass, upkeep);
+        Self::spawn_playing_surface(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &grass,
+            upkeep,
+            surface,
+        );
         // Kept for the surround, which is laid on the next frame off the same
         // sheet — generating it twice would cost a second 1024-square texture
         // and its mip chain for a picture nobody could tell apart.
         commands.insert_resource(grass);
         commands.insert_resource(upkeep);
+        commands.insert_resource(surface);
 
         // A stadium is lit from four corners at once, so almost nothing on the
         // pitch falls into true shadow. One directional light standing in for
@@ -1431,6 +1446,7 @@ impl Pitch {
         materials: &mut Assets<StandardMaterial>,
         grass: &Turf,
         upkeep: Upkeep,
+        surface: Surface,
     ) {
         // One material for the whole playing surface. Both mow shades, the
         // wear and the unevenness are vertex colours on [`Sward`] — which is
@@ -1471,7 +1487,7 @@ impl Pitch {
             ..default()
         });
         commands.spawn((
-            Mesh3d(Self::stock(meshes, Sward::mow(upkeep, Self::TURF_TILE))),
+            Mesh3d(Self::stock(meshes, surface.mesh(upkeep))),
             MeshMaterial3d(playing_surface),
         ));
     }
@@ -1489,6 +1505,7 @@ impl Pitch {
         mut materials: ResMut<Assets<StandardMaterial>>,
         grass: Res<Turf>,
         upkeep: Res<Upkeep>,
+        surface: Res<Surface>,
     ) {
         // Same grass at the same scale, so the pitch does not stop at a change
         // of texture as well as a change of light.
@@ -1508,8 +1525,14 @@ impl Pitch {
         // the whole tangent-space path out of the fragment shader over most of
         // the lower frame. The blades stay — that is the albedo, and it is
         // what keeps the surround from reading as a hole cut in the world.
+        let shade = LinearRgba::from(Self::SHADOW);
+        let tint = surface.colour();
         let surround = materials.add(StandardMaterial {
-            base_color: Self::SHADOW,
+            base_color: Color::linear_rgb(
+                shade.red * tint.x,
+                shade.green * tint.y,
+                shade.blue * tint.z,
+            ),
             base_color_texture: Some(grass.albedo.clone()),
             perceptual_roughness: 1.0,
             // **No sheen out here either**, and for a stronger reason than on
@@ -1538,7 +1561,7 @@ impl Pitch {
         commands.spawn((
             Mesh3d(Self::stock(
                 &mut meshes,
-                Sward::rough(*upkeep, SURROUND, Self::TURF_TILE),
+                Sward::rough(*upkeep, SURROUND, surface.tile()),
             )),
             MeshMaterial3d(surround),
             Transform::from_xyz(0.0, -0.01, 0.0),
@@ -2664,7 +2687,7 @@ mod tests {
     /// through the mesh's own tangent frame, [`Pitch::SUN`], and the vertex
     /// colours. Which is enough to see whether a stripe is a lit thing or a
     /// painted one.
-    fn overhead(
+    pub(super) fn overhead(
         mesh: &Mesh,
         images: &Assets<Image>,
         grass: &Turf,

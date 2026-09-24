@@ -215,6 +215,9 @@ impl Default for ViewerLabels {
 #[derive(Deserialize)]
 #[serde(default)]
 pub struct VenueInfo {
+    /// Stable catalogue ID (1..=20), assigned from the home team's immutable ID.
+    /// Zero or an unknown ID keeps the legacy pitch for older replay documents.
+    pub field_style: u8,
     /// What the home club's ground holds. Never zero in the game — the
     /// simulator seeds a capacity for every club that has no recorded one —
     /// but zero is read here as "nobody said" and falls back to a full-size
@@ -245,6 +248,7 @@ impl Default for VenueInfo {
     /// what a document written before this field gets.
     fn default() -> Self {
         VenueInfo {
+            field_style: 0,
             capacity: 60_000,
             attendance: 50_000,
             reputation: 10_000,

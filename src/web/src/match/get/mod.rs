@@ -164,6 +164,8 @@ impl TeamColorsJson {
 /// big a row is — see `match_viewer::scene::crowd::Stature`.
 #[derive(Serialize)]
 struct VenueJson {
+    /// Frozen assignment from the home team's ID; independent of this fixture.
+    field_style: u8,
     capacity: u32,
     attendance: u32,
     reputation: u16,
@@ -184,8 +186,12 @@ impl VenueJson {
     /// there is no ground to look up: those are played at a national stadium,
     /// which is what the default already describes.
     fn for_fixture(data: &SimulatorData, home_team_id: u32, away_team_id: u32) -> Self {
+        let field_style = shared::field::for_home_team(home_team_id);
         let Some(home) = data.team(home_team_id) else {
-            return VenueJson::default();
+            return VenueJson {
+                field_style,
+                ..VenueJson::default()
+            };
         };
         let ground = data
             .club(home.club_id)
@@ -195,6 +201,7 @@ impl VenueJson {
 
         let away = data.team(away_team_id);
         VenueJson {
+            field_style,
             capacity: ground.0,
             attendance: ground.1,
             reputation: home.reputation.world,
@@ -212,6 +219,7 @@ impl Default for VenueJson {
     /// international tie is played in.
     fn default() -> Self {
         VenueJson {
+            field_style: 0,
             capacity: 60_000,
             attendance: 50_000,
             reputation: 10_000,
@@ -677,7 +685,10 @@ pub async fn match_get_action(
             substitutes: i18n.t("substitutes").to_string(),
         },
         venue: if is_international {
-            VenueJson::default()
+            VenueJson {
+                field_style: shared::field::for_home_team(match_result.home_team_id),
+                ..VenueJson::default()
+            }
         } else {
             VenueJson::for_fixture(
                 simulator_data,

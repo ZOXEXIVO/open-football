@@ -23,6 +23,8 @@
 //!    [`Appearance`], seeded from the player id alone. Same player, same face,
 //!    every render, on both sides of the WebAssembly boundary.
 
+pub mod field;
+
 // ── Region ────────────────────────────────────────────────────
 
 /// Geographic region of a country — combined with the DB skin buckets it

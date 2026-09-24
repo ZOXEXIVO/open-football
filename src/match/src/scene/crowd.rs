@@ -1842,6 +1842,7 @@ mod tests {
     /// standing, so nothing but the arguments moves the answer.
     fn venue(capacity: u32, attendance: u32, reputation: u16, youth: bool) -> VenueInfo {
         VenueInfo {
+            field_style: 0,
             capacity,
             attendance,
             reputation,
@@ -2062,6 +2063,7 @@ mod tests {
         // side propping up the table.
         let against = |visitor: u16| {
             Stature::of(&VenueInfo {
+                field_style: 0,
                 capacity: 30_000,
                 attendance: 21_000,
                 reputation: 7_000,
@@ -2100,6 +2102,7 @@ mod tests {
     #[test]
     fn a_giant_visiting_a_small_club_fills_it() {
         let cup_tie = Stature::of(&VenueInfo {
+            field_style: 0,
             capacity: 8_000,
             attendance: 5_200,
             reputation: 4_400,
