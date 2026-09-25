@@ -19,7 +19,7 @@ every year?
 Open Football is built around a stable structure: the interface and data model
 stay familiar while the simulation logic, mechanics, and football intelligence keep
 improving.
-
+ 
 <a href="https://open-football.org">
   TRY </a> or <a href="https://github.com/ZOXEXIVO/open-football/releases">
    download
