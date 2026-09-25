@@ -32,8 +32,27 @@ The system SHALL compute the plausibility of a player moving to a given country 
 - **THEN** the move is blocked regardless of any other eligibility signal, since the system blocks specific country pairs when a real-world political restriction applies, evaluated symmetrically from the historically accurate date
 
 ### Requirement: An unbid market listing decays in asking price over time
-The system SHALL reduce the asking price of a player listing that receives no bids, on a fixed weekly cadence, down to a floor fraction of the original price.
+The system SHALL reduce the asking price of a player listing that receives no bids, on a fixed weekly cadence, down to
+a floor fraction of the listing's anchor price. The anchor is the price set when the player was listed, or the price
+the seller last re-anchored it to.
 
 #### Scenario: Listing decays toward its floor
 - **WHEN** a player listing has gone seven days without a bid
-- **THEN** its asking price decreases by 5%, continuing weekly until it reaches 60% of the original asking price, below which it does not decay further
+- **THEN** its asking price decreases by 5%, continuing weekly until it reaches 60% of its anchor price, below which it does not decay further
+
+#### Scenario: A re-anchored listing decays from its new anchor
+- **WHEN** the seller re-anchors a listing to a lower price than it was first listed at
+- **THEN** weekly decay continues from the new anchor, down to 60% of that anchor rather than 60% of the original listing price
+
+### Requirement: A listing records its market exposure and the market's best named price
+Every seller-listed permanent listing SHALL count the days it has been available while its country's transfer window
+was open. Days while the window is shut SHALL NOT be counted. The listing SHALL also keep the highest fee from a bid
+the seller rejected for price, for the life of the listing.
+
+#### Scenario: Exposure counts only open-window days
+- **WHEN** a listing stays available through thirty days of an open window and then sixty days of a closed one
+- **THEN** its recorded exposure is thirty days
+
+#### Scenario: A rejected bid is remembered
+- **WHEN** the seller rejects two bids on a listing for price, of 1.5M and then 2M
+- **THEN** the listing's best named price is 2M, and it stays 2M after both negotiations are cleared from the market

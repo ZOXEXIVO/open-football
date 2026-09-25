@@ -55,3 +55,17 @@ The system SHALL widen the pool of clubs a listed player is offered to as time p
 #### Scenario: A stale permanent listing discounts and widens after a grace period
 - **WHEN** a permanent listing has gone unsold for 21 days
 - **THEN** the club begins actively shopping the player itself, and each further unanswered 7-day window cascades the offer one reputation tier further
+
+### Requirement: A loan staged to clear a stranded listing carries the board's wage subsidy
+When a club stages a loan as the result of a stranded-listing review, the share of the player's wage the parent club
+keeps paying SHALL be the subsidy its board set at that review. The borrower SHALL pay a correspondingly smaller share,
+within the same bounds that limit every other loan wage split. A loan staged for any other purpose SHALL keep its
+existing per-purpose subsidy.
+
+#### Scenario: A more resolved board pays more of the wage
+- **WHEN** two otherwise identical stranded players are loaned to the same borrower, one staged with a higher board subsidy than the other
+- **THEN** the borrower pays a smaller share of the higher-subsidy player's wage, and the parent pays the rest
+
+#### Scenario: Other loans are unchanged
+- **WHEN** a player is loaned out for development, without any stranded-listing review
+- **THEN** the wage split uses the subsidy his loan purpose already implies
