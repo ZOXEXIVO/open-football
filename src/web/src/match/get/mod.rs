@@ -423,7 +423,7 @@ pub async fn match_get_action(
     let (home_team_name, home_team_slug, home_club_id) = if is_international {
         let name = simulator_data
             .country(match_result.home_team_id)
-            .map(|c| i18n.country(&c.code).to_string())
+            .map(|c| c.name.clone())
             .unwrap_or_else(|| i18n.t("home_team").to_string());
         let slug = simulator_data
             .country(match_result.home_team_id)
@@ -440,7 +440,7 @@ pub async fn match_get_action(
     let (away_team_name, away_team_slug, away_club_id) = if is_international {
         let name = simulator_data
             .country(match_result.away_team_id)
-            .map(|c| i18n.country(&c.code).to_string())
+            .map(|c| c.name.clone())
             .unwrap_or_else(|| i18n.t("away_team").to_string());
         let slug = simulator_data
             .country(match_result.away_team_id)

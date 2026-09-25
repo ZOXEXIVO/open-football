@@ -142,7 +142,7 @@ fn country_display(
 ) -> (String, String) {
     for continent in &simulator_data.continents {
         if let Some(country) = continent.countries.iter().find(|c| c.id == country_id) {
-            return (i18n.country(&country.code).to_string(), country.slug.clone());
+            return (country.name.clone(), country.slug.clone());
         }
     }
     (i18n.t("unknown").to_string(), String::new())
