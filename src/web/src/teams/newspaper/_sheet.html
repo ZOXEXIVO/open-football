@@ -64,9 +64,9 @@
             <figure class="np-figure{% if portrait.marked %} np-cut-figure{% endif %}">
                 <a class="np-photo" href="/{{ lang }}/players/{{ portrait.player_slug }}">
                     {% if portrait.player_generated %}
-                    <img src="/api/players/{{ portrait.player_id }}/face.jpg?v={{ crate::face::FACE_VERSION }}" alt="{{ portrait.player_name }}" loading="lazy">
+                    <img src="/api/players/{{ portrait.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}" alt="{{ portrait.player_name }}" loading="lazy">
                     {% else %}
-                    <img src="https://open-football.org/player/{{ portrait.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ portrait.player_id }}/face.jpg?v={{ crate::face::FACE_VERSION }}';" alt="{{ portrait.player_name }}" loading="lazy">
+                    <img src="https://open-football.org/player/{{ portrait.player_id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ portrait.player_id }}/face.svg?v={{ crate::face::FACE_VERSION }}';" alt="{{ portrait.player_name }}" loading="lazy">
                     {% endif %}
                     <span class="np-screen" aria-hidden="true"></span>
                 </a>

@@ -25,6 +25,27 @@ pub enum HairStyle {
     Cornrows,
 }
 
+impl HairStyle {
+    /// The old numeric code, kept for the debug comment in the SVG so a
+    /// contact sheet can still be read off.
+    pub fn code(self) -> u8 {
+        match self {
+            HairStyle::Crop => 0,
+            HairStyle::SidePart => 1,
+            HairStyle::Medium => 2,
+            HairStyle::Buzz => 3,
+            HairStyle::SweptBack => 4,
+            HairStyle::Afro => 5,
+            HairStyle::Bald => 6,
+            HairStyle::Curly => 7,
+            HairStyle::Long => 8,
+            HairStyle::Fade => 9,
+            HairStyle::FauxHawk => 10,
+            HairStyle::Cornrows => 11,
+        }
+    }
+}
+
 /// The front edge of the hair.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hairline {

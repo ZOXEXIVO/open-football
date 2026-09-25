@@ -31,7 +31,6 @@ askama_web = { version = "0.16.0", features = ["axum-0.8"] }
 rust-embed = "8.12"
 mime_guess = "2.0.5"
 flate2 = "1.1.10"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 rayon = "1.12.0"
 hostname = "0.4.2"
 sysinfo = { version = "0.39.6", features = ["system"] }
