@@ -120,10 +120,8 @@ pub async fn player_matches_action(
         .map(|(n, s)| (n.as_str(), s.as_str()))
         .collect();
 
-    // Read off the match records rather than the current team's schedule —
-    // see `collector` for why the schedule alone loses youth football,
-    // everything played before a move, and the whole table for a player who
-    // is between clubs.
+    // Read off the match histories of the player's teams rather than the
+    // current team's schedule — see `collector` for why.
     let mut items = PlayerMatchCollector::collect(simulator_data, &i18n, player, team_opt);
     // Only played matches are listed, so the newest season holding one is
     // already the season under way — or the one just finished while the new

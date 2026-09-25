@@ -3372,8 +3372,8 @@ impl SellerFeeFloor {
         // A genuine listing the club can't shift erodes the floor over time —
         // a seller who's held a player on the market for months is genuinely
         // more willing to deal. Without this a rated, long-listed player's
-        // floor stayed permanently above any (decayed) bid and he could only
-        // ever leave via the 365-day free exit.
+        // floor stayed permanently above any (decayed) bid and no sale could
+        // ever clear it.
         let fraction = SellerFeeFloor::erode_for_seller_position(
             base_fraction,
             country,
@@ -3410,9 +3410,15 @@ impl SellerFeeFloor {
             player.book_value(date),
             &LedgerPressure::of(&LedgerContext::of(seller)),
         );
+        // A board that has reviewed a man the market would not take has
+        // already said what it will accept; nothing below re-raises it.
+        let reviewed = country
+            .transfer_market
+            .board_floor_for(neg_data.player_id, seller.id)
+            .unwrap_or(f64::INFINITY);
 
         Some(SellerFloorVerdict {
-            min_fee: (market_value * fraction).max(book_floor),
+            min_fee: (market_value * fraction).max(book_floor).min(reviewed),
             market_value,
             fraction,
             asset_class,
@@ -4136,6 +4142,7 @@ mod seller_fee_floor_tests {
     use crate::shared::{Currency, CurrencyValue, Location};
     use crate::transfers::deal::negotiation::TransferNegotiation;
     use crate::transfers::deal::offer::TransferOffer;
+    use crate::transfers::market::TransferListing;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
@@ -4711,6 +4718,42 @@ mod seller_fee_floor_tests {
         // The allowed discount: the floor is well below the healthy 70%
         // first-team floor — a near-expiry player genuinely goes cheaper.
         assert!(v.fraction < SellerFeeFloor::FIRST_TEAM_FLOOR);
+    }
+
+    /// A board that reviewed a man the market would not take has named the
+    /// fee it accepts; the importance floor must not re-raise it. Until it
+    /// has, the listing leaves the floor exactly where it was.
+    #[test]
+    fn a_reviewed_board_floor_is_honoured() {
+        let mut target = Ff::player(
+            100,
+            150,
+            26,
+            5000,
+            PlayerSquadStatus::FirstTeamRegular,
+            Ff::far_contract(),
+        );
+        target.statuses.add(Ff::date(), PlayerStatusType::Lst);
+        let unlisted = Ff::country(vec![target.clone()]);
+        let mut country = Ff::country(vec![target]);
+        country.transfer_market.add_listing(TransferListing::new(
+            100,
+            Ff::SELLER_ID,
+            Ff::SELLER_ID,
+            CurrencyValue::new(3_000_000.0, Currency::Usd),
+            Ff::date(),
+            TransferListingType::Transfer,
+        ));
+        let nd = Ff::neg_data(100, 400_000.0, 3_000_000.0);
+
+        let before = SellerFeeFloor::for_permanent(&unlisted, &nd, Ff::date()).unwrap();
+        let listed = SellerFeeFloor::for_permanent(&country, &nd, Ff::date()).unwrap();
+        assert_eq!(listed.min_fee, before.min_fee);
+        assert!(400_000.0 < listed.min_fee);
+
+        country.transfer_market.listings[0].board_floor = Some(400_000.0);
+        let reviewed = SellerFeeFloor::for_permanent(&country, &nd, Ff::date()).unwrap();
+        assert_eq!(reviewed.min_fee, 400_000.0);
     }
 
     /// Regression #8: the stale-listing decay floors an asking price at

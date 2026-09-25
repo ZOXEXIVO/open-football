@@ -82,7 +82,7 @@ impl LoanTerms {
         LoanTerms {
             willingness: LoanAssetGuard::willingness_for(parent, player, date),
             plan: player.mind.career.plan_view(MindClock::day(date)),
-            parent_subsidy: LoanMoney::parent_desire(player.pathway_stage(), player.loan_purpose()),
+            parent_subsidy: player.loan_subsidy(),
         }
     }
 }

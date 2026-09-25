@@ -115,19 +115,20 @@ fn find_league_slug(data: &core::SimulatorData, match_id: &str) -> String {
     if let Some(mr) = data.match_store.get(match_id) {
         return mr.league_slug.clone();
     }
-    // Scan leagues, plus each country's domestic cup (which lives outside
-    // the `leagues` collection) so cup-match recordings resolve too.
+    // Scan leagues, plus each country's domestic cup and playoffs (which
+    // live outside the `leagues` collection) so their recordings resolve too.
     for continent in &data.continents {
         for country in &continent.countries {
-            for league in &country.leagues.leagues {
+            let competitions = country
+                .leagues
+                .leagues
+                .iter()
+                .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
+                .chain(country.playoffs.iter().map(|playoff| &playoff.league));
+            for league in competitions {
                 if league.matches.get(match_id).is_some() {
                     return league.slug.clone();
                 }
-            }
-            if let Some(cup) = &country.domestic_cup
-                && cup.league.matches.get(match_id).is_some()
-            {
-                return cup.league.slug.clone();
             }
         }
     }

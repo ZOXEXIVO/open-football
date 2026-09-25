@@ -127,6 +127,80 @@ pub struct PlayerEventDto {
     pub is_mind: bool,
 }
 
+impl PlayerEventDto {
+    /// The severity tile this card toggles under. Decisions, mind notes and
+    /// context-less events carry no severity, so they share the Unrated
+    /// tile — every card sits under exactly one.
+    pub fn severity_bucket(&self) -> &str {
+        self.severity_tag.as_deref().unwrap_or(EventFilter::UNRATED)
+    }
+
+    /// The mood tile this card toggles under — the same valence that picks
+    /// the card's rail colour.
+    pub fn mood_bucket(&self) -> &'static str {
+        if self.is_positive {
+            EventFilter::POSITIVE
+        } else if self.is_negative {
+            EventFilter::NEGATIVE
+        } else {
+            EventFilter::NEUTRAL
+        }
+    }
+}
+
+pub struct EventFilterTile {
+    pub tag: &'static str,
+    pub label: String,
+}
+
+/// The feed's two toggle rows. A card shows only while both its severity
+/// tile and its mood tile are on.
+struct EventFilter;
+
+impl EventFilter {
+    const UNRATED: &'static str = "unrated";
+    const POSITIVE: &'static str = "positive";
+    const NEGATIVE: &'static str = "negative";
+    const NEUTRAL: &'static str = "neutral";
+
+    const SEVERITIES: [HappinessEventSeverity; 4] = [
+        HappinessEventSeverity::Minor,
+        HappinessEventSeverity::Moderate,
+        HappinessEventSeverity::Serious,
+        HappinessEventSeverity::Major,
+    ];
+
+    const MOODS: [(&'static str, &'static str); 3] = [
+        (Self::POSITIVE, "event_mood_positive"),
+        (Self::NEGATIVE, "event_mood_negative"),
+        (Self::NEUTRAL, "event_mood_neutral"),
+    ];
+
+    fn severity_tiles(events_i18n: &EventI18n) -> Vec<EventFilterTile> {
+        Self::SEVERITIES
+            .iter()
+            .map(|severity| EventFilterTile {
+                tag: EventContextRenderer::severity_tag(*severity),
+                label: events_i18n.t(severity.as_i18n_key()).to_string(),
+            })
+            .chain([EventFilterTile {
+                tag: Self::UNRATED,
+                label: events_i18n.t("severity_unrated").to_string(),
+            }])
+            .collect()
+    }
+
+    fn mood_tiles(events_i18n: &EventI18n) -> Vec<EventFilterTile> {
+        Self::MOODS
+            .iter()
+            .map(|(tag, key)| EventFilterTile {
+                tag,
+                label: events_i18n.t(key).to_string(),
+            })
+            .collect()
+    }
+}
+
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "player/events/index.html")]
 pub struct PlayerEventsTemplate {
@@ -161,6 +235,8 @@ pub struct PlayerEventsTemplate {
     pub awards_count: u32,
     pub news_count: usize,
     pub events: Vec<PlayerEventDto>,
+    pub severity_tiles: Vec<EventFilterTile>,
+    pub mood_tiles: Vec<EventFilterTile>,
 }
 
 pub async fn player_events_action(
@@ -221,6 +297,8 @@ pub async fn player_events_action(
         &route_params.lang,
         league_slug.as_deref(),
     );
+    let severity_tiles = EventFilter::severity_tiles(&events_i18n);
+    let mood_tiles = EventFilter::mood_tiles(&events_i18n);
 
     Ok(PlayerEventsTemplate {
         css_version: CSS_VERSION,
@@ -286,6 +364,8 @@ pub async fn player_events_action(
         awards_count: player.awards_count.total(),
         news_count: PlayerNewsCounter::count(simulator_data, player),
         events,
+        severity_tiles,
+        mood_tiles,
     }
     .into_response())
 }
@@ -3765,20 +3845,26 @@ fn resolve_partner(data: &SimulatorData, partner_id: u32) -> Option<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::i18n::I18nManager;
+    use crate::i18n::SUPPORTED_LANG_CODES;
+    use crate::i18n::events::EventI18nManager;
     use chrono::NaiveTime;
     use core::club::ClubAcademy;
     use core::club::player::builder::PlayerBuilder;
+    use core::club::player::mind::{GoalKind, MindClock, MindNote, MindNoteKind};
     use core::competitions::global::GlobalCompetitions;
     use core::continent::Continent;
     use core::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use core::shared::Location;
     use core::shared::fullname::FullName;
     use core::{
-        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
-        Player, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
-        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
-        TeamReputation, TeamType, TrainingSchedule,
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, HappinessEventCause,
+        HappinessEventScope, PersonAttributes, Player, PlayerAttributes, PlayerCollection,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
+    use std::env;
+    use std::fs;
 
     /// The English event bundle, verbatim — for the audits that assert on
     /// the file's text rather than on a resolved key.
@@ -6115,6 +6201,361 @@ mod tests {
                     "{lang}: decision-card label {label} does not resolve"
                 );
             }
+        }
+    }
+
+    /// A happiness event's card, filled the way `build_events` fills it.
+    fn happiness_card(
+        event_type: HappinessEventType,
+        magnitude: f32,
+        severity: Option<HappinessEventSeverity>,
+        i18n: &EventI18n,
+    ) -> PlayerEventDto {
+        let event = HappinessEvent {
+            event_type,
+            magnitude,
+            days_ago: 3,
+            partner_player_id: None,
+            context: severity.map(|s| {
+                HappinessEventContext::new(
+                    HappinessEventCause::PersonalityClash,
+                    s,
+                    HappinessEventScope::DressingRoom,
+                )
+            }),
+        };
+        let (detail, follow_up, severity_label, severity_tag) =
+            EventContextRenderer::render(&event, i18n);
+        PlayerEventDto {
+            description: i18n
+                .t(event_type_to_i18n_key(&event.event_type))
+                .to_string(),
+            is_positive: event.magnitude > 0.0,
+            is_negative: event.magnitude < 0.0,
+            is_big: is_big_event(&event.event_type),
+            days_ago: event.days_ago,
+            time_ago_label: EventContextRenderer::time_ago_label(event.days_ago, i18n),
+            partner_name: None,
+            partner_slug: None,
+            detail,
+            follow_up,
+            severity_label,
+            severity_tag,
+            comparison: None,
+            movement: None,
+            decided_by: None,
+            is_decision: false,
+            is_mind: false,
+        }
+    }
+
+    fn decision_card(i18n: &EventI18n) -> PlayerEventDto {
+        DecisionRender::to_event(
+            &decision_row(
+                (2026, 4, 30),
+                "dec_transfer_listed",
+                "dec_reason_surplus_squad",
+                "dec_decided_board",
+            ),
+            i18n,
+            today(),
+        )
+    }
+
+    fn mind_card(lang: &str) -> PlayerEventDto {
+        MindRender::to_event(
+            &MindNote::want(
+                MindNoteKind::WantVoiced,
+                GoalKind::LeaveThisClub,
+                MindClock::day(NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()),
+            ),
+            &MindWorld::sim(),
+            &I18nManager::new().for_lang(lang),
+            lang,
+            today(),
+        )
+    }
+
+    /// Only a happiness event with context carries a severity, and a
+    /// register row is never warm or sour. Every source must still land
+    /// under one tile in each row, or some card could never be hidden.
+    #[test]
+    fn every_card_source_falls_under_one_tile_per_row() {
+        let i18n = load_en_i18n();
+        let rated = happiness_card(
+            HappinessEventType::ConflictWithTeammate,
+            -4.5,
+            Some(HappinessEventSeverity::Serious),
+            &i18n,
+        );
+        let bare = happiness_card(HappinessEventType::ManagerEncouragement, 1.5, None, &i18n);
+        let decision = decision_card(&i18n);
+        let note = mind_card("en");
+
+        assert_eq!(rated.severity_bucket(), "serious");
+        assert_eq!(rated.mood_bucket(), "negative");
+        assert_eq!(bare.severity_bucket(), "unrated");
+        assert_eq!(bare.mood_bucket(), "positive");
+        assert_eq!(decision.severity_bucket(), "unrated");
+        assert_eq!(decision.mood_bucket(), "neutral");
+        assert_eq!(note.severity_bucket(), "unrated");
+        assert!(
+            ["positive", "negative", "neutral"].contains(&note.mood_bucket()),
+            "a mind note takes its mood from its valence"
+        );
+    }
+
+    #[test]
+    fn filter_tiles_come_in_a_fixed_order() {
+        let i18n = load_en_i18n();
+
+        let severity: Vec<&str> = EventFilter::severity_tiles(&i18n)
+            .iter()
+            .map(|t| t.tag)
+            .collect();
+        assert_eq!(
+            severity,
+            ["minor", "moderate", "serious", "major", "unrated"]
+        );
+
+        let mood = EventFilter::mood_tiles(&i18n);
+        let tags: Vec<&str> = mood.iter().map(|t| t.tag).collect();
+        assert_eq!(tags, ["positive", "negative", "neutral"]);
+        assert_eq!(mood[0].label, i18n.t("event_mood_positive"));
+    }
+
+    #[test]
+    fn filter_copy_resolves_in_every_locale() {
+        let events = EventI18nManager::new(&I18nManager::new());
+        for lang in SUPPORTED_LANG_CODES {
+            let i18n = events.for_lang(lang);
+            let keys = EventFilter::SEVERITIES
+                .iter()
+                .map(|s| s.as_i18n_key())
+                .chain(["severity_unrated"])
+                .chain(EventFilter::MOODS.iter().map(|(_, key)| *key));
+            let tiles = EventFilter::severity_tiles(&i18n)
+                .into_iter()
+                .chain(EventFilter::mood_tiles(&i18n));
+            for (tile, key) in tiles.zip(keys) {
+                assert_ne!(tile.label, key, "{lang}: tile label {key} does not resolve");
+            }
+            for key in [
+                "event_filter_severity",
+                "event_filter_mood",
+                "no_events_filtered",
+            ] {
+                assert_ne!(i18n.t(key), key, "{lang}: {key} does not resolve");
+            }
+        }
+    }
+
+    /// The events page for one player, with a feed that puts at least one
+    /// card under every severity and every mood tile.
+    fn events_page(lang: &str, events: Vec<PlayerEventDto>) -> PlayerEventsTemplate {
+        let chrome = I18nManager::new();
+        let events_i18n = EventI18nManager::new(&chrome).for_lang(lang);
+        PlayerEventsTemplate {
+            css_version: "test",
+            computer_name: "test",
+            cpu_brand: "test",
+            cores_count: 1,
+            title: "Raffaele Huli".to_string(),
+            sub_title_prefix: "GK".to_string(),
+            sub_title_suffix: String::new(),
+            sub_title: "Triestina".to_string(),
+            sub_title_link: format!("/{lang}/teams/triestina"),
+            sub_title_country_code: String::new(),
+            header_color: "#8b0000".to_string(),
+            foreground_color: "#ffffff".to_string(),
+            menu_sections: Vec::new(),
+            i18n: chrome.for_lang(lang),
+            severity_tiles: EventFilter::severity_tiles(&events_i18n),
+            mood_tiles: EventFilter::mood_tiles(&events_i18n),
+            events_i18n,
+            lang: lang.to_string(),
+            active_tab: "events",
+            player_id: 2000425725,
+            player_slug: "2000425725-raffaele-huli".to_string(),
+            club_id: 1,
+            is_on_loan: false,
+            is_injured: false,
+            is_unhappy: false,
+            is_force_match_selection: false,
+            is_on_watchlist: false,
+            events_count: events.len(),
+            interested_clubs_count: 0,
+            awards_count: 0,
+            news_count: 0,
+            events,
+        }
+    }
+
+    fn mixed_feed(lang: &str) -> Vec<PlayerEventDto> {
+        let i18n = EventI18nManager::new(&I18nManager::new()).for_lang(lang);
+        let rated = |event_type, magnitude, severity| {
+            happiness_card(event_type, magnitude, Some(severity), &i18n)
+        };
+        vec![
+            rated(
+                HappinessEventType::ManagerEncouragement,
+                1.2,
+                HappinessEventSeverity::Minor,
+            ),
+            rated(
+                HappinessEventType::FanCriticism,
+                -1.4,
+                HappinessEventSeverity::Minor,
+            ),
+            rated(
+                HappinessEventType::TeammateBonding,
+                2.5,
+                HappinessEventSeverity::Moderate,
+            ),
+            rated(
+                HappinessEventType::ConflictWithTeammate,
+                -4.5,
+                HappinessEventSeverity::Serious,
+            ),
+            rated(
+                HappinessEventType::WonStartingPlace,
+                4.2,
+                HappinessEventSeverity::Serious,
+            ),
+            rated(
+                HappinessEventType::Relegated,
+                -7.0,
+                HappinessEventSeverity::Major,
+            ),
+            happiness_card(HappinessEventType::FanPraise, 0.8, None, &i18n),
+            decision_card(&i18n),
+            mind_card(lang),
+        ]
+    }
+
+    #[test]
+    fn events_page_renders_two_labelled_filter_groups_and_tags_every_card() {
+        let i18n = load_en_i18n();
+        let html = events_page("en", mixed_feed("en"))
+            .render()
+            .expect("render");
+
+        let start = html
+            .find("<div class=\"fm-evt-filter\">")
+            .expect("filter toolbar");
+        let end = html.find("<ol class=\"fm-evt-list\"").expect("feed");
+        let toolbar = &html[start..end];
+
+        for (id, key) in [
+            ("evtFilterSeverity", "event_filter_severity"),
+            ("evtFilterMood", "event_filter_mood"),
+        ] {
+            assert!(
+                toolbar.contains(&format!("role=\"group\" aria-labelledby=\"{id}\"")),
+                "the {key} group is named by its label"
+            );
+            assert!(
+                toolbar.contains(&format!("id=\"{id}\">{}</span>", i18n.t(key))),
+                "the {key} group shows its label"
+            );
+        }
+
+        let chips = |attr: &str| {
+            toolbar
+                .matches(&format!("class=\"visually-hidden\" {attr}="))
+                .count()
+        };
+        assert_eq!(chips("data-severity"), 5, "one severity chip per bucket");
+        assert_eq!(chips("data-mood"), 3, "one mood chip per bucket");
+
+        let labels: Vec<String> = EventFilter::severity_tiles(&i18n)
+            .into_iter()
+            .chain(EventFilter::mood_tiles(&i18n))
+            .map(|t| t.label)
+            .collect();
+        for chip in toolbar.split("<label class=\"fm-evt-toggle").skip(1) {
+            let text = chip
+                [chip.find("</span>").unwrap() + "</span>".len()..chip.find("</label>").unwrap()]
+                .trim();
+            assert!(
+                labels.iter().any(|l| l == text),
+                "a chip shows only its label, no count: {text:?}"
+            );
+        }
+
+        let cards: Vec<&str> = html.split("<li class=\"fm-evt-card").skip(1).collect();
+        assert_eq!(cards.len(), 9);
+        for card in cards {
+            let head = &card[..card.find('>').unwrap()];
+            assert!(
+                ["minor", "moderate", "serious", "major", "unrated"]
+                    .iter()
+                    .any(|t| head.contains(&format!("data-severity=\"{t}\""))),
+                "card without a severity bucket: {head}"
+            );
+            assert!(
+                ["positive", "negative", "neutral"]
+                    .iter()
+                    .any(|t| head.contains(&format!("data-mood=\"{t}\""))),
+                "card without a mood bucket: {head}"
+            );
+        }
+        assert!(html.contains("id=\"evtFilteredEmpty\" style=\"display:none\""));
+    }
+
+    #[test]
+    fn empty_feed_renders_no_filter() {
+        let html = events_page("en", Vec::new()).render().expect("render");
+
+        assert!(html.contains(load_en_i18n().t("no_events")));
+        assert!(
+            !html.contains("class=\"fm-evt-filter\""),
+            "no filter without a feed"
+        );
+        assert!(!html.contains("id=\"evtFilteredEmpty\""));
+    }
+
+    /// Writes a self-contained copy of the page per locale — label lengths
+    /// vary a lot between them — so the filter can be looked at in a
+    /// browser without a server:
+    ///
+    /// ```text
+    /// EVENTS_PREVIEW_DIR=<dir> cargo test -p web --lib player_events_preview -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn player_events_preview() {
+        let Ok(dir) = env::var("EVENTS_PREVIEW_DIR") else {
+            return;
+        };
+        fs::create_dir_all(&dir).expect("preview dir");
+
+        let bootstrap =
+            fs::read_to_string("assets/static/css/bootstrap.min.css").expect("bootstrap");
+        let style = fs::read_to_string("assets/static/css/style.css").expect("stylesheet");
+
+        for lang in SUPPORTED_LANG_CODES {
+            let mut html = events_page(lang, mixed_feed(lang))
+                .render()
+                .expect("render");
+            for link in [
+                "<link href=\"/static/css/bootstrap.min.css\" rel=\"stylesheet\">",
+                "<link href=\"/static/css/flags.css\" rel=\"stylesheet\">",
+                "<link href=\"/static/css/font.min.css\" rel=\"stylesheet\">",
+            ] {
+                html = html.replace(link, "");
+            }
+            if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+                && let Some(end) = html[start..].find('>')
+            {
+                html.replace_range(start..start + end + 1, "");
+            }
+            html = html.replace(
+                "</head>",
+                &format!("<style>{bootstrap}</style><style>{style}</style></head>"),
+            );
+
+            fs::write(format!("{dir}/player-events-{lang}.html"), html).expect("write preview");
         }
     }
 }

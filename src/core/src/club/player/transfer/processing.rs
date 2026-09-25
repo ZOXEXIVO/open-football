@@ -2209,8 +2209,9 @@ mod career_desire_tests {
     }
 
     /// Once the club has put him up for sale the market owns the exit:
-    /// the listing pass makes the row, the push and the unsold valve
-    /// resolve it, and the request would only duplicate that.
+    /// the listing pass makes the row, the push and the board's review of
+    /// a stranded listing resolve it, and the request would only duplicate
+    /// that.
     #[test]
     fn a_player_the_club_is_selling_leaves_it_to_the_market() {
         let today = d(2026, 6, 1);

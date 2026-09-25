@@ -614,7 +614,6 @@ mod tests {
         FreeAgentReleaseReason::FailedRenewalRelease,
         FreeAgentReleaseReason::AcademyAgedOut,
         FreeAgentReleaseReason::Under16Release,
-        FreeAgentReleaseReason::UnsoldListingExit,
     ];
 
     const ABILITY_BANDS: &[AbilityBand] = &[

@@ -231,10 +231,7 @@ impl LoanBoard {
                         .map(|c| LoanAssetGuard::willingness_for(c, player, date))
                         .unwrap_or_else(ParentWillingness::open),
                     plan: player.mind.career.plan_view(MindClock::day(date)),
-                    parent_subsidy: LoanMoney::parent_desire(
-                        player.pathway_stage(),
-                        player.plan.as_ref().and_then(|p| p.loan_purpose),
-                    ),
+                    parent_subsidy: player.loan_subsidy(),
                     stage: player.pathway_stage(),
                     club_band_target: parent_club
                         .and_then(|c| {
@@ -416,10 +413,7 @@ impl LoanBoard {
                             guard,
                             willingness,
                             plan: player.mind.career.plan_view(MindClock::day(date)),
-                            parent_subsidy: LoanMoney::parent_desire(
-                                player.pathway_stage(),
-                                player.plan.as_ref().and_then(|p| p.loan_purpose),
-                            ),
+                            parent_subsidy: player.loan_subsidy(),
                             stage: player.pathway_stage(),
                             club_band_target: club
                                 .transfer_plan

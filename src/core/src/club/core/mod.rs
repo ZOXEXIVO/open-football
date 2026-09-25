@@ -15,6 +15,6 @@ mod tick;
 mod treasury;
 
 pub use boardroom::LeagueStanding;
-pub use squad::SquadDepartures;
+pub use squad::{SquadDepartures, StrandedEffect, StrandedListing, StrandedMarket};
 pub use club::{Club, ClubColors, ClubPhilosophy};
 pub use treasury::WageReliefSale;

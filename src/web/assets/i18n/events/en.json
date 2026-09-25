@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "The tournament squad went a different way at his position.",
   "national_reason_youth_to_senior": "An impressive run with the youth side earned him a senior place.",
   "no_events": "No events recorded yet",
+  "no_events_filtered": "No events match the selected filters",
+  "event_mood_positive": "Positive",
+  "event_mood_negative": "Negative",
+  "event_mood_neutral": "Neutral",
+  "event_filter_severity": "Severity",
+  "event_filter_mood": "Mood",
   "promise_kind_playing_time": "more playing time",
   "reason_ev_above_squad_standard": "His level visibly sits above what the rest of the squad offers.",
   "reason_ev_already_strained_relationship": "Previous friction meant this was not treated as a one-off.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "He never got into the team on loan",
   "loan_headline_verdict_struggled": "A loan spell he struggled through",
   "loan_headline_verdict_inconclusive": "Too short a loan spell to judge",
-  "loan_verdict_standout": "Outstanding loan",
-  "loan_verdict_successful": "Successful loan",
-  "loan_verdict_steady": "Steady loan",
-  "loan_verdict_peripheral": "Peripheral on loan",
-  "loan_verdict_struggled": "Struggled on loan",
-  "loan_verdict_inconclusive": "Too short to judge",
   "loan_spell_apps": "{apps} appearances",
   "loan_spell_apps_with_starts": "{apps} appearances ({starts} starts)",
   "loan_spell_goals": "{goals} goals",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Stage: personal terms agreed.",
   "transfer_interest_stage_terms_rejected": "Stage: the player rejected the terms.",
   "event_national_team_triumph": "Won an international tournament",
-  "event_national_team_heartbreak": "Lost an international final"
+  "event_national_team_heartbreak": "Lost an international final",
+  "event_reunited_with_former_manager": "Reunited with a former manager"
 }

@@ -108,7 +108,7 @@ use core::club::staff::perception::AbilityEstimator;
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use core::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
-use core::transfers::deal::negotiation::NegotiationRejectionReason;
+use core::transfers::deal::negotiation::{NegotiationRejectionReason, NegotiationStatus};
 use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
 use core::transfers::scouting::recruitment::{
@@ -4332,6 +4332,307 @@ impl PlacementCensus {
     }
 }
 // ---------------------------------------------------------------------
+// Stranded listings
+// ---------------------------------------------------------------------
+
+/// A seller-listed player as he stood yesterday — the "before" his exit
+/// is read against, since the contract is gone by the time he is freed.
+#[derive(Debug, Clone, Copy)]
+struct ListedSnapshot {
+    club_id: u32,
+    salary: u32,
+    expiration: NaiveDate,
+    listed_date: NaiveDate,
+}
+
+/// Where a man who came off the list is standing today.
+#[derive(Debug, Clone, Copy)]
+struct ListedPlacement {
+    club_id: u32,
+    contracted: bool,
+    loan_parent_share: Option<u8>,
+}
+
+/// Where a transfer-listed player ends up. Running: a release clears the
+/// contract a day before the pool sweep writes the history row, so an
+/// exit is held until the world says which door he went through.
+#[derive(Debug, Default)]
+struct StrandedCensus {
+    listed: HashMap<u32, ListedSnapshot>,
+    /// Came off the list, not yet placed: the snapshot and the day.
+    pending: HashMap<u32, (ListedSnapshot, u32)>,
+    exits: BTreeMap<&'static str, usize>,
+    releases_by_reason: BTreeMap<String, usize>,
+    /// Wages left on the deal each released listed man walked away from.
+    release_carry: Vec<f64>,
+    /// Parent's share of the wage (%) on each loan a listed man left on.
+    loan_parent_share: Vec<u8>,
+    /// Every free-pool history row in the world, by reason.
+    all_free_reasons: BTreeMap<String, usize>,
+    seen_free_rows: HashSet<(u32, NaiveDate)>,
+}
+
+impl StrandedCensus {
+    /// Days an unplaced exit waits for its history row before it is
+    /// written off as unresolved.
+    const RESOLVE_DAYS: u32 = 7;
+    /// How far back a free-pool history row still counts as today's.
+    const RECENT_ROW_DAYS: i64 = 3;
+
+    fn observe(&mut self, data: &SimulatorData, day: u32) {
+        let date = data.date.date();
+
+        let mut listings: HashMap<u32, (u32, NaiveDate)> = HashMap::new();
+        let mut freed: HashMap<u32, String> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let market = &country.transfer_market;
+                for listing in &market.listings {
+                    if listing.listing_type == TransferListingType::Transfer
+                        && listing.origin == TransferListingOrigin::SellerListed
+                        && matches!(
+                            listing.status,
+                            TransferListingStatus::Available | TransferListingStatus::InNegotiation
+                        )
+                    {
+                        listings.insert(listing.player_id, (listing.club_id, listing.listed_date));
+                    }
+                }
+                for row in &market.transfer_history {
+                    if !matches!(row.transfer_type, TransferType::Free)
+                        || (date - row.transfer_date).num_days() > Self::RECENT_ROW_DAYS
+                    {
+                        continue;
+                    }
+                    freed.insert(row.player_id, row.reason.key.clone());
+                    if self
+                        .seen_free_rows
+                        .insert((row.player_id, row.transfer_date))
+                    {
+                        *self
+                            .all_free_reasons
+                            .entry(row.reason.key.clone())
+                            .or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        let mut today: HashMap<u32, ListedSnapshot> = HashMap::new();
+        let mut placed: HashMap<u32, ListedPlacement> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        for player in team.players.players.iter() {
+                            if let Some(&(club_id, listed_date)) = listings.get(&player.id)
+                                && club_id == club.id
+                                && !player.is_on_loan()
+                                && let Some(contract) = player.contract.as_ref()
+                            {
+                                today.insert(
+                                    player.id,
+                                    ListedSnapshot {
+                                        club_id,
+                                        salary: contract.salary,
+                                        expiration: contract.expiration,
+                                        listed_date,
+                                    },
+                                );
+                            }
+                            if self.listed.contains_key(&player.id)
+                                || self.pending.contains_key(&player.id)
+                            {
+                                placed.insert(
+                                    player.id,
+                                    ListedPlacement {
+                                        club_id: club.id,
+                                        contracted: player.contract.is_some(),
+                                        loan_parent_share: player
+                                            .contract_loan
+                                            .as_ref()
+                                            .map(|c| c.parent_wage_share_pct()),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (id, snapshot) in std::mem::take(&mut self.listed) {
+            if !today.contains_key(&id) {
+                self.pending.entry(id).or_insert((snapshot, day));
+            }
+        }
+        self.listed = today;
+
+        let mut resolved: Vec<u32> = Vec::new();
+        for (&id, &(snapshot, since)) in &self.pending {
+            if self.listed.contains_key(&id) {
+                resolved.push(id);
+                continue;
+            }
+            let exit = if let Some(reason) = freed.get(&id) {
+                *self.releases_by_reason.entry(reason.clone()).or_insert(0) += 1;
+                let days_left = (snapshot.expiration - date).num_days().max(0) as f64;
+                self.release_carry
+                    .push(snapshot.salary as f64 * days_left / 365.0);
+                Some("released")
+            } else {
+                match placed.get(&id) {
+                    Some(p) if p.loan_parent_share.is_some() => {
+                        self.loan_parent_share
+                            .push(p.loan_parent_share.unwrap_or(0));
+                        Some("loaned")
+                    }
+                    Some(p) if p.contracted && p.club_id != snapshot.club_id => Some("sold"),
+                    Some(p) if p.contracted => Some("delisted, still at club"),
+                    _ if day - since >= Self::RESOLVE_DAYS => Some("unresolved"),
+                    _ => None,
+                }
+            };
+            if let Some(exit) = exit {
+                *self.exits.entry(exit).or_insert(0) += 1;
+                resolved.push(id);
+            }
+        }
+        for id in resolved {
+            self.pending.remove(&id);
+        }
+    }
+}
+
+/// Prints the stranded-listing report.
+struct StrandedPrinter;
+
+impl StrandedPrinter {
+    /// Days-listed bands for the still-listed table.
+    const LISTED_BANDS: [(i64, &'static str); 4] = [
+        (120, "<120d"),
+        (365, "120-365d"),
+        (730, "365-730d"),
+        (i64::MAX, ">730d"),
+    ];
+
+    fn print(census: &StrandedCensus, data: &SimulatorData) {
+        let date = data.date.date();
+        println!("\n---- STRANDED LISTINGS ----");
+        println!("  (where a seller-listed man goes when he comes off the list)");
+        for (exit, n) in &census.exits {
+            println!("  {exit:<28} {n:>6}");
+        }
+
+        println!("  released listed men, by reason:");
+        for (reason, n) in &census.releases_by_reason {
+            println!("    {reason:<40} {n:>6}");
+        }
+        if !census.release_carry.is_empty() {
+            let mut carry = census.release_carry.clone();
+            carry.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+            println!(
+                "    wages left on released deals: median {:.0}k, p90 {:.0}k",
+                carry[carry.len() / 2] / 1_000.0,
+                carry[(carry.len() * 9 / 10).min(carry.len() - 1)] / 1_000.0,
+            );
+        }
+
+        let loans = &census.loan_parent_share;
+        if loans.is_empty() {
+            println!("  loans off the list: 0");
+        } else {
+            let paying = loans.iter().filter(|s| **s > 0).count();
+            let mean = loans.iter().map(|s| *s as f64).sum::<f64>() / loans.len() as f64;
+            println!(
+                "  loans off the list: {}  parent pays a share on {} ({:.0}%), mean parent share {:.0}%",
+                loans.len(),
+                paying,
+                paying as f64 * 100.0 / loans.len() as f64,
+                mean,
+            );
+        }
+
+        let mut bands = [0usize; 4];
+        for snapshot in census.listed.values() {
+            let days = (date - snapshot.listed_date).num_days();
+            let band = Self::LISTED_BANDS
+                .iter()
+                .position(|(upper, _)| days < *upper)
+                .unwrap_or(3);
+            bands[band] += 1;
+        }
+        println!("  still listed, at their club, by days listed:");
+        for (i, (_, label)) in Self::LISTED_BANDS.iter().enumerate() {
+            println!("    {label:<10} {:>6}", bands[i]);
+        }
+        println!("    listed ≥365d, still at club: {}", bands[2] + bands[3]);
+        Self::print_aged(census, data);
+
+        println!("  every free-pool entry in the world, by reason:");
+        for (reason, n) in &census.all_free_reasons {
+            println!("    {reason:<40} {n:>6}");
+        }
+    }
+
+    /// What holds a year-old listing where it is: the row's status, a bid
+    /// still in the room, or a deal about to run out on its own.
+    fn print_aged(census: &StrandedCensus, data: &SimulatorData) {
+        const AGED_DAYS: i64 = 365;
+        const NEAR_EXPIRY_DAYS: i64 = 180;
+        let date = data.date.date();
+        let (mut available, mut in_negotiation, mut stuck, mut live_bid, mut near_expiry) =
+            (0usize, 0usize, 0usize, 0usize, 0usize);
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let live: HashSet<u32> = country
+                    .transfer_market
+                    .negotiations
+                    .values()
+                    .filter(|n| {
+                        matches!(
+                            n.status,
+                            NegotiationStatus::Pending | NegotiationStatus::Countered
+                        )
+                    })
+                    .map(|n| n.player_id)
+                    .collect();
+                for listing in &country.transfer_market.listings {
+                    let Some(snapshot) = census.listed.get(&listing.player_id) else {
+                        continue;
+                    };
+                    if listing.listing_type != TransferListingType::Transfer
+                        || listing.origin != TransferListingOrigin::SellerListed
+                        || (date - listing.listed_date).num_days() < AGED_DAYS
+                    {
+                        continue;
+                    }
+                    match listing.status {
+                        TransferListingStatus::Available => available += 1,
+                        TransferListingStatus::InNegotiation => {
+                            in_negotiation += 1;
+                            if !live.contains(&listing.player_id) {
+                                stuck += 1;
+                            }
+                        }
+                        _ => continue,
+                    }
+                    if live.contains(&listing.player_id) {
+                        live_bid += 1;
+                    }
+                    if (snapshot.expiration - date).num_days() < NEAR_EXPIRY_DAYS {
+                        near_expiry += 1;
+                    }
+                }
+            }
+        }
+        println!(
+            "    ≥365d rows: available {available}, in negotiation {in_negotiation} \
+             (no live bid {stuck}), live bid {live_bid}, <180d left {near_expiry}"
+        );
+    }
+}
+// ---------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------
 
@@ -4355,6 +4656,9 @@ struct SimHarness {
     /// moment the player moves, and a closed one is dropped from the
     /// board's own ledger two seasons later.
     mandates: MandateCensus,
+    /// Where listed men go. Running: the contract is gone a day before
+    /// the pool sweep writes the row that says why.
+    stranded: StrandedCensus,
 }
 
 impl SimHarness {
@@ -4379,12 +4683,14 @@ impl SimHarness {
             odb_clubs,
             player_side: PlayerSideCensus::default(),
             mandates: MandateCensus::default(),
+            stranded: StrandedCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
         harness.player_side.observe(&harness.data, 0);
         harness.loan_assets.observe(&harness.data, 0);
         harness.mandates.observe(&harness.data, 0);
+        harness.stranded.observe(&harness.data, 0);
         harness
     }
 
@@ -4413,6 +4719,7 @@ impl SimHarness {
             self.player_side.observe(&self.data, day);
             self.loan_assets.observe(&self.data, day);
             self.mandates.observe(&self.data, day);
+            self.stranded.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -4433,6 +4740,7 @@ impl SimHarness {
                 PlayerSidePrinter::print(&self.player_side);
                 LoanAssetPrinter::print(&self.loan_assets);
                 MandatePrinter::print(&self.mandates);
+                StrandedPrinter::print(&self.stranded, &self.data);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
@@ -4443,6 +4751,7 @@ impl SimHarness {
         PlayerSidePrinter::print(&self.player_side);
         LoanAssetPrinter::print(&self.loan_assets);
         MandatePrinter::print(&self.mandates);
+        StrandedPrinter::print(&self.stranded, &self.data);
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()

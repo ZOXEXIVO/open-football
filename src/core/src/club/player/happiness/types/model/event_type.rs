@@ -630,7 +630,7 @@ pub enum HappinessEventType {
     /// The transfer window closed with the player still on the transfer
     /// list, unsold — stuck at a club that wants him gone until the
     /// next window. Visible beat between listing and the availability
-    /// broadcast / free-exit machinery.
+    /// broadcast / the board's stranded-listing review.
     UnsoldWindowClosed,
     /// The club rejected a concrete bid for a player who had formally
     /// asked to leave — the move he wanted was vetoed. Much sharper
@@ -650,7 +650,7 @@ pub enum HappinessEventType {
     /// formally asked the club to find him a new team — the trigger for
     /// the scouts' availability broadcast that shops him around other
     /// clubs. Mild frustration note, cooldowned; the exit itself is
-    /// handled by the sale / free-exit machinery.
+    /// handled by the sale machinery and the board's review.
     AskedClubToArrangeTransfer,
     /// Ambitious or senior player worried about where the club is
     /// heading: key sales unreplaced, weakened squad, persistent

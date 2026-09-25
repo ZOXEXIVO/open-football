@@ -1025,6 +1025,21 @@ impl PlayerStatisticsHistory {
         self.mark_departed(&from.slug, false, date);
     }
 
+    /// Record retirement straight out of a squad: the in-flight stats land
+    /// on the spell he was playing and it closes. Unlike `record_release`
+    /// the loan flag is honoured — a loanee retires from the loan spell,
+    /// not from a parent-side row that would leave the loan one open.
+    pub fn record_retirement(
+        &mut self,
+        last_stats: PlayerStatistics,
+        from: &TeamInfo,
+        is_loan: bool,
+        date: NaiveDate,
+    ) {
+        self.upsert_current(from, last_stats, is_loan, None, date);
+        self.mark_departed(&from.slug, is_loan, date);
+    }
+
     /// Record a free-agent signing. Unlike `record_departure_transfer`,
     /// there is no source club — only the destination — so we just freeze
     /// any prior-season entries and push one fresh row for the new club.

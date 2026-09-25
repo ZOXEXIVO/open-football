@@ -3,6 +3,7 @@ use crate::club::player::happiness::LoanSpellVerdict;
 use crate::club::player::mind::MindSituation;
 use crate::club::player::mind::{ActorRef, EpisodeKind, MindClock};
 use crate::transfers::deal::offer::PromisedSquadStatus;
+use crate::transfers::loan::agreement::LoanMoney;
 use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
 use crate::{Person, Player, PlayerStatusType};
 use chrono::{Duration, NaiveDate};
@@ -152,6 +153,10 @@ pub struct PlayerPlan {
     /// way to the borrower, never collapsed — the purpose decides the
     /// minutes bar, the reach and the subsidy.
     pub loan_purpose: Option<LoanOutReason>,
+    /// Share of his wage the board agreed to keep paying on the loan it
+    /// staged to clear him — its own number, in place of the one the
+    /// purpose implies. Gone with the staged loan.
+    pub loan_subsidy: Option<f32>,
     pub loans_used: u8,
     pub last_verdict: Option<LoanSpellVerdict>,
     /// What the club would take for him, as a multiple of his value —
@@ -256,6 +261,7 @@ impl PlayerPlan {
             stage_since: date,
             review_on: date + Duration::days(Self::REVIEW_DAYS),
             loan_purpose: None,
+            loan_subsidy: None,
             loans_used: 0,
             last_verdict: None,
             asking_multiple: None,
@@ -277,6 +283,7 @@ impl PlayerPlan {
             stage_since: date,
             review_on: date + Duration::days(Self::REVIEW_DAYS),
             loan_purpose: None,
+            loan_subsidy: None,
             loans_used: 0,
             last_verdict: None,
             asking_multiple: None,
@@ -299,6 +306,7 @@ impl PlayerPlan {
         self.band_target = stage.band_target();
         if stage != PathwayStage::LoanOut {
             self.loan_purpose = None;
+            self.loan_subsidy = None;
         }
         from
     }
@@ -450,6 +458,16 @@ impl Player {
     #[inline]
     pub fn loan_purpose(&self) -> Option<LoanOutReason> {
         self.plan.as_ref().and_then(|p| p.loan_purpose)
+    }
+
+    /// How much of his wage his club means to keep paying if he is lent
+    /// out: what its board agreed for this loan, else what the loan's
+    /// purpose implies.
+    pub fn loan_subsidy(&self) -> f32 {
+        self.plan
+            .as_ref()
+            .and_then(|p| p.loan_subsidy)
+            .unwrap_or_else(|| LoanMoney::parent_desire(self.pathway_stage(), self.loan_purpose()))
     }
 
     /// The club states the pathway; the player is told.
@@ -619,5 +637,92 @@ impl Player {
         } else {
             LoanDestinationPreference::Any
         }
+    }
+}
+
+#[cfg(test)]
+mod loan_subsidy_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::calculators::WageCalculator;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2027, 1, 31).unwrap()
+        }
+
+        /// A man his club has staged for a loan, for `purpose`.
+        fn staged(purpose: LoanOutReason, board_subsidy: Option<f32>) -> Player {
+            let mut player = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+                .birth_date(NaiveDate::from_ymd_opt(2003, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .build()
+                .unwrap();
+            let mut plan = PlayerPlan::from_existing(
+                PlayerPlanRole::DepthRotation,
+                PathwayStage::LoanOut,
+                PlayerFieldPositionGroup::Midfielder,
+                24,
+                Self::date(),
+            );
+            plan.loan_purpose = Some(purpose);
+            plan.loan_subsidy = board_subsidy;
+            player.plan = Some(plan);
+            player
+        }
+    }
+
+    #[test]
+    fn a_more_resolved_board_pays_more_of_the_wage() {
+        let low = Fx::staged(LoanOutReason::FinancialRelief, Some(0.2));
+        let high = Fx::staged(LoanOutReason::FinancialRelief, Some(0.9));
+        let (low_borrower, _) =
+            WageCalculator::loan_wage_split_v2(1_000_000, 0.6, low.loan_subsidy());
+        let (high_borrower, _) =
+            WageCalculator::loan_wage_split_v2(1_000_000, 0.6, high.loan_subsidy());
+        assert!(
+            high_borrower < low_borrower,
+            "{high_borrower} vs {low_borrower}"
+        );
+    }
+
+    #[test]
+    fn other_loans_keep_the_subsidy_their_purpose_implies() {
+        let development = Fx::staged(LoanOutReason::NeedsGameTime, None);
+        assert_eq!(
+            development.loan_subsidy(),
+            LoanMoney::parent_desire(PathwayStage::LoanOut, Some(LoanOutReason::NeedsGameTime))
+        );
+    }
+
+    #[test]
+    fn the_board_subsidy_goes_with_the_staged_loan() {
+        let mut player = Fx::staged(LoanOutReason::FinancialRelief, Some(0.9));
+        let plan = player.plan.as_mut().unwrap();
+        plan.move_to(
+            PathwayStage::Reassess,
+            Fx::date(),
+            PlayerPlan::SHORT_REVIEW_DAYS,
+        );
+        assert_eq!(plan.loan_subsidy, None);
+        assert_eq!(player.loan_subsidy(), 0.0);
     }
 }

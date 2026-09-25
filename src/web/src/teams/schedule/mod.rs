@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::common::played_fixture::PlayedFixture;
 use crate::common::season_step::SeasonStep;
 use crate::teams::newspaper::NewspaperCounter;
 use crate::views::{self, MenuSection, NeighborMenus};
@@ -98,10 +99,6 @@ pub async fn team_schedule_get_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let schedule = league
-        .map(|l| l.schedule.get_matches_for_team(team.id))
-        .unwrap_or_default();
-
     let (neighbor_teams, country_leagues) =
         get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
@@ -122,45 +119,79 @@ pub async fn team_schedule_get_action(
             .unwrap_or_else(|| Season::from_date(date).as_league_season())
     };
 
-    // League matches
-    let mut items: Vec<(NaiveDateTime, LeagueSeason, TeamScheduleItem)> = schedule
+    // Everything played, every season, from the team's own history; the
+    // schedules below only contribute what is still to come.
+    let mut items: Vec<(NaiveDateTime, LeagueSeason, TeamScheduleItem)> = team
+        .match_history
+        .items()
         .iter()
-        .map(|schedule| {
-            let is_home = schedule.home_team_id == team.id;
-
-            let home_team_data = simulator_data.team_data(schedule.home_team_id).unwrap();
-            let away_team_data = simulator_data.team_data(schedule.away_team_id).unwrap();
-
+        .map(|played| {
+            let fixture = PlayedFixture::read(simulator_data, &i18n, team, played);
             (
-                schedule.date,
-                campaign(schedule.date.date()),
+                fixture.kickoff,
+                fixture
+                    .season
+                    .unwrap_or_else(|| campaign(fixture.kickoff.date())),
                 TeamScheduleItem {
-                    date: schedule.date.format("%d.%m.%Y").to_string(),
-                    time: schedule.date.format("%H:%M").to_string(),
-                    opponent_slug: if is_home {
-                        away_team_data.slug.clone()
-                    } else {
-                        home_team_data.slug.clone()
-                    },
-                    opponent_name: if is_home {
-                        away_team_data.name.clone()
-                    } else {
-                        home_team_data.name.clone()
-                    },
-                    is_home,
-                    competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                    result: schedule.result.as_ref().map(|res| TeamScheduleItemResult {
-                        match_id: schedule.id.clone(),
-                        home_goals: res.home_team.get(),
-                        away_goals: res.away_team.get(),
+                    date: fixture.date,
+                    time: fixture.time,
+                    opponent_slug: fixture.opponent_slug,
+                    opponent_name: fixture.opponent_name,
+                    is_home: fixture.is_home,
+                    competition_name: fixture.competition_name,
+                    result: Some(TeamScheduleItemResult {
+                        match_id: fixture.match_id,
+                        home_goals: fixture.home_goals,
+                        away_goals: fixture.away_goals,
                     }),
                 },
             )
         })
         .collect();
 
-    // Continental competition matches (Champions League, Europa League, Conference League)
-    //
+    // The domestic cup and the playoffs are stored apart from `leagues`, but
+    // for listing a team's fixtures they are all just competitions.
+    let competitions = simulator_data
+        .country_by_club(team.club_id)
+        .into_iter()
+        .flat_map(|country| {
+            country
+                .leagues
+                .leagues
+                .iter()
+                .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
+                .chain(country.playoffs.iter().map(|playoff| &playoff.league))
+        });
+    for competition in competitions {
+        let competition_calendar = competition.settings.season_calendar();
+        for fixture in competition.schedule.get_matches_for_team(team.id) {
+            if fixture.result.is_some() {
+                continue;
+            }
+            let is_home = fixture.home_team_id == team.id;
+            let opponent_id = if is_home {
+                fixture.away_team_id
+            } else {
+                fixture.home_team_id
+            };
+            let opponent = simulator_data.team_data(opponent_id).unwrap();
+
+            items.push((
+                fixture.date,
+                competition_calendar.season_of(fixture.date.date()),
+                TeamScheduleItem {
+                    date: fixture.date.format("%d.%m.%Y").to_string(),
+                    time: fixture.date.format("%H:%M").to_string(),
+                    opponent_slug: opponent.slug.clone(),
+                    opponent_name: opponent.name.clone(),
+                    is_home,
+                    competition_name: competition.name.clone(),
+                    result: None,
+                },
+            ));
+        }
+    }
+
     // Continental fixtures are keyed by *club*, not by team, so every squad of
     // the club — B, Second, U18..U23 — matches the club id. Only the Main squad
     // actually enters the bracket, so gate on it: otherwise "Real Madrid U18"
@@ -170,8 +201,10 @@ pub async fn team_schedule_get_action(
     } else {
         Vec::new()
     };
-    for (comp_key, home_club_id, away_club_id, date, match_id, match_result) in continental_matches
-    {
+    for (comp_key, home_club_id, away_club_id, date, _, match_result) in continental_matches {
+        if match_result.is_some() {
+            continue;
+        }
         let is_home = home_club_id == team.club_id;
         let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
@@ -185,10 +218,8 @@ pub async fn team_schedule_get_action(
             })
             .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
 
-        let datetime = date.and_hms_opt(20, 0, 0).unwrap();
-
         items.push((
-            datetime,
+            date.and_hms_opt(20, 0, 0).unwrap(),
             campaign(date),
             TeamScheduleItem {
                 date: date.format("%d.%m.%Y").to_string(),
@@ -197,68 +228,9 @@ pub async fn team_schedule_get_action(
                 opponent_name,
                 is_home,
                 competition_name: i18n.t(comp_key).to_string(),
-                result: match_result.map(|(home_goals, away_goals)| TeamScheduleItemResult {
-                    match_id: match_id.to_string(),
-                    home_goals,
-                    away_goals,
-                }),
+                result: None,
             },
         ));
-    }
-
-    // Domestic cup matches. The knockout cup lives on `Country::domestic_cup`,
-    // outside the league programme, so it is not covered by the league
-    // schedule gathered above — collect its fixtures for this team here.
-    // Only `Main` squads enter the cup, so non-senior teams yield nothing.
-    if let Some(cup_league) = simulator_data
-        .country_by_club(team.club_id)
-        .and_then(|country| country.domestic_cup.as_ref())
-        .map(|cup| &cup.league)
-    {
-        let cup_calendar = cup_league.settings.season_calendar();
-        for schedule in cup_league.schedule.get_matches_for_team(team.id) {
-            let is_home = schedule.home_team_id == team.id;
-
-            let home_team_data = simulator_data.team_data(schedule.home_team_id).unwrap();
-            let away_team_data = simulator_data.team_data(schedule.away_team_id).unwrap();
-
-            items.push((
-                schedule.date,
-                cup_calendar.season_of(schedule.date.date()),
-                TeamScheduleItem {
-                    date: schedule.date.format("%d.%m.%Y").to_string(),
-                    time: schedule.date.format("%H:%M").to_string(),
-                    opponent_slug: if is_home {
-                        away_team_data.slug.clone()
-                    } else {
-                        home_team_data.slug.clone()
-                    },
-                    opponent_name: if is_home {
-                        away_team_data.name.clone()
-                    } else {
-                        home_team_data.name.clone()
-                    },
-                    is_home,
-                    competition_name: cup_league.name.clone(),
-                    // A cup `Score` may store its sides in either order
-                    // relative to the fixture; map goals back through the
-                    // recorded `team_id`s (mirrors the cup-page mapping).
-                    result: schedule.result.as_ref().map(|res| {
-                        let home_first = schedule.home_team_id == res.home_team.team_id;
-                        let (home_goals, away_goals) = if home_first {
-                            (res.home_team.get(), res.away_team.get())
-                        } else {
-                            (res.away_team.get(), res.home_team.get())
-                        };
-                        TeamScheduleItemResult {
-                            match_id: schedule.id.clone(),
-                            home_goals,
-                            away_goals,
-                        }
-                    }),
-                },
-            ));
-        }
     }
 
     // Sort all matches by date

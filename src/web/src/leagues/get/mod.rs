@@ -144,15 +144,6 @@ impl StandingsZones {
         }
     }
 
-    fn tier_label_key(tier: &CompetitionTier) -> &'static str {
-        match tier {
-            CompetitionTier::ChampionsLeague => "champions_league",
-            CompetitionTier::EuropaLeague => "europa_league",
-            CompetitionTier::ConferenceLeague => "conference_league",
-            CompetitionTier::CopaLibertadores => "copa_libertadores",
-        }
-    }
-
     fn zone(&self, index: usize, rows: usize) -> Option<StandingsZone> {
         if index >= rows.saturating_sub(self.relegated) {
             return Some(StandingsZone::Relegation);
@@ -188,9 +179,9 @@ impl StandingsZones {
             .map(|zone| StandingsLegendItem {
                 zone: self.zone_class(zone),
                 label: match zone {
-                    StandingsZone::Continental(i) => i18n
-                        .t(Self::tier_label_key(&self.continental[i].tier))
-                        .to_string(),
+                    StandingsZone::Continental(i) => {
+                        i18n.t(self.continental[i].tier.as_i18n_key()).to_string()
+                    }
                     StandingsZone::Promotion => i18n.t("promotion").to_string(),
                     StandingsZone::Relegation => i18n.t("relegation").to_string(),
                 },

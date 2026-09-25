@@ -1190,6 +1190,141 @@ a.fm-seasonstep-arrow:hover {
 }
 
 /* ============================================
+   FM FILTER TILES
+   Summary tiles that double as checkboxes. A real <input> stays in the
+   DOM (visually hidden) so each toggle keeps native keyboard + focus
+   behaviour; the box fills with the tile's own --tile-accent when on,
+   and the whole tile fades when off so a switched-off tile reads as
+   "not shown" at a glance. A row sets --tile-cols to its tile count.
+   ============================================ */
+
+.fm-filter-tiles {
+    display: grid;
+    grid-template-columns: repeat(var(--tile-cols, 4), 1fr);
+    gap: 10px;
+    padding: 14px 12px 4px;
+}
+
+.fm-filter-tile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: #1c2830;
+    border: 1px solid #263340;
+    border-left-width: 3px;
+    border-left-color: var(--tile-accent, #35d36a);
+    border-radius: 4px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.fm-filter-tile:hover {
+    background: #22303a;
+    border-color: #2f4150;
+}
+
+.fm-filter-tile-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.fm-filter-tile-num {
+    font-size: 20px;
+    font-weight: 700;
+    color: #e8edf1;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.fm-filter-tile-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    font-weight: 600;
+    color: #8a939b;
+    letter-spacing: 0.2px;
+}
+
+.fm-filter-tile-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+}
+
+.fm-filter-tile-box {
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 2px solid #3a4a58;
+    background: #131c23;
+    position: relative;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fm-filter-tile-box::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 1px;
+    width: 4px;
+    height: 9px;
+    border: solid #10191f;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg) scale(0);
+    transform-origin: center;
+    transition: transform 0.15s ease;
+}
+
+.fm-filter-tile-input:checked + .fm-filter-tile-box {
+    background: var(--tile-accent, #35d36a);
+    border-color: var(--tile-accent, #35d36a);
+}
+
+.fm-filter-tile-input:checked + .fm-filter-tile-box::after {
+    transform: rotate(45deg) scale(1);
+}
+
+.fm-filter-tile-input:focus-visible + .fm-filter-tile-box {
+    box-shadow: 0 0 0 3px rgba(120, 170, 255, 0.35);
+}
+
+.fm-filter-tile.is-off {
+    opacity: 0.5;
+    background: #171f26;
+    border-left-color: #33404b;
+}
+
+.fm-filter-tile.is-off .fm-filter-tile-num,
+.fm-filter-tile.is-off .fm-filter-tile-label {
+    color: #6a747d;
+}
+
+@media (max-width: 640px) {
+    .fm-filter-tiles {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fm-filter-tile,
+    .fm-filter-tile-box,
+    .fm-filter-tile-box::after {
+        transition: none;
+    }
+}
+
+/* ============================================
    FM BADGES
    ============================================ */
 
@@ -4053,6 +4188,164 @@ a.fm-seasonstep-arrow:hover {
     color: #ff6e6a;
     border-color: rgba(229, 57, 53, 0.55);
     box-shadow: inset 0 0 0 1px rgba(229, 57, 53, 0.25);
+}
+
+/* --- Filter toolbar: severity + mood ---
+   Two labelled groups of pill chips on one line, divided so the two kinds
+   of filter never read as one list. A chip's dot takes its pill's colour
+   (severity) or its rail's (mood), so a chip and the cards it toggles read
+   as one; Unrated takes the decision row's slate, since most of what it
+   covers is register paperwork. The checkbox itself is .visually-hidden
+   inside the label, which keeps native keyboard behaviour. */
+.fm-evt-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 10px 12px 2px;
+}
+
+.fm-evt-filter-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.fm-evt-filter-group + .fm-evt-filter-group {
+    border-left: 1px solid #263340;
+    padding-left: 14px;
+}
+
+.fm-evt-filter-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #4f6473;
+    white-space: nowrap;
+}
+
+.fm-evt-filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    min-width: 0;
+}
+
+.fm-evt-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 9px 0 8px;
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    color: #c8d6e0;
+    white-space: nowrap;
+    background: #1a252d;
+    border: 1px solid #2b3945;
+    border-color: color-mix(in srgb, var(--chip-accent) 45%, #2b3945);
+    border-radius: 11px;
+    cursor: pointer;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.fm-evt-toggle:hover {
+    background: #22303a;
+}
+
+.fm-evt-toggle:has(input:focus-visible) {
+    outline: 2px solid #78aaff;
+    outline-offset: 1px;
+}
+
+.fm-evt-toggle-dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--chip-accent);
+}
+
+.fm-evt-toggle.is-off {
+    opacity: 0.45;
+    border-color: #2b3945;
+}
+
+.fm-evt-toggle.is-off .fm-evt-toggle-dot {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--chip-accent);
+}
+
+.fm-evt-toggle-minor {
+    --chip-accent: #8aa1ad;
+}
+
+.fm-evt-toggle-moderate {
+    --chip-accent: #ffb14d;
+}
+
+.fm-evt-toggle-serious {
+    --chip-accent: #ff9067;
+}
+
+.fm-evt-toggle-major {
+    --chip-accent: #ff6e6a;
+}
+
+.fm-evt-toggle-unrated {
+    --chip-accent: #5f727e;
+}
+
+.fm-evt-toggle-positive {
+    --chip-accent: #4caf50;
+}
+
+.fm-evt-toggle-negative {
+    --chip-accent: #e53935;
+}
+
+.fm-evt-toggle-neutral {
+    --chip-accent: #5a6e7c;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fm-evt-toggle {
+        transition: none;
+    }
+}
+
+/* Phones: a group per line. The groups are subgrids of one two-column
+   grid, so both labels share a column sized to the longer one and the
+   chips of both groups start at the same x in every locale. */
+@media (max-width: 640px) {
+    .fm-evt-filter {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        row-gap: 6px;
+    }
+
+    .fm-evt-filter-group {
+        display: grid;
+        grid-column: 1 / -1;
+        grid-template-columns: subgrid;
+        align-items: start;
+        column-gap: 10px;
+    }
+
+    .fm-evt-filter-group + .fm-evt-filter-group {
+        border-left: 0;
+        padding-left: 0;
+    }
+
+    .fm-evt-filter-label {
+        line-height: 22px;
+    }
 }
 
 /* --- Decision chip ---
@@ -12687,152 +12980,22 @@ html:has(.fm-workers-page) {
     border-top-style: dashed;
 }
 
-/* --- Summary tiles --- */
-.fm-rel-summary {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 10px;
-    padding: 14px 12px 4px;
+/* --- Tier filter tiles: the tiles are .fm-filter-tile; each tier only
+   supplies its accent. --- */
+.fm-rel-tile-bond {
+    --tile-accent: #35d36a;
 }
 
-.fm-rel-stat {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 10px 12px;
-    background: #1c2830;
-    border: 1px solid #263340;
-    border-left-width: 3px;
-    border-radius: 4px;
+.fm-rel-tile-friendly {
+    --tile-accent: #4ec95e;
 }
 
-.fm-rel-stat-num {
-    font-size: 20px;
-    font-weight: 700;
-    color: #e8edf1;
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
+.fm-rel-tile-tension {
+    --tile-accent: #e0a23a;
 }
 
-.fm-rel-stat-label {
-    font-size: 11px;
-    font-weight: 600;
-    color: #8a939b;
-    letter-spacing: 0.2px;
-}
-
-.fm-rel-stat-bond {
-    border-left-color: #35d36a;
-    --rel-tier: #35d36a;
-}
-
-.fm-rel-stat-friendly {
-    border-left-color: #4ec95e;
-    --rel-tier: #4ec95e;
-}
-
-.fm-rel-stat-tension {
-    border-left-color: #e0a23a;
-    --rel-tier: #e0a23a;
-}
-
-.fm-rel-stat-rivalry {
-    border-left-color: #e5442c;
-    --rel-tier: #e5442c;
-}
-
-/* --- Tier filter toggles ---
-   Each summary tile doubles as a checkbox that shows or hides its tier's
-   threads. A real <input> stays in the DOM (visually hidden) so the toggle
-   keeps native keyboard + focus behaviour; the custom box fills with the
-   tier's own accent when on, and the whole tile fades when off so a
-   switched-off tier reads as "not shown" at a glance. --- */
-.fm-rel-filter {
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
-    cursor: pointer;
-    -webkit-user-select: none;
-    user-select: none;
-    transition: opacity 0.15s ease, border-color 0.15s ease, background 0.15s ease;
-}
-
-.fm-rel-filter:hover {
-    background: #22303a;
-    border-color: #2f4150;
-}
-
-.fm-rel-stat-body {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.fm-rel-filter-input {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    margin: 0;
-    pointer-events: none;
-}
-
-.fm-rel-filter-box {
-    flex: 0 0 auto;
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 2px solid #3a4a58;
-    background: #131c23;
-    position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.fm-rel-filter-box::after {
-    content: "";
-    position: absolute;
-    left: 5px;
-    top: 1px;
-    width: 4px;
-    height: 9px;
-    border: solid #10191f;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg) scale(0);
-    transform-origin: center;
-    transition: transform 0.15s ease;
-}
-
-.fm-rel-filter-input:checked + .fm-rel-filter-box {
-    background: var(--rel-tier, #35d36a);
-    border-color: var(--rel-tier, #35d36a);
-}
-
-.fm-rel-filter-input:checked + .fm-rel-filter-box::after {
-    transform: rotate(45deg) scale(1);
-}
-
-.fm-rel-filter-input:focus-visible + .fm-rel-filter-box {
-    box-shadow: 0 0 0 3px rgba(120, 170, 255, 0.35);
-}
-
-.fm-rel-stat.is-off {
-    opacity: 0.5;
-    background: #171f26;
-    border-left-color: #33404b;
-}
-
-.fm-rel-stat.is-off .fm-rel-stat-num,
-.fm-rel-stat.is-off .fm-rel-stat-label {
-    color: #6a747d;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .fm-rel-filter,
-    .fm-rel-filter-box,
-    .fm-rel-filter-box::after {
-        transition: none;
-    }
+.fm-rel-tile-rivalry {
+    --tile-accent: #e5442c;
 }
 
 /* --- Graph stage: transparent, sits directly on the panel. Height is set
@@ -13074,12 +13237,6 @@ html:has(.fm-workers-page) {
 
 .fm-rel-stage.fm-rel-focus .fm-rel-edge.is-linked {
     opacity: 1;
-}
-
-@media (max-width: 640px) {
-    .fm-rel-summary {
-        grid-template-columns: repeat(2, 1fr);
-    }
 }
 
 /* ============================================================

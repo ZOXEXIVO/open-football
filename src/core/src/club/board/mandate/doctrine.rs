@@ -298,7 +298,12 @@ impl ClubBoard {
             ask: market_ask.max(floor),
             floor,
             write_off: write_off as f32,
-            verdict: self.exit_route(book, market_ask, Self::has_loan_runway(row), pressure),
+            verdict: self.exit_route(
+                book,
+                market_ask,
+                Self::has_loan_runway(row.contract_months_remaining, row.age, row.loans_used),
+                pressure,
+            ),
         }
     }
 
@@ -333,12 +338,15 @@ impl ClubBoard {
 
     /// Is there a season elsewhere left in him? A man with contract, career
     /// and spells still in hand is lent out rather than written off.
-    fn has_loan_runway(row: &AssetRow) -> bool {
+    pub fn has_loan_runway(
+        contract_months_remaining: Option<i32>,
+        age: u8,
+        loans_used: u8,
+    ) -> bool {
         const MIN_CONTRACT_MONTHS: i32 = 12;
-        row.contract_months_remaining
-            .is_some_and(|m| m >= MIN_CONTRACT_MONTHS)
-            && CareerRunway::at(row.age) >= 0.25
-            && row.loans_used < AssetRow::MAX_LOANS
+        contract_months_remaining.is_some_and(|m| m >= MIN_CONTRACT_MONTHS)
+            && CareerRunway::at(age) >= 0.25
+            && loans_used < AssetRow::MAX_LOANS
     }
 }
 

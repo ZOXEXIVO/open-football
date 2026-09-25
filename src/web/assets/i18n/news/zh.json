@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player}早就愿意跟{other}签字了",
   "news_b_keeper_loan_wants_permanent_v2": "「门将需要有人愿意一整个赛季都信他。这里的人信了。」{n}场出场，其中{m}场零封，以及一个不再把自己当成{club}替补的门将。",
   "news_h_keeper_loan_wants_permanent_v3": "{player}把{other}的球门变成了自己的",
-  "news_b_keeper_loan_wants_permanent_v3": "「我是去踢球的，从那以后一场都没缺。」{n}场出场、{m}场零封，还有一个夏天——{club}得有人向他解释，为什么该回来坐在替补席上。"
+  "news_b_keeper_loan_wants_permanent_v3": "「我是去踢球的，从那以后一场都没缺。」{n}场出场、{m}场零封，还有一个夏天——{club}得有人向他解释，为什么该回来坐在替补席上。",
+  "news_h_frozen_out_of_the_side": "{player}在{club}被彻底冷藏",
+  "news_b_frozen_out_of_the_side": "这不是轮换。{player}已有一段时间不在主教练的计划之中，{club}上下也不再掩饰这一点。",
+  "news_h_old_wounds_reopened": "{player}再遇曾闹翻的主帅",
+  "news_b_old_wounds_reopened": "两人此前共事过，结局并不愉快。{club}没有人认为新帅已经忘记，{player}本人最清楚不过。",
+  "news_h_reunited_with_his_manager": "{player}重回了解他的主帅麾下",
+  "news_b_reunited_with_his_manager": "{club}的新帅此前带过{player}，且合作愉快。他上任时对这名球员早有定论，这比任何季前准备都更有分量。",
+  "news_h_severance_paid": "{club}支付{fee}与{manager}解约",
+  "news_b_severance_paid": "解雇的账单来了。{manager}拿着合同剩余期限的{fee}离开，而这笔钱没能给俱乐部换来任何能派上场的东西。"
 }

@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player} aurait déjà signé à {other}",
   "news_b_keeper_loan_wants_permanent_v2": "« Un gardien a besoin qu'on lui fasse confiance une saison entière. Ici, c'est le cas. » {n} matchs, {m} sans encaisser, et un portier qui a cessé de se voir comme la doublure de {club}.",
   "news_h_keeper_loan_wants_permanent_v3": "{player} a fait sienne la cage de {other}",
-  "news_b_keeper_loan_wants_permanent_v3": "« Je suis venu pour jouer et je n'ai pas manqué un match depuis. » {n} apparitions, {m} clean sheets, et un été où quelqu'un à {club} devra lui expliquer pourquoi il devrait revenir s'asseoir."
+  "news_b_keeper_loan_wants_permanent_v3": "« Je suis venu pour jouer et je n'ai pas manqué un match depuis. » {n} apparitions, {m} clean sheets, et un été où quelqu'un à {club} devra lui expliquer pourquoi il devrait revenir s'asseoir.",
+  "news_h_frozen_out_of_the_side": "{player} mis au placard à {club}",
+  "news_b_frozen_out_of_the_side": "Ce n'est pas de la rotation. {player} n'entre plus dans les plans de l'entraîneur depuis un moment, et personne à {club} ne prétend le contraire.",
+  "news_h_old_wounds_reopened": "{player} retrouve un entraîneur avec qui il s'est fâché",
+  "news_b_old_wounds_reopened": "Ils ont déjà travaillé ensemble et cela s'est mal terminé. Personne à {club} n'imagine que le nouvel entraîneur ait oublié, {player} moins que tout le monde.",
+  "news_h_reunited_with_his_manager": "{player} retrouve un entraîneur qui le connaît",
+  "news_b_reunited_with_his_manager": "Le nouvel entraîneur de {club} a déjà travaillé avec {player}, et cela s'était bien passé. Il arrive avec un avis déjà fait, ce qui vaut mieux qu'une préparation.",
+  "news_h_severance_paid": "{club} verse {fee} pour se séparer de {manager}",
+  "news_b_severance_paid": "La facture du limogeage est arrivée. {manager} part avec {fee} pour le reste de son contrat, et cet argent n'achète au club rien qu'il puisse aligner sur le terrain."
 }

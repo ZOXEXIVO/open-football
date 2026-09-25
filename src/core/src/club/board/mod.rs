@@ -24,6 +24,7 @@
 //! * [`infrastructure`] — the yearly facility review
 //! * [`sale`] — the board telling the manager somebody has to go
 //! * [`severance`] — what it costs to end a manager's deal early
+//! * [`stranded`] — what it does with a man it listed and could not sell
 //! * [`takeover`] — rare ownership change
 //! * [`strategy`] — how the board wants the club run, beyond the vision
 //! * [`decision`] — the explainable decisions the board emits
@@ -47,6 +48,7 @@ pub mod roll;
 pub mod sale;
 pub mod scoring;
 pub mod severance;
+pub mod stranded;
 pub mod strategy;
 pub mod takeover;
 pub mod targets;
@@ -70,6 +72,7 @@ pub use roll::*;
 pub use sale::*;
 pub use scoring::*;
 pub use severance::*;
+pub use stranded::*;
 pub use strategy::*;
 pub use takeover::*;
 pub use targets::*;

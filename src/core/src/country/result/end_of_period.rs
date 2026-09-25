@@ -15,14 +15,15 @@ use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::league::LeagueLadder;
 use crate::transfers::squad::LevelBand;
-use crate::utils::{DateUtils, FormattingUtils, IntegerUtils};
+use crate::utils::{DateUtils, FormattingUtils};
 use crate::world::SimulatorData;
+use crate::world::bootstrap::ClubIdentity;
 use crate::{
     AwardReputationInput, AwardReputationKind, Club, ClubResult, Country, HappinessEventCause,
     HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
     LoanEventContext, LoanEventKind, LoanSpellRecord, Person, Player, PlayerClubContract,
     PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
-    PlayerStatCompetitionKind, PlayerStatusType, SeasonOutcomeContext, SeasonOutcomeKind,
+    PlayerStatCompetitionKind, RetirementReason, SeasonOutcomeContext, SeasonOutcomeKind,
     StaffPosition, Team, TeamInfo, TeamType, TrophyEventContext, TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
@@ -1775,123 +1776,45 @@ impl CountryResult {
         }
     }
 
-    /// Monthly check: retire players who are clearly past max retirement age
-    /// or already have the Ret status. Does NOT do probabilistic retirement
-    /// (that stays at season end in process_player_retirements).
+    /// Monthly backstop: players past the age any career runs to retire
+    /// now rather than lingering in a squad until the season-end verdict.
     fn process_overdue_retirements(country: &mut Country, date: NaiveDate) {
-        let mut to_retire: Vec<(usize, usize, u32)> = Vec::new();
-
-        for (club_idx, club) in country.clubs.iter().enumerate() {
-            for (team_idx, team) in club.teams.iter().enumerate() {
-                for player in team.players.iter() {
-                    if Self::must_retire(player, date) {
-                        to_retire.push((club_idx, team_idx, player.id));
-                    }
-                }
-            }
-        }
-
-        for (club_idx, team_idx, player_id) in to_retire {
-            SquadDepartures::notify(
-                &mut country.clubs[club_idx],
-                player_id,
-                SeparationCause::HeRetired,
-                date,
-            );
-            if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
-                .players
-                .take_player(&player_id)
-            {
-                debug!(
-                    "Overdue retirement: {} (age {})",
-                    player.full_name,
-                    player.age(date)
-                );
-                player.statuses.add(date, PlayerStatusType::Ret);
-                player.contract = None;
-                player.retired = true;
-                country.retired_players.push(player);
-            }
-        }
-    }
-
-    /// Deterministic retirement: only for players past absolute max age or with Ret status.
-    /// Players still getting games are given a +1 year grace period.
-    /// Uses the same CA/position/jitter logic as should_retire for consistency.
-    fn must_retire(player: &Player, date: NaiveDate) -> bool {
-        if player.statuses.has(PlayerStatusType::Ret) {
-            return true;
-        }
-
-        let age = player.age(date);
-        let ca = player.player_attributes.current_ability;
-        let position = player.position();
-
-        let max_retire_age = match ca {
-            0..=39 => 37u8,
-            40..=69 => 38,
-            70..=99 => 39,
-            100..=129 => 40,
-            130..=159 => 41,
-            160..=179 => 42,
-            _ => 43,
-        };
-
-        let position_offset: i8 = if position.is_goalkeeper() {
-            2
-        } else if position.is_defender() {
-            1
-        } else if position.is_forward() {
-            -1
-        } else {
-            0
-        };
-
-        let id_jitter: i8 = match player.id % 3 {
-            0 => -1,
-            1 => 0,
-            _ => 1,
-        };
-
-        let max_age =
-            (max_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(35, 47) as u8;
-
-        // Players still getting games get a 1-year grace period
-        let has_recent_games = player.statistics.total_games() >= 5
-            || player
-                .statistics_history
-                .items
-                .last()
-                .map(|h| h.statistics.total_games() >= 5)
-                .unwrap_or(true);
-
-        let effective_max = if has_recent_games {
-            max_age + 1
-        } else {
-            max_age
-        };
-
-        age >= effective_max
+        let retiring = Self::retirements(country, |player| player.overdue_retirement(date));
+        Self::retire_players(country, retiring, date);
     }
 
     fn process_player_retirements(country: &mut Country, date: NaiveDate) {
         debug!("Processing player retirements");
+        let retiring = Self::retirements(country, |player| player.season_end_retirement(date));
+        Self::retire_players(country, retiring, date);
+    }
 
-        // Collect players to retire: (club_idx, team_idx, player_id)
-        let mut to_retire: Vec<(usize, usize, u32)> = Vec::new();
-
+    /// `(club_idx, team_idx, player_id, reason)` for every squad player
+    /// whose own verdict says he stops.
+    fn retirements(
+        country: &Country,
+        verdict: impl Fn(&Player) -> Option<RetirementReason>,
+    ) -> Vec<(usize, usize, u32, RetirementReason)> {
+        let mut retiring = Vec::new();
         for (club_idx, club) in country.clubs.iter().enumerate() {
             for (team_idx, team) in club.teams.iter().enumerate() {
                 for player in team.players.iter() {
-                    if Self::should_retire(player, date) {
-                        to_retire.push((club_idx, team_idx, player.id));
+                    if let Some(reason) = verdict(player) {
+                        retiring.push((club_idx, team_idx, player.id, reason));
                     }
                 }
             }
         }
+        retiring
+    }
 
-        // Execute retirements: remove from team, add Ret status, store in retired_players
-        for (club_idx, team_idx, player_id) in to_retire {
+    fn retire_players(
+        country: &mut Country,
+        retiring: Vec<(usize, usize, u32, RetirementReason)>,
+        date: NaiveDate,
+    ) {
+        let league_lookup = ClubIdentity::league_lookup(country);
+        for (club_idx, team_idx, player_id, reason) in retiring {
             // The dugout hears about it first: a man retiring on him is one
             // of the few partings a manager remembers warmly.
             SquadDepartures::notify(
@@ -1900,139 +1823,21 @@ impl CountryResult {
                 SeparationCause::HeRetired,
                 date,
             );
-            if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
-                .players
-                .take_player(&player_id)
-            {
+            let club = &mut country.clubs[club_idx];
+            // The spell closes under the slug it was seeded with — youth
+            // and Reserve squads alias to the parent club's main team.
+            let from = ClubIdentity::resolve(club, &league_lookup)
+                .team_info_for(&club.teams.teams[team_idx]);
+            if let Some(mut player) = club.teams.teams[team_idx].players.take_player(&player_id) {
                 debug!(
                     "Player retired: {} (age {})",
                     player.full_name,
                     player.age(date)
                 );
-                player.statuses.add(date, PlayerStatusType::Ret);
-                player.contract = None;
-                player.retired = true;
+                player.retire_from_squad(&from, date, reason);
                 country.retired_players.push(player);
             }
         }
-    }
-
-    fn should_retire(player: &Player, date: NaiveDate) -> bool {
-        let age = player.age(date);
-        let ca = player.player_attributes.current_ability;
-
-        // Already marked for retirement
-        if player.statuses.has(PlayerStatusType::Ret) {
-            return true;
-        }
-
-        let position = player.position();
-        let is_gk = position.is_goalkeeper();
-
-        // Wider age windows with finer CA granularity (5-6 year spread)
-        // This prevents mass retirement at a single age boundary
-        let (min_retire_age, max_retire_age) = match ca {
-            0..=39 => (31u8, 36u8),
-            40..=69 => (32, 37),
-            70..=99 => (33, 38),
-            100..=129 => (34, 39),
-            130..=159 => (35, 40),
-            160..=179 => (36, 41),
-            _ => (37, 42),
-        };
-
-        // Position adjustments: GK +2, defenders +1, forwards -1
-        let position_offset: i8 = if is_gk {
-            2
-        } else if position.is_defender() {
-            1
-        } else if position.is_forward() {
-            -1
-        } else {
-            0
-        };
-
-        // Per-player jitter based on player ID: spreads ±1 year
-        // so players of the same age/ability don't all retire together
-        let id_jitter: i8 = match player.id % 3 {
-            0 => -1,
-            1 => 0,
-            _ => 1,
-        };
-
-        let min_age =
-            (min_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(30, 44) as u8;
-        let max_age =
-            (max_retire_age as i16 + position_offset as i16 + id_jitter as i16).clamp(34, 46) as u8;
-
-        // Too young to retire
-        if age < min_age {
-            return false;
-        }
-
-        // Past max age — forced retirement
-        if age >= max_age {
-            return true;
-        }
-
-        // Still playing regularly? Reduce chance but don't fully block
-        let current_season_games = player.statistics.total_games();
-        let last_season_games = player
-            .statistics_history
-            .items
-            .last()
-            .map(|h| h.statistics.total_games())
-            .unwrap_or(0);
-
-        let total_recent_games = current_season_games + last_season_games;
-
-        // Base retirement probability: gentle ramp across the window
-        // Starts at 5%, increases quadratically to ~60% at max_age-1
-        let range = (max_age - min_age).max(1) as f32;
-        let years_over = (age - min_age) as f32;
-        let progress = years_over / range; // 0.0 at min_age, ~1.0 at max_age
-        let mut chance: f32 = 5.0 + 55.0 * progress * progress;
-
-        // === Personality modifiers (continuous, not stepped) ===
-
-        // Ambition: 0-20 scale, high ambition reduces chance
-        let ambition = player.attributes.ambition;
-        chance -= (ambition - 10.0) * 1.5; // -15 to +15
-
-        // Determination: high determination = persist longer
-        let determination = player.skills.mental.determination;
-        chance -= (determination - 10.0) * 1.0; // -10 to +10
-
-        // === Game time modifiers (graduated) ===
-        if total_recent_games >= 30 {
-            chance -= 25.0; // Regular starter across both seasons
-        } else if total_recent_games >= 15 {
-            chance -= 15.0;
-        } else if total_recent_games >= 5 {
-            chance -= 5.0;
-        } else if total_recent_games == 0 {
-            chance += 15.0; // No games at all — likely to retire
-        }
-
-        // === Ability decline modifier ===
-        let pa = player.player_attributes.potential_ability;
-        if pa > 0 {
-            let decline_ratio = 1.0 - (ca as f32 / pa as f32);
-            if decline_ratio > 0.5 {
-                chance += 10.0; // Severely declined
-            } else if decline_ratio > 0.3 {
-                chance += 5.0;
-            }
-        }
-
-        // Birth month adds sub-year variance:
-        // players born later in the year get slight chance reduction
-        // (they are effectively slightly younger within the same age bracket)
-        let birth_month = player.birth_date.month() as f32;
-        chance += (birth_month - 6.0) * 0.5; // -2.5 to +3.0
-
-        chance = chance.clamp(3.0, 85.0);
-        IntegerUtils::random(0, 100) < chance as i32
     }
 
     fn process_year_end_finances(country: &mut Country) {

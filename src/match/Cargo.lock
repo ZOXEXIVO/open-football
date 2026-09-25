@@ -3823,7 +3823,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.8.0"
+version = "1.8.10"
 
 [[package]]
 name = "shlex"

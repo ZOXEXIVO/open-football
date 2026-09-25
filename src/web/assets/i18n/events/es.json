@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "En el grupo del torneo se eligió otra opción para su posición.",
   "national_reason_youth_to_senior": "Una racha impresionante con la sub-21 le valió un sitio con la absoluta.",
   "no_events": "Aún no hay eventos registrados",
+  "no_events_filtered": "Ningún evento coincide con los filtros seleccionados",
+  "event_mood_positive": "Positivo",
+  "event_mood_negative": "Negativo",
+  "event_mood_neutral": "Neutral",
+  "event_filter_severity": "Gravedad",
+  "event_filter_mood": "Tono",
   "promise_kind_playing_time": "más minutos de juego",
   "reason_ev_above_squad_standard": "Su nivel se sitúa visiblemente por encima del resto del plantel.",
   "reason_ev_already_strained_relationship": "Las fricciones previas hicieron que no se viera como un hecho aislado.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "Nunca entró en el equipo durante la cesión",
   "loan_headline_verdict_struggled": "Una cesión que le costó",
   "loan_headline_verdict_inconclusive": "Cesión demasiado corta para juzgarla",
-  "loan_verdict_standout": "Cesión sobresaliente",
-  "loan_verdict_successful": "Cesión exitosa",
-  "loan_verdict_steady": "Cesión correcta",
-  "loan_verdict_peripheral": "Suplente durante la cesión",
-  "loan_verdict_struggled": "Cesión complicada",
-  "loan_verdict_inconclusive": "Demasiado corta para juzgar",
   "loan_spell_apps": "{apps} partidos",
   "loan_spell_apps_with_starts": "{apps} partidos ({starts} de titular)",
   "loan_spell_goals": "{goals} goles",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Etapa: condiciones personales acordadas.",
   "transfer_interest_stage_terms_rejected": "Etapa: el jugador rechazó las condiciones.",
   "event_national_team_triumph": "Ganó un torneo internacional",
-  "event_national_team_heartbreak": "Perdió una final internacional"
+  "event_national_team_heartbreak": "Perdió una final internacional",
+  "event_reunited_with_former_manager": "Reencuentro con un antiguo entrenador"
 }

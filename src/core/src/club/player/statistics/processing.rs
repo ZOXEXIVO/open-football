@@ -557,6 +557,19 @@ impl Player {
         self.is_force_match_selection = false;
     }
 
+    /// Close the spell he retires from. No season-end snapshot ever visits
+    /// a retired player, so the games of his last campaign are frozen here
+    /// or never. History side only — [`Player::retire_from_squad`] owns the
+    /// rest of the transition.
+    pub fn on_retirement(&mut self, from: &TeamInfo, date: NaiveDate) {
+        let is_loan = self.is_on_loan();
+        let season_year = self.spell_season_anchor(&from.slug, date);
+        let stats = self.drain_match_stats(from, season_year, None);
+        self.statistics_history
+            .record_retirement(stats, from, is_loan, date);
+        self.is_force_match_selection = false;
+    }
+
     /// Record a manual signing of a free agent. There is no source club
     /// to attribute stats to: the prior club's `on_release` already
     /// drained the live buckets, and a player sitting in the free-agent
@@ -5058,6 +5071,74 @@ mod drain_invariants_tests {
             crate::continent::competitions::EUROPA_LEAGUE_SLUG,
             3,
         ));
+    }
+
+    #[test]
+    fn retirement_keeps_the_last_campaign_on_history() {
+        // User repro (Sobolev): a Betis striker on loan at Gil Vicente
+        // retires at Portugal's season end, months before the season-start
+        // snapshot that would have frozen his 34 games — and History
+        // renders a retired player with no live counters at all.
+        let mut p = player();
+        let betis = team("Betis", "betis", "la-liga");
+        let gil = team("Gil Vicente", "gil-vicente", "primeira-liga");
+        p.statistics_history
+            .seed_initial_team(&betis, d(2028, 8, 1), false);
+        p.statistics = stats(11, 1);
+        p.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500,
+            d(2030, 6, 30),
+            99,
+            0,
+            100,
+        ));
+        p.on_loan(&betis, &gil, 0.0, d(2029, 6, 12));
+        p.on_season_end(Season::new(2028), &gil, d(2029, 8, 11));
+        p.statistics = stats(34, 23);
+
+        p.on_retirement(&gil, d(2030, 5, 19));
+
+        let empty = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &empty,
+            friendly: &empty,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+        for render in [
+            d(2030, 6, 15),
+            d(2030, 8, 19),
+            d(2031, 8, 19),
+            d(2033, 9, 1),
+        ] {
+            let rows = PlayerStatisticsProjection::player_history_rows(
+                &p.statistics_history,
+                &live,
+                render,
+            );
+            let gil: Vec<_> = rows
+                .iter()
+                .filter(|r| r.team_slug == "gil-vicente")
+                .map(|r| {
+                    (
+                        r.season.start_year,
+                        r.is_loan,
+                        r.statistics.played,
+                        r.statistics.goals,
+                    )
+                })
+                .collect();
+            assert_eq!(gil, vec![(2029, true, 34, 23)], "rendered on {render}");
+            assert!(
+                rows.iter().all(|r| r.season.start_year <= 2029),
+                "a retired career gains no seasons, rendered on {render}"
+            );
+            assert!(
+                rows.iter()
+                    .any(|r| r.team_slug == "betis" && r.statistics.played == 11),
+                "the parent season survives, rendered on {render}"
+            );
+        }
     }
 
     #[test]

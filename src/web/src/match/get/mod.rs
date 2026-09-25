@@ -391,9 +391,9 @@ pub async fn match_get_action(
         .get(&route_params.match_id)
         .or_else(|| {
             // Fall back: scan each country's per-league match stores. The
-            // domestic cup lives on `Country::domestic_cup`, outside the
-            // `leagues` collection, so scan its inner league too — otherwise
-            // cup ties linked from the bracket would 404.
+            // domestic cup and the playoffs live outside the `leagues`
+            // collection, so scan their inner leagues too — otherwise ties
+            // linked from a bracket or a schedule would 404.
             simulator_data
                 .continents
                 .iter()
@@ -403,13 +403,9 @@ pub async fn match_get_action(
                         .leagues
                         .leagues
                         .iter()
+                        .chain(country.domestic_cup.as_ref().map(|cup| &cup.league))
+                        .chain(country.playoffs.iter().map(|playoff| &playoff.league))
                         .find_map(|l| l.matches.get(&route_params.match_id))
-                        .or_else(|| {
-                            country
-                                .domestic_cup
-                                .as_ref()
-                                .and_then(|cup| cup.league.matches.get(&route_params.match_id))
-                        })
                 })
         })
         .ok_or_else(|| {

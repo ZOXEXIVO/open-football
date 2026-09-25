@@ -83,6 +83,96 @@ and, where available, cause/evidence detail and a follow-up hint.
 - **WHEN** a user requests the retired `/decisions` URL for a player
 - **THEN** the system SHALL respond with a permanent redirect to the player's events page
 
+### Requirement: Player events severity and mood filter
+The player's events page SHALL let the reader filter the feed by severity and by mood.
+
+Every card SHALL belong to exactly one severity bucket: Minor, Moderate, Serious or Major when the card carries that
+severity, and Unrated when it carries none. Unrated covers decision-register rows, mind-journal notes, and happiness
+events with no attached context. Every card SHALL also belong to exactly one mood bucket: Positive, Negative or
+Neutral, matching the card's existing positive/negative/neutral classification.
+
+The page SHALL show one compact filter toolbar above the feed, holding two visibly separate groups. Each group SHALL
+have its own localised label: a Severity group (Minor, Moderate, Serious, Major, Unrated) and a Mood group (Positive,
+Negative, Neutral). Each toggle SHALL be a small chip showing a dot in its bucket's accent colour and its localised
+label, with no card count. Every chip SHALL be on when the page loads, and a switched-off chip SHALL look switched
+off. Assistive technology SHALL announce each group by its visible label. A card SHALL be visible only when both its
+severity chip and its mood chip are on.
+
+Filtering SHALL happen in the browser without a page reload or a new request. The filter state SHALL NOT be written
+to the URL and SHALL NOT persist across page loads. Adding the filter SHALL NOT change which cards the feed contains,
+their order, or how each card is rendered.
+
+#### Scenario: All tiles on at page load
+- **WHEN** a user opens the events page for a player with a non-empty feed
+- **THEN** the page SHALL show a Severity group with five chips and a Mood group with three chips, each chip on,
+  with a label and no count
+- **AND** every card in the feed SHALL be visible
+
+#### Scenario: The two groups read as separate filters
+- **WHEN** the filter toolbar is shown
+- **THEN** each group SHALL be preceded by its own label ("Severity", "Mood" in English), and the two groups SHALL
+  be visually divided from each other
+- **AND** each group SHALL be exposed to assistive technology as a group named by that label
+
+#### Scenario: Compact on desktop
+- **WHEN** the events page is viewed at desktop width (1280px) in English
+- **THEN** both groups SHALL sit on a single toolbar line no taller than one chip plus its padding
+
+#### Scenario: Buckets with no cards still show a tile
+- **WHEN** a player's feed contains no Major cards
+- **THEN** the Major chip SHALL still appear, and toggling it SHALL leave the visible cards unchanged
+
+#### Scenario: Unchecking a severity tile hides its cards
+- **WHEN** the user switches off the Minor chip
+- **THEN** every Minor card SHALL be hidden, every other card SHALL stay visible, and the Minor chip SHALL look
+  switched off
+- **AND** switching the Minor chip back on SHALL show those cards again in their original positions
+
+#### Scenario: Unrated tile covers every card without a severity
+- **WHEN** the user switches off only the Unrated chip
+- **THEN** every decision-register row, every mind-journal note and every happiness event without a severity
+  SHALL be hidden
+- **AND** every card with a Minor, Moderate, Serious or Major pill SHALL stay visible
+
+#### Scenario: Unchecking a mood tile hides its cards
+- **WHEN** the user switches off only the Neutral chip
+- **THEN** every neutral card (including every decision-register row) SHALL be hidden, and every positive and
+  negative card SHALL stay visible
+
+#### Scenario: Severity and mood combine
+- **WHEN** the user leaves only the Serious and Major severity chips and only the Negative mood chip on
+- **THEN** exactly the cards that are both Serious-or-Major and negative SHALL be visible
+
+#### Scenario: Visible count follows the filter
+- **WHEN** the user changes any chip
+- **THEN** the panel's card count SHALL show the number of cards now visible
+
+#### Scenario: Every card filtered out
+- **WHEN** the chips that are on leave no visible card
+- **THEN** the panel SHALL show a localised line saying no events match the selected filters, distinct from the
+  "no events recorded yet" empty state
+- **AND** switching on a chip that brings any card back SHALL remove that line
+
+#### Scenario: Empty feed shows no filter
+- **WHEN** a player has no events at all
+- **THEN** the page SHALL show the existing "no events recorded yet" empty state and SHALL NOT show the filter
+  toolbar
+
+#### Scenario: Keyboard operation
+- **WHEN** a keyboard user tabs to a chip and presses Space
+- **THEN** the chip SHALL toggle exactly as a pointer click does, with a visible focus indicator
+
+#### Scenario: Localised labels in every locale
+- **WHEN** the events page is requested in any supported locale (`en`, `de`, `es`, `fr`, `ja`, `pt`, `ru`, `tr`,
+  `zh`)
+- **THEN** both group labels, every chip label and the filtered-empty line SHALL render in that locale's own copy,
+  never as a raw i18n key
+
+#### Scenario: Phone-width layout
+- **WHEN** the events page is viewed at phone width (640px or narrower)
+- **THEN** each group SHALL sit on its own line with its label in front, its chips SHALL wrap within the panel, and
+  the page SHALL NOT scroll horizontally
+
 ### Requirement: Player career history page
 The system SHALL provide, for a player, a season-by-season career table (club, loan flag, transfer fee, division,
 per-competition breakdown, and season totals) plus career-aggregate totals.

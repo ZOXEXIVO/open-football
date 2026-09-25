@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "В заявке на турнир на его позицию выбрали другого.",
   "national_reason_youth_to_senior": "Хорошая серия в молодёжке принесла ему место в основной сборной.",
   "no_events": "События ещё не записаны",
+  "no_events_filtered": "Нет событий, подходящих под выбранные фильтры",
+  "event_mood_positive": "Позитивные",
+  "event_mood_negative": "Негативные",
+  "event_mood_neutral": "Нейтральные",
+  "event_filter_severity": "Тяжесть",
+  "event_filter_mood": "Настрой",
   "promise_kind_playing_time": "больше игрового времени",
   "reason_ev_above_squad_standard": "Его уровень заметно выше того, что предлагает остальная часть состава.",
   "reason_ev_already_strained_relationship": "Прежние трения не дали отнестись к этому как к разовому случаю.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "В аренде он так и не пробился в состав",
   "loan_headline_verdict_struggled": "Тяжёлая аренда",
   "loan_headline_verdict_inconclusive": "Аренда слишком коротка для выводов",
-  "loan_verdict_standout": "Выдающаяся аренда",
-  "loan_verdict_successful": "Успешная аренда",
-  "loan_verdict_steady": "Ровная аренда",
-  "loan_verdict_peripheral": "Вне состава в аренде",
-  "loan_verdict_struggled": "Тяжёлая аренда",
-  "loan_verdict_inconclusive": "Слишком мало игр для выводов",
   "loan_spell_apps": "матчей: {apps}",
   "loan_spell_apps_with_starts": "матчей: {apps} (в старте: {starts})",
   "loan_spell_goals": "голов: {goals}",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Стадия: личные условия согласованы.",
   "transfer_interest_stage_terms_rejected": "Стадия: игрок отказался от условий.",
   "event_national_team_triumph": "Выиграл международный турнир",
-  "event_national_team_heartbreak": "Проиграл международный финал"
+  "event_national_team_heartbreak": "Проиграл международный финал",
+  "event_reunited_with_former_manager": "Снова работает с бывшим тренером"
 }

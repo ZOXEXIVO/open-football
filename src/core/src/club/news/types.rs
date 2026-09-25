@@ -3595,6 +3595,7 @@ impl NewsStoryKind {
                 // its own offer to. A write-off of nothing is not one.
                 | NewsStoryKind::FeeWrittenOff
                 | NewsStoryKind::BoardRaisesItsOffer
+                | NewsStoryKind::SeverancePaid
         )
     }
 
@@ -3611,6 +3612,7 @@ impl NewsStoryKind {
         matches!(
             self,
             NewsStoryKind::ManagerSacked
+                | NewsStoryKind::SeverancePaid
                 | NewsStoryKind::NewManagerArrives
                 | NewsStoryKind::ManagerPoached
                 | NewsStoryKind::CaretakerTakesCharge

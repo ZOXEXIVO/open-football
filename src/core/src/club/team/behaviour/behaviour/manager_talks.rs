@@ -6,6 +6,7 @@
 //! conduct functions.
 
 use super::TeamBehaviour;
+use crate::club::board::ClubBoard;
 use crate::club::player::ManagerPromiseKind;
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
@@ -927,10 +928,6 @@ impl PlayerForcedTerminationReview {
     /// (squad status) leads him to expect — the minutes share below which a
     /// player concludes he has no future in the side.
     const FROZEN_OUT_MAX_RATIO: f32 = 0.40;
-    /// The club won't absorb a severance lump above this share (a twelfth) of
-    /// one year's wage bill as a one-off, however keen it is to move him on.
-    const LUMP_SUM_WAGE_BILL_DIVISOR: u32 = 12;
-    const LUMP_SUM_FLOOR: u32 = 10_000;
 
     /// `Some(termination)` when every condition is met, else `None`.
     fn evaluate(
@@ -1006,8 +1003,7 @@ impl PlayerForcedTerminationReview {
         // deal out, so tearing up always saves net wages — the binding
         // constraint is the size of the one-off payment.
         let severance = contract.termination_cost(date);
-        let lump_cap =
-            (annual_wage_bill / Self::LUMP_SUM_WAGE_BILL_DIVISOR).max(Self::LUMP_SUM_FLOOR);
+        let lump_cap = ClubBoard::lump_sum_cap(annual_wage_bill);
         if severance > lump_cap {
             return None;
         }

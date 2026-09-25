@@ -298,10 +298,9 @@ impl LoanPipeline {
     /// cascade's reach stays in the running — until a club opens a
     /// normal purchase negotiation. Unlike the loan push there is no
     /// National+ resource gate — a stranded listing is a wage problem
-    /// for any club. Together with the year-unsold free-exit valve this
-    /// guarantees a listing RESOLVES: sold via the push, or — rarely,
-    /// when even the widened market wants no part of him — the player
-    /// leaves on a free.
+    /// for any club. What happens when even the widened market wants no
+    /// part of him is his board's call when the window closes: a lower
+    /// price, a subsidised loan, a pay-off he agrees to, or the wait.
     pub fn broadcast_listed_transfers(country: &mut Country, date: NaiveDate) {
         if date.weekday() != Weekday::Mon {
             return;

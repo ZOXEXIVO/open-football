@@ -696,10 +696,18 @@ impl ApproachBuilder {
             // his own board will write off. Only the cross-border path
             // stages it — a domestic seller is readable live — but it is
             // built here because this is where both have the club.
-            seller_book_floor: selling_club.board.book_floor(
-                player.book_value(date),
-                &LedgerPressure::of(&LedgerContext::of(selling_club)),
-            ),
+            seller_book_floor: selling_club
+                .board
+                .book_floor(
+                    player.book_value(date),
+                    &LedgerPressure::of(&LedgerContext::of(selling_club)),
+                )
+                .min(
+                    ctx.sell_country
+                        .transfer_market
+                        .board_floor_for(player_id, selling_club_id)
+                        .unwrap_or(f64::INFINITY),
+                ),
             buyer_ceiling_fee: priced.as_ref().map(|p| p.envelope.ceiling(p.stretch)),
             approved_fee: priced.as_ref().map(|p| p.envelope.walk_away),
             mandate: priced.as_ref().map(|p| p.mandate),

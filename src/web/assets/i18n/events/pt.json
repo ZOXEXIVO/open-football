@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "Na convocatória do torneio optaram por outro nome na posição dele.",
   "national_reason_youth_to_senior": "Uma série impressionante com a sub-21 garantiu-lhe lugar na principal.",
   "no_events": "Sem eventos registados",
+  "no_events_filtered": "Nenhum evento corresponde aos filtros selecionados",
+  "event_mood_positive": "Positivo",
+  "event_mood_negative": "Negativo",
+  "event_mood_neutral": "Neutro",
+  "event_filter_severity": "Gravidade",
+  "event_filter_mood": "Tom",
   "promise_kind_playing_time": "mais tempo de jogo",
   "reason_ev_above_squad_standard": "Seu nível está visivelmente acima do que o restante do elenco oferece.",
   "reason_ev_already_strained_relationship": "Atritos anteriores fizeram com que não fosse encarado como caso isolado.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "Nunca entrou na equipa durante o empréstimo",
   "loan_headline_verdict_struggled": "Um empréstimo difícil",
   "loan_headline_verdict_inconclusive": "Empréstimo curto demais para julgar",
-  "loan_verdict_standout": "Empréstimo notável",
-  "loan_verdict_successful": "Empréstimo bem-sucedido",
-  "loan_verdict_steady": "Empréstimo razoável",
-  "loan_verdict_peripheral": "Pouco utilizado no empréstimo",
-  "loan_verdict_struggled": "Empréstimo difícil",
-  "loan_verdict_inconclusive": "Curto demais para julgar",
   "loan_spell_apps": "{apps} jogos",
   "loan_spell_apps_with_starts": "{apps} jogos ({starts} como titular)",
   "loan_spell_goals": "{goals} golos",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Fase: acordo pessoal fechado.",
   "transfer_interest_stage_terms_rejected": "Fase: o jogador recusou as condições.",
   "event_national_team_triumph": "Venceu um torneio internacional",
-  "event_national_team_heartbreak": "Perdeu uma final internacional"
+  "event_national_team_heartbreak": "Perdeu uma final internacional",
+  "event_reunited_with_former_manager": "Reencontro com um ex-técnico"
 }

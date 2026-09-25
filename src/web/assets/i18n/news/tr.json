@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player} çoktan {other} ile imzalardı",
   "news_b_keeper_loan_wants_permanent_v2": "“Bir kaleciye, ona bütün bir sezon güvenecek biri lazım. Burada güvendiler.” {n} maç, {m} kez gol yemeden ve kendini artık {club} kulübünün yedeği saymayan bir kaleci.",
   "news_h_keeper_loan_wants_permanent_v3": "{player} {other} kalesini kendi kalesi yaptı",
-  "news_b_keeper_loan_wants_permanent_v3": "“Oynamak için gittim ve o günden beri hiçbir maçı kaçırmadım.” {n} maç, {m} kez gol yemeden ve {club} tarafında birinin ona neden geri dönüp oturması gerektiğini anlatmak zorunda kalacağı bir yaz."
+  "news_b_keeper_loan_wants_permanent_v3": "“Oynamak için gittim ve o günden beri hiçbir maçı kaçırmadım.” {n} maç, {m} kez gol yemeden ve {club} tarafında birinin ona neden geri dönüp oturması gerektiğini anlatmak zorunda kalacağı bir yaz.",
+  "news_h_frozen_out_of_the_side": "{player} {club} kadrosunda dışlandı",
+  "news_b_frozen_out_of_the_side": "Bu bir rotasyon değil. {player} bir süredir teknik direktörün planlarında yok ve {club}'da kimse aksini iddia etmiyor.",
+  "news_h_old_wounds_reopened": "{player} tartıştığı hocayla yeniden karşı karşıya",
+  "news_b_old_wounds_reopened": "Daha önce birlikte çalıştılar ve iyi bitmedi. {club}'da kimse yeni hocanın bunu unuttuğunu düşünmüyor; en başta da {player}.",
+  "news_h_reunited_with_his_manager": "{player} yeniden kendisini tanıyan bir hocayla",
+  "news_b_reunited_with_his_manager": "{club}'ın yeni hocası {player} ile daha önce çalıştı ve iyi gitmişti. Oyuncu hakkında çoktan oluşmuş bir görüşle geliyor; bu her hazırlık döneminden değerli.",
+  "news_h_severance_paid": "{club}, {manager} ile yollarını ayırmak için {fee} ödedi",
+  "news_b_severance_paid": "Kovmanın faturası geldi. {manager}, sözleşmesinin kalan süresi için {fee} alarak ayrılıyor ve bu para kulübe sahaya sürebileceği hiçbir şey kazandırmıyor."
 }

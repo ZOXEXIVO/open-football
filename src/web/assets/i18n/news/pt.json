@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player} já teria assinado pelo {other}",
   "news_b_keeper_loan_wants_permanent_v2": "«Um guarda-redes precisa de alguém disposto a confiar nele uma época inteira. Aqui têm confiado.» {n} jogos, {m} deles sem sofrer, e um guardião que deixou de se ver como o suplente do {club}.",
   "news_h_keeper_loan_wants_permanent_v3": "{player} fez sua a baliza do {other}",
-  "news_b_keeper_loan_wants_permanent_v3": "«Vim para jogar e desde então não falhei um jogo.» {n} jogos, {m} balizas a zeros, e um verão em que alguém do {club} vai ter de lhe explicar por que razão deve voltar e sentar-se."
+  "news_b_keeper_loan_wants_permanent_v3": "«Vim para jogar e desde então não falhei um jogo.» {n} jogos, {m} balizas a zeros, e um verão em que alguém do {club} vai ter de lhe explicar por que razão deve voltar e sentar-se.",
+  "news_h_frozen_out_of_the_side": "{player} afastado no {club}",
+  "news_b_frozen_out_of_the_side": "Isto não é rotação. {player} está fora dos planos do treinador há algum tempo, e ninguém no {club} finge o contrário.",
+  "news_h_old_wounds_reopened": "{player} reencontra um treinador com quem se desentendeu",
+  "news_b_old_wounds_reopened": "Já trabalharam juntos e não acabou bem. Ninguém no {club} espera que o novo treinador tenha esquecido, e {player} menos ainda.",
+  "news_h_reunited_with_his_manager": "{player} volta a ter um treinador que o conhece",
+  "news_b_reunited_with_his_manager": "O novo treinador do {club} já trabalhou com {player} e correu bem. Chega com uma ideia formada do jogador, o que vale mais do que qualquer pré-época.",
+  "news_h_severance_paid": "O {club} paga {fee} para rescindir com {manager}",
+  "news_b_severance_paid": "Chegou a conta da demissão. {manager} sai com {fee} pelo tempo que restava de contrato, e esse dinheiro não compra ao clube nada que possa pôr em campo."
 }

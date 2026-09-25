@@ -801,7 +801,7 @@ pub(crate) mod thresholds {
     /// loan list he only considers destinations within the ordinary
     /// step-down band; months unsold widen what he'll listen to, until at
     /// full resignation the band spans a genuinely deep drop — the last
-    /// stop before the unsold free-exit valve takes over anyway.
+    /// stop before his club's board starts talking about paying him off.
     pub const LOAN_RENOWN_RESIGNATION_SPAN: f32 = 3000.0;
 
     /// Sporting drop at which even a FULLY resigned listed player stops

@@ -7,10 +7,12 @@
 
 use crate::club::person::Person;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::utils::FloatUtils;
 use crate::{
     CareerStageEventContext, CareerStageEventKind, CareerStageEvidence, HappinessEventCause,
-    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType, Player,
-    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, RetirementReason,
+    HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
+    MatchExperienceBackground, Player, PlayerSquadStatus, PlayerStatusType, RetirementReason,
+    TeamInfo,
 };
 use chrono::NaiveDate;
 
@@ -19,12 +21,146 @@ use chrono::NaiveDate;
 const RETIREMENT_CONSIDERING_COOLDOWN_DAYS: u16 = 180;
 const COACHING_INTEREST_COOLDOWN_DAYS: u16 = 365;
 
+/// Season-end retirement pull of a man who barely featured, and of an
+/// ever-present, relative to what his age alone implies.
+const UNUSED_RETIREMENT_PULL: f32 = 2.0;
+const EVER_PRESENT_RETIREMENT_PULL: f32 = 0.08;
+
+/// The ages a career can end between. Ability sets the band — clubs keep
+/// wanting a better player for longer — keepers and defenders outlast
+/// forwards, and a per-player offset stops one cohort retiring together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetirementWindow {
+    pub opens: u8,
+    pub closes: u8,
+}
+
+impl RetirementWindow {
+    pub fn of(player: &Player) -> Self {
+        let (opens, closes): (i16, i16) = match player.player_attributes.current_ability {
+            0..=39 => (31, 36),
+            40..=69 => (32, 37),
+            70..=99 => (33, 38),
+            100..=129 => (34, 39),
+            130..=159 => (35, 40),
+            160..=179 => (36, 41),
+            _ => (37, 42),
+        };
+        let position = player.position();
+        let position_offset: i16 = if position.is_goalkeeper() {
+            2
+        } else if position.is_defender() {
+            1
+        } else if position.is_forward() {
+            -1
+        } else {
+            0
+        };
+        let offset = position_offset + (player.id % 3) as i16 - 1;
+        RetirementWindow {
+            opens: (opens + offset).clamp(30, 44) as u8,
+            closes: (closes + offset).clamp(34, 46) as u8,
+        }
+    }
+
+    /// How far through the window an age (in fractional years) sits:
+    /// 0 at the opening, 1 at the close.
+    fn progress(&self, years: f32) -> f32 {
+        let span = (self.closes - self.opens) as f32;
+        ((years - self.opens as f32) / span).clamp(0.0, 1.0)
+    }
+}
+
 impl Player {
+    /// Season-end verdict on hanging up his boots; `None` means he plays
+    /// on. The pull grows through his retirement window and every career
+    /// ends at its close. Inside it, a season of real football holds the
+    /// pull off and a season without it brings it forward — an
+    /// ever-present at the opening of his window is almost never the man
+    /// who stops.
+    pub fn season_end_retirement(&self, date: NaiveDate) -> Option<RetirementReason> {
+        let window = RetirementWindow::of(self);
+        let age = self.age(date);
+        if age < window.opens {
+            return None;
+        }
+        let involvement = self.season_involvement();
+        let retires = age >= window.closes
+            || FloatUtils::random(0.0, 1.0) < self.retirement_chance(window, involvement, date);
+        retires.then(|| self.retirement_reason(involvement))
+    }
+
+    /// Monthly backstop for a man past the age any career runs to, so he
+    /// doesn't linger in a squad until the season-end verdict. Five games
+    /// this season or last buy one more year.
+    pub fn overdue_retirement(&self, date: NaiveDate) -> Option<RetirementReason> {
+        let still_playing = self.statistics.total_games() >= 5
+            || self
+                .statistics_history
+                .items
+                .last()
+                .map(|h| h.statistics.total_games() >= 5)
+                .unwrap_or(true);
+        let ceiling = RetirementWindow::of(self).closes + 1 + u8::from(still_playing);
+        (self.age(date) >= ceiling).then(|| self.retirement_reason(self.season_involvement()))
+    }
+
+    /// Retire straight out of a squad. The spell he was playing closes
+    /// like any departure first, so the season he stopped in keeps its
+    /// games.
+    pub fn retire_from_squad(
+        &mut self,
+        from: &TeamInfo,
+        date: NaiveDate,
+        reason: RetirementReason,
+    ) {
+        self.on_retirement(from, date);
+        self.announce_retirement(date, reason);
+    }
+
+    fn retirement_chance(
+        &self,
+        window: RetirementWindow,
+        involvement: f32,
+        date: NaiveDate,
+    ) -> f32 {
+        let years = (date - self.birth_date).num_days() as f32 / 365.25;
+        let progress = window.progress(years);
+        let age_pull = 0.05 + 0.55 * progress * progress;
+        // Ambition and determination (0–20, neutral at 10) keep a man going.
+        let resolve = (self.attributes.ambition - 10.0) * 0.03
+            + (self.skills.mental.determination - 10.0) * 0.02;
+        let temperament = (1.0 - resolve).clamp(0.5, 1.5);
+        let role = EVER_PRESENT_RETIREMENT_PULL
+            + (UNUSED_RETIREMENT_PULL - EVER_PRESENT_RETIREMENT_PULL) * (1.0 - involvement).powi(2);
+        (age_pull * temperament * role).min(0.85)
+    }
+
+    /// Share of a full league season he played across every spell of the
+    /// campaign, 0..1 — starts count whole, substitute appearances half.
+    fn season_involvement(&self) -> f32 {
+        let season = self
+            .statistics_history
+            .current_season_stats(&self.statistics);
+        let apps = season.played as f32 + 0.5 * season.played_subs as f32;
+        (apps / MatchExperienceBackground::SEASON_MATCHES).clamp(0.0, 1.0)
+    }
+
+    fn retirement_reason(&self, involvement: f32) -> RetirementReason {
+        if involvement < 0.3 {
+            RetirementReason::ReducedRole
+        } else if self.player_attributes.world_reputation >= 7000 {
+            RetirementReason::PlannedFarewell
+        } else {
+            RetirementReason::Age
+        }
+    }
+
     /// Record a formal retirement announcement and move the player into
     /// retirement state. Emits a career-visible [`RetirementAnnounced`]
     /// event *before* flipping the retirement flags so the event remains
-    /// visible in history, then sets `Ret` status, clears the contract,
-    /// and marks the player retired.
+    /// visible in history, then sets `Ret` status, clears the contract
+    /// and any loan, and marks the player retired.
     ///
     /// Idempotent: a player who has already retired produces no second
     /// announcement. Magnitude is positive for a planned / legend
@@ -65,6 +201,7 @@ impl Player {
 
         self.statuses.add(date, PlayerStatusType::Ret);
         self.contract = None;
+        self.contract_loan = None;
         self.retired = true;
     }
 
@@ -146,19 +283,17 @@ impl CareerStageDetector {
         evidence
     }
 
-    /// Outfield players are in the retirement-age window from 34, keepers
-    /// (who play on longer) from 37.
+    /// A player weighs stopping from the day his [`RetirementWindow`]
+    /// opens — the same window the season-end verdict is taken in, so no
+    /// one retires before he could have thought about it.
     fn is_in_retirement_age_window(player: &Player, age: u8) -> bool {
-        let is_keeper = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
-        if is_keeper { age >= 37 } else { age >= 34 }
+        age >= RetirementWindow::of(player).opens
     }
 
     /// The last years of a career, where even an ever-present starter
-    /// openly weighs stopping. Three years past the window opening — a
-    /// 40-year-old keeper, a 37-year-old outfield player.
+    /// openly weighs stopping. Three years past the window opening.
     fn is_in_late_career_tail(player: &Player, age: u8) -> bool {
-        let is_keeper = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
-        if is_keeper { age >= 40 } else { age >= 37 }
+        age >= RetirementWindow::of(player).opens + 3
     }
 
     fn emit_considering(player: &mut Player, stage: CareerStageEventContext) {
@@ -723,5 +858,153 @@ mod tests {
             &mut p,
             d(2026, 5, 30)
         ));
+    }
+
+    // ── Season-end retirement ───────────────────────────────────
+
+    /// The reported striker: CA 130, id ≡ 0 (mod 3), ambitious and
+    /// determined, 33 at Portugal's 2029/30 season end.
+    fn window_opening_striker(starts: u16) -> Player {
+        let mut attrs = neutral_attrs();
+        attrs.ambition = 15.0;
+        let mut p = PlayerBuilder::new()
+            .id(3)
+            .full_name(FullName::new("Test".into(), "Striker".into()))
+            .birth_date(d(1997, 3, 7))
+            .country_id(1)
+            .attributes(attrs)
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes {
+                current_ability: 130,
+                potential_ability: 134,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        p.skills.mental.determination = 16.0;
+        p.statistics.played = starts;
+        p
+    }
+
+    fn chance(p: &Player, date: NaiveDate) -> f32 {
+        p.retirement_chance(RetirementWindow::of(p), p.season_involvement(), date)
+    }
+
+    #[test]
+    fn reported_striker_window_opens_at_33() {
+        let p = window_opening_striker(34);
+        assert_eq!(
+            RetirementWindow::of(&p),
+            RetirementWindow {
+                opens: 33,
+                closes: 38
+            }
+        );
+    }
+
+    #[test]
+    fn ever_present_barely_weighs_retiring_at_window_opening() {
+        let p = window_opening_striker(34);
+        let c = chance(&p, d(2030, 5, 19));
+        assert!(
+            c < 0.005,
+            "a 34-start season at the window opening must not read as a retirement, got {c}"
+        );
+    }
+
+    #[test]
+    fn a_season_without_football_brings_retirement_forward() {
+        let date = d(2030, 5, 19);
+        let starter = chance(&window_opening_striker(34), date);
+        let unused = chance(&window_opening_striker(0), date);
+        assert!(unused > 0.05, "unused veteran got {unused}");
+        assert!(
+            unused > starter * 20.0,
+            "playing time must dominate: unused {unused} vs starter {starter}"
+        );
+    }
+
+    #[test]
+    fn retirement_pull_grows_through_the_window() {
+        let p = window_opening_striker(17);
+        let early = chance(&p, d(2030, 5, 19));
+        let late = chance(&p, d(2034, 5, 19));
+        assert!(late > early * 5.0, "early {early}, late {late}");
+    }
+
+    #[test]
+    fn no_season_end_retirement_before_the_window_opens() {
+        let p = window_opening_striker(0);
+        assert_eq!(p.season_end_retirement(d(2029, 5, 19)), None);
+    }
+
+    #[test]
+    fn window_close_ends_even_an_ever_present_career() {
+        let p = window_opening_striker(34);
+        assert_eq!(
+            p.season_end_retirement(d(2035, 5, 19)),
+            Some(RetirementReason::Age)
+        );
+    }
+
+    #[test]
+    fn overdue_backstop_gives_a_playing_man_one_more_year() {
+        let p = window_opening_striker(20);
+        assert_eq!(p.overdue_retirement(d(2036, 5, 19)), None);
+        assert_eq!(
+            p.overdue_retirement(d(2037, 5, 19)),
+            Some(RetirementReason::Age)
+        );
+    }
+
+    #[test]
+    fn considering_opens_with_the_retirement_window() {
+        let mut p = window_opening_striker(0);
+        assert!(!p.consider_retirement_as_free_agent(d(2029, 5, 19), 14));
+        assert!(p.consider_retirement_as_free_agent(d(2030, 5, 19), 14));
+    }
+
+    #[test]
+    fn retiring_loanee_closes_his_loan_spell_with_its_games() {
+        let gil = TeamInfo {
+            name: "Gil Vicente".into(),
+            slug: "gil-vicente".into(),
+            reputation: 100,
+            league_name: "Primeira Liga".into(),
+            league_slug: "primeira-liga".into(),
+        };
+        let mut p = window_opening_striker(34);
+        p.statistics.goals = 23;
+        p.contract = Some(PlayerClubContract::new(50_000, d(2030, 6, 30)));
+        p.contract_loan = Some(PlayerClubContract::new_loan(
+            50_000,
+            d(2030, 6, 30),
+            99,
+            0,
+            100,
+        ));
+        p.statistics_history
+            .seed_initial_team(&gil, d(2029, 6, 12), true);
+
+        p.retire_from_squad(&gil, d(2030, 5, 19), RetirementReason::Age);
+
+        assert!(p.is_retired());
+        assert!(p.contract.is_none() && p.contract_loan.is_none());
+        assert_eq!(p.statistics.total_games(), 0, "live season drained");
+        let spell = p
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "gil-vicente")
+            .unwrap();
+        assert!(spell.is_loan && spell.departed_date.is_some());
+        assert_eq!((spell.statistics.played, spell.statistics.goals), (34, 23));
+        assert_eq!(count_event(&p, HappinessEventType::RetirementAnnounced), 1);
     }
 }

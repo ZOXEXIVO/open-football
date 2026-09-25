@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "Turnuva kadrosu pozisyonunda farklı bir tercih yaptı.",
   "national_reason_youth_to_senior": "Genç takımdaki etkileyici çıkış A milli takım yerini kazandırdı.",
   "no_events": "Henüz olay kaydı yok",
+  "no_events_filtered": "Seçilen filtrelere uyan olay yok",
+  "event_mood_positive": "Olumlu",
+  "event_mood_negative": "Olumsuz",
+  "event_mood_neutral": "Nötr",
+  "event_filter_severity": "Önem",
+  "event_filter_mood": "Duygu",
   "promise_kind_playing_time": "daha fazla oyun süresi",
   "reason_ev_above_squad_standard": "Seviyesi, kadronun geri kalanının sunduğunun belirgin biçimde üzerinde.",
   "reason_ev_already_strained_relationship": "Önceki sürtüşmeler bunu münferit görülmesine engel oldu.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "Kiralık dönemde takıma hiç giremedi",
   "loan_headline_verdict_struggled": "Zorlandığı bir kiralık dönem",
   "loan_headline_verdict_inconclusive": "Yargılamak için fazla kısa bir kiralık dönem",
-  "loan_verdict_standout": "Üstün kiralık dönem",
-  "loan_verdict_successful": "Başarılı kiralık dönem",
-  "loan_verdict_steady": "İstikrarlı kiralık dönem",
-  "loan_verdict_peripheral": "Kenarda kalan kiralık dönem",
-  "loan_verdict_struggled": "Zor kiralık dönem",
-  "loan_verdict_inconclusive": "Yargılamak için fazla kısa",
   "loan_spell_apps": "{apps} maç",
   "loan_spell_apps_with_starts": "{apps} maç ({starts} ilk 11)",
   "loan_spell_goals": "{goals} gol",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Aşama: kişisel şartlarda anlaşma sağlandı.",
   "transfer_interest_stage_terms_rejected": "Aşama: oyuncu şartları reddetti.",
   "event_national_team_triumph": "Uluslararası bir turnuva kazandı",
-  "event_national_team_heartbreak": "Uluslararası bir final kaybetti"
+  "event_national_team_heartbreak": "Uluslararası bir final kaybetti",
+  "event_reunited_with_former_manager": "Eski bir teknik direktörüyle yeniden buluştu"
 }

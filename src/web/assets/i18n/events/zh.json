@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "大賽名單在他的位置上選擇了他人。",
   "national_reason_youth_to_senior": "在青年隊的亮眼表現讓他升上成年隊。",
   "no_events": "尚未記錄事件",
+  "no_events_filtered": "沒有符合所選篩選條件的事件",
+  "event_mood_positive": "正面",
+  "event_mood_negative": "负面",
+  "event_mood_neutral": "中立",
+  "event_filter_severity": "严重程度",
+  "event_filter_mood": "情绪",
   "promise_kind_playing_time": "更多上場時間",
   "reason_ev_above_squad_standard": "他的水平明显高于队中其他球员所展现的水准。",
   "reason_ev_already_strained_relationship": "此前的摩擦使这次没有被视为孤例。",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "租借期间他始终未能进入阵容",
   "loan_headline_verdict_struggled": "一次艰难的租借",
   "loan_headline_verdict_inconclusive": "租借时间太短，难以评价",
-  "loan_verdict_standout": "出色的租借",
-  "loan_verdict_successful": "成功的租借",
-  "loan_verdict_steady": "稳健的租借",
-  "loan_verdict_peripheral": "边缘化的租借",
-  "loan_verdict_struggled": "艰难的租借",
-  "loan_verdict_inconclusive": "时间太短难以评价",
   "loan_spell_apps": "{apps} 场出场",
   "loan_spell_apps_with_starts": "{apps} 场出场（{starts} 场首发）",
   "loan_spell_goals": "{goals} 球",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "阶段：个人条款已谈妥。",
   "transfer_interest_stage_terms_rejected": "阶段：球员拒绝了条款。",
   "event_national_team_triumph": "赢得国际大赛冠军",
-  "event_national_team_heartbreak": "输掉国际大赛决赛"
+  "event_national_team_heartbreak": "输掉国际大赛决赛",
+  "event_reunited_with_former_manager": "与昔日主帅重聚"
 }

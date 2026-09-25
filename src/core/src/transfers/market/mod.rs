@@ -19,7 +19,9 @@ pub use route::*;
 pub use window::*;
 
 use crate::shared::CurrencyValue;
-use crate::transfers::deal::negotiation::{NegotiationStatus, TransferNegotiation};
+use crate::transfers::deal::negotiation::{
+    NegotiationRejectionReason, NegotiationStatus, TransferNegotiation,
+};
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::{CompletedTransfer, TransferType};
 use chrono::Duration;
@@ -147,6 +149,16 @@ pub struct TransferListing {
     /// Last date a decay step was applied. Equal to `listed_date` when
     /// freshly created. Used to gate "one decay per week" cadence.
     pub last_decay_date: NaiveDate,
+    /// Days this row has been on offer while its country's window was
+    /// open — how much of the market has actually seen him, which a
+    /// listing's calendar age overstates by every shut month.
+    pub exposure_days: u16,
+    /// The highest fee the seller turned down for price. The market has
+    /// named what it will pay; a board short of patience can take it.
+    pub best_rejected_bid: Option<f64>,
+    /// The lowest fee the seller's board has agreed to take, set when it
+    /// reviews a listing that got through a window unsold.
+    pub board_floor: Option<f64>,
     pub listing_type: TransferListingType,
     pub status: TransferListingStatus,
     /// Why this listing exists. Synthetic listings created to back an
@@ -188,6 +200,9 @@ pub enum TransferListingStatus {
 }
 
 impl TransferListing {
+    /// Share of its anchor an unbid listing decays to and no further.
+    pub const DECAY_FLOOR: f64 = 0.6;
+
     pub fn new(
         player_id: u32,
         club_id: u32,
@@ -232,6 +247,9 @@ impl TransferListing {
             original_asking_price: asking_price,
             listed_date,
             last_decay_date: listed_date,
+            exposure_days: 0,
+            best_rejected_bid: None,
+            board_floor: None,
             listing_type,
             status: TransferListingStatus::Available,
             origin,
@@ -243,6 +261,16 @@ impl TransferListing {
     /// listings backing unsolicited approaches return false.
     pub fn is_seller_advertised(&self) -> bool {
         !matches!(self.origin, TransferListingOrigin::SyntheticUnsolicited)
+    }
+
+    /// A permanent sale the club itself advertised, still on the market.
+    pub fn is_live_sale(&self) -> bool {
+        self.listing_type == TransferListingType::Transfer
+            && self.origin == TransferListingOrigin::SellerListed
+            && matches!(
+                self.status,
+                TransferListingStatus::Available | TransferListingStatus::InNegotiation
+            )
     }
 }
 
@@ -485,6 +513,16 @@ impl TransferMarket {
             .collect()
     }
 
+    /// The fee a seller's board has agreed to take for a man it could not
+    /// sell, when it has reviewed him. No seller refuses a bid at or above
+    /// it for price.
+    pub fn board_floor_for(&self, player_id: u32, club_id: u32) -> Option<f64> {
+        self.listings
+            .iter()
+            .filter(|l| l.is_live_sale() && l.player_id == player_id && l.club_id == club_id)
+            .find_map(|l| l.board_floor)
+    }
+
     pub fn get_listing_by_player(&self, player_id: u32) -> Option<&TransferListing> {
         self.listings.iter().find(|l| {
             l.player_id == player_id
@@ -692,8 +730,9 @@ impl TransferMarket {
 
     pub fn update(&mut self, current_date: NaiveDate) -> Vec<(u32, u32)> {
         // Stale-listing decay: an Available listing sitting without a bid
-        // loses 5% of its asking every 7 days, down to 60% of the original
-        // ask. Gives sellers a natural market-clearing signal and keeps
+        // loses 5% of its asking every 7 days, down to 60% of its anchor —
+        // the listing price, or whatever the seller's board last re-set it
+        // to. Gives sellers a natural market-clearing signal and keeps
         // listings from sitting forever at an unrealistic price.
         for listing in self.listings.iter_mut() {
             if listing.status != TransferListingStatus::Available {
@@ -704,7 +743,7 @@ impl TransferMarket {
                 continue;
             }
             let steps = (days_since_decay / 7) as i32;
-            let floor = listing.original_asking_price.amount * 0.6;
+            let floor = listing.original_asking_price.amount * TransferListing::DECAY_FLOOR;
             let multiplier = 0.95_f64.powi(steps);
             let decayed = (listing.asking_price.amount * multiplier).max(floor);
             listing.asking_price.amount = decayed;
@@ -713,6 +752,9 @@ impl TransferMarket {
                 .checked_add_signed(Duration::days(steps as i64 * 7))
                 .unwrap_or(current_date);
         }
+
+        self.record_exposure();
+        self.record_rejected_bids();
 
         // Check for expired negotiations
         let expired_ids: Vec<u32> = self
@@ -784,6 +826,39 @@ impl TransferMarket {
                 )
             {
                 listing.status = TransferListingStatus::Available;
+            }
+        }
+    }
+
+    /// One more day of the market looking at every live sale — but only
+    /// while the window is open; a shut month is not a month of refusals.
+    fn record_exposure(&mut self) {
+        if !self.transfer_window_open {
+            return;
+        }
+        for listing in self.listings.iter_mut().filter(|l| l.is_live_sale()) {
+            listing.exposure_days = listing.exposure_days.saturating_add(1);
+        }
+    }
+
+    /// Fold every bid the seller refused for price into the listing it was
+    /// made against. A max over the retained rows, so re-reading a row on
+    /// the next day changes nothing and the figure outlives the row.
+    fn record_rejected_bids(&mut self) {
+        for negotiation in self.negotiations.values().filter(|n| {
+            n.status == NegotiationStatus::Rejected
+                && !n.is_loan
+                && n.rejection_reason == Some(NegotiationRejectionReason::AskingPriceTooHigh)
+        }) {
+            let bid = negotiation.current_offer.base_fee.amount;
+            for listing in self.listings.iter_mut().filter(|l| {
+                l.is_live_sale()
+                    && l.player_id == negotiation.player_id
+                    && l.club_id == negotiation.selling_club_id
+                    && negotiation.created_date >= l.listed_date
+            }) {
+                listing.best_rejected_bid =
+                    Some(listing.best_rejected_bid.map_or(bid, |b| b.max(bid)));
             }
         }
     }
@@ -985,6 +1060,106 @@ mod tests {
         assert_eq!(
             market.negotiations.get(&negotiation_id).map(|n| &n.status),
             Some(&NegotiationStatus::Pending),
+        );
+    }
+
+    fn listed_market(asking: f64) -> TransferMarket {
+        let mut market = TransferMarket::new();
+        market.add_listing(TransferListing::new(
+            10,
+            1,
+            100,
+            money(asking),
+            d(2026, 7, 1),
+            TransferListingType::Transfer,
+        ));
+        market
+    }
+
+    #[test]
+    fn exposure_counts_only_open_window_days() {
+        let mut market = listed_market(1_000_000.0);
+        let mut date = d(2026, 7, 1);
+        market.check_transfer_window(true);
+        for _ in 0..30 {
+            date = date.succ_opt().unwrap();
+            market.update(date);
+        }
+        market.check_transfer_window(false);
+        for _ in 0..60 {
+            date = date.succ_opt().unwrap();
+            market.update(date);
+        }
+        assert_eq!(market.listings[0].exposure_days, 30);
+    }
+
+    #[test]
+    fn a_rejected_bid_is_remembered_after_its_row_is_gone() {
+        let mut market = listed_market(3_000_000.0);
+        for (buyer, bid) in [(2, 1_500_000.0), (3, 2_000_000.0)] {
+            let id = market
+                .start_negotiation(
+                    10,
+                    buyer,
+                    offer(buyer, bid),
+                    d(2026, 7, 2),
+                    0.5,
+                    0.6,
+                    24,
+                    0.5,
+                )
+                .unwrap();
+            market
+                .negotiations
+                .get_mut(&id)
+                .unwrap()
+                .reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
+        }
+        market.update(d(2026, 7, 3));
+        market.negotiations.clear();
+        market.update(d(2026, 7, 4));
+        assert_eq!(market.listings[0].best_rejected_bid, Some(2_000_000.0));
+    }
+
+    #[test]
+    fn a_bid_refused_for_another_reason_names_no_price() {
+        let mut market = listed_market(3_000_000.0);
+        let id = market
+            .start_negotiation(
+                10,
+                2,
+                offer(2, 2_500_000.0),
+                d(2026, 7, 2),
+                0.5,
+                0.6,
+                24,
+                0.5,
+            )
+            .unwrap();
+        market
+            .negotiations
+            .get_mut(&id)
+            .unwrap()
+            .reject_with_reason(NegotiationRejectionReason::MedicalFailed);
+        market.update(d(2026, 7, 3));
+        assert_eq!(market.listings[0].best_rejected_bid, None);
+    }
+
+    #[test]
+    fn a_reanchored_listing_decays_from_its_new_anchor() {
+        let mut market = listed_market(5_000_000.0);
+        let reviewed = d(2026, 9, 1);
+        let listing = &mut market.listings[0];
+        listing.asking_price = money(1_000_000.0);
+        listing.original_asking_price = money(1_000_000.0);
+        listing.last_decay_date = reviewed;
+
+        market.update(reviewed + Duration::days(200));
+
+        let asking = market.listings[0].asking_price.amount;
+        assert!(
+            (asking - 600_000.0).abs() < 1.0,
+            "decay must stop at 60% of the new anchor, got {asking}"
         );
     }
 }

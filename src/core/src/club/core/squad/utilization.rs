@@ -522,7 +522,7 @@ impl Club {
         // fresh wave outran the per-position caps that turn a flag into a
         // listing a buyer can actually see. A listing the market has
         // refused is a PRICE problem, and it already has two owners: the
-        // tier-cascading seller push and the 365-day free-exit valve.
+        // tier-cascading seller push and the board's window-close review.
         // What a club in real trouble needs is not more names but better
         // ones, which is what the debt-standing escalation now gives it.
         let already_listed_wages: i64 = self

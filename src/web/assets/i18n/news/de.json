@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player} hätte bei {other} längst unterschrieben",
   "news_b_keeper_loan_wants_permanent_v2": "„Ein Torhüter braucht jemanden, der ihm eine ganze Saison lang vertraut. Hier ist das so.“ {n} Spiele, {m} davon ohne Gegentor — und ein Keeper, der sich nicht mehr als Ersatzmann von {club} sieht.",
   "news_h_keeper_loan_wants_permanent_v3": "{player} hat das Tor von {other} zu seinem gemacht",
-  "news_b_keeper_loan_wants_permanent_v3": "„Ich bin hingegangen, um zu spielen, und habe seitdem kein Spiel verpasst.“ {n} Einsätze, {m} Spiele ohne Gegentor — und ein Sommer, in dem jemand bei {club} ihm erklären muss, warum er zurückkommen und sich hinsetzen soll."
+  "news_b_keeper_loan_wants_permanent_v3": "„Ich bin hingegangen, um zu spielen, und habe seitdem kein Spiel verpasst.“ {n} Einsätze, {m} Spiele ohne Gegentor — und ein Sommer, in dem jemand bei {club} ihm erklären muss, warum er zurückkommen und sich hinsetzen soll.",
+  "news_h_frozen_out_of_the_side": "{player} bei {club} aussortiert",
+  "news_b_frozen_out_of_the_side": "Das ist keine Rotation. {player} gehört seit geraumer Zeit nicht mehr zu den Planungen des Trainers, und bei {club} tut niemand mehr so als ob.",
+  "news_h_old_wounds_reopened": "{player} trifft auf einen Trainer, mit dem er sich zerstritt",
+  "news_b_old_wounds_reopened": "Sie haben schon einmal zusammengearbeitet, und es endete nicht gut. Niemand bei {club} erwartet, dass der neue Trainer das vergessen hat — {player} am wenigsten.",
+  "news_h_reunited_with_his_manager": "{player} wieder unter einem Trainer, der ihn kennt",
+  "news_b_reunited_with_his_manager": "Der neue Mann bei {club} hat schon einmal mit {player} gearbeitet, und es lief gut. Er kommt mit einem fertigen Bild vom Spieler — das ist mehr wert als jede Vorbereitung.",
+  "news_h_severance_paid": "{club} zahlt {manager} {fee} Abfindung",
+  "news_b_severance_paid": "Die Rechnung für die Entlassung ist da. {manager} geht mit {fee} für die Restlaufzeit seines Vertrags, und für dieses Geld bekommt der Verein nichts, was er auf den Platz stellen kann."
 }

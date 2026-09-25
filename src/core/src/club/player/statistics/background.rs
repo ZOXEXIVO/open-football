@@ -76,7 +76,7 @@ pub struct MatchExperienceBackground {
 
 impl MatchExperienceBackground {
     /// Assumed league-season length for start-share normalisation.
-    const SEASON_MATCHES: f32 = 34.0;
+    pub(crate) const SEASON_MATCHES: f32 = 34.0;
     /// Apps in one season-spell before it anchors the peak level — below
     /// this the player visited the club, he didn't play for it.
     const REAL_SPELL_APPS: u16 = 8;

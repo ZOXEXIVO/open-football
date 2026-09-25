@@ -1,8 +1,9 @@
 use crate::MatchTacticType;
 use crate::PlayerPositionType;
 use crate::r#match::TeamScore;
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, NaiveTime};
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 const DEFAULT_MATCH_LIST_SIZE: usize = 10;
 
@@ -185,6 +186,15 @@ pub struct MatchHistoryItem {
     /// (`{date}_{home}_{away}`), which is how the newspaper's scorelines
     /// link back to the match page.
     pub is_home: bool,
+    /// The match record's id. Shared with the other side's item and with
+    /// every snapshot clone, so it is an `Arc` rather than a `String`.
+    pub match_id: Arc<str>,
+    /// The competition: a `League` id, or one of the continental ids.
+    pub league_id: u32,
+    /// Kickoff, when the competition scheduled one — `date` is the sim
+    /// clock, which never leaves midnight.
+    pub kickoff: Option<NaiveTime>,
+    pub substitutes_used: Vec<u32>,
 }
 
 impl MatchHistoryItem {
@@ -198,7 +208,23 @@ impl MatchHistoryItem {
             tactic_change_minute: None,
             starting_eleven: Vec::new(),
             is_home: false,
+            match_id: Arc::default(),
+            league_id: 0,
+            kickoff: None,
+            substitutes_used: Vec::new(),
         }
+    }
+
+    pub fn with_fixture(
+        mut self,
+        match_id: Arc<str>,
+        league_id: u32,
+        kickoff: Option<NaiveTime>,
+    ) -> Self {
+        self.match_id = match_id;
+        self.league_id = league_id;
+        self.kickoff = kickoff;
+        self
     }
 
     pub fn with_venue(mut self, is_home: bool) -> Self {
@@ -214,6 +240,17 @@ impl MatchHistoryItem {
     pub fn with_starting_eleven(mut self, starting_eleven: Vec<(u32, PlayerPositionType)>) -> Self {
         self.starting_eleven = starting_eleven;
         self
+    }
+
+    pub fn with_substitutes_used(mut self, substitutes_used: Vec<u32>) -> Self {
+        self.substitutes_used = substitutes_used;
+        self
+    }
+
+    /// Started, or came on — an unused substitute never took the field.
+    pub fn took_the_field(&self, player_id: u32) -> bool {
+        self.starting_eleven.iter().any(|(id, _)| *id == player_id)
+            || self.substitutes_used.contains(&player_id)
     }
 
     /// Combined tactical summary: starting shape + final shape +
@@ -403,5 +440,16 @@ mod tests {
         assert_eq!(shifted.tactic_change_minute, Some(72));
         assert_eq!(shifted.tactic_started, Some(MatchTacticType::T442));
         assert_eq!(shifted.tactic_used, Some(MatchTacticType::T433));
+    }
+
+    #[test]
+    fn starters_and_used_substitutes_took_the_field() {
+        let played = item(1, 0)
+            .with_starting_eleven(vec![(10, PlayerPositionType::Striker)])
+            .with_substitutes_used(vec![12]);
+        assert!(played.took_the_field(10));
+        assert!(played.took_the_field(12));
+        // Named on the bench, never brought on.
+        assert!(!played.took_the_field(13));
     }
 }

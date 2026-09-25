@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "大会メンバーは彼のポジションで別の選択をした。",
   "national_reason_youth_to_senior": "ユース代表での好調がシニアの場を勝ち取った。",
   "no_events": "イベント記録なし",
+  "no_events_filtered": "選択したフィルターに該当するイベントはありません",
+  "event_mood_positive": "ポジティブ",
+  "event_mood_negative": "ネガティブ",
+  "event_mood_neutral": "中立",
+  "event_filter_severity": "重大度",
+  "event_filter_mood": "ムード",
   "promise_kind_playing_time": "より多くの出場時間",
   "reason_ev_above_squad_standard": "彼の水準は、他の選手が示すレベルより明らかに上である。",
   "reason_ev_already_strained_relationship": "以前からの摩擦があり、一回限りとは扱われなかった。",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "レンタル先で出番をつかめなかった",
   "loan_headline_verdict_struggled": "苦しんだレンタル期間",
   "loan_headline_verdict_inconclusive": "判断するには短すぎるレンタル",
-  "loan_verdict_standout": "際立ったレンタル",
-  "loan_verdict_successful": "成功したレンタル",
-  "loan_verdict_steady": "堅実なレンタル",
-  "loan_verdict_peripheral": "出番の少ないレンタル",
-  "loan_verdict_struggled": "苦しんだレンタル",
-  "loan_verdict_inconclusive": "判断には短すぎる",
   "loan_spell_apps": "{apps}試合出場",
   "loan_spell_apps_with_starts": "{apps}試合出場（先発{starts}試合）",
   "loan_spell_goals": "{goals}ゴール",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "段階：個人条件で合意。",
   "transfer_interest_stage_terms_rejected": "段階：選手が条件を拒否。",
   "event_national_team_triumph": "国際大会で優勝",
-  "event_national_team_heartbreak": "国際大会の決勝で敗退"
+  "event_national_team_heartbreak": "国際大会の決勝で敗退",
+  "event_reunited_with_former_manager": "かつての監督と再会"
 }

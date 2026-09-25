@@ -8,7 +8,7 @@
         <div class="fm-panel-head">
             <h3>{{ i18n.t("events") }}</h3>
             {% if !events.is_empty() %}
-            <span class="fm-panel-count">{{ events.len() }}</span>
+            <span class="fm-panel-count" id="evtCount">{{ events.len() }}</span>
             {% endif %}
         </div>
         {% if events.is_empty() %}
@@ -17,9 +17,33 @@
             <div class="fm-evt-empty-text">{{ events_i18n.t("no_events") }}</div>
         </div>
         {% else %}
-        <ol class="fm-evt-list">
+        <div class="fm-evt-filter">
+            <div class="fm-evt-filter-group" role="group" aria-labelledby="evtFilterSeverity">
+                <span class="fm-evt-filter-label" id="evtFilterSeverity">{{ events_i18n.t("event_filter_severity") }}</span>
+                <div class="fm-evt-filter-chips">
+                    {% for tile in severity_tiles %}
+                    <label class="fm-evt-toggle fm-evt-toggle-{{ tile.tag }}">
+                        <input type="checkbox" class="visually-hidden" data-severity="{{ tile.tag }}" autocomplete="off" checked>
+                        <span class="fm-evt-toggle-dot" aria-hidden="true"></span>{{ tile.label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="fm-evt-filter-group" role="group" aria-labelledby="evtFilterMood">
+                <span class="fm-evt-filter-label" id="evtFilterMood">{{ events_i18n.t("event_filter_mood") }}</span>
+                <div class="fm-evt-filter-chips">
+                    {% for tile in mood_tiles %}
+                    <label class="fm-evt-toggle fm-evt-toggle-{{ tile.tag }}">
+                        <input type="checkbox" class="visually-hidden" data-mood="{{ tile.tag }}" autocomplete="off" checked>
+                        <span class="fm-evt-toggle-dot" aria-hidden="true"></span>{{ tile.label }}
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <ol class="fm-evt-list" id="evtList">
             {% for event in events %}
-            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_mind %} fm-evt-mind{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
+            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_mind %} fm-evt-mind{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}" data-severity="{{ event.severity_bucket() }}" data-mood="{{ event.mood_bucket() }}">
                 <span class="fm-evt-rail" aria-hidden="true"></span>
                 <div class="fm-evt-content">
                     <header class="fm-evt-head">
@@ -70,7 +94,50 @@
             </li>
             {% endfor %}
         </ol>
+        <div class="fm-evt-empty" id="evtFilteredEmpty" style="display:none">
+            <div class="fm-evt-empty-mark"></div>
+            <div class="fm-evt-empty-text">{{ events_i18n.t("no_events_filtered") }}</div>
+        </div>
         {% endif %}
     </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+    var list = document.getElementById('evtList');
+    if (!list) return;
+    var cards = Array.prototype.slice.call(list.querySelectorAll('.fm-evt-card'));
+    var count = document.getElementById('evtCount');
+    var filteredEmpty = document.getElementById('evtFilteredEmpty');
+    var inputs = Array.prototype.slice.call(document.querySelectorAll('.fm-evt-filter input[type=checkbox]'));
+    // One map per group, keyed by the card attribute the group filters on.
+    var active = { 'data-severity': {}, 'data-mood': {} };
+    function rowOf(inp) { return inp.hasAttribute('data-severity') ? 'data-severity' : 'data-mood'; }
+    inputs.forEach(function (inp) { active[rowOf(inp)][inp.getAttribute(rowOf(inp))] = true; });
+
+    // Cards are hidden in place rather than removed, so re-checking a tile
+    // brings them back in their original feed order.
+    function applyFilters() {
+        var visible = 0;
+        cards.forEach(function (card) {
+            var on = active['data-severity'][card.getAttribute('data-severity')]
+                && active['data-mood'][card.getAttribute('data-mood')];
+            card.style.display = on ? '' : 'none';
+            if (on) visible++;
+        });
+        count.textContent = visible;
+        filteredEmpty.style.display = visible === 0 ? '' : 'none';
+    }
+
+    inputs.forEach(function (inp) {
+        inp.addEventListener('change', function () {
+            active[rowOf(inp)][inp.getAttribute(rowOf(inp))] = inp.checked;
+            inp.closest('.fm-evt-toggle').classList.toggle('is-off', !inp.checked);
+            applyFilters();
+        });
+    });
+})();
+</script>
 {% endblock %}

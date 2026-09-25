@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "Le groupe du tournoi a fait un autre choix à son poste.",
   "national_reason_youth_to_senior": "Une série impressionnante chez les jeunes lui a valu une place chez les seniors.",
   "no_events": "Aucun événement enregistré",
+  "no_events_filtered": "Aucun événement ne correspond aux filtres sélectionnés",
+  "event_mood_positive": "Positif",
+  "event_mood_negative": "Négatif",
+  "event_mood_neutral": "Neutre",
+  "event_filter_severity": "Gravité",
+  "event_filter_mood": "Tonalité",
   "promise_kind_playing_time": "plus de temps de jeu",
   "reason_ev_above_squad_standard": "Son niveau se situe visiblement au-dessus de ce qu'offre le reste de l'effectif.",
   "reason_ev_already_strained_relationship": "Des frictions antérieures ont fait que ce n'a pas été pris pour un incident isolé.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "Il n'a jamais intégré l'équipe durant son prêt",
   "loan_headline_verdict_struggled": "Un prêt difficile",
   "loan_headline_verdict_inconclusive": "Prêt trop court pour être jugé",
-  "loan_verdict_standout": "Prêt remarquable",
-  "loan_verdict_successful": "Prêt réussi",
-  "loan_verdict_steady": "Prêt correct",
-  "loan_verdict_peripheral": "Remplaçant durant le prêt",
-  "loan_verdict_struggled": "Prêt difficile",
-  "loan_verdict_inconclusive": "Trop court pour juger",
   "loan_spell_apps": "{apps} apparitions",
   "loan_spell_apps_with_starts": "{apps} apparitions ({starts} titularisations)",
   "loan_spell_goals": "{goals} buts",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Étape : accord personnel trouvé.",
   "transfer_interest_stage_terms_rejected": "Étape : le joueur a refusé les conditions.",
   "event_national_team_triumph": "A remporté un tournoi international",
-  "event_national_team_heartbreak": "A perdu une finale internationale"
+  "event_national_team_heartbreak": "A perdu une finale internationale",
+  "event_reunited_with_former_manager": "Retrouvailles avec un ancien entraîneur"
 }

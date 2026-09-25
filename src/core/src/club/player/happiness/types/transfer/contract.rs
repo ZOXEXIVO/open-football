@@ -35,7 +35,7 @@ impl ContractEventKind {
             ContractEventKind::Terminated => "contract_kind_terminated",
             ContractEventKind::SalaryShock => "contract_kind_salary_shock",
             ContractEventKind::SalaryBoost => "contract_kind_salary_boost",
-            ContractEventKind::LoyaltyDiscountAccepted => "contract_kind_loyalty_discount_accepted",
+            ContractEventKind::LoyaltyDiscountAccepted => "contract_kind_loyalty_discount",
             ContractEventKind::AgentPushingForBetterTerms => "contract_kind_agent_pushing",
             ContractEventKind::WagePromiseFrustration => "contract_kind_wage_promise_frustration",
             ContractEventKind::AcceptedReducedRoleContract => "contract_kind_accepted_reduced_role",

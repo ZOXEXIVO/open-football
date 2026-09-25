@@ -21,7 +21,6 @@ use crate::club::player::mind::{GoalKind, MindClock};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::loan::agreement::LoanMoney;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::pipeline::LoanDestinationPreference;
@@ -246,10 +245,7 @@ impl PlayerView {
             // the three from its own borrow.
             loan_willingness: LoanAssetGuard::willingness_for(club, player, date),
             career_plan: player.mind.career.plan_view(MindClock::day(date)),
-            parent_subsidy: LoanMoney::parent_desire(
-                player.pathway_stage(),
-                player.plan.as_ref().and_then(|p| p.loan_purpose),
-            ),
+            parent_subsidy: player.loan_subsidy(),
             player_name: player.full_name.to_string(),
             club_name: club.name.clone(),
             position: player.position(),

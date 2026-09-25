@@ -5,12 +5,14 @@ use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
+use crate::club::{StrandedEffect, StrandedListing, StrandedMarket};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::value::asking::AskingPrice;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
@@ -22,7 +24,7 @@ use crate::{
     ReputationLevel, Team,
 };
 use crate::{PathwayStage, PlayerPlan, TransferItem};
-use chrono::{Datelike, NaiveDate, Weekday};
+use chrono::NaiveDate;
 use log::debug;
 use std::collections::{HashMap, HashSet};
 
@@ -41,8 +43,9 @@ pub(crate) enum ListingDecision {
     },
     FreeTransfer,
     /// The player's live loan listing becomes a permanent listing in
-    /// place — same row, same `listed_date`, so the unsold-exit valve's
-    /// clock keeps the time already served on the loan list.
+    /// place — same row, same `listed_date`, so the listing's age, which the
+    /// seller's floor and the player's resignation read, keeps the time
+    /// already served on the loan list.
     UpgradeLoanToTransfer,
 }
 
@@ -141,7 +144,8 @@ impl ListingPass {
         // Loan listings that have been shopped for months with no borrower
         // while the club has separately flagged the player for sale
         // (`contract.is_transfer_listed`) — upgraded in place to permanent
-        // listings so the unsold-exit valve can finally reach them.
+        // listings so a buyer, and the board's review of a stranded
+        // listing, can finally reach them.
         let mut listings_to_upgrade: Vec<(u32, CurrencyValue)> = Vec::new();
         // Loan intents the weekly rebalance withdrew because it promoted
         // the player instead. The club has already stripped the badge and
@@ -316,25 +320,12 @@ impl ListingPass {
         }
     }
 
-    /// Escape valve for players stranded on the transfer list. A listing
-    /// the market has ignored for a full year — asking price decayed, the
-    /// scouts' availability push exhausted, no live negotiation — stops
-    /// being a sale in progress and becomes a stalemate the player
-    /// refuses to live with: he pushes for a termination, the club
-    /// (already paying wages for a player it decided to sell) agrees,
-    /// pays the severance, and he leaves on a free. Without this valve a
-    /// dissatisfied player could sit listed for five seasons.
-    ///
-    /// Contracts already inside their final half-year are left to lapse
-    /// naturally instead — the renewal gate guarantees no new offer, so
-    /// expiry is the cheaper exit and needs no severance. Weekly cadence;
-    /// window-independent (tearing up a contract is legal year-round).
     /// The transfer window has just closed with these players still on
     /// the market — the moment the limbo becomes real: nothing can
     /// change until the next window. One mood note per genuinely
-    /// listed, unsold player. The availability broadcast and the
-    /// free-exit valve stay the machinery that resolves the listing;
-    /// this is the player feeling the door shut.
+    /// listed, unsold player. The availability broadcast and the board's
+    /// stranded-listing review stay the machinery that resolves the
+    /// listing; this is the player feeling the door shut.
     pub(crate) fn emit_window_close_limbo(country: &mut Country, date: NaiveDate) {
         let _ = date;
         // Pass 1 (read): genuine, still-open seller listings. Synthetic
@@ -373,20 +364,14 @@ impl ListingPass {
         }
     }
 
-    pub(crate) fn release_unsold_listed_players(country: &mut Country, date: NaiveDate) {
-        if date.weekday() != Weekday::Mon {
-            return;
-        }
-        const UNSOLD_EXIT_DAYS: i64 = 365;
-        const MIN_REMAINING_DAYS: i64 = 180;
-        // Stagger the valve so a save with a long-stale backlog doesn't
-        // dump every stranded player into the free-agent pool in one tick.
-        const MAX_EXITS_PER_CLUB_PER_PASS: usize = 2;
-
-        // LIVE negotiations only: resolved rows are retained ~30 days for
-        // diagnostics, and a status-blind check let a bid rejected weeks
-        // ago keep deferring the valve (and, worse, mis-ordered a player's
-        // exit against a genuinely pending deal).
+    /// The window has closed with these players still for sale. Each club
+    /// is told which of its listings the market refused, and what it saw of
+    /// them; the club decides, and the market carries out its half — a new
+    /// price the board will stand by, or a row retired with the player.
+    /// A man with a bid still in the room is not stranded yet.
+    pub(crate) fn review_stranded_listings(country: &mut Country, date: NaiveDate) {
+        // Pass 1 (read): the refused listings, grouped by club, and the
+        // market each club sells into.
         let in_negotiation: HashSet<u32> = country
             .transfer_market
             .negotiations
@@ -399,98 +384,86 @@ impl ListingPass {
             })
             .map(|n| n.player_id)
             .collect();
+        let mut stranded: HashMap<u32, Vec<StrandedListing>> = HashMap::new();
+        for listing in country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.is_live_sale() && !in_negotiation.contains(&l.player_id))
+        {
+            stranded
+                .entry(listing.club_id)
+                .or_default()
+                .push(StrandedListing {
+                    player_id: listing.player_id,
+                    exposure_days: listing.exposure_days,
+                    current_ask: listing.asking_price.amount,
+                    best_rejected_bid: listing.best_rejected_bid,
+                });
+        }
+        if stranded.is_empty() {
+            return;
+        }
+        let markets: HashMap<u32, StrandedMarket> = country
+            .clubs
+            .iter()
+            .filter(|c| stranded.contains_key(&c.id))
+            .map(|c| {
+                let (league_reputation, club_reputation) =
+                    PlayerValuationCalculator::seller_context(country, c);
+                (
+                    c.id,
+                    StrandedMarket {
+                        league_reputation,
+                        club_reputation,
+                    },
+                )
+            })
+            .collect();
 
-        // Pass 1 (read): genuine seller listings that have gone unsold
-        // past the threshold, bounded per club.
-        let mut exits: Vec<(u32, u32)> = Vec::new(); // (player_id, club_id)
-        let mut per_club: HashMap<u32, usize> = HashMap::new();
-        for listing in &country.transfer_market.listings {
-            if listing.listing_type != TransferListingType::Transfer
-                || listing.origin != TransferListingOrigin::SellerListed
-                || listing.status != TransferListingStatus::Available
-            {
-                continue;
-            }
-            if (date - listing.listed_date).num_days() < UNSOLD_EXIT_DAYS {
-                continue;
-            }
-            if in_negotiation.contains(&listing.player_id) {
-                continue;
-            }
-            let taken = per_club.entry(listing.club_id).or_insert(0);
-            if *taken >= MAX_EXITS_PER_CLUB_PER_PASS {
-                continue;
-            }
-            let Some(player) = country
-                .clubs
-                .iter()
-                .filter(|c| c.id == listing.club_id)
-                .flat_map(|c| c.teams.teams.iter())
-                .flat_map(|t| t.players.players.iter())
-                .find(|p| p.id == listing.player_id)
+        // Pass 2 (mut clubs): each club decides for its own.
+        let mut effects: Vec<(u32, StrandedEffect)> = Vec::new();
+        for club in country.clubs.iter_mut() {
+            let (Some(listings), Some(market)) = (stranded.get(&club.id), markets.get(&club.id))
             else {
                 continue;
             };
-            // A loaned-out or pinned player isn't the valve's to release;
-            // a near-expiry deal just runs out (renewals are blocked).
-            if player.is_on_loan() || player.is_force_match_selection {
-                continue;
-            }
-            let Some(contract) = player.contract.as_ref() else {
-                continue;
-            };
-            if (contract.expiration - date).num_days() < MIN_REMAINING_DAYS {
-                continue;
-            }
-            *taken += 1;
-            exits.push((listing.player_id, listing.club_id));
-        }
-        if exits.is_empty() {
-            return;
+            effects.extend(
+                club.on_listings_stranded(listings, market, date)
+                    .into_iter()
+                    .map(|effect| (club.id, effect)),
+            );
         }
 
-        // Pass 2 (mut clubs): tear up the contract, pay the severance,
-        // drop the club-side asking-price entry.
-        for &(player_id, club_id) in &exits {
-            let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) else {
-                continue;
-            };
-            let mut payout: u32 = 0;
-            for team in &mut club.teams.teams {
-                team.transfer_list.remove(player_id);
-                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                    payout = player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.termination_cost(date))
-                        .unwrap_or(0);
-                    player.on_contract_terminated(date, FreeAgentReleaseReason::UnsoldListingExit);
-                    debug!(
-                        "Unsold-listing exit: player {} leaves club {} for free after a year on the list (severance {})",
-                        player_id, club_id, payout
-                    );
+        // Pass 3 (mut market): the market's half of each verdict.
+        for (club_id, effect) in effects {
+            match effect {
+                StrandedEffect::Reanchor {
+                    player_id,
+                    anchor,
+                    board_floor,
+                } => {
+                    for listing in country.transfer_market.listings.iter_mut().filter(|l| {
+                        l.is_live_sale() && l.player_id == player_id && l.club_id == club_id
+                    }) {
+                        listing.asking_price.amount = anchor;
+                        listing.original_asking_price.amount = anchor;
+                        listing.last_decay_date = date;
+                        listing.board_floor = Some(board_floor);
+                    }
+                }
+                StrandedEffect::Retire { player_id } => {
+                    for listing in country
+                        .transfer_market
+                        .listings
+                        .iter_mut()
+                        .filter(|l| l.player_id == player_id)
+                    {
+                        listing.status = TransferListingStatus::Cancelled;
+                    }
+                    ApproachPass::clear_player_interest(country, player_id);
                 }
             }
-            if payout > 0 {
-                club.finance
-                    .balance
-                    .push_expense_player_wages(payout as i64);
-            }
-        }
-
-        // Pass 3 (mut market): retire the listing rows and drop every
-        // club's standing interest — the player is bound for the
-        // free-agent pool, where the pool machinery owns his market.
-        for &(player_id, _) in &exits {
-            for listing in country
-                .transfer_market
-                .listings
-                .iter_mut()
-                .filter(|l| l.player_id == player_id)
-            {
-                listing.status = TransferListingStatus::Cancelled;
-            }
-            ApproachPass::clear_player_interest(country, player_id);
         }
     }
 
@@ -1437,13 +1410,13 @@ impl ListingPass {
                             // `Loa` badge was a life sentence: the loan
                             // row never expires, the flagged-for-sale
                             // branch below skips loan-listed players, and
-                            // the unsold-exit valve only reads permanent
-                            // listings — so a warehoused reserve (the
-                            // 29-keeper U20 case) could never leave by
-                            // any route. The original listed date is
-                            // kept, so a long-stranded player reaches the
-                            // valve's one-year clock immediately instead
-                            // of restarting it.
+                            // the board's stranded review only reads
+                            // permanent listings — so a warehoused reserve
+                            // (the 29-keeper U20 case) could never leave
+                            // by any route. The original listed date is
+                            // kept, so the time he has already spent on
+                            // the market carries over instead of
+                            // restarting.
                             let flagged_for_sale = player
                                 .contract
                                 .as_ref()
@@ -1686,8 +1659,7 @@ impl ListingPass {
 
     /// Upgrade stale loan listings to permanent listings. In-place: same row,
     /// same `listed_date` — only the type, origin and asking price change, so
-    /// the unsold-exit valve's clock keeps the time already served on the
-    /// loan list.
+    /// the listing's age keeps the time already served on the loan list.
     fn upgrade_stale_loan_listings(
         country: &mut Country,
         date: NaiveDate,
@@ -1696,8 +1668,8 @@ impl ListingPass {
     ) {
         // Upgrade stale loan listings to permanent listings (see the
         // collection above). In-place: same row, same `listed_date` — only
-        // the type, origin and asking price change, so the unsold-exit
-        // valve's clock keeps the time already served on the loan list.
+        // the type, origin and asking price change, so the listing's age
+        // keeps the time already served on the loan list.
         for (player_id, asking_price) in listings_to_upgrade {
             let Some(listing) = country.transfer_market.listings.iter_mut().find(|l| {
                 l.player_id == player_id
@@ -1780,7 +1752,7 @@ impl ListingPass {
         // makes them true: the board audit stamps the badge the day it
         // decides. Treating the badge as proof of a row stranded every
         // board-listed main-squad player — badge, no row, nothing for a
-        // buyer, the seller push or the unsold-exit valve to read — while
+        // buyer, the seller push or the board's stranded review to read — while
         // the reconcile stripped the badge again and the renewal manager
         // saw a clean player. A free-transfer release is a decision
         // already made.
@@ -2221,6 +2193,7 @@ mod tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::deal::offer::TransferOffer;
     use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutStatus};
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
@@ -2228,7 +2201,7 @@ mod tests {
         PlayerSkills, PlayerStatistics, PlayerStatisticsHistoryItem, StaffCollection, Team,
         TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
-    use chrono::{NaiveDate, NaiveTime};
+    use chrono::{Duration, NaiveDate, NaiveTime};
 
     /// Fixtures for the listing pass: one club (id 100) in one league
     /// (id 1); teams and rosters vary per scenario.
@@ -2789,8 +2762,8 @@ mod tests {
 
     /// The Sokolic case. The board audit stamps `Lst` the day it decides,
     /// and the pass used to treat that badge as proof of a market row —
-    /// so the row was never made, nothing could buy him, the unsold-exit
-    /// valve never saw him, and the reconcile stripped the badge again so
+    /// so the row was never made, nothing could buy him, his board never
+    /// reviewed him, and the reconcile stripped the badge again so
     /// the renewal manager re-signed him. The badge is now materialised
     /// into a permanent listing with no duplicate history (the board wrote
     /// its own), and a candidate's own badge does not occupy the selling
@@ -2851,8 +2824,8 @@ mod tests {
 
     /// A main-squad player on a loan row nobody has taken for half a year,
     /// whom the club has also decided to sell, is upgraded in place — the
-    /// row keeps its date so the unsold-exit valve's clock keeps the time
-    /// already served. The reserve branch had this rule; the main squad
+    /// row keeps its date so the listing's age keeps the time already
+    /// served. The reserve branch had this rule; the main squad
     /// did not, which is how a keeper sat on a five-year-old loan row.
     #[test]
     fn a_stale_loan_row_on_a_main_squad_player_the_club_wants_sold_upgrades_in_place() {
@@ -2891,7 +2864,7 @@ mod tests {
         assert_eq!(rows[0].listing_type, TransferListingType::Transfer);
         assert_eq!(
             rows[0].listed_date, listed_on,
-            "the valve's clock keeps the time served on the loan list"
+            "the listing's age keeps the time served on the loan list"
         );
         let player = country.clubs[0].teams.teams[0]
             .players
@@ -2945,23 +2918,23 @@ mod tests {
         );
     }
 
-    // ── Unsold-listing escape valve ─────────────────────────────
+    // ── Stranded-listing review ─────────────────────────────────
 
-    /// Fixtures for `release_unsold_listed_players`: one listed player
-    /// (id 101) on the main team whose market listing's age varies per
-    /// scenario.
-    struct ValveFx;
+    /// One listed player (id 101) on the main team, his listing seen by the
+    /// market for `exposure_days` of open window.
+    struct StrandedFx;
 
-    impl ValveFx {
-        /// 2026-06-01 is a Monday — the valve's weekly cadence day.
-        fn monday() -> NaiveDate {
-            Fixture::date(2026, 6, 1)
+    impl StrandedFx {
+        /// A day a window closes on.
+        fn close() -> NaiveDate {
+            Fixture::date(2026, 8, 31)
         }
 
-        fn listed_country(listed_date: NaiveDate) -> Country {
+        fn listed_country(exposure_days: u16, salary: u32) -> Country {
             let mut player = Fixture::player(101);
             {
                 let contract = player.contract.as_mut().unwrap();
+                contract.salary = salary;
                 contract.expiration = Fixture::date(2029, 6, 30);
                 contract.is_transfer_listed = true;
             }
@@ -2972,7 +2945,7 @@ mod tests {
                 vec![player],
             )]);
             let mut country = Fixture::country(club);
-            country.transfer_market.add_listing(TransferListing::new(
+            let mut listing = TransferListing::new(
                 101,
                 100,
                 10,
@@ -2980,106 +2953,153 @@ mod tests {
                     amount: 500_000.0,
                     currency: Currency::Usd,
                 },
-                listed_date,
+                Fixture::date(2025, 6, 1),
                 TransferListingType::Transfer,
-            ));
+            );
+            listing.exposure_days = exposure_days;
+            country.transfer_market.add_listing(listing);
+            country
+        }
+
+        /// A season on the bench with a transfer request in, on a wage the
+        /// market would beat.
+        fn wanting_out(exposure_days: u16) -> Country {
+            let mut country = Self::listed_country(exposure_days, 50_000);
+            let player = Self::player_mut(&mut country);
+            player.happiness.starter_ratio = 0.0;
+            player.happiness.appearances_tracked = 40;
+            player
+                .statuses
+                .add(Self::close() - Duration::days(300), PlayerStatusType::Req);
             country
         }
 
         fn player(country: &Country) -> &Player {
             &country.clubs[0].teams.teams[0].players.players[0]
         }
+
+        fn player_mut(country: &mut Country) -> &mut Player {
+            &mut country.clubs[0].teams.teams[0].players.players[0]
+        }
+
+        fn limbo_moods(country: &Country) -> usize {
+            Self::player(country)
+                .happiness
+                .recent_events
+                .iter()
+                .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
+                .count()
+        }
     }
 
     #[test]
-    fn year_unsold_listing_forces_free_exit() {
-        let today = ValveFx::monday();
-        // Listed 396 days ago — past the year threshold, no negotiation.
-        let mut country = ValveFx::listed_country(Fixture::date(2025, 5, 1));
-        ListingPass::release_unsold_listed_players(&mut country, today);
+    fn a_synthetic_listing_is_not_reviewed() {
+        let mut country = StrandedFx::listed_country(440, 1_000_000);
+        country.transfer_market.listings[0].origin = TransferListingOrigin::SyntheticUnsolicited;
+        ListingPass::review_stranded_listings(&mut country, StrandedFx::close());
+        let listing = &country.transfer_market.listings[0];
+        assert_eq!(listing.board_floor, None);
+        assert_eq!(listing.asking_price.amount, 500_000.0);
+    }
 
-        let player = ValveFx::player(&country);
-        assert!(player.contract.is_none(), "the deal must be torn up");
-        assert!(
-            player.statuses.has(PlayerStatusType::Frt),
-            "the free-agent sweep must be able to collect him"
+    #[test]
+    fn a_live_bid_defers_the_review() {
+        let mut country = StrandedFx::wanting_out(440);
+        let offer = TransferOffer::new(
+            CurrencyValue {
+                amount: 300_000.0,
+                currency: Currency::Usd,
+            },
+            2,
+            StrandedFx::close(),
         );
+        country
+            .transfer_market
+            .start_negotiation(101, 2, offer, StrandedFx::close(), 0.5, 0.5, 31, 0.5)
+            .unwrap();
+        ListingPass::review_stranded_listings(&mut country, StrandedFx::close());
+        assert!(StrandedFx::player(&country).contract.is_some());
+        assert_eq!(country.transfer_market.listings[0].board_floor, None);
+    }
+
+    #[test]
+    fn a_reviewed_listing_restarts_from_the_boards_price() {
+        let mut country = StrandedFx::listed_country(440, 1_000_000);
+        country.transfer_market.listings[0].best_rejected_bid = Some(200_000.0);
+        ListingPass::review_stranded_listings(&mut country, StrandedFx::close());
+
+        assert!(StrandedFx::player(&country).contract.is_some());
+        let listing = &country.transfer_market.listings[0];
+        assert!(listing.is_live_sale());
+        assert!(listing.asking_price.amount < 500_000.0);
+        assert_eq!(
+            listing.asking_price.amount,
+            listing.original_asking_price.amount
+        );
+        assert_eq!(listing.last_decay_date, StrandedFx::close());
+        assert!(
+            listing
+                .board_floor
+                .is_some_and(|floor| floor <= listing.asking_price.amount)
+        );
+    }
+
+    #[test]
+    fn a_settled_player_leaves_before_the_window_mood_lands() {
+        let mut country = StrandedFx::wanting_out(440);
+        ListingPass::review_stranded_listings(&mut country, StrandedFx::close());
+        ListingPass::emit_window_close_limbo(&mut country, StrandedFx::close());
+
+        let player = StrandedFx::player(&country);
+        assert!(player.contract.is_none(), "the deal must be settled");
         assert_eq!(
             player.release_reason(),
-            Some(FreeAgentReleaseReason::UnsoldListingExit),
-            "the exit must carry the unsold-listing narrative"
+            Some(FreeAgentReleaseReason::MutualTermination)
         );
         assert!(
             country
                 .transfer_market
                 .listings
                 .iter()
-                .filter(|l| l.player_id == 101)
-                .all(|l| l.status == TransferListingStatus::Cancelled),
-            "the stranded listing row must be retired"
+                .all(|l| l.status == TransferListingStatus::Cancelled)
         );
+        assert_eq!(StrandedFx::limbo_moods(&country), 0);
     }
 
     #[test]
-    fn recent_listing_is_not_torn_up() {
-        let today = ValveFx::monday();
-        // Listed ~3 months ago — a live sale, not a stalemate.
-        let mut country = ValveFx::listed_country(Fixture::date(2026, 3, 1));
-        ListingPass::release_unsold_listed_players(&mut country, today);
-        assert!(
-            ValveFx::player(&country).contract.is_some(),
-            "a listing months old is still a sale in progress"
-        );
+    fn a_man_nobody_will_pay_off_stays_through_four_windows() {
+        let mut country = StrandedFx::listed_country(0, 2_000_000);
+        StrandedFx::player_mut(&mut country).birth_date = Fixture::date(1992, 1, 1);
+        let mut close = StrandedFx::close();
+        for _ in 0..4 {
+            country.transfer_market.listings[0].exposure_days += 90;
+            ListingPass::review_stranded_listings(&mut country, close);
+            assert!(StrandedFx::player(&country).contract.is_some());
+            assert!(country.transfer_market.listings[0].is_live_sale());
+            close += Duration::days(182);
+        }
     }
 
     #[test]
     fn window_close_lands_limbo_on_listed_players() {
-        let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
-        ListingPass::emit_window_close_limbo(&mut country, ValveFx::monday());
-        let unsold = ValveFx::player(&country)
-            .happiness
-            .recent_events
-            .iter()
-            .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
-            .count();
+        let mut country = StrandedFx::listed_country(0, 1_000_000);
+        ListingPass::emit_window_close_limbo(&mut country, StrandedFx::close());
         assert_eq!(
-            unsold, 1,
+            StrandedFx::limbo_moods(&country),
+            1,
             "a listed, unsold player must feel the window shut"
         );
     }
 
     #[test]
     fn window_close_ignores_synthetic_listings() {
-        let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
+        let mut country = StrandedFx::listed_country(0, 1_000_000);
         country.transfer_market.listings[0].origin = TransferListingOrigin::SyntheticUnsolicited;
-        ListingPass::emit_window_close_limbo(&mut country, ValveFx::monday());
-        let unsold = ValveFx::player(&country)
-            .happiness
-            .recent_events
-            .iter()
-            .filter(|e| e.event_type == HappinessEventType::UnsoldWindowClosed)
-            .count();
+        ListingPass::emit_window_close_limbo(&mut country, StrandedFx::close());
         assert_eq!(
-            unsold, 0,
+            StrandedFx::limbo_moods(&country),
+            0,
             "a synthetic anchor row is not a player waiting on a move"
-        );
-    }
-
-    #[test]
-    fn near_expiry_listed_contract_lapses_instead_of_terminating() {
-        let today = ValveFx::monday();
-        let mut country = ValveFx::listed_country(Fixture::date(2025, 5, 1));
-        // Final half-year of the deal — natural expiry is the cheaper
-        // exit; the renewal gate guarantees no new offer arrives.
-        country.clubs[0].teams.teams[0].players.players[0]
-            .contract
-            .as_mut()
-            .unwrap()
-            .expiration = Fixture::date(2026, 9, 1);
-        ListingPass::release_unsold_listed_players(&mut country, today);
-        assert!(
-            ValveFx::player(&country).contract.is_some(),
-            "final-half-year deals run out on their own — no severance needed"
         );
     }
 

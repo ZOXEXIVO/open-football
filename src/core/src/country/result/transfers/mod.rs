@@ -186,12 +186,13 @@ impl TransferTick {
         // players their limbo is real until the next window.
         country.transfer_market.check_transfer_window(window_open);
         if window_just_closed {
-            ListingPass::emit_window_close_limbo(country, current_date);
             // A loan the club staged and nobody took lapses with the
-            // window it was staged in.
+            // window it was staged in — before the boards stage the next.
             for club in country.clubs.iter_mut() {
                 club.on_window_closed(current_date);
             }
+            ListingPass::review_stranded_listings(country, current_date);
+            ListingPass::emit_window_close_limbo(country, current_date);
         }
 
         Self::settle_open_business(
@@ -721,8 +722,8 @@ impl TransferTick {
         // flavor: a player unsold past the grace weeks asks the club
         // to find him a move and the scouts offer him around, the
         // tier reach widening cumulatively downward until a buyer
-        // responds. Paired with the year-unsold free-exit valve
-        // below, no listing lingers for seasons.
+        // responds. What the club does when a whole window goes by
+        // unanswered is its board's call, at the window's close.
         PerformanceProfiler::stage_labelled(
             "tm_broadcast_transfers",
             3,
@@ -751,26 +752,14 @@ impl TransferTick {
         );
     }
 
-    /// The passes that run whatever the window says, after it: the stranded-
-    /// listing escape valve, the shadow reports, the breakout watch, and the
-    /// `Wnt` reconciliation.
+    /// The passes that run whatever the window says, after it: the shadow
+    /// reports, the breakout watch, and the `Wnt` reconciliation.
     fn run_year_round_tail(
         country: &mut Country,
         current_date: NaiveDate,
         foreign_players: &[&PlayerSummary],
     ) {
         let country_name = country.name.clone();
-
-        // Escape valve for stranded listings: a player still unsold a full
-        // year after being transfer-listed forces a mutual termination and
-        // leaves on a free. Window-independent — tearing up a contract is
-        // legal year-round; the free-agent sweep collects him next tick.
-        PerformanceProfiler::stage_labelled(
-            "tm_release_unsold",
-            3,
-            || country_name.clone(),
-            || ListingPass::release_unsold_listed_players(country, current_date),
-        );
 
         PerformanceProfiler::stage_labelled(
             "tm_shadow_reports",

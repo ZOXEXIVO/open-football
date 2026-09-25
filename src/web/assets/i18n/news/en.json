@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player} would sign for {other} tomorrow",
   "news_b_keeper_loan_wants_permanent_v2": "“A goalkeeper needs somebody willing to trust him for a whole season. They have.” {n} games, {m} of them shut-outs, and a keeper who has stopped thinking of himself as {club}’s spare.",
   "news_h_keeper_loan_wants_permanent_v3": "{player} has made the {other} goal his own",
-  "news_b_keeper_loan_wants_permanent_v3": "“I went there to play and I have not missed a game since.” {n} appearances, {m} clean sheets, and a summer in which somebody at {club} has to explain to him why he should come back and sit down."
+  "news_b_keeper_loan_wants_permanent_v3": "“I went there to play and I have not missed a game since.” {n} appearances, {m} clean sheets, and a summer in which somebody at {club} has to explain to him why he should come back and sit down.",
+  "news_h_frozen_out_of_the_side": "{player} frozen out at {club}",
+  "news_b_frozen_out_of_the_side": "This is not rotation. {player} has not been in the manager's plans for some time, and nobody at {club} is pretending otherwise.",
+  "news_h_old_wounds_reopened": "{player} faces a manager he fell out with",
+  "news_b_old_wounds_reopened": "They have worked together before and it did not end well. Nobody at {club} expects the new manager to have forgotten, least of all {player}.",
+  "news_h_reunited_with_his_manager": "{player} back under a manager who knows him",
+  "news_b_reunited_with_his_manager": "The new man at {club} has worked with {player} before and it went well. He arrives with a view of the player already formed, which is worth more than any pre-season.",
+  "news_h_severance_paid": "{club} pay {fee} to end {manager}'s contract",
+  "news_b_severance_paid": "The bill for the sacking has arrived. {manager} leaves with {fee} for the time left on his deal, and that money buys the club nothing it can put on the pitch."
 }

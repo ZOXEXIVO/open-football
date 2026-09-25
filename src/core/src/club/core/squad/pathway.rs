@@ -764,6 +764,7 @@ impl Club {
                 Some(plan) => {
                     plan.move_to(PathwayStage::LoanOut, date, PlayerPlan::REVIEW_DAYS);
                     plan.loan_purpose = Some(purpose);
+                    plan.loan_subsidy = None;
                 }
                 None => {
                     fresh.loan_purpose = Some(purpose);

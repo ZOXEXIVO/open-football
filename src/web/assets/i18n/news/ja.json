@@ -2334,5 +2334,13 @@
   "news_h_keeper_loan_wants_permanent_v2": "{player}はとうに{other}と契約していただろう",
   "news_b_keeper_loan_wants_permanent_v2": "「GKには、一シーズン丸ごと預けてくれる誰かが要る。ここにはそれがある」。{n}試合、うち{m}試合が無失点。そして自分を{club}の控えだとは、もう思っていない男が一人。",
   "news_h_keeper_loan_wants_permanent_v3": "{player}が{other}のゴールを自分のものにした",
-  "news_b_keeper_loan_wants_permanent_v3": "「プレーするために来たし、それから一試合も欠けていない」。{n}試合出場、無失点{m}試合。そして{club}の誰かが、なぜ戻って座るべきなのかを本人に説明しなければならない夏。"
+  "news_b_keeper_loan_wants_permanent_v3": "「プレーするために来たし、それから一試合も欠けていない」。{n}試合出場、無失点{m}試合。そして{club}の誰かが、なぜ戻って座るべきなのかを本人に説明しなければならない夏。",
+  "news_h_frozen_out_of_the_side": "{player}、{club}で構想外に",
+  "news_b_frozen_out_of_the_side": "これはローテーションではない。{player}はしばらく監督の構想から外れており、{club}の誰もそれを否定していない。",
+  "news_h_old_wounds_reopened": "{player}、かつて衝突した監督と再び",
+  "news_b_old_wounds_reopened": "二人は以前も共に仕事をし、結末は良くなかった。{club}の誰も新監督が忘れたとは思っていない。{player}本人がいちばんそう思っている。",
+  "news_h_reunited_with_his_manager": "{player}、自分を知る監督のもとへ",
+  "news_b_reunited_with_his_manager": "{club}の新監督はかつて{player}と仕事をし、うまくいった。すでに選手像を持って着任するのは、どんなプレシーズンよりも大きい。",
+  "news_h_severance_paid": "{club}、{manager}との契約解除に{fee}を支払う",
+  "news_b_severance_paid": "解任の請求書が届いた。{manager}は残りの契約期間分として{fee}を受け取って去る。その金でクラブがピッチに送り出せるものは何ひとつ買えない。"
 }

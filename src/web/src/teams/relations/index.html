@@ -18,37 +18,37 @@
         {% if nodes.is_empty() %}
         <div class="fm-empty">{{ i18n.t("rel_empty") }}</div>
         {% else %}
-        <div class="fm-rel-summary" role="group" aria-label="{{ i18n.t("rel_heading") }}">
-            <label class="fm-rel-stat fm-rel-stat-bond fm-rel-filter">
-                <input type="checkbox" class="fm-rel-filter-input" data-tier="bond" checked>
-                <span class="fm-rel-filter-box" aria-hidden="true"></span>
-                <span class="fm-rel-stat-body">
-                    <span class="fm-rel-stat-num">{{ bond_count }}</span>
-                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_bond") }}</span>
+        <div class="fm-filter-tiles" role="group" aria-label="{{ i18n.t("rel_heading") }}">
+            <label class="fm-filter-tile fm-rel-tile-bond">
+                <input type="checkbox" class="fm-filter-tile-input" data-tier="bond" checked>
+                <span class="fm-filter-tile-box" aria-hidden="true"></span>
+                <span class="fm-filter-tile-body">
+                    <span class="fm-filter-tile-num">{{ bond_count }}</span>
+                    <span class="fm-filter-tile-label">{{ i18n.t("rel_tier_bond") }}</span>
                 </span>
             </label>
-            <label class="fm-rel-stat fm-rel-stat-friendly fm-rel-filter">
-                <input type="checkbox" class="fm-rel-filter-input" data-tier="friendly" checked>
-                <span class="fm-rel-filter-box" aria-hidden="true"></span>
-                <span class="fm-rel-stat-body">
-                    <span class="fm-rel-stat-num">{{ friendly_count }}</span>
-                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_friendly") }}</span>
+            <label class="fm-filter-tile fm-rel-tile-friendly">
+                <input type="checkbox" class="fm-filter-tile-input" data-tier="friendly" checked>
+                <span class="fm-filter-tile-box" aria-hidden="true"></span>
+                <span class="fm-filter-tile-body">
+                    <span class="fm-filter-tile-num">{{ friendly_count }}</span>
+                    <span class="fm-filter-tile-label">{{ i18n.t("rel_tier_friendly") }}</span>
                 </span>
             </label>
-            <label class="fm-rel-stat fm-rel-stat-tension fm-rel-filter">
-                <input type="checkbox" class="fm-rel-filter-input" data-tier="tension" checked>
-                <span class="fm-rel-filter-box" aria-hidden="true"></span>
-                <span class="fm-rel-stat-body">
-                    <span class="fm-rel-stat-num">{{ tension_count }}</span>
-                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_tension") }}</span>
+            <label class="fm-filter-tile fm-rel-tile-tension">
+                <input type="checkbox" class="fm-filter-tile-input" data-tier="tension" checked>
+                <span class="fm-filter-tile-box" aria-hidden="true"></span>
+                <span class="fm-filter-tile-body">
+                    <span class="fm-filter-tile-num">{{ tension_count }}</span>
+                    <span class="fm-filter-tile-label">{{ i18n.t("rel_tier_tension") }}</span>
                 </span>
             </label>
-            <label class="fm-rel-stat fm-rel-stat-rivalry fm-rel-filter">
-                <input type="checkbox" class="fm-rel-filter-input" data-tier="rivalry" checked>
-                <span class="fm-rel-filter-box" aria-hidden="true"></span>
-                <span class="fm-rel-stat-body">
-                    <span class="fm-rel-stat-num">{{ rivalry_count }}</span>
-                    <span class="fm-rel-stat-label">{{ i18n.t("rel_tier_rivalry") }}</span>
+            <label class="fm-filter-tile fm-rel-tile-rivalry">
+                <input type="checkbox" class="fm-filter-tile-input" data-tier="rivalry" checked>
+                <span class="fm-filter-tile-box" aria-hidden="true"></span>
+                <span class="fm-filter-tile-body">
+                    <span class="fm-filter-tile-num">{{ rivalry_count }}</span>
+                    <span class="fm-filter-tile-label">{{ i18n.t("rel_tier_rivalry") }}</span>
                 </span>
             </label>
         </div>
@@ -434,11 +434,11 @@
             nodes[p].el.style.display = shown[p] ? '' : 'none';
         }
     }
-    Array.prototype.slice.call(document.querySelectorAll('.fm-rel-filter-input'))
+    Array.prototype.slice.call(document.querySelectorAll('.fm-filter-tile-input'))
         .forEach(function (inp) {
             inp.addEventListener('change', function () {
                 active[inp.getAttribute('data-tier')] = inp.checked;
-                var tile = inp.closest('.fm-rel-stat');
+                var tile = inp.closest('.fm-filter-tile');
                 if (tile) tile.classList.toggle('is-off', !inp.checked);
                 applyFilters();
             });

@@ -114,6 +114,14 @@ impl Schedule {
             .collect()
     }
 
+    pub fn kickoff_of(&self, id: &str) -> Option<NaiveDateTime> {
+        self.tours
+            .iter()
+            .flat_map(|t| &t.items)
+            .find(|i| i.id == id)
+            .map(|i| i.date)
+    }
+
     pub fn update_match_result(&mut self, id: &str, score: &Score) {
         let mut _updated = false;
 

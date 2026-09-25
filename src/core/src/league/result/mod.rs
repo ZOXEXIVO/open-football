@@ -16,6 +16,7 @@ use crate::r#match::MatchResult;
 use crate::r#match::TeamScore;
 use crate::world::SimulatorData;
 use crate::{MatchHistoryItem, SimulationResult};
+use std::sync::Arc;
 
 pub struct LeagueResult {
     pub league_id: u32,
@@ -89,11 +90,13 @@ impl LeagueResult {
         let now = data.date();
 
         // Update league schedule (skip for friendlies without a league)
-        if let Some(league) = data.league_mut(result.league_id) {
+        let kickoff = data.league_mut(result.league_id).and_then(|league| {
             league
                 .schedule
                 .update_match_result(&result.id, &result.score);
-        }
+            league.schedule.kickoff_of(&result.id).map(|at| at.time())
+        });
+        let match_id: Arc<str> = Arc::from(result.id.as_str());
 
         let home_team_id = result.score.home_team.team_id;
         let away_team_id = result.score.away_team.team_id;
@@ -132,6 +135,16 @@ impl LeagueResult {
             .as_ref()
             .map(|d| d.right_team_players.starter_slots.clone())
             .unwrap_or_default();
+        let home_substitutes_used = result
+            .details
+            .as_ref()
+            .map(|d| d.left_team_players.substitutes_used.clone())
+            .unwrap_or_default();
+        let away_substitutes_used = result
+            .details
+            .as_ref()
+            .map(|d| d.right_team_players.substitutes_used.clone())
+            .unwrap_or_default();
 
         let home_team = data
             .team_mut(home_team_id)
@@ -150,7 +163,9 @@ impl LeagueResult {
         )
         .with_venue(true)
         .with_tactic(final_home_tactic)
-        .with_starting_eleven(home_starting_eleven);
+        .with_starting_eleven(home_starting_eleven)
+        .with_substitutes_used(home_substitutes_used)
+        .with_fixture(Arc::clone(&match_id), result.league_id, kickoff);
         if let Some((start, _, change_minute)) = tactic_summary {
             home_item = home_item.with_tactic_summary(start, final_home_tactic, change_minute);
         }
@@ -169,7 +184,9 @@ impl LeagueResult {
         )
         .with_venue(false)
         .with_tactic(final_away_tactic)
-        .with_starting_eleven(away_starting_eleven);
+        .with_starting_eleven(away_starting_eleven)
+        .with_substitutes_used(away_substitutes_used)
+        .with_fixture(match_id, result.league_id, kickoff);
         if let Some((_, start, change_minute)) = tactic_summary {
             away_item = away_item.with_tactic_summary(start, final_away_tactic, change_minute);
         }

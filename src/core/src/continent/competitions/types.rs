@@ -62,6 +62,27 @@ pub enum CompetitionTier {
     CopaLibertadores,
 }
 
+impl CompetitionTier {
+    pub fn from_league_id(league_id: u32) -> Option<Self> {
+        match league_id {
+            CHAMPIONS_LEAGUE_ID => Some(CompetitionTier::ChampionsLeague),
+            EUROPA_LEAGUE_ID => Some(CompetitionTier::EuropaLeague),
+            CONFERENCE_LEAGUE_ID => Some(CompetitionTier::ConferenceLeague),
+            COPA_LIBERTADORES_ID => Some(CompetitionTier::CopaLibertadores),
+            _ => None,
+        }
+    }
+
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            CompetitionTier::ChampionsLeague => "champions_league",
+            CompetitionTier::EuropaLeague => "europa_league",
+            CompetitionTier::ConferenceLeague => "conference_league",
+            CompetitionTier::CopaLibertadores => "copa_libertadores",
+        }
+    }
+}
+
 // ─── Shared group / knockout types for all continental competitions ──
 
 #[derive(Debug, Clone, Default)]

@@ -431,6 +431,12 @@
   "national_reason_tournament_squad_omitted": "Im Turnierkader entschied man sich auf seiner Position anders.",
   "national_reason_youth_to_senior": "Eine starke Phase mit dem Nachwuchs brachte ihn ins A-Team.",
   "no_events": "Bisher keine Ereignisse",
+  "no_events_filtered": "Keine Ereignisse für die gewählten Filter",
+  "event_mood_positive": "Positiv",
+  "event_mood_negative": "Negativ",
+  "event_mood_neutral": "Neutral",
+  "event_filter_severity": "Schwere",
+  "event_filter_mood": "Stimmung",
   "promise_kind_playing_time": "mehr Spielzeit",
   "reason_ev_above_squad_standard": "Sein Niveau liegt sichtbar über dem, was der Rest des Kaders bietet.",
   "reason_ev_already_strained_relationship": "Frühere Reibereien sorgten dafür, dass dies nicht als Einzelfall gewertet wurde.",
@@ -830,12 +836,6 @@
   "loan_headline_verdict_peripheral": "Er kam auf Leihbasis nie in die Mannschaft",
   "loan_headline_verdict_struggled": "Eine Leihe, in der er sich schwertat",
   "loan_headline_verdict_inconclusive": "Zu kurze Leihe für ein Urteil",
-  "loan_verdict_standout": "Herausragende Leihe",
-  "loan_verdict_successful": "Erfolgreiche Leihe",
-  "loan_verdict_steady": "Solide Leihe",
-  "loan_verdict_peripheral": "Randfigur auf Leihbasis",
-  "loan_verdict_struggled": "Schwere Leihe",
-  "loan_verdict_inconclusive": "Zu kurz für ein Urteil",
   "loan_spell_apps": "{apps} Einsätze",
   "loan_spell_apps_with_starts": "{apps} Einsätze ({starts} von Beginn an)",
   "loan_spell_goals": "{goals} Tore",
@@ -853,5 +853,6 @@
   "transfer_interest_stage_terms_agreed": "Stadium: persönliche Bedingungen vereinbart.",
   "transfer_interest_stage_terms_rejected": "Stadium: der Spieler hat die Bedingungen abgelehnt.",
   "event_national_team_triumph": "Ein internationales Turnier gewonnen",
-  "event_national_team_heartbreak": "Ein internationales Finale verloren"
+  "event_national_team_heartbreak": "Ein internationales Finale verloren",
+  "event_reunited_with_former_manager": "Wiedersehen mit einem früheren Trainer"
 }

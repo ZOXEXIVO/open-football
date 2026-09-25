@@ -23,3 +23,5 @@ docs
 # macOS finder metadata
 .DS_Store
 **/.DS_Store
+
+openspec/changes/archive/

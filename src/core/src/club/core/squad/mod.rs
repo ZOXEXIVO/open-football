@@ -5,8 +5,9 @@
 //! under-eighteens' surplus keeper is routinely the reserve side's answer. So
 //! the passes here all read the whole club and write back into whichever
 //! roster is right — promotion and demotion, the season-start positional
-//! trim, the monthly utilization audit, the loan sweep, and the goalkeeping
-//! department's review of the one queue that runs through every squad.
+//! trim, the monthly utilization audit, the loan sweep, the goalkeeping
+//! department's review of the one queue that runs through every squad, and
+//! what the club does with a listed man a whole window would not buy.
 
 mod decision;
 pub mod departure;
@@ -17,7 +18,9 @@ mod parked;
 mod pathway;
 mod promotion;
 mod rebalance;
+pub mod stranded;
 mod trim;
 mod utilization;
 
 pub use departure::SquadDepartures;
+pub use stranded::{StrandedEffect, StrandedListing, StrandedMarket};

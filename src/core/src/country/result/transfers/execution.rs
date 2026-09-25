@@ -16,7 +16,6 @@ use crate::transfers::TransferWindowManager;
 use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::loan::LoanPipeline;
-use crate::transfers::loan::agreement::LoanMoney;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
@@ -1542,7 +1541,7 @@ impl TransferExecutor {
         // not arrange the move at all pays nothing. The purpose is
         // carried on his pathway, so nothing downstream has to
         // re-derive it from a birth year.
-        let parent_desire = LoanMoney::parent_desire(player.pathway_stage(), player.loan_purpose());
+        let parent_desire = player.loan_subsidy();
         let loan_contract = ExecutionLookup::loan_contract(
             loan_fee,
             loan_end,
