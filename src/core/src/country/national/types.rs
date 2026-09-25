@@ -28,6 +28,23 @@ impl NationalTeamLevel {
     pub fn is_under21(&self) -> bool {
         matches!(self, NationalTeamLevel::Under21)
     }
+
+    /// Both levels share `league_slug` "international" (match routing keys
+    /// off it), so the match-store id is the only record of which side played.
+    pub fn match_id_prefix(&self) -> &'static str {
+        match self {
+            NationalTeamLevel::Senior => "int",
+            NationalTeamLevel::Under21 => "u21-int",
+        }
+    }
+
+    pub fn of_match_id(match_id: &str) -> Self {
+        if match_id.starts_with(NationalTeamLevel::Under21.match_id_prefix()) {
+            NationalTeamLevel::Under21
+        } else {
+            NationalTeamLevel::Senior
+        }
+    }
 }
 
 #[derive(Clone)]

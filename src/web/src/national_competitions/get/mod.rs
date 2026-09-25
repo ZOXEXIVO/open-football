@@ -6,6 +6,7 @@ use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::NationalTeamLevel;
 use core::continent::national::{
     CompetitionPhase, CompetitionScope, NationalCompetitionConfig, NationalTeamCompetition,
 };
@@ -50,6 +51,8 @@ pub struct CompetitionDto {
     pub phase: String,
     /// i18n key for the team-level label ("senior" / "u21").
     pub level_key: &'static str,
+    /// Appended to `/countries/{slug}` so team links open the side that plays this competition.
+    pub team_suffix: &'static str,
     pub groups: Vec<GroupDto>,
     pub knockout: Vec<KnockoutDto>,
 }
@@ -237,6 +240,10 @@ fn build_competition_dto(
         confederation: confederation_label(&comp.config.scope, comp.config.continent_id),
         phase: i18n.t(comp.phase.as_i18n_key()).to_string(),
         level_key: comp.config.team_level.as_i18n_key(),
+        team_suffix: match comp.config.team_level {
+            NationalTeamLevel::Senior => "",
+            NationalTeamLevel::Under21 => "/u21",
+        },
         groups,
         knockout,
     }

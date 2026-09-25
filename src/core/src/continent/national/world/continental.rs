@@ -279,16 +279,9 @@ impl WorldNationalCompetitions {
         let away_country_id = fixture.away_country_id;
         let level = fixture.level;
 
-        // U21 matches carry a distinct id prefix so the match store / detail
-        // page can tell them apart from senior internationals. The
-        // `league_slug` stays "international" (match routing keys off it).
-        let id_prefix = match level {
-            NationalTeamLevel::Senior => "int",
-            NationalTeamLevel::Under21 => "u21-int",
-        };
         let match_id = format!(
             "{}-{}-{}-{}",
-            id_prefix,
+            level.match_id_prefix(),
             date.format("%Y%m%d"),
             home_country_id,
             away_country_id

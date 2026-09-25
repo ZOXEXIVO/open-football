@@ -8,7 +8,7 @@
                 <div class="fm-match-squad fm-match-squad-home">
                     <div class="fm-squad-hdr">
                         <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
-                        <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                        <a href="{{ home_team_url }}" class="fm-squad-title">{{ home_team_name }}</a>
                     </div>
                     <div class="fm-squad-section">
                         {% for player in home_squad_main %}
@@ -234,7 +234,7 @@
                 <div class="fm-match-squad fm-match-squad-away">
                     <div class="fm-squad-hdr">
                         <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
-                        <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                        <a href="{{ away_team_url }}" class="fm-squad-title">{{ away_team_name }}</a>
                     </div>
                     <div class="fm-squad-section">
                         {% for player in away_squad_main %}
@@ -267,7 +267,7 @@
             <div class="fm-match-squad fm-match-squad-home">
                 <div class="fm-squad-hdr">
                     <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
-                    <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                    <a href="{{ home_team_url }}" class="fm-squad-title">{{ home_team_name }}</a>
                 </div>
                 <div class="fm-squad-section">
                     {% for player in home_squad_main %}
@@ -297,7 +297,7 @@
             <div class="fm-match-squad fm-match-squad-away">
                 <div class="fm-squad-hdr">
                     <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
-                    <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                    <a href="{{ away_team_url }}" class="fm-squad-title">{{ away_team_name }}</a>
                 </div>
                 <div class="fm-squad-section">
                     {% for player in away_squad_main %}

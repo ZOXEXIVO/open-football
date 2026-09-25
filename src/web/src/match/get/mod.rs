@@ -12,6 +12,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::MatchRuntime;
+use core::NationalTeamLevel;
 use core::Player;
 use core::SimulatorData;
 use core::r#match::MatchResultRaw;
@@ -45,13 +46,13 @@ pub struct MatchGetTemplate {
     /// Empty for a match that belongs to no page of its own.
     pub competition_url: String,
     pub home_team_name: String,
-    pub home_team_slug: String,
+    pub home_team_url: String,
     pub home_goals: u8,
     pub home_goal_events: Vec<GoalEventDisplay>,
     pub home_squad_main: Vec<MatchPlayer>,
     pub home_squad_subs: Vec<MatchPlayer>,
     pub away_team_name: String,
-    pub away_team_slug: String,
+    pub away_team_url: String,
     pub away_goals: u8,
     pub away_goal_events: Vec<GoalEventDisplay>,
     pub away_squad_main: Vec<MatchPlayer>,
@@ -420,38 +421,48 @@ pub async fn match_get_action(
     let is_international = match_result.league_slug == "international";
 
     // For international matches, team IDs are country IDs — resolve names differently
-    let (home_team_name, home_team_slug, home_club_id) = if is_international {
-        let name = simulator_data
+    let national_team_suffix = match NationalTeamLevel::of_match_id(&match_result.id) {
+        NationalTeamLevel::Senior => "",
+        NationalTeamLevel::Under21 => "/u21",
+    };
+    let (home_team_name, home_team_url, home_club_id) = if is_international {
+        let (name, url) = simulator_data
             .country(match_result.home_team_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| i18n.t("home_team").to_string());
-        let slug = simulator_data
-            .country(match_result.home_team_id)
-            .map(|c| c.slug.clone())
-            .unwrap_or_default();
-        (name, slug, 0u32)
+            .map(|c| {
+                let url = format!(
+                    "/{}/countries/{}{}",
+                    route_params.lang, c.slug, national_team_suffix
+                );
+                (c.name.clone(), url)
+            })
+            .unwrap_or_else(|| (i18n.t("home_team").to_string(), String::new()));
+        (name, url, 0u32)
     } else {
         let t = simulator_data
             .team(match_result.home_team_id)
             .ok_or_else(|| ApiError::NotFound("Home team not found".to_string()))?;
-        (t.name.clone(), t.slug.clone(), t.club_id)
+        let url = format!("/{}/teams/{}", route_params.lang, t.slug);
+        (t.name.clone(), url, t.club_id)
     };
 
-    let (away_team_name, away_team_slug, away_club_id) = if is_international {
-        let name = simulator_data
+    let (away_team_name, away_team_url, away_club_id) = if is_international {
+        let (name, url) = simulator_data
             .country(match_result.away_team_id)
-            .map(|c| c.name.clone())
-            .unwrap_or_else(|| i18n.t("away_team").to_string());
-        let slug = simulator_data
-            .country(match_result.away_team_id)
-            .map(|c| c.slug.clone())
-            .unwrap_or_default();
-        (name, slug, 0u32)
+            .map(|c| {
+                let url = format!(
+                    "/{}/countries/{}{}",
+                    route_params.lang, c.slug, national_team_suffix
+                );
+                (c.name.clone(), url)
+            })
+            .unwrap_or_else(|| (i18n.t("away_team").to_string(), String::new()));
+        (name, url, 0u32)
     } else {
         let t = simulator_data
             .team(match_result.away_team_id)
             .ok_or_else(|| ApiError::NotFound("Away team not found".to_string()))?;
-        (t.name.clone(), t.slug.clone(), t.club_id)
+        let url = format!("/{}/teams/{}", route_params.lang, t.slug);
+        (t.name.clone(), url, t.club_id)
     };
 
     let result_details = match_result
@@ -713,7 +724,7 @@ pub async fn match_get_action(
         competition_name,
         competition_url,
         home_team_name: home_team_name.clone(),
-        home_team_slug: home_team_slug.clone(),
+        home_team_url,
         home_goals,
         home_goal_events,
         home_squad_main: result_details
@@ -766,7 +777,7 @@ pub async fn match_get_action(
             })
             .collect(),
         away_team_name: away_team_name.clone(),
-        away_team_slug: away_team_slug.clone(),
+        away_team_url,
         away_goals,
         away_goal_events,
         away_squad_main: result_details

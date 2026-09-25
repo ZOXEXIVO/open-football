@@ -45,7 +45,7 @@
                         <tr class="{% if loop.index <= 1 %}zone-ucl{% endif %}">
                             <td class="st-pos">{{ loop.index }}</td>
                             <td class="st-club">
-                                <a href="/{{ lang }}/countries/{{ row.country_slug }}">{{ row.country_name }}</a>
+                                <a href="/{{ lang }}/countries/{{ row.country_slug }}{{ comp.team_suffix }}">{{ row.country_name }}</a>
                             </td>
                             <td>{{ row.played }}</td>
                             <td>{{ row.won }}</td>
@@ -79,7 +79,7 @@
                 <div class="fm-fixtures">
                     {% for fix in bracket.fixtures %}
                     <div class="fm-fixture">
-                        <div class="fx-home"><a href="/{{ lang }}/countries/{{ fix.home_slug }}/squad">{{ fix.home_name }}</a></div>
+                        <div class="fx-home"><a href="/{{ lang }}/countries/{{ fix.home_slug }}{{ comp.team_suffix }}">{{ fix.home_name }}</a></div>
                         <div class="fx-score">
                             {% if let Some(hs) = fix.home_score %}
                             {% if let Some(as_) = fix.away_score %}
@@ -89,7 +89,7 @@
                             –
                             {% endif %}
                         </div>
-                        <div class="fx-away"><a href="/{{ lang }}/countries/{{ fix.away_slug }}/squad">{{ fix.away_name }}</a></div>
+                        <div class="fx-away"><a href="/{{ lang }}/countries/{{ fix.away_slug }}{{ comp.team_suffix }}">{{ fix.away_name }}</a></div>
                     </div>
                     {% if let Some(winner) = fix.winner_name %}
                     <div class="fm-matchday-hd">{{ i18n.t("winner") }}: {{ winner }}</div>
