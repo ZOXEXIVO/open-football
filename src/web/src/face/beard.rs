@@ -3,8 +3,8 @@
 //! Two different things. What grows back after a shave lives IN the skin —
 //! the blue-grey veil of roots under it and the dark specks of a few days'
 //! growth — so it is handed to the complexion as pigment. A beard that is
-//! kept is hair: it has volume over the lips and chin, it runs one way, and
-//! it catches the light the way scalp hair does.
+//! kept is hair: a mass of its own over the lips and chin, clumped the way
+//! scalp hair is.
 
 use super::canvas::{Grid, Outline, Path, Plane, Ramp};
 use super::color::Linear;
@@ -12,7 +12,7 @@ use super::geometry::Landmarks;
 use super::hair::HairMass;
 use super::identity::{Beard, Identity, Moustache};
 use super::noise::Noise;
-use super::relief::Relief;
+use super::shading::Shade;
 use super::tones::Tones;
 
 /// What a razor leaves on this man's face.
@@ -85,11 +85,13 @@ impl FacialHair {
         }
     }
 
-    /// A kept beard and moustache, as hair laid over the lower face.
+    /// A kept beard and moustache, as hair laid over the lower face and
+    /// darkened by the shade `shade` lays on it.
     pub fn kept(
         grid: &Grid,
         l: &Landmarks,
-        relief: &Relief,
+        head: &Plane,
+        shade: &Plane,
         id: &Identity,
         t: &Tones,
         noise: &Noise,
@@ -148,15 +150,18 @@ impl FacialHair {
             .map(|(o, v, d, f)| (o.distance(grid), *v, *d, *f))
             .collect();
         let stream = |x: f32, y: f32| (x - cx) * (1.0 + 0.018 * (y - ny)).max(0.3);
-        let tex = Plane::from_fn(*grid, |x, y| {
+        // Read only where the cover is worked out, four units past a part
+        let tex = Plane::from_fn(*grid, |k, x, y| {
+            if head.v[k] <= 0.0 || fields.iter().all(|(dist, ..)| dist.v[k] < -4.0) {
+                return 0.0;
+            }
             let q = stream(x, y);
             0.5 + 0.28 * noise.at(q * 1.3 + seed, y * 0.35)
                 + 0.24 * noise.fbm(x * 0.9, y * 0.9 - seed, 2)
         });
         let mut cover = Plane::new(*grid, 0.0);
-        let mut volume = Plane::new(*grid, 0.0);
         for (k, c) in cover.v.iter_mut().enumerate() {
-            if relief.cover.v[k] <= 0.0 {
+            if head.v[k] <= 0.0 {
                 continue;
             }
             for (dist, vol, density, fuzz) in &fields {
@@ -168,31 +173,11 @@ impl FacialHair {
                 // Skin shows between the hairs, the more so the shorter they are
                 let body = 0.2 + 0.8 * Ramp::smooth(0.25, 0.8, tex.v[k]);
                 let short = (*vol / 6.0).min(1.0);
-                let a = edge
-                    * density
-                    * relief.cover.v[k]
-                    * (1.0 - lips.v[k])
-                    * (body + (1.0 - body) * short);
-                if a > *c {
-                    *c = a;
-                    volume.v[k] = vol * Ramp::smooth(-0.5, 4.0, d);
-                }
+                *c = c.max(
+                    edge * density * head.v[k] * (1.0 - lips.v[k]) * (body + (1.0 - body) * short),
+                );
             }
         }
-        let z = relief.z.blurred(0.8).map(|k, zs| {
-            if cover.v[k] <= 0.0 {
-                0.0
-            } else {
-                zs + 0.3 + volume.v[k] * (0.6 + 0.5 * tex.v[k])
-            }
-        });
-        let dir = grid.map(|_, _, x, y| {
-            let e = 0.3;
-            let gx = stream(x + e, y) - stream(x - e, y);
-            let gy = stream(x, y + e) - stream(x, y - e);
-            let len = (gx * gx + gy * gy).sqrt().max(1e-6);
-            (-gy / len, gx / len)
-        });
         let base = t.hair_greyed(id.grey);
         let albedo = grid.map(|i, j, x, y| {
             let k = j * grid.w + i;
@@ -202,17 +187,12 @@ impl FacialHair {
             // A beard greys before the hair does
             let white = Ramp::smooth(0.5, 0.75, 0.5 + 0.5 * noise.at(x * 1.5 + 90.0, y * 0.5))
                 * (id.grey * 2.0).min(1.0);
-            base.mix(t.grey_hair, white) * (0.6 + 0.75 * tex.v[k])
+            Shade::dim(
+                base.mix(t.grey_hair, white) * (0.6 + 0.75 * tex.v[k]),
+                shade.v[k],
+            )
         });
-        Some(HairMass {
-            cover,
-            z,
-            dir,
-            tex,
-            albedo,
-            gloss: 0.35,
-            bump: 1.4,
-        })
+        Some(HairMass { cover, albedo })
     }
 
     /// The lips, which no beard covers, a little enlarged.

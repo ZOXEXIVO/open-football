@@ -1,12 +1,12 @@
 //! The pigments one player is made of, derived from his three palette
 //! colours.
 //!
-//! These are albedos — what the surface does to light — not the colours it
-//! ends up on screen: the studio decides those. Every variation here is a
-//! departure from the base complexion in the direction real skin departs,
-//! so a change of complexion carries the whole set with it: blood shows
-//! redder where the skin is thin, the shaven lower face is bluer, lips are
-//! the skin with more blood and less melanin at the surface.
+//! These are the colours the picture is painted in, with nothing between
+//! them and the screen but the flat shade laid over them. Every variation
+//! here is a departure from the base complexion in the direction real skin
+//! departs, so a change of complexion carries the whole set with it: blood
+//! shows redder where the skin is thin, the shaven lower face is bluer, lips
+//! are the skin with more blood and less melanin at the surface.
 
 use super::color::{Linear, Rgb};
 
@@ -39,10 +39,9 @@ impl Tones {
     pub fn derive(skin_hex: &str, hair_hex: &str, eye_hex: &str, redness: f32) -> Tones {
         let encoded = Rgb::hex(skin_hex);
         let fairness = (0.2126 * encoded.r + 0.7152 * encoded.g + 0.0722 * encoded.b) / 255.0;
-        // The palette is how a complexion LOOKS in a lit photograph; the
-        // pigment under it is darker, so the lit plane lands on the palette
-        // tone and the planes turning away fall below it
-        let skin = encoded.linear() * 0.97;
+        // Painted flat, the pigment IS the palette tone the match viewer is
+        // told about
+        let skin = encoded.linear();
         let hair = Linear::hex(hair_hex);
 
         let blood = 0.65 + 0.45 * fairness + redness * 0.25;

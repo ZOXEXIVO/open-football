@@ -1,4 +1,4 @@
-//! The raster a portrait is rendered on, and the shapes it is built from.
+//! The raster a portrait is painted on, and the shapes it is built from.
 //!
 //! Everything is laid out in PAGE units — the `200 × 250` box the match
 //! viewer's landmarks are written in — and a [`Grid`] is a window onto the
@@ -54,15 +54,6 @@ impl Grid {
         }
     }
 
-    /// Whether a page position falls inside the window.
-    pub fn holds(&self, x: f32, y: f32) -> bool {
-        let (x1, y1) = (
-            self.x0 + self.w as f32 / self.scale,
-            self.y0 + self.h as f32 / self.scale,
-        );
-        (self.x0..=x1).contains(&x) && (self.y0..=y1).contains(&y)
-    }
-
     pub fn len(&self) -> usize {
         self.w * self.h
     }
@@ -74,11 +65,6 @@ impl Grid {
 
     pub fn y(&self, j: usize) -> f32 {
         self.y0 + (j as f32 + 0.5) / self.scale
-    }
-
-    /// One pixel, in page units.
-    pub fn px(&self) -> f32 {
-        1.0 / self.scale
     }
 
     /// A value per pixel from its column, row and page position, rows in
@@ -113,7 +99,7 @@ impl Grid {
     }
 }
 
-/// A scalar field over the grid: a depth, a coverage, a density.
+/// A scalar field over the grid: a coverage, a weight, a distance.
 #[derive(Clone)]
 pub struct Plane {
     pub grid: Grid,
@@ -128,27 +114,12 @@ impl Plane {
         }
     }
 
-    /// Every pixel from a function of its page position, rows in parallel.
-    pub fn from_fn(grid: Grid, f: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
-        let mut v = vec![0.0; grid.len()];
-        v.par_chunks_mut(grid.w).enumerate().for_each(|(j, row)| {
-            let y = grid.y(j);
-            for (i, out) in row.iter_mut().enumerate() {
-                *out = f(grid.x(i), y);
-            }
-        });
-        Plane { grid, v }
-    }
-
-    /// Every pixel from a function of its column and row, rows in parallel.
-    pub fn from_pixels(grid: Grid, f: impl Fn(usize, usize) -> f32 + Sync) -> Plane {
-        let mut v = vec![0.0; grid.len()];
-        v.par_chunks_mut(grid.w).enumerate().for_each(|(j, row)| {
-            for (i, out) in row.iter_mut().enumerate() {
-                *out = f(i, j);
-            }
-        });
-        Plane { grid, v }
+    /// Every pixel from its index and page position, rows in parallel.
+    pub fn from_fn(grid: Grid, f: impl Fn(usize, f32, f32) -> f32 + Sync) -> Plane {
+        Plane {
+            grid,
+            v: grid.map(|i, j, x, y| f(j * grid.w + i, x, y)),
+        }
     }
 
     /// A new plane from this one pixel by pixel.
@@ -160,97 +131,6 @@ impl Plane {
             .map(|(k, &a)| f(k, a))
             .collect();
         Plane { grid: self.grid, v }
-    }
-
-    pub fn at(&self, i: usize, j: usize) -> f32 {
-        self.v[j * self.grid.w + i]
-    }
-
-    /// Bilinear sample at a page position, clamped at the border.
-    pub fn sample(&self, x: f32, y: f32) -> f32 {
-        let g = &self.grid;
-        let fx = ((x - g.x0) * g.scale - 0.5).clamp(0.0, (g.w - 1) as f32);
-        let fy = ((y - g.y0) * g.scale - 0.5).clamp(0.0, (g.h - 1) as f32);
-        let (i0, j0) = (fx as usize, fy as usize);
-        let (i1, j1) = ((i0 + 1).min(g.w - 1), (j0 + 1).min(g.h - 1));
-        let (tx, ty) = (fx - i0 as f32, fy - j0 as f32);
-        let top = self.at(i0, j0) + (self.at(i1, j0) - self.at(i0, j0)) * tx;
-        let bottom = self.at(i0, j1) + (self.at(i1, j1) - self.at(i0, j1)) * tx;
-        top + (bottom - top) * ty
-    }
-
-    /// The slope at a pixel in page units, by central differences.
-    pub fn slope(&self, i: usize, j: usize) -> (f32, f32) {
-        let g = &self.grid;
-        let (l, r) = (i.saturating_sub(1), (i + 1).min(g.w - 1));
-        let (u, d) = (j.saturating_sub(1), (j + 1).min(g.h - 1));
-        let dx = (self.at(r, j) - self.at(l, j)) / ((r - l).max(1) as f32 * g.px());
-        let dy = (self.at(i, d) - self.at(i, u)) / ((d - u).max(1) as f32 * g.px());
-        (dx, dy)
-    }
-
-    /// Gaussian blur with σ in page units, as three box passes each way.
-    pub fn blurred(&self, sigma: f32) -> Plane {
-        let mut out = self.clone();
-        for radius in Self::boxes(sigma * self.grid.scale) {
-            out.box_rows(radius);
-            out = out.transposed();
-            out.box_rows(radius);
-            out = out.transposed();
-        }
-        out
-    }
-
-    /// The radii of three boxes whose convolution is a Gaussian of `sigma`
-    /// pixels (Kovesi's construction).
-    fn boxes(sigma: f32) -> [usize; 3] {
-        let ideal = (4.0 * sigma * sigma + 1.0).sqrt();
-        let mut lower = ideal.floor() as i32;
-        if lower % 2 == 0 {
-            lower -= 1;
-        }
-        let lower = lower.max(1);
-        let upper = lower + 2;
-        let (lf, n) = (lower as f32, 3.0);
-        let m = ((12.0 * sigma * sigma - n * lf * lf - 4.0 * n * lf - 3.0 * n) / (-4.0 * lf - 4.0))
-            .round() as i32;
-        std::array::from_fn(|k| {
-            let width = if (k as i32) < m { lower } else { upper };
-            ((width - 1) / 2) as usize
-        })
-    }
-
-    fn box_rows(&mut self, radius: usize) {
-        if radius == 0 {
-            return;
-        }
-        let w = self.grid.w;
-        let norm = 1.0 / (2 * radius + 1) as f32;
-        self.v.par_chunks_mut(w).for_each(|row| {
-            let src = row.to_vec();
-            let at = |k: isize| src[k.clamp(0, w as isize - 1) as usize];
-            let r = radius as isize;
-            let mut acc: f32 = (-r..=r).map(at).sum();
-            for (i, out) in row.iter_mut().enumerate() {
-                *out = acc * norm;
-                let i = i as isize;
-                acc += at(i + r + 1) - at(i - r);
-            }
-        });
-    }
-
-    fn transposed(&self) -> Plane {
-        let g = self.grid;
-        let mut v = vec![0.0; g.len()];
-        for j in 0..g.h {
-            for i in 0..g.w {
-                v[i * g.h + j] = self.v[j * g.w + i];
-            }
-        }
-        Plane {
-            grid: Grid::window(g.scale, (g.y0, g.x0), (g.h, g.w)),
-            v,
-        }
     }
 }
 
@@ -286,6 +166,13 @@ impl Outline {
             Path::flatten_cubic(&mut out, p1, c1, c2, p2, 10);
         }
         Outline { pts: out }
+    }
+
+    /// The same shape moved across the page.
+    pub fn shifted(&self, (dx, dy): (f32, f32)) -> Outline {
+        Outline {
+            pts: self.pts.iter().map(|&(x, y)| (x + dx, y + dy)).collect(),
+        }
     }
 
     pub fn bounds(&self) -> (f32, f32, f32, f32) {
@@ -344,17 +231,18 @@ impl Outline {
             .map(|_, d| (0.5 + d * scale).clamp(0.0, 1.0))
     }
 
+    /// Coverage with an edge `soft` page units wide — a painted edge rather
+    /// than a cut one.
+    pub fn feathered(&self, grid: &Grid, soft: f32) -> Plane {
+        self.distance(grid)
+            .map(|_, d| Ramp::smooth(-soft * 0.5, soft * 0.5, d))
+    }
+
     /// The outermost crossings of the row at `y`: where the shape starts and
     /// ends across the page.
     pub fn row_span(&self, y: f32) -> Option<(f32, f32)> {
         let xs = self.crossings(y, true);
         Some((*xs.first()?, *xs.last()?))
-    }
-
-    /// The same down the column at `x`.
-    pub fn col_span(&self, x: f32) -> Option<(f32, f32)> {
-        let ys = self.crossings(x, false);
-        Some((*ys.first()?, *ys.last()?))
     }
 
     /// Where the edges cross the line `y = at` (rows) or `x = at`
@@ -567,6 +455,96 @@ impl Polyline {
     }
 }
 
+/// One soft weight laid on the page: where colour gathers on a face, where
+/// a fold of the ear sinks in.
+pub enum Form {
+    /// (1 − r²)³ inside a rotated ellipse: full at the centre, feathered to
+    /// nothing at the rim with no ring at its edge.
+    Blob {
+        x: f32,
+        y: f32,
+        rx: f32,
+        ry: f32,
+        cos: f32,
+        sin: f32,
+        h: f32,
+    },
+    /// The same profile across a curve: a crease, a fold, a ridge.
+    Crease {
+        line: Polyline,
+        w: f32,
+        h: f32,
+        /// Fade in and out over this share of the length at each end
+        taper: f32,
+    },
+}
+
+impl Form {
+    pub fn blob(x: f32, y: f32, rx: f32, ry: f32, rot_deg: f32, h: f32) -> Form {
+        let (sin, cos) = rot_deg.to_radians().sin_cos();
+        Form::Blob {
+            x,
+            y,
+            rx: rx.max(0.1),
+            ry: ry.max(0.1),
+            cos,
+            sin,
+            h,
+        }
+    }
+
+    /// A crease through `pts`, as a smooth run rather than a polygon.
+    pub fn crease(pts: &[(f32, f32)], w: f32, h: f32, taper: f32) -> Form {
+        Form::Crease {
+            line: Path::through(pts, 0.0).polyline(),
+            w,
+            h,
+            taper,
+        }
+    }
+
+    pub fn at(&self, px: f32, py: f32) -> f32 {
+        match self {
+            Form::Blob {
+                x,
+                y,
+                rx,
+                ry,
+                cos,
+                sin,
+                h,
+            } => {
+                let (dx, dy) = (px - x, py - y);
+                if dx.abs() > rx.max(*ry) || dy.abs() > rx.max(*ry) {
+                    return 0.0;
+                }
+                let u = (dx * cos + dy * sin) / rx;
+                let v = (-dx * sin + dy * cos) / ry;
+                let k = 1.0 - (u * u + v * v);
+                if k <= 0.0 { 0.0 } else { h * k * k * k }
+            }
+            Form::Crease { line, w, h, taper } => {
+                if !line.near(px, py, *w) {
+                    return 0.0;
+                }
+                let foot = line.foot(px, py);
+                let k = 1.0 - (foot.d / w) * (foot.d / w);
+                if k <= 0.0 {
+                    return 0.0;
+                }
+                let ends = if *taper > 0.0 {
+                    let a = (foot.u / taper).min(1.0);
+                    let b = ((1.0 - foot.u) / taper).min(1.0);
+                    a * a * (3.0 - 2.0 * a) * b * b * (3.0 - 2.0 * b)
+                } else {
+                    1.0
+                };
+                h * k * k * k * ends
+            }
+        }
+    }
+}
+
 /// One layer of the picture: straight colour and coverage per pixel.
 pub struct Layer {
     pub color: Vec<Linear>,
@@ -574,8 +552,8 @@ pub struct Layer {
 }
 
 impl Layer {
-    /// Shades every pixel that `f` says is covered, rows in parallel.
-    pub fn shade(
+    /// Paints every pixel that `f` says is covered, rows in parallel.
+    pub fn paint(
         grid: &Grid,
         f: impl Fn(usize, usize, f32, f32) -> Option<(Linear, f32)> + Sync,
     ) -> Layer {
@@ -688,30 +666,6 @@ impl Canvas {
         out
     }
 
-    /// The picture through a real lens: a touch of softness, `sigma` in
-    /// page units, that no camera is without and every render is.
-    pub fn softened(&self, sigma: f32) -> Canvas {
-        let g = self.grid;
-        let channel = |f: &dyn Fn(usize) -> f32| {
-            Plane {
-                grid: g,
-                v: (0..g.len()).map(f).collect(),
-            }
-            .blurred(sigma)
-        };
-        let r = channel(&|k| self.color[k].r);
-        let gr = channel(&|k| self.color[k].g);
-        let b = channel(&|k| self.color[k].b);
-        let a = channel(&|k| self.alpha[k]);
-        Canvas {
-            grid: g,
-            color: (0..g.len())
-                .map(|k| Linear::new(r.v[k], gr.v[k], b.v[k]))
-                .collect(),
-            alpha: a.v,
-        }
-    }
-
     /// The same picture at half the resolution, averaged 2×2.
     pub fn halved(&self) -> Canvas {
         let g = self.grid;
@@ -733,11 +687,9 @@ impl Canvas {
         out
     }
 
-    /// The photograph: developed the way a studio camera's files are —
-    /// richer colour and a touch more contrast than the light itself.
     pub fn jpeg(&self, quality: u8) -> Vec<u8> {
         let rgb: Vec<u8> = (0..self.grid.len())
-            .flat_map(|k| Self::graded(self.developed(k), k))
+            .flat_map(|k| self.developed(k))
             .collect();
         let mut out = Vec::with_capacity(64 * 1024);
         JpegEncoder::new_with_quality(&mut out, quality)
@@ -775,53 +727,13 @@ impl Canvas {
         self.alpha[k]
     }
 
-    /// A pixel through the tone curve, straight (un-premultiplied) sRGB.
+    /// A pixel as straight (un-premultiplied) sRGB.
     pub fn developed(&self, k: usize) -> [u8; 3] {
         let a = self.alpha[k];
         if a <= 1e-4 {
             return [0, 0, 0];
         }
-        let c = self.color[k] * (1.0 / a);
-        Linear::new(Self::curve(c.r), Self::curve(c.g), Self::curve(c.b)).encode()
-    }
-
-    /// A camera's rendering of a developed pixel: saturation lifted about
-    /// its own grey, warmed a shade, a gentle S through the mid-tones, and
-    /// the sensor's grain — a render with none reads as a render.
-    fn graded(px: [u8; 3], k: usize) -> [u8; 3] {
-        let c = px.map(|v| v as f32 / 255.0);
-        let luma = 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-        let warm = [1.015, 1.0, 0.975];
-        let hash = |salt: u64| {
-            let mut h = (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ salt;
-            h ^= h >> 31;
-            h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-            h ^= h >> 29;
-            (h % 10_000) as f32 / 10_000.0 - 0.5
-        };
-        // Grain is strongest in the mid-tones, where a sensor is noisiest
-        // relative to what it records, and mostly luminance
-        let amount = 0.03 * (4.0 * luma * (1.0 - luma)).sqrt();
-        let grain = (hash(1) + hash(2)) * amount;
-        std::array::from_fn(|i| {
-            let v = (luma + (c[i] - luma) * 1.12) * warm[i];
-            let v = v.clamp(0.0, 1.0);
-            let s = v + 0.35 * v * (1.0 - v) * (v - 0.5);
-            let s = s + grain + hash(3 + i as u64) * amount * 0.4;
-            (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
-        })
-    }
-
-    /// Linear up to the mid-tones, so a lit cheek comes out the colour the
-    /// palette gave it, then a shoulder that rolls highlights off the way
-    /// film does instead of clipping them flat.
-    fn curve(c: f32) -> f32 {
-        const KNEE: f32 = 0.62;
-        if c <= KNEE {
-            c.max(0.0)
-        } else {
-            KNEE + (1.0 - KNEE) * (1.0 - (-(c - KNEE) / (1.0 - KNEE)).exp())
-        }
+        (self.color[k] * (1.0 / a)).encode()
     }
 }
 

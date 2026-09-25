@@ -329,6 +329,31 @@ fn main() {
         return;
     }
 
+    // `dev_simulate holiday [days]` — the web holiday loop: every seventh
+    // day the world is published and deep-cloned back, as
+    // `ProcessingRun::publish_progress` does.
+    if args.first().map(|a| a == "holiday").unwrap_or(false) {
+        for day in 1..=days {
+            let tick_start = Instant::now();
+            harness.tick();
+            let tick_ms = tick_start.elapsed().as_secs_f64() * 1000.0;
+            if day % 7 == 0 {
+                let clone_start = Instant::now();
+                let copy = harness.data.clone();
+                let clone_ms = clone_start.elapsed().as_secs_f64() * 1000.0;
+                let drop_start = Instant::now();
+                drop(std::mem::replace(&mut harness.data, copy));
+                let drop_ms = drop_start.elapsed().as_secs_f64() * 1000.0;
+                println!(
+                    "week {:>3}  {}  tick {tick_ms:>8.1} ms  clone {clone_ms:>8.1} ms  drop {drop_ms:>8.1} ms",
+                    day / 7,
+                    harness.data.date.date(),
+                );
+            }
+        }
+        return;
+    }
+
     harness.bench(days);
 }
 

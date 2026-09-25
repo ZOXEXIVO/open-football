@@ -200,8 +200,6 @@ pub struct NoseShape {
     pub nostril: f32,
     /// Ball of the nose radius
     pub ball: f32,
-    /// Dorsum profile: negative dips, positive humps
-    pub hump: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -238,7 +236,6 @@ pub struct Eye {
     /// −1 for the eye on the left of the page, +1 for the right
     pub side: f32,
     pub cx: f32,
-    pub cy: f32,
     /// The almond between the lids, where the eyeball shows
     pub opening: Outline,
     /// The lid margins, both run from the inner corner to the outer
@@ -314,7 +311,6 @@ impl Eye {
         Eye {
             side,
             cx: ex,
-            cy: ey,
             opening: Outline::polygon(ring),
             upper,
             lower,
@@ -364,7 +360,6 @@ pub struct Landmarks {
     pub eye: f32,
     pub nose: f32,
     pub mouth: f32,
-    pub sulcus: f32,
     pub head: Outline,
     pub neck: Outline,
     pub eyes: [Eye; 2],
@@ -412,7 +407,6 @@ impl Landmarks {
         let nose =
             (156.5 + m.nose_len * 2.8 + m.length * 0.5 + st.nose_y * 1.5).clamp(150.0, 163.0);
         let mouth = nose + (skull.chin - nose) * (0.36 + st.philtrum * 0.035 + m.lip * 0.01);
-        let sulcus = mouth + (skull.chin - mouth) * 0.42;
         let recession = match age {
             0..=25 => 0.0,
             26..=30 => 1.5,
@@ -474,19 +468,19 @@ impl Landmarks {
             peak,
         };
 
-        let (bridge, tip, nostril, ball, hump): (f32, f32, f32, f32, f32) = match id.nose_st {
+        let (bridge, tip, nostril, ball): (f32, f32, f32, f32) = match id.nose_st {
             // Narrow, straight
-            0 => (3.2, 8.0, 2.4, 4.4, 0.0),
+            0 => (3.2, 8.0, 2.4, 4.4),
             // Broad, flat bridge
-            1 => (4.8, 13.2, 4.2, 6.2, -0.5),
+            1 => (4.8, 13.2, 4.2, 6.2),
             // Medium
-            2 => (4.0, 10.2, 3.3, 5.2, 0.1),
+            2 => (4.0, 10.2, 3.3, 5.2),
             // Fine, slightly upturned
-            3 => (3.1, 7.8, 2.4, 4.7, -0.35),
-            // Aquiline — strong bridge, hump
-            4 => (4.4, 10.8, 3.4, 5.4, 1.1),
+            3 => (3.1, 7.8, 2.4, 4.7),
+            // Aquiline — strong bridge
+            4 => (4.4, 10.8, 3.4, 5.4),
             // Roman, long
-            _ => (3.9, 9.4, 3.0, 5.0, 0.5),
+            _ => (3.9, 9.4, 3.0, 5.0),
         };
         let nw = 1.0 + m.nose_w * 0.12 + id.fw * 0.03 + maturity * 0.05;
         let nose_shape = NoseShape {
@@ -494,7 +488,6 @@ impl Landmarks {
             tip: tip * nw,
             nostril: nostril * nw,
             ball: ball * (1.0 + m.nose_w * 0.06 + maturity * 0.05),
-            hump,
         };
 
         let (mh, upper, lower, bow): (f32, f32, f32, f32) = match id.mouth_st {
@@ -580,7 +573,6 @@ impl Landmarks {
             eye,
             nose,
             mouth,
-            sulcus,
             head,
             neck,
             eyes,

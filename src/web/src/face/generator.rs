@@ -1,20 +1,23 @@
-//! The portrait: one player, rendered as a studio head shot.
+//! The portrait: one player, painted as a flat illustration.
 //!
 //! The page is `200 × 250` units with the head centred at x = 100, the eye
 //! line at y = 118 and the chin at y ≈ 205, which is what the match viewer
-//! projects the cutout by. Every surface in it — skull and face, ears, neck,
-//! hair, beard — is built as depth, the studio lights all of them by the
-//! same rules, and the layers are laid down back to front the way a camera
-//! would see them. Head and neck only: the man is fitted onto a body
-//! elsewhere, and a body of his own would never sit on it.
+//! projects the cutout by. Every part of the head — face, ears, neck, hair,
+//! beard — is a shape in flat pigment with a few flat shapes of shade on it,
+//! laid down back to front. Head and neck only: the man is fitted onto a
+//! body elsewhere, and a body of his own would never sit on it.
 //!
 //! Everything is decided by the player id and his record. Same player, same
 //! face, every render.
 
+use std::sync::OnceLock;
+
+use log::error;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use shared::{AppearanceRng, Palette, SkinDist};
+use tokio::sync::oneshot;
 
 use super::beard::FacialHair;
-use super::body::Body;
 use super::canvas::{Canvas, Grid, Layer, Plane, Ramp};
 use super::color::Linear;
 use super::features::Features;
@@ -22,14 +25,13 @@ use super::geometry::Landmarks;
 use super::hair::Hair;
 use super::identity::Identity;
 use super::noise::Noise;
-use super::relief::Relief;
-use super::shading::{Occlusion, Studio};
+use super::shading::Shade;
 use super::tones::Tones;
 
 /// What is drawn AROUND the head.
 ///
 /// The head itself is identical either way — same rng stream, same features,
-/// same light, same framing — because the two are the same man seen in two
+/// same shade, same framing — because the two are the same man seen in two
 /// places.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FaceFrame {
@@ -44,8 +46,8 @@ pub enum FaceFrame {
 }
 
 impl FaceFrame {
-    /// The file this frame is delivered as: a photograph for the page, a
-    /// picture with transparency for the viewer at the size it reads.
+    /// The file this frame is delivered as: a JPEG for the page, a picture
+    /// with transparency for the viewer at the size it reads.
     pub fn mime(self) -> &'static str {
         match self {
             FaceFrame::Portrait => "image/jpeg",
@@ -72,7 +74,37 @@ pub struct Portrait;
 impl Portrait {
     const QUALITY: u8 = 92;
 
-    /// The encoded picture. Both frames are rendered at twice the size they
+    /// The picture, painted on the portraits' own threads: a page of thirty
+    /// faces queues there instead of spreading over every core the
+    /// simulation and the other requests are running on. `None` if the
+    /// render failed.
+    pub async fn commission(sitter: Sitter, frame: FaceFrame) -> Option<Vec<u8>> {
+        let (tx, rx) = oneshot::channel();
+        Self::pool().spawn(move || {
+            // Nobody is waiting for a face whose page has already gone
+            if !tx.is_closed() {
+                let _ = tx.send(Self::take(&sitter, frame));
+            }
+        });
+        rx.await.ok()
+    }
+
+    /// A quarter of the machine, never fewer than two threads.
+    fn pool() -> &'static ThreadPool {
+        static POOL: OnceLock<ThreadPool> = OnceLock::new();
+        POOL.get_or_init(|| {
+            let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+            ThreadPoolBuilder::new()
+                .num_threads((cores / 4).max(2))
+                .thread_name(|n| format!("portrait-{n}"))
+                // A render that panics fails its own request, not the process
+                .panic_handler(|_| error!("portrait render panicked"))
+                .build()
+                .expect("the portrait pool starts")
+        })
+    }
+
+    /// The encoded picture. Both frames are painted at twice the size they
     /// are delivered at and averaged down, so every strand, lash and edge is
     /// anti-aliased by real coverage: the portrait at two pixels a unit, the
     /// cutout at the one the viewer reads it at.
@@ -80,7 +112,6 @@ impl Portrait {
         match frame {
             FaceFrame::Portrait => Self::render(sitter, frame, &Grid::new(4.0))
                 .halved()
-                .softened(0.3)
                 .jpeg(Self::QUALITY),
             FaceFrame::Cutout => Self::render(sitter, frame, &Grid::new(2.0)).halved().png(),
         }
@@ -107,156 +138,86 @@ impl Portrait {
         );
         let l = Landmarks::new(&id, age, heft, aggr);
         let noise = Noise::new(sitter.player_id as u64 * 0x2545_F491 + id.seed as u64);
-        let studio = Studio::portrait();
 
-        let neck = Body::neck(&grid, &l);
-        let relief = Relief::build(&grid, &l, &id, &noise, age, heft, &neck.z);
-        let (ear_cover, ear_z) = Features::ears(&grid, &l);
+        let head = l.head.coverage(&grid);
+        let neck = l.neck.coverage(&grid);
+        let (ear_cover, ear_shade) = Features::ears(&grid, &l);
         let back = Hair::back(&grid, &l, &t, &id, &noise);
-        let tufts = Hair::scalp(&grid, &l, &relief, &t, &id, &noise, age);
+        let tufts = Hair::scalp(&grid, &l, &t, &id, &noise, age);
         let growth = FacialHair::growth(&grid, &l, &id, &t, &noise, age);
-        let beard = FacialHair::kept(&grid, &l, &relief, &id, &t, &noise);
-
-        let mut solids: Vec<(&Plane, &Plane)> = vec![
-            (&relief.cover, &relief.z),
-            (&ear_cover, &ear_z),
-            (&neck.cover, &neck.z),
-        ];
-        solids.extend(
-            back.iter()
-                .chain(&tufts)
-                .chain(&beard)
-                .map(|m| (&m.cover, &m.z)),
-        );
-        let occ = Occlusion::new(Self::depth(&grid, &solids));
+        let face_shade = Shade::face(&grid, &l, &id);
+        let beard = FacialHair::kept(&grid, &l, &head, &face_shade, &id, &t, &noise);
 
         // The man is painted on a sheet of his own and laid in turned by his
         // photographic tilt about the chin
         let mut man = Canvas::new(grid);
         if let Some(back) = &back {
-            man.over(&back.shade(&studio, &occ));
+            man.over(&back.paint());
         }
-        let plain = Plane::new(grid, 1.0);
-        let body_oil = vec![0.12; grid.len()];
-        let neck_albedo = Features::plain_skin(&grid, &neck.cover, &t, &noise, 0.08);
-        man.over(&studio.skin(
-            &occ,
-            &neck.cover,
-            &neck.z,
-            &neck_albedo,
-            &body_oil,
-            None,
-            &plain,
+        let neck_skin = Features::plain_skin(&grid, &neck, &t, &noise, 0.08);
+        man.over(&Self::skin(
+            &grid,
+            &neck,
+            &neck_skin,
+            &Shade::neck(&grid, &l),
         ));
-        // Cartilage is thin and lit from behind as much as in front: an
-        // ear is redder and a shade deeper than the cheek beside it
-        let ear_albedo: Vec<Linear> = Features::plain_skin(&grid, &ear_cover, &t, &noise, 0.6)
+        // Cartilage is thin: an ear is redder and a shade deeper than the
+        // cheek beside it
+        let ear_skin: Vec<Linear> = Features::plain_skin(&grid, &ear_cover, &t, &noise, 0.6)
             .into_iter()
             .map(|c| c * 0.9)
             .collect();
-        man.over(&studio.skin(
-            &occ,
-            &ear_cover,
-            &ear_z,
-            &ear_albedo,
-            &body_oil,
-            None,
-            &plain,
-        ));
-
-        let skin = Features::complexion(
-            &grid,
-            &l,
-            &id,
-            &t,
-            &noise,
-            &relief.cover,
-            &growth,
-            aggr,
-            id.grey,
-        );
-        let lids = relief.opening.map(|_, o| 1.0 - o);
-        man.over(&studio.skin(
-            &occ,
-            &relief.cover,
-            &relief.z,
-            &skin.albedo,
-            &skin.oil,
-            Some(&skin.micro),
-            &lids,
-        ));
+        man.over(&Self::skin(&grid, &ear_cover, &ear_skin, &ear_shade));
+        let face_skin =
+            Features::complexion(&grid, &l, &id, &t, &noise, &head, &growth, aggr, id.grey);
+        man.over(&Self::skin(&grid, &head, &face_skin, &face_shade));
+        let opening = Features::openings(&grid, &l);
         let seeds = l.eyes.each_ref().map(|e| Features::eye_seed(&id, e.side));
-        man.over(&Layer::shade(&grid, |i, j, x, y| {
+        man.over(&Layer::paint(&grid, |i, j, x, y| {
             let k = j * grid.w + i;
-            let open = relief.opening.v[k] * relief.cover.v[k];
+            let open = opening.v[k] * head.v[k];
             if open <= 0.0 {
                 return None;
             }
             let e = usize::from(x > l.cx);
-            let c = Features::eye(
-                x,
-                y,
-                relief.z.v[k],
-                &l.eyes[e],
-                &relief.balls[e],
-                &t,
-                &noise,
-                &studio,
-                &occ,
-                seeds[e],
-            );
-            Some((c, open))
+            Some((Features::eye(x, y, &l.eyes[e], &t, &noise, seeds[e]), open))
         }));
-        man.over(&Layer::shade(&grid, |_, _, x, y| {
+        man.over(&Layer::paint(&grid, |_, _, x, y| {
             let e = usize::from(x > l.cx);
             Features::lashes(x, y, &l.eyes[e], &t, &noise, seeds[e])
                 .map(|(lash, a)| (lash * 0.9, a))
         }));
         if let Some(beard) = &beard {
-            man.over(&beard.shade(&studio, &occ));
+            man.over(&beard.paint());
         }
         for tuft in &tufts {
-            man.over(&tuft.shade(&studio, &occ));
+            man.over(&tuft.paint());
         }
 
         let mut canvas = Canvas::new(grid);
         if frame == FaceFrame::Portrait {
-            canvas.over(&Self::backdrop(&grid, &solids));
+            canvas.over(&Self::backdrop(&grid));
         }
         canvas.lay(&man.rotated(id.tilt * 0.7, (l.cx, l.skull.chin)));
         canvas
     }
 
-    /// Everything standing in the picture as one depth map: the nearest
-    /// solid surface at each pixel.
-    fn depth(grid: &Grid, solids: &[(&Plane, &Plane)]) -> Plane {
-        Plane::from_pixels(*grid, |i, j| {
+    /// A stretch of skin: its pigment under the flat shade laid on it.
+    fn skin(grid: &Grid, cover: &Plane, albedo: &[Linear], shade: &Plane) -> Layer {
+        Layer::paint(grid, |i, j, _, _| {
             let k = j * grid.w + i;
-            solids
-                .iter()
-                .filter(|(cover, _)| cover.v[k] > 0.5)
-                .map(|(_, z)| z.v[k])
-                .fold(0.0, f32::max)
+            let a = cover.v[k];
+            (a > 0.0).then(|| (Shade::over(albedo[k], shade.v[k]), a))
         })
     }
 
-    /// The studio card: near-white, falling off to grey at the edges, with
-    /// the man's shadow thrown onto it by the key light.
-    fn backdrop(grid: &Grid, solids: &[(&Plane, &Plane)]) -> Layer {
-        let figure = Plane::from_pixels(*grid, |i, j| {
-            let k = j * grid.w + i;
-            solids.iter().map(|(c, _)| c.v[k]).fold(0.0, f32::max)
-        })
-        .blurred(7.0);
+    /// The studio card: near-white, falling off to grey at the edges.
+    fn backdrop(grid: &Grid) -> Layer {
         let card = Linear::new(0.92, 0.92, 0.91);
         let edge = Linear::new(0.70, 0.70, 0.70);
-        Layer::shade(grid, |_, _, x, y| {
+        Layer::paint(grid, |_, _, x, y| {
             let r = (((x - 100.0) / 110.0).powi(2) + ((y - 110.0) / 140.0).powi(2)).sqrt();
-            let mut c = card.mix(edge, Ramp::smooth(0.3, 1.3, r));
-            // Thrown down and to the right, away from the key
-            let shade = figure.sample(x - 9.0, y - 5.0);
-            c = c * (1.0 - 0.22 * shade);
-            Some((c, 1.0))
+            Some((card.mix(edge, Ramp::smooth(0.3, 1.3, r)), 1.0))
         })
     }
 }
@@ -282,9 +243,9 @@ mod tests {
     /// them together is that `Appearance::draw` is the FIRST call made on the
     /// rng — slip anything in front of it and the two quietly diverge.
     ///
-    /// Read off the picture itself: the cheek the key light falls on must
-    /// come out nearer the palette entry the viewer was told than any entry
-    /// more than one step away from it.
+    /// Read off the picture itself: the cheek clear of the shade must come
+    /// out nearer the palette entry the viewer was told than any entry more
+    /// than one step away from it.
     #[test]
     fn the_portrait_paints_the_tone_the_viewer_is_told_about() {
         let nations = [
@@ -500,59 +461,6 @@ mod tests {
                 )
                 .expect("write face");
             }
-        }
-    }
-
-    /// Dev-only clay renders of the bare head relief — the shape with no
-    /// pigment, lit by the key alone — as clay_<n>.png in $FACE_PREVIEW_DIR.
-    #[test]
-    #[ignore]
-    fn preview_clay() {
-        let Ok(dir) = std::env::var("FACE_PREVIEW_DIR") else {
-            return;
-        };
-        let root = std::path::Path::new(&dir);
-        let grid = Grid::new(4.0);
-        let studio = Studio::portrait();
-        for (n, (skin, age, i)) in [
-            (
-                SkinDist::pure(SkinBucket::White, Region::WestEurope),
-                26u8,
-                0u32,
-            ),
-            (SkinDist::pure(SkinBucket::Black, Region::SubSaharan), 26, 3),
-            (SkinDist::pure(SkinBucket::Metis, Region::EastAsia), 31, 5),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let player_id = 2_000_000_000u32 + age as u32 * 1000 + i * 77 + 13;
-            let mut rng = AppearanceRng::new(player_id);
-            let id = Identity::draw(&mut rng, skin, age);
-            let heft = -1.6 + i as f32 * 0.5;
-            let l = Landmarks::new(&id, age, heft, 0.3);
-            let noise = Noise::new(player_id as u64);
-            let neck = Body::neck(&grid, &l);
-            let relief = Relief::build(&grid, &l, &id, &noise, age, heft, &neck.z);
-            let (ear_cover, ear_z) = Features::ears(&grid, &l);
-            let solids = [
-                (&neck.cover, &neck.z),
-                (&ear_cover, &ear_z),
-                (&relief.cover, &relief.z),
-            ];
-            let occ = Occlusion::new(Portrait::depth(&grid, &solids));
-            let clay = vec![Linear::gray(0.45); grid.len()];
-            let oil = vec![0.2; grid.len()];
-            let plain = Plane::new(grid, 1.0);
-            let mut canvas = Canvas::new(grid);
-            canvas.over(&Layer::shade(&grid, |_, _, _, _| {
-                Some((Linear::gray(0.12), 1.0))
-            }));
-            for (cover, z) in solids {
-                canvas.over(&studio.skin(&occ, cover, z, &clay, &oil, None, &plain));
-            }
-            std::fs::write(root.join(format!("clay_{n}.png")), canvas.halved().png())
-                .expect("write clay");
         }
     }
 

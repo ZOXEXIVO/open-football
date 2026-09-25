@@ -2,9 +2,9 @@
 //!
 //! [`Rgb`] is a colour as written — `#rrggbb`, sRGB, 0..255 — and is what
 //! the palettes and the club records hand over. [`Linear`] is the same
-//! colour as light: every mix, every lamp and every shadow is worked out in
-//! it, because adding and multiplying encoded sRGB values is what makes
-//! computer shading look like computer shading.
+//! colour as light: every mix and every shade is worked out in it, because
+//! mixing and multiplying encoded sRGB values muddies every colour it
+//! touches.
 
 use std::ops::{Add, AddAssign, Mul};
 
@@ -68,8 +68,7 @@ impl std::fmt::Display for Rgb {
     }
 }
 
-/// Linear-light RGB, unbounded above: a lit highlight is allowed to exceed 1
-/// until the tone curve brings it back.
+/// Linear-light RGB.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Linear {
     pub r: f32,

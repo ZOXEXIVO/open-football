@@ -1,32 +1,16 @@
 //! What lives on and in the skin of the head: its colouring, the brows,
 //! lips and nostrils painted into it, the eyes set in it, the lashes over
 //! them, and the ears standing off it.
-//!
-//! Pigment is kept apart from light. Everything in [`Complexion`] is what
-//! the surface is — the studio decides what it looks like — which is why a
-//! brow or a freckle keeps its edge when the skin's shading is softened by
-//! scattering, exactly as it does in a photograph.
 
 use std::f32::consts::{PI, TAU};
 
 use super::beard::Growth;
-use super::canvas::{Grid, Outline, Path, Plane, Polyline, Ramp};
+use super::canvas::{Form, Grid, Outline, Path, Plane, Polyline, Ramp};
 use super::color::Linear;
 use super::geometry::{Eye, Landmarks};
 use super::identity::Identity;
 use super::noise::Noise;
-use super::relief::{Eyeball, Form};
-use super::shading::{Occlusion, Studio, Vec3};
 use super::tones::Tones;
-
-/// The head's skin as pigment and sheen, pixel by pixel.
-pub struct Complexion {
-    pub albedo: Vec<Linear>,
-    /// 0 matte .. 1 oily: how strongly and how tightly it reflects
-    pub oil: Vec<f32>,
-    /// Surface grain too fine to model, for the specular to catch
-    pub micro: Plane,
-}
 
 /// One brow: the spine its hairs grow along, and how thick it is.
 struct Brow {
@@ -102,7 +86,6 @@ struct Zones {
     flush: Vec<Form>,
     pale: Vec<Form>,
     orbit: Vec<Form>,
-    oil: Vec<Form>,
     nostrils: Vec<Form>,
     /// Where pores are coarse — the nose and the cheeks beside it — and,
     /// negatively, where the skin is fine — round the eyes
@@ -177,11 +160,6 @@ impl Zones {
             Form::blob(cx, l.hairline + 20.0, 34.0, 20.0, 0.0, 0.7),
             Form::blob(nx, l.eye + 4.0, 4.5, 11.0, 0.0, 0.35),
         ];
-        let oil = vec![
-            Form::blob(cx, l.hairline + 20.0, 30.0, 16.0, 0.0, 0.4),
-            Form::blob(nx, l.nose - 12.0, 7.0, 14.0, 0.0, 0.45),
-            Form::blob(cx, s.chin - 9.0, 10.0, 7.0, 0.0, 0.40),
-        ];
         let mut pores = vec![
             Form::blob(nx, l.nose - 6.0, ns.tip * 1.4, 14.0, 0.0, 0.8),
             Form::blob(cx, l.hairline + 22.0, 26.0, 14.0, 0.0, 0.25),
@@ -202,7 +180,6 @@ impl Zones {
             flush,
             pale,
             orbit,
-            oil,
             nostrils,
             pores,
         }
@@ -221,7 +198,7 @@ impl Zones {
 pub struct Features;
 
 impl Features {
-    /// Pigment and sheen over the whole head, the razor's work included.
+    /// Pigment over the whole head, the razor's work included.
     #[allow(clippy::too_many_arguments)]
     pub fn complexion(
         grid: &Grid,
@@ -233,7 +210,7 @@ impl Features {
         growth: &Growth,
         aggr: f32,
         grey: f32,
-    ) -> Complexion {
+    ) -> Vec<Linear> {
         let zones = Zones::new(l, id);
         let brows = l.eyes.each_ref().map(|eye| Brow::new(l, id, eye, aggr));
         let brow_col = t
@@ -254,7 +231,7 @@ impl Features {
             )
         });
 
-        let albedo = grid.map(|i, j, x, y| {
+        grid.map(|i, j, x, y| {
             let k = j * grid.w + i;
             if cover.v[k] <= 0.0 {
                 return Linear::BLACK;
@@ -314,28 +291,7 @@ impl Features {
                 .map(|b| b.density(x, y, noise))
                 .fold(0.0, f32::max);
             a.mix(brow_col, brow * 0.94)
-        });
-
-        let oil = grid.map(|i, j, x, y| {
-            let k = j * grid.w + i;
-            if cover.v[k] <= 0.0 {
-                return 0.0;
-            }
-            let lips = Ramp::smooth(-0.3, 0.6, upper.v[k].max(lower.v[k]));
-            (0.18 + Zones::sum(&zones.oil, x, y))
-                .max(lips * 0.85)
-                .min(1.0)
-        });
-        // The skin's own surface: pores sunk into it, a fine grain across
-        // it and a gentle unevenness under both
-        let micro = Plane::from_fn(*grid, |x, y| {
-            let pit = Self::pore(noise, x, y, Zones::coarse(&zones.pores, x, y));
-            -0.09 * pit
-                + 0.02 * noise.at(x * 2.2 + 5.0, y * 2.2)
-                + 0.07 * noise.fbm(x * 0.55 + 71.0, y * 0.55, 2)
-        });
-
-        Complexion { albedo, oil, micro }
+        })
     }
 
     /// How deep a pore pit is at a point, 0..1: one pore to a cell of
@@ -367,21 +323,19 @@ impl Features {
         })
     }
 
-    /// The eyeball at a point inside the opening, lit.
-    #[allow(clippy::too_many_arguments)]
-    pub fn eye(
-        x: f32,
-        y: f32,
-        z: f32,
-        eye: &Eye,
-        ball: &Eyeball,
-        t: &Tones,
-        noise: &Noise,
-        studio: &Studio,
-        occ: &Occlusion,
-        seed: f32,
-    ) -> Linear {
-        let n = ball.normal(x, y);
+    /// How much of each pixel is open eye rather than lid: the lids meet
+    /// the ball over a hair's breadth of wet margin, not along a cut edge.
+    pub fn openings(grid: &Grid, l: &Landmarks) -> Plane {
+        let [a, b] = l.eyes.each_ref().map(|e| {
+            e.opening
+                .distance(grid)
+                .map(|_, d| Ramp::smooth(-0.35, 0.45, d))
+        });
+        a.map(|k, v| v.max(b.v[k]))
+    }
+
+    /// The eyeball at a point inside the opening.
+    pub fn eye(x: f32, y: f32, eye: &Eye, t: &Tones, noise: &Noise, seed: f32) -> Linear {
         let (ix, iy) = eye.iris;
         let (dx, dy) = (x - ix, y - iy);
         let r = (dx * dx + dy * dy).sqrt();
@@ -391,7 +345,7 @@ impl Features {
         let reach = (eye.outer.0 - eye.cx).abs().max(1.0);
         let across = ((x - eye.cx) / reach).abs();
         let veins = Ramp::smooth(0.45, 0.8, noise.at(x * 1.6 + seed, y * 1.6));
-        let mut albedo = t.sclera.mix(
+        let mut c = t.sclera.mix(
             Linear::new(0.52, 0.26, 0.24),
             Ramp::smooth(0.35, 1.05, across) * (0.40 + 0.25 * veins),
         );
@@ -400,50 +354,25 @@ impl Features {
             1.2,
             ((x - eye.inner.0).powi(2) + (y - eye.inner.1).powi(2)).sqrt(),
         );
-        albedo = albedo.mix(t.caruncle, caruncle);
+        c = c.mix(t.caruncle, caruncle);
 
         if r < ir + 0.5 {
             let iris = Self::iris(dx, dy, r, eye, t, noise, seed);
-            albedo = albedo.mix(iris, Ramp::smooth(ir + 0.35, ir - 0.2, r));
+            c = c.mix(iris, Ramp::smooth(ir + 0.35, ir - 0.2, r));
         }
 
-        // The iris is a disc facing out under the cornea, not the ball's
-        // curve: flatten the normal over it
-        let over_iris = Ramp::smooth(ir + 0.4, ir - 0.4, r);
-        let n_lit = Vec3::normalized([
-            n[0] * (1.0 - 0.6 * over_iris),
-            n[1] * (1.0 - 0.6 * over_iris),
-            n[2],
-        ]);
-        let shadow = occ.shadow(x, y, z, studio.key.dir, 0.32);
-        let ao = occ.ambient(x, y, z);
-        // The lid and its lashes shade the top of the ball
+        // The upper lid lays a flat band of shade across the top of the ball
         let below_lid = eye.upper.foot(x, y).d * eye.side;
-        let lash_shade = 0.45 + 0.55 * Ramp::smooth(0.0, 3.0, below_lid);
-        let mut c = albedo * studio.skin_light(n_lit, shadow, ao) * lash_shade;
+        c = c * (0.6 + 0.4 * Ramp::smooth(0.8, 1.3, below_lid));
 
-        // A wet surface: the broad sheen of the ball, then the sharp image
-        // of the soft box in the cornea
-        c += studio.specular(n, 0.14, 0.03, shadow) * 1.4;
-        let rc = ir * 1.5;
-        if r < rc {
-            let (cx_, cy_) = (dx / rc, dy / rc);
-            let cz = (1.0 - cx_ * cx_ - cy_ * cy_).max(0.0).sqrt();
-            let refl = [2.0 * cz * cx_, 2.0 * cz * cy_, 2.0 * cz * cz - 1.0];
-            for (lamp, (wx, wy), gain, vis) in [
-                (&studio.key, (0.11, 0.13), 2.6, shadow.max(0.25)),
-                (&studio.fill, (0.07, 0.09), 1.0, 1.0),
-            ] {
-                let bx = ((refl[0] - lamp.dir[0]) / wx).abs();
-                let by = ((refl[1] - lamp.dir[1]) / wy).abs();
-                let hit = 1.0 - Ramp::smooth(0.75, 1.0, bx.max(by));
-                c += lamp.color * (hit * gain * vis * lash_shade.max(0.7));
-            }
-        }
-        // The tear line along the lower lid catches the light
-        let above_lower = -eye.lower.foot(x, y).d * eye.side;
-        let wet = Ramp::smooth(0.0, 0.25, above_lower) * Ramp::smooth(0.75, 0.3, above_lower);
-        c + Linear::new(0.5, 0.36, 0.34) * (wet * 0.10 * shadow.max(0.3))
+        // The lamp in the cornea: one spot, high on the side it stands
+        let (hx, hy) = (ix - ir * 0.38, iy - ir * 0.42);
+        let spot = Ramp::smooth(
+            ir * 0.30,
+            ir * 0.18,
+            ((x - hx).powi(2) + (y - hy).powi(2)).sqrt(),
+        );
+        c.mix(Linear::gray(0.92), spot * 0.9)
     }
 
     fn iris(dx: f32, dy: f32, r: f32, eye: &Eye, t: &Tones, noise: &Noise, seed: f32) -> Linear {
@@ -523,9 +452,10 @@ impl Features {
         (cover > 0.002).then_some((t.lash, cover))
     }
 
-    /// Both ears: `(cover, depth, how far out along the ear)` — the ear
-    /// hangs off the side of the skull and stands forward of the plane
-    /// behind it, angled so its bowl faces the camera.
+    /// Both ears: `(cover, shade)` — the ear hangs off the side of the
+    /// skull with its bowl toward the camera. The hollows of its folds take
+    /// the shadow tone, and the far ear, turned from the light, a little
+    /// all over.
     pub fn ears(grid: &Grid, l: &Landmarks) -> (Plane, Plane) {
         let e = &l.ear;
         let (top, bottom) = (e.top, e.bottom);
@@ -534,7 +464,7 @@ impl Features {
         let w = e.width;
         let anchor = l.half_width_at(mid);
         let mut cover = Plane::new(*grid, 0.0);
-        let mut depth = Plane::new(*grid, 0.0);
+        let mut shade = Plane::new(*grid, 0.0);
         for side in [-1.0f32, 1.0] {
             // `f` is in ear widths out from the head's edge: 0 is the
             // silhouette, 1 the furthest the helix stands off it
@@ -635,15 +565,13 @@ impl Features {
                         continue;
                     }
                     let (x, y) = (grid.x(i), grid.y(j));
-                    let f = (side * (x - l.cx) - off(y)) / w;
-                    let z = 12.0 * (1.0 - 0.85 * f.clamp(-0.5, 1.0))
-                        + forms.iter().map(|m| m.at(x, y)).sum::<f32>();
+                    let folds = forms.iter().map(|m| m.at(x, y)).sum::<f32>();
                     cover.v[k] = cover.v[k].max(c.v[k]);
-                    depth.v[k] = z.max(0.5);
+                    shade.v[k] = (Ramp::smooth(-0.4, -1.4, folds) * 0.5).max(side.max(0.0) * 0.3);
                 }
             }
         }
-        (cover, depth)
+        (cover, shade)
     }
 
     /// The per-eye seed for strand and fibre noise.

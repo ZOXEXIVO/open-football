@@ -1,5 +1,4 @@
 mod beard;
-mod body;
 mod canvas;
 mod color;
 mod features;
@@ -8,7 +7,6 @@ mod geometry;
 mod hair;
 mod identity;
 mod noise;
-mod relief;
 pub mod routes;
 mod shading;
 pub mod skin;
@@ -17,7 +15,7 @@ mod tones;
 /// Cache-busting version for face URLs. Responses are served `immutable`,
 /// so bump this whenever generator output changes — every template injects
 /// it via `{{ crate::face::FACE_VERSION }}`.
-pub const FACE_VERSION: u32 = 14;
+pub const FACE_VERSION: u32 = 15;
 
 /// Where the real head shots live: the picture library every `<img>` on the
 /// site already points at, and the first thing the match viewer tries for a
@@ -49,7 +47,7 @@ struct FacePathParams {
     player_id: u32,
 }
 
-/// The profile-page portrait: studio card, shoulders in the club's shirt.
+/// The profile-page portrait, on a studio card.
 async fn portrait_action(state: State<GameAppData>, path: Path<FacePathParams>) -> Response {
     face_response(state, path, FaceFrame::Portrait).await
 }
@@ -101,21 +99,14 @@ async fn face_response(
 
     drop(guard);
 
-    // A render is tens of milliseconds of arithmetic: off the async
-    // workers, and after the world lock is let go
-    let player_id = path.player_id;
-    let rendered = tokio::task::spawn_blocking(move || {
-        let sitter = Sitter {
-            player_id,
-            age,
-            skin,
-            heft,
-            aggression,
-        };
-        Portrait::take(&sitter, frame)
-    })
-    .await;
-    let Ok(bytes) = rendered else {
+    let sitter = Sitter {
+        player_id: path.player_id,
+        age,
+        skin,
+        heft,
+        aggression,
+    };
+    let Some(bytes) = Portrait::commission(sitter, frame).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
 
