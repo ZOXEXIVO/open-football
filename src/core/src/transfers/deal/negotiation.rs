@@ -1,8 +1,9 @@
-use crate::club::board::mandate::SigningMandate;
 use crate::PlayerFieldPositionGroup;
+use crate::club::board::mandate::SigningMandate;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::{PlayerStance, TermsRefusalCause};
+use crate::transfers::gate::fit::SquadFitSnapshot;
 use crate::transfers::loan::guard::LoanGuardVerdict;
 use crate::transfers::squad::plan::BriefTier;
 use crate::utils::IntegerUtils;
@@ -38,6 +39,30 @@ pub enum NegotiationRejectionReason {
     /// [`crate::transfers::TransferRoutePolicy`] route block list on the
     /// current sim date (today: Russia ↔ Ukraine after 2022-02-24).
     CountryPairRouteBlocked,
+    /// The buyer filled the position while the deal was in flight — the
+    /// man it staged the offer for would now arrive surplus.
+    SquadNoLongerNeedsHim,
+}
+
+/// Who a staged free-agent pursuit expects to sign, as the market read him
+/// the day it staged the offer. The deal completes days later, and the
+/// squad he is joining can have changed by then.
+#[derive(Debug, Clone, Copy)]
+pub struct FreeAgentArrival {
+    pub group: PlayerFieldPositionGroup,
+    pub ability: u8,
+    /// What the buyer can see of his ceiling — never hidden PA.
+    pub potential: u8,
+    pub age: u8,
+}
+
+impl FreeAgentArrival {
+    /// Whether he would land surplus in the squad `fit` describes, on the
+    /// rule every signing door applies. A side too thin to field still
+    /// takes who it can get.
+    pub(crate) fn lands_surplus_in(&self, fit: &SquadFitSnapshot) -> bool {
+        !fit.is_emergency() && fit.would_be_surplus(self.ability, self.potential, self.age)
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -165,6 +190,9 @@ pub struct TransferNegotiation {
     /// re-opened the loan over-accumulation hole. `None` for permanent
     /// deals and for legacy rows (the fold then falls back to the lookup).
     pub loan_target_profile: Option<(PlayerFieldPositionGroup, u8)>,
+    /// Set by the free-agent depth stager: the arrival the medical checks
+    /// the buyer's squad against again before the deal completes.
+    pub free_agent_arrival: Option<FreeAgentArrival>,
     /// The highest fee at which this deal is still worth doing to THIS
     /// buyer — the fee where its
     /// [`crate::transfers::UpgradeMath`] value reaches zero,
@@ -298,6 +326,7 @@ impl TransferNegotiation {
             foreign_seller_floor: None,
             foreign_seller_finances: None,
             loan_target_profile: None,
+            free_agent_arrival: None,
             buyer_ceiling_fee: None,
             approved_fee: None,
             rehearings: 0,

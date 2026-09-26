@@ -185,6 +185,10 @@ pub struct PlayingTimeFrustrationConfig {
     pub promise_breach_threshold: f32,
     pub max_negative_playing_time_factor: f32,
     pub max_positive_playing_time_factor: f32,
+    /// Owed matches at which frustration is ~63% of its ceiling. Below it
+    /// a few missed matches are shrugged off; past it the grievance builds
+    /// fast and saturates.
+    pub owed_match_patience: f32,
 }
 
 impl Default for PlayingTimeFrustrationConfig {
@@ -203,11 +207,19 @@ impl Default for PlayingTimeFrustrationConfig {
             promise_breach_threshold: -12.0,
             max_negative_playing_time_factor: -20.0,
             max_positive_playing_time_factor: 20.0,
+            owed_match_patience: 7.0,
         }
     }
 }
 
 impl PlayingTimeFrustrationConfig {
+    /// 0..1 frustration for `owed` matches the player believes he was
+    /// denied: patience first, then a grievance that builds and saturates.
+    pub fn owed_severity(&self, owed: f32) -> f32 {
+        let x = owed.max(0.0) / self.owed_match_patience;
+        1.0 - (-(x * x)).exp()
+    }
+
     /// Expected share of the club's eligible matches a player of this
     /// squad status counts on starting. Drives the deficit model — the
     /// gap between expectation and actual involvement is what frustrates.
@@ -499,7 +511,6 @@ impl Player {
         club_ctx: ClubMoraleContext,
     ) {
         let age = DateUtils::age(self.birth_date, now);
-        let age_sensitivity = if (24..=30).contains(&age) { 1.3 } else { 1.0 };
 
         // Decay old events weekly
         self.happiness.decay_events();
@@ -511,7 +522,7 @@ impl Player {
         self.on_unresolved_speculation_pressure(recent_interest_count);
 
         // 1. Playing time vs squad status
-        let playing_time_factor = self.calculate_playing_time_factor(age_sensitivity, now);
+        let playing_time_factor = self.calculate_playing_time_factor(now);
         self.happiness.factors.playing_time = playing_time_factor;
 
         // 2. Salary vs ability
@@ -681,14 +692,26 @@ impl Player {
     /// kicked a ball can't be frustrated about minutes he was never
     /// denied, and a player who is repeatedly overlooked accrues a real
     /// deficit even though the few games he *did* play were all starts.
-    fn calculate_playing_time_factor(&self, age_sensitivity: f32, now: NaiveDate) -> f32 {
+    ///
+    /// Frustration grows with the matches he is OWED, on one patience
+    /// curve for every role: the role only sets how fast they accrue. A
+    /// key man dropped for ten matches is furious; a backup who expected a
+    /// cup tie now and then grows restless over a barren season.
+    fn calculate_playing_time_factor(&self, now: NaiveDate) -> f32 {
         let cfg = PlayingTimeFrustrationConfig::default();
         let opp = self.playing_time_opportunity(now);
+        let status = self.contract.as_ref().map(|c| &c.squad_status);
+        let loan_min_appearances = self
+            .contract_loan
+            .as_ref()
+            .and_then(|c| c.loan_min_appearances);
 
-        // ── Zero-match hard block — never overridden ──
-        if opp.eligible_official_matches_since_join == 0 {
+        // The same gate every playing-time signal reads: no fixtures yet,
+        // inside the hard grace, below the status's sample, or told he is
+        // not needed — his minutes cannot be judged.
+        let Some(grace) = opp.can_judge(status, &cfg, loan_min_appearances) else {
             return 0.0;
-        }
+        };
         // Sample-size guard — don't judge on a handful of fixtures.
         if opp.eligible_official_matches_since_join < cfg.min_player_apps_sample {
             return 0.0;
@@ -702,11 +725,9 @@ impl Player {
         }
         let ability_factor = ((ability - 40.0) / 80.0).clamp(0.0, 1.0);
 
-        let status = self.contract.as_ref().map(|c| &c.squad_status);
-        let expected_share = self.own_expected_start_share(status, now);
+        let expectation = CareerExpectation::of(self, status, now);
         let eligible = opp.eligible_official_matches_since_join as f32;
-        let expected_raw = eligible * expected_share;
-        let expected = expected_raw.max(1.0);
+        let expected_raw = eligible * expectation.expected_start_share;
         let actual = opp.actual_involvement_score(&cfg);
 
         if actual >= expected_raw {
@@ -719,15 +740,15 @@ impl Player {
             (surplus * cfg.max_positive_playing_time_factor * ability_factor)
                 .clamp(0.0, cfg.max_positive_playing_time_factor)
         } else {
-            // Below expectation — frustration scaled by ability, age
-            // sensitivity, and the post-transfer grace ramp.
-            let deficit_ratio = ((expected_raw - actual) / expected).clamp(0.0, 1.0);
-            let frustration_multiplier = opp.frustration_multiplier(&cfg);
+            // Below expectation — frustration scaled by the matches owed,
+            // ability, what the minutes are worth to his career, and the
+            // post-transfer grace ramp.
+            let severity = cfg.owed_severity(expected_raw - actual);
             (cfg.max_negative_playing_time_factor
-                * deficit_ratio
+                * severity
                 * ability_factor
-                * age_sensitivity
-                * frustration_multiplier)
+                * expectation.stake
+                * grace)
                 .clamp(cfg.max_negative_playing_time_factor, 0.0)
         }
     }
@@ -1680,7 +1701,7 @@ mod playing_time_opportunity_tests {
         );
         // The morale factor must read neutral — the player was never
         // denied minutes he had a chance at.
-        assert_eq!(p.calculate_playing_time_factor(1.3, now()), 0.0);
+        assert_eq!(p.calculate_playing_time_factor(now()), 0.0);
     }
 
     // ── Scenario 2: club plays matches, KeyPlayer gets 0 minutes ──
@@ -1701,7 +1722,7 @@ mod playing_time_opportunity_tests {
         );
 
         // Morale factor strongly negative (10 eligible ≥ 5 sample).
-        let factor = p.calculate_playing_time_factor(1.0, now());
+        let factor = p.calculate_playing_time_factor(now());
         assert!(factor < -10.0, "benched KeyPlayer factor was {factor}");
     }
 
@@ -1732,7 +1753,7 @@ mod playing_time_opportunity_tests {
         p.happiness.sub_apps_since_join = 3;
         p.happiness.left_out_since_join = 15;
 
-        let factor = p.calculate_playing_time_factor(1.0, now());
+        let factor = p.calculate_playing_time_factor(now());
         assert!(factor < -8.0, "under-involved regular factor was {factor}");
     }
 
@@ -1745,8 +1766,99 @@ mod playing_time_opportunity_tests {
         p.happiness.starts_since_join = 18;
         p.happiness.sub_apps_since_join = 2;
 
-        let factor = p.calculate_playing_time_factor(1.0, now());
+        let factor = p.calculate_playing_time_factor(now());
         assert!(factor > 0.0, "ever-present regular factor was {factor}");
+    }
+
+    /// A player of this status left out of every one of `eligible` matches.
+    fn unused(status: PlayerSquadStatus, eligible: u16) -> Player {
+        let mut p = build_player(130, status, 200);
+        p.happiness.eligible_official_matches_since_join = eligible;
+        p.happiness.left_out_since_join = eligible;
+        p
+    }
+
+    #[test]
+    fn an_unused_backup_is_restless_not_aggrieved_early_on() {
+        let backup =
+            unused(PlayerSquadStatus::MainBackupPlayer, 20).calculate_playing_time_factor(now());
+        let key = unused(PlayerSquadStatus::KeyPlayer, 10).calculate_playing_time_factor(now());
+        assert!(
+            backup < 0.0 && backup > -5.0,
+            "twenty matches without a game is a concern for a backup, not a major one: {backup}"
+        );
+        assert!(
+            key < backup * 2.0,
+            "the benched key man is far angrier: {key} vs {backup}"
+        );
+    }
+
+    #[test]
+    fn a_barren_season_hardens_a_young_ambitious_backups_grievance() {
+        let mut p = unused(PlayerSquadStatus::MainBackupPlayer, 45);
+        p.birth_date = NaiveDate::from_ymd_opt(2003, 1, 1).unwrap();
+        p.attributes.ambition = 16.0;
+        let factor = p.calculate_playing_time_factor(now());
+        assert!(
+            factor <= PlayingTimeFrustrationConfig::default().complaint_threshold,
+            "a season on the outside is a complaint for a young ambitious backup: {factor}"
+        );
+    }
+
+    #[test]
+    fn the_same_deficit_brings_the_same_frustration_whatever_the_status() {
+        // Owed three matches either way: a key man who started four of ten,
+        // a backup who played none of twenty.
+        let mut key = build_player(130, PlayerSquadStatus::KeyPlayer, 200);
+        key.happiness.eligible_official_matches_since_join = 10;
+        key.happiness.starts_since_join = 4;
+        key.happiness.left_out_since_join = 6;
+        let backup = unused(PlayerSquadStatus::MainBackupPlayer, 20);
+
+        let (k, b) = (
+            key.calculate_playing_time_factor(now()),
+            backup.calculate_playing_time_factor(now()),
+        );
+        assert!(
+            (k - b).abs() < 1e-4,
+            "same owed matches, same factor: {k} vs {b}"
+        );
+    }
+
+    #[test]
+    fn a_not_needed_player_is_neutral_about_minutes() {
+        assert_eq!(
+            unused(PlayerSquadStatus::NotNeeded, 20).calculate_playing_time_factor(now()),
+            0.0
+        );
+    }
+
+    #[test]
+    fn a_backup_below_his_sample_is_neutral() {
+        assert_eq!(
+            unused(PlayerSquadStatus::MainBackupPlayer, 5).calculate_playing_time_factor(now()),
+            0.0,
+            "a backup's minutes are judged over a longer sample than five matches"
+        );
+    }
+
+    #[test]
+    fn a_veteran_minds_less_than_a_young_ambitious_player() {
+        let mut young = unused(PlayerSquadStatus::MainBackupPlayer, 30);
+        young.birth_date = NaiveDate::from_ymd_opt(2003, 1, 1).unwrap();
+        young.attributes.ambition = 16.0;
+        let mut veteran = unused(PlayerSquadStatus::MainBackupPlayer, 30);
+        veteran.birth_date = NaiveDate::from_ymd_opt(1991, 1, 1).unwrap();
+
+        let (y, v) = (
+            young.calculate_playing_time_factor(now()),
+            veteran.calculate_playing_time_factor(now()),
+        );
+        assert!(
+            y < v,
+            "the younger man's frustration is the larger: {y} vs {v}"
+        );
+        assert!(v < 0.0, "the veteran still minds: {v}");
     }
 
     // ── Scenario 3 & 4: loan audit gate keys off matches, not days ──
@@ -2246,7 +2358,7 @@ mod morale_timeline_tests {
 
         // 0 official matches → no complaint.
         assert_eq!(
-            player.calculate_playing_time_factor(1.0, now),
+            player.calculate_playing_time_factor(now),
             0.0,
             "0 official matches: playing-time factor must be neutral"
         );
@@ -2255,7 +2367,7 @@ mod morale_timeline_tests {
         player.happiness.eligible_official_matches_since_join = 1;
         player.happiness.left_out_since_join = 1;
         assert_eq!(
-            player.calculate_playing_time_factor(1.0, now),
+            player.calculate_playing_time_factor(now),
             0.0,
             "1 official match is below the sample floor: still neutral"
         );
@@ -2276,7 +2388,7 @@ mod morale_timeline_tests {
         player.happiness.eligible_official_matches_since_join = 10;
         player.happiness.left_out_since_join = 10;
 
-        let factor = player.calculate_playing_time_factor(1.0, now);
+        let factor = player.calculate_playing_time_factor(now);
         assert!(
             factor <= -8.0,
             "a benched key player with 10 missed eligible matches should be \

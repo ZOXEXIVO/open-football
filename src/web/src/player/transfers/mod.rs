@@ -14,7 +14,7 @@ use core::transfers::{
     NegotiationPhase, NegotiationStatus, TransferListingStatus, TransferListingType,
 };
 use core::utils::FormattingUtils;
-use core::{PlayerStatusType, SimulatorData};
+use core::{Player, PlayerStatusType, SimulatorData};
 use serde::Deserialize;
 use std::cmp::Reverse;
 
@@ -163,6 +163,31 @@ impl TransferReasonView {
     }
 }
 
+/// Why the club put him on the market, beside the listing status: the
+/// reason recorded with the decision that listed him — never whichever
+/// row the register happened to write last — and nothing when he is not
+/// listed at all.
+struct ListingReasonView;
+
+impl ListingReasonView {
+    fn of(player: &Player, statuses: &[PlayerStatusType], i18n: &I18n) -> String {
+        let listed = statuses.iter().any(|s| {
+            matches!(
+                s,
+                PlayerStatusType::Lst | PlayerStatusType::Loa | PlayerStatusType::Frt
+            )
+        });
+        if !listed {
+            return String::new();
+        }
+        player
+            .decision_history
+            .latest_listing()
+            .map(|d| i18n.t(&d.decision).to_string())
+            .unwrap_or_default()
+    }
+}
+
 fn status_type_to_i18n_key(status: &PlayerStatusType) -> &'static str {
     match status {
         PlayerStatusType::Lst => "player_status_listed",
@@ -287,12 +312,7 @@ pub async fn player_transfers_action(
             .iter()
             .map(|s| status_type_to_i18n_key(s).to_string())
             .collect(),
-        reason: player
-            .decision_history
-            .items
-            .last()
-            .map(|d| i18n.t(&d.decision).to_string())
-            .unwrap_or_default(),
+        reason: ListingReasonView::of(player, &transfer_related, &i18n),
     };
 
     // Get transfer listing for this player
@@ -554,9 +574,16 @@ fn get_neighbor_teams(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
+    use core::club::player::builder::PlayerBuilder;
     use core::club::player::calculators::FreeAgentReleaseReason;
+    use core::shared::fullname::FullName;
     use core::transfers::deal::reason::{AbilityBand, ScoutVerdict};
     use core::transfers::pipeline::{ScoutingRecommendation, TransferNeedReason};
+    use core::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
     use std::collections::HashMap;
 
     fn en_map() -> HashMap<String, String> {
@@ -704,5 +731,55 @@ mod tests {
         );
         assert!(TransferReasonView::scout(&i18n, &raid).is_empty());
         assert!(TransferReasonView::motive(&i18n, &TransferReason::default()).is_empty());
+    }
+
+    fn loan_listed_then_pathway_changed() -> Player {
+        let mut player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Seb".to_string(), "Nava".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(2008, 5, 19).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        let day = NaiveDate::from_ymd_opt(2031, 11, 1).unwrap();
+        player.decision_history.add(
+            day,
+            "dec_board_loan_listed".to_string(),
+            "dec_reason_development_pathway".to_string(),
+            "dec_decided_board".to_string(),
+        );
+        player.decision_history.add(
+            day,
+            "dec_pathway_stage_changed".to_string(),
+            "pathway_stage_loan_out".to_string(),
+            "dec_decided_board".to_string(),
+        );
+        player
+    }
+
+    #[test]
+    fn a_pathway_change_after_the_listing_does_not_replace_its_reason() {
+        let i18n = I18n::for_test(en_map());
+        let player = loan_listed_then_pathway_changed();
+        assert_eq!(
+            ListingReasonView::of(&player, &[PlayerStatusType::Loa], &i18n),
+            i18n.t("dec_reason_development_pathway")
+        );
+    }
+
+    #[test]
+    fn an_unlisted_player_shows_no_listing_reason() {
+        let i18n = I18n::for_test(en_map());
+        let player = loan_listed_then_pathway_changed();
+        assert!(ListingReasonView::of(&player, &[PlayerStatusType::Unh], &i18n).is_empty());
     }
 }

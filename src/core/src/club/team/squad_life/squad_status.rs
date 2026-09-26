@@ -115,6 +115,73 @@ impl RecentInvolvementSample {
     }
 }
 
+/// A squad's ability ladder per position group, with the club's own level
+/// as the ceiling — the one ranking the monthly pass labels members by and
+/// every signing route projects a newcomer into. Offering a role off any
+/// other reading lets the offer and the first monthly label disagree about
+/// the same man.
+#[derive(Debug, Clone)]
+pub struct SquadLadder {
+    groups: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    level: ClubLevelAnchor,
+}
+
+impl SquadLadder {
+    pub fn of(team: &Team) -> Self {
+        let mut groups: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        for p in team.players.iter() {
+            groups
+                .entry(p.position().position_group())
+                .or_default()
+                .push(p.player_attributes.current_ability);
+        }
+        for cas in groups.values_mut() {
+            cas.sort_unstable_by(|a, b| b.cmp(a));
+        }
+        SquadLadder {
+            groups,
+            level: ClubLevelAnchor::for_reputation(team.reputation.overall_score()),
+        }
+    }
+
+    /// The club's level ceiling on every label.
+    pub fn level(&self) -> ClubLevelAnchor {
+        self.level
+    }
+
+    /// Current abilities of the group, best first.
+    pub fn group(&self, group: PlayerFieldPositionGroup) -> &[u8] {
+        self.groups.get(&group).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// A member's rank label before the monthly pass's evidence and level
+    /// adjustments — he is already on the ladder.
+    pub fn member_status(
+        &self,
+        ca: u8,
+        age: u8,
+        group: PlayerFieldPositionGroup,
+    ) -> PlayerSquadStatus {
+        PlayerSquadStatus::calculate(ca, age, group, self.group(group))
+    }
+
+    /// The label a newcomer would hold the day he arrives: ranked among the
+    /// group with himself added, capped by the club's level. With no match
+    /// evidence and no promise yet, this is exactly what the next monthly
+    /// pass gives him.
+    pub fn arrival_status(
+        &self,
+        ca: u8,
+        age: u8,
+        group: PlayerFieldPositionGroup,
+    ) -> PlayerSquadStatus {
+        let mut cas = self.group(group).to_vec();
+        let at = cas.partition_point(|&c| c > ca);
+        cas.insert(at, ca);
+        PlayerSquadStatus::calculate_at_level(ca, age, group, &cas, Some(self.level))
+    }
+}
+
 pub struct SquadStatusUpdater;
 
 impl SquadStatusUpdater {
@@ -139,17 +206,7 @@ impl SquadStatusUpdater {
             Self::apply_development_labels(team, date);
             return;
         }
-        let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
-        for p in team.players.iter() {
-            let g = p.position().position_group();
-            by_group
-                .entry(g)
-                .or_default()
-                .push(p.player_attributes.current_ability);
-        }
-        for cas in by_group.values_mut() {
-            cas.sort_unstable_by(|a, b| b.cmp(a));
-        }
+        let ladder = SquadLadder::of(team);
 
         let explains_role_changes = team
             .staffs
@@ -159,7 +216,7 @@ impl SquadStatusUpdater {
         let team_reputation = team.reputation.world;
         // What this club expects of a starter: the rank inside the group
         // hands out the labels, the club's level caps them.
-        let club_level = ClubLevelAnchor::for_reputation(team.reputation.overall_score());
+        let club_level = ladder.level();
         let recent = RecentInvolvementSample::of_team(team, date);
 
         for player in team.players.iter_mut() {
@@ -177,9 +234,8 @@ impl SquadStatusUpdater {
             let mut transition: Option<(u8, u8)> = None;
             let mut backed_after_loan = false;
             if let Some(ref mut contract) = player.contract {
-                let group_cas = by_group.get(&group).map(|v| v.as_slice()).unwrap_or(&[]);
                 let old_rank = Self::senior_rank(&contract.squad_status);
-                let mut new_status = PlayerSquadStatus::calculate(ca, age, group, group_cas);
+                let mut new_status = ladder.member_status(ca, age, group);
                 // Don't let a CA-strong label over-promise a role the player
                 // isn't actually getting: a keeper stuck behind the number
                 // one, or an out-of-favour senior, reads as a backup rather
@@ -491,9 +547,10 @@ mod development_squad_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamBuilder,
-        TeamReputation, TeamType, TrainingSchedule,
+        AcceptContractHandler, PersonAttributes, PlayerAttributes, PlayerClubContract,
+        PlayerCollection, PlayerContractProposal, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, Team, TeamBuilder, TeamReputation,
+        TeamType, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -709,6 +766,88 @@ mod development_squad_tests {
         let c = team.players.players[0].contract.as_ref().unwrap();
         assert_eq!(c.squad_status, PlayerSquadStatus::MainBackupPlayer);
         assert!(c.promised_squad_status.is_none());
+    }
+
+    fn keepers_of_three() -> Team {
+        squad_of(
+            TeamType::Main,
+            vec![
+                keeper(1, 1996, 140, PlayerSquadStatus::KeyPlayer),
+                keeper(2, 1997, 130, PlayerSquadStatus::MainBackupPlayer),
+                keeper(3, 1998, 120, PlayerSquadStatus::MainBackupPlayer),
+            ],
+        )
+    }
+
+    #[test]
+    fn projected_backup_gets_the_backup_label_on_the_first_monthly_pass() {
+        let mut team = squad_of(
+            TeamType::Main,
+            vec![
+                keeper(1, 1996, 140, PlayerSquadStatus::KeyPlayer),
+                keeper(2, 1997, 130, PlayerSquadStatus::MainBackupPlayer),
+            ],
+        );
+        let projected =
+            team.squad_ladder()
+                .arrival_status(125, 23, PlayerFieldPositionGroup::Goalkeeper);
+        assert_eq!(projected, PlayerSquadStatus::MainBackupPlayer);
+
+        let mut newcomer = keeper(9, 2003, 125, PlayerSquadStatus::MainBackupPlayer);
+        newcomer.last_transfer_date = Some(today() - Duration::days(20));
+        team.players.players.push(newcomer);
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(status_of(&team, 9), projected);
+    }
+
+    #[test]
+    fn a_promise_carried_through_a_renewal_still_floors_the_monthly_label() {
+        let mut promised = keeper(3, 1998, 120, PlayerSquadStatus::FirstTeamRegular);
+        promised.contract.as_mut().unwrap().promised_squad_status = Some((
+            PlayerSquadStatus::FirstTeamRegular,
+            today() + Duration::days(200),
+        ));
+        AcceptContractHandler::process(
+            &mut promised,
+            PlayerContractProposal::basic(40_000, 4, 10, 0, 0, None),
+            today(),
+        );
+        let mut team = squad_of(
+            TeamType::Main,
+            vec![
+                keeper(1, 1996, 140, PlayerSquadStatus::KeyPlayer),
+                keeper(2, 1997, 130, PlayerSquadStatus::MainBackupPlayer),
+                promised,
+            ],
+        );
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(
+            status_of(&team, 3),
+            PlayerSquadStatus::FirstTeamRegular,
+            "the third keeper's promise outlives the extension, so the breach stays visible"
+        );
+    }
+
+    #[test]
+    fn a_fourth_keeper_below_three_projects_as_not_needed() {
+        let team = keepers_of_three();
+        assert_eq!(
+            team.squad_ladder()
+                .arrival_status(110, 27, PlayerFieldPositionGroup::Goalkeeper),
+            PlayerSquadStatus::NotNeeded
+        );
+    }
+
+    #[test]
+    fn a_keeper_who_outranks_the_number_one_projects_as_key() {
+        let team = keepers_of_three();
+        assert_eq!(
+            team.squad_ladder()
+                .arrival_status(150, 27, PlayerFieldPositionGroup::Goalkeeper),
+            PlayerSquadStatus::KeyPlayer
+        );
     }
 }
 

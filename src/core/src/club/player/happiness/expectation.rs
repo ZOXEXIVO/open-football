@@ -25,6 +25,7 @@
 //! exactly, which is what keeps the settled-squad-player calibration
 //! intact.
 
+use crate::club::CareerRunway;
 use crate::club::person::Person;
 use crate::club::player::player::Player;
 use crate::club::player::statistics::StuckCareerScan;
@@ -43,6 +44,11 @@ pub struct CareerExpectation {
     /// table — carried so consumers can talk about the gap rather than
     /// re-deriving it.
     pub club_expected_start_share: f32,
+    /// How much being denied those minutes costs him — the prime years he
+    /// has left and how hard he pushes, [`Self::MIN_STAKE`]..
+    /// [`Self::MIN_STAKE`] + [`Self::STAKE_SPAN`]. Continuous in age: a
+    /// birthday never changes how much a missed match hurts.
+    pub stake: f32,
 }
 
 impl CareerExpectation {
@@ -51,6 +57,10 @@ impl CareerExpectation {
     /// maximally ambitious deputy believes he should play a quarter of
     /// the matches, not that he is the first name on the team sheet.
     const MAX_AMBITION_UPLIFT: f32 = 0.08;
+    /// A man winding down still minds being left out — just less.
+    const MIN_STAKE: f32 = 0.7;
+    /// What a young, maximally ambitious player adds on top.
+    const STAKE_SPAN: f32 = 0.6;
 
     /// Build the player's expectation of himself.
     pub fn of(player: &Player, status: Option<&PlayerSquadStatus>, today: NaiveDate) -> Self {
@@ -76,7 +86,17 @@ impl CareerExpectation {
         Self {
             expected_start_share,
             club_expected_start_share,
+            stake: Self::stake(player, today),
         }
+    }
+
+    /// Career runway weighted by ambition: the years a spectator's season
+    /// costs the most, pushed hardest by the men who want most.
+    fn stake(player: &Player, today: NaiveDate) -> f32 {
+        let years = (today - player.birth_date).num_days() as f32 / 365.25;
+        let runway = CareerRunway::at_years(years);
+        let ambition01 = (player.attributes.ambition / 20.0).clamp(0.0, 1.0);
+        Self::MIN_STAKE + Self::STAKE_SPAN * runway * (0.5 + 0.5 * ambition01)
     }
 
     /// How much the player's own ambition raises his bar, 0..
@@ -117,5 +137,71 @@ impl CareerExpectation {
     /// player, is most of the time.
     pub fn role_disagreement(&self) -> f32 {
         (self.expected_start_share - self.club_expected_start_share).max(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2031, 11, 9).unwrap()
+    }
+
+    fn player(birth: NaiveDate, ambition: f32) -> Player {
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("St".into(), "Ake".into()))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes {
+                ambition,
+                ..Default::default()
+            })
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap()
+    }
+
+    fn stake(birth: NaiveDate, ambition: f32) -> f32 {
+        CareerExpectation::of(&player(birth, ambition), None, today()).stake
+    }
+
+    #[test]
+    fn stake_rises_with_runway_and_with_ambition() {
+        let young = NaiveDate::from_ymd_opt(2008, 5, 19).unwrap();
+        let prime = NaiveDate::from_ymd_opt(2003, 5, 19).unwrap();
+        assert!(stake(young, 10.0) > stake(prime, 10.0));
+        assert!(stake(young, 16.0) > stake(young, 4.0));
+    }
+
+    #[test]
+    fn a_veteran_sits_at_the_floor() {
+        let veteran = NaiveDate::from_ymd_opt(1996, 1, 1).unwrap();
+        assert!((stake(veteran, 20.0) - CareerExpectation::MIN_STAKE).abs() < 1e-6);
+    }
+
+    #[test]
+    fn no_birthday_cliff_at_thirty_one() {
+        let day_before = NaiveDate::from_ymd_opt(2000, 11, 10).unwrap();
+        let day_after = NaiveDate::from_ymd_opt(2000, 11, 9).unwrap();
+        let (before, after) = (stake(day_before, 12.0), stake(day_after, 12.0));
+        assert!(
+            (before - after).abs() < 1e-3,
+            "turning 31 moves the stake by a day's drift, not a step: {before} vs {after}"
+        );
     }
 }

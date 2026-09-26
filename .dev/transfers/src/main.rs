@@ -4633,6 +4633,260 @@ impl StrandedPrinter {
     }
 }
 // ---------------------------------------------------------------------
+// Squad shape and minutes grievance
+// ---------------------------------------------------------------------
+
+/// How many men a club carries per position group, and whether the ones it
+/// does not play are aggrieved about it — the two halves of a club signing
+/// players it has no role for.
+///
+/// Running only for the pool flow. The world's own flow counters are read
+/// and zeroed inside the same month-start tick that retires the long sits,
+/// so the census follows the pool's membership instead.
+#[derive(Debug, Default)]
+struct SquadShapeCensus {
+    /// Every player seen in the pool since day 0.
+    ever_pooled: HashSet<u32>,
+    /// Pool size on day 0 — everyone past it was released into it.
+    initial_pool: Option<usize>,
+    /// Transfer-history rows already read, per country.
+    history_read: HashMap<u32, usize>,
+    /// Free-signing goalkeepers, read the day they landed.
+    keepers_arrived: usize,
+    /// …of whom ranked outside their new club's top three that day.
+    keepers_surplus_on_arrival: usize,
+    /// Signing reason → surplus-on-arrival keepers it produced.
+    surplus_by_reason: BTreeMap<String, usize>,
+}
+
+impl SquadShapeCensus {
+    /// Playing-time factor at or below which the ledger reads "major concern".
+    const MAJOR_CONCERN: f32 = -5.0;
+
+    fn type_label(t: &TransferType) -> &'static str {
+        match t {
+            TransferType::Permanent => "perm",
+            TransferType::Loan(_) => "loan",
+            TransferType::Free => "free",
+        }
+    }
+
+    fn observe(&mut self, data: &SimulatorData) {
+        for country in data.continents.iter().flat_map(|c| c.countries.iter()) {
+            let history = &country.transfer_market.transfer_history;
+            let read = self.history_read.entry(country.id).or_insert(history.len());
+            let fresh = history.get(*read..).unwrap_or(&[]);
+            *read = history.len();
+            for row in fresh {
+                if !matches!(row.transfer_type, TransferType::Free) {
+                    continue;
+                }
+                let Some(main) = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == row.to_club_id)
+                    .and_then(|c| c.teams.main())
+                else {
+                    continue;
+                };
+                let Some(arrival) = main.players.iter().find(|p| p.id == row.player_id) else {
+                    continue;
+                };
+                if arrival.position().position_group() != PlayerFieldPositionGroup::Goalkeeper {
+                    continue;
+                }
+                let better = main
+                    .players
+                    .iter()
+                    .filter(|p| {
+                        p.id != arrival.id
+                            && !p.is_on_loan()
+                            && p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
+                            && p.player_attributes.current_ability
+                                > arrival.player_attributes.current_ability
+                    })
+                    .count();
+                self.keepers_arrived += 1;
+                if better >= PlayerFieldPositionGroup::Goalkeeper.main_depth_cap() {
+                    self.keepers_surplus_on_arrival += 1;
+                    *self
+                        .surplus_by_reason
+                        .entry(row.reason.key.clone())
+                        .or_default() += 1;
+                }
+            }
+        }
+        self.initial_pool.get_or_insert(data.free_agents.len());
+        self.ever_pooled
+            .extend(data.free_agents.iter().map(|p| p.id));
+    }
+
+    fn print(&self, data: &SimulatorData) {
+        // (player, club) pairs that arrived as free signings during the run.
+        let free_arrivals: HashSet<(u32, u32)> = data
+            .continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .flat_map(|c| c.transfer_market.transfer_history.iter())
+            .filter(|t| matches!(t.transfer_type, TransferType::Free))
+            .map(|t| (t.player_id, t.to_club_id))
+            .collect();
+        let mut free_keepers = 0usize;
+        let mut free_keepers_surplus = 0usize;
+        let mut keeper_counts: BTreeMap<usize, usize> = BTreeMap::new();
+        let mut over_cap: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut clubs = 0usize;
+        // status → (players, major-concern minutes, formally unhappy)
+        let mut grievance: BTreeMap<&'static str, (usize, usize, usize)> = BTreeMap::new();
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let Some(main) = club.teams.main() else {
+                        continue;
+                    };
+                    clubs += 1;
+                    let mut keepers: Vec<(u8, u32)> = main
+                        .players
+                        .iter()
+                        .filter(|p| {
+                            !p.is_on_loan()
+                                && p.position().position_group()
+                                    == PlayerFieldPositionGroup::Goalkeeper
+                        })
+                        .map(|p| (p.player_attributes.current_ability, p.id))
+                        .collect();
+                    keepers.sort_unstable_by(|a, b| b.cmp(a));
+                    let cap = PlayerFieldPositionGroup::Goalkeeper.main_depth_cap();
+                    for (rank, (_, id)) in keepers.iter().enumerate() {
+                        if free_arrivals.contains(&(*id, club.id)) {
+                            free_keepers += 1;
+                            if rank >= cap {
+                                free_keepers_surplus += 1;
+                            }
+                        }
+                    }
+                    for group in PlayerFieldPositionGroup::ALL {
+                        let count = main
+                            .players
+                            .iter()
+                            .filter(|p| !p.is_on_loan() && p.position().position_group() == group)
+                            .count();
+                        if group == PlayerFieldPositionGroup::Goalkeeper {
+                            *keeper_counts.entry(count).or_default() += 1;
+                        }
+                        if count > group.main_depth_cap() {
+                            *over_cap.entry(group).or_default() += 1;
+                        }
+                    }
+                    for player in main.players.iter() {
+                        let Some(contract) = player.contract.as_ref() else {
+                            continue;
+                        };
+                        let row = grievance
+                            .entry(MarketCensus::squad_status_label(&contract.squad_status))
+                            .or_default();
+                        row.0 += 1;
+                        if player.happiness.factors.playing_time <= Self::MAJOR_CONCERN {
+                            row.1 += 1;
+                        }
+                        if player.statuses.has(PlayerStatusType::Unh) {
+                            row.2 += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        println!("\n-- squad shape: main-squad goalkeepers per club ({clubs} clubs) --");
+        let line: Vec<String> = keeper_counts
+            .iter()
+            .map(|(count, n)| format!("{count}gk={n}"))
+            .collect();
+        println!("  {}", line.join("  "));
+        println!(
+            "  free-agent keepers signed during the run: {free_keepers}, now outside their club's top {}: {free_keepers_surplus}",
+            PlayerFieldPositionGroup::Goalkeeper.main_depth_cap(),
+        );
+        println!(
+            "  free-signing keepers read on arrival day: {}, outside the top {} that day: {}",
+            self.keepers_arrived,
+            PlayerFieldPositionGroup::Goalkeeper.main_depth_cap(),
+            self.keepers_surplus_on_arrival,
+        );
+        for (reason, n) in &self.surplus_by_reason {
+            println!("    surplus on arrival via {reason:?}: {n}");
+        }
+        let mut crowded: Vec<(usize, &str, u32)> = data
+            .continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .flat_map(|c| c.clubs.iter())
+            .filter_map(|club| {
+                let main = club.teams.main()?;
+                let keepers = main
+                    .players
+                    .iter()
+                    .filter(|p| {
+                        !p.is_on_loan()
+                            && p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
+                    })
+                    .count();
+                Some((keepers, club.name.as_str(), club.id))
+            })
+            .collect();
+        crowded.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        for (keepers, name, club_id) in crowded.into_iter().take(5) {
+            let arrivals: Vec<String> = data
+                .continents
+                .iter()
+                .flat_map(|c| c.countries.iter())
+                .flat_map(|c| c.transfer_market.transfer_history.iter())
+                .filter(|t| t.to_club_id == club_id)
+                .map(|t| format!("{}:{}", Self::type_label(&t.transfer_type), t.reason.key))
+                .collect();
+            println!("    {keepers} keepers at {name}: arrivals {arrivals:?}");
+        }
+        for group in PlayerFieldPositionGroup::ALL {
+            println!(
+                "  over depth cap {:?} (>{}): {}",
+                group,
+                group.main_depth_cap(),
+                over_cap.get(&group).copied().unwrap_or(0)
+            );
+        }
+
+        println!("\n-- minutes grievance by squad status (main squads) --");
+        println!(
+            "  {:<20} {:>7} {:>14} {:>10}",
+            "status", "players", "pt<=-5 %", "Unh %"
+        );
+        for (status, (players, major, unhappy)) in &grievance {
+            println!(
+                "  {:<20} {:>7} {:>13.1}% {:>9.1}%",
+                status,
+                players,
+                ReportPrinter::pct(*major, *players),
+                ReportPrinter::pct(*unhappy, *players),
+            );
+        }
+
+        let retired_after_pool = data
+            .continents
+            .iter()
+            .flat_map(|c| c.countries.iter())
+            .flat_map(|c| c.retired_players.iter())
+            .filter(|p| self.ever_pooled.contains(&p.id))
+            .count();
+        println!(
+            "\n-- free-agent pool: {} now, {} released into it, {} retired after sitting in it --",
+            data.free_agents.len(),
+            self.ever_pooled.len() - self.initial_pool.unwrap_or(0),
+            retired_after_pool,
+        );
+    }
+}
+// ---------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------
 
@@ -4659,6 +4913,9 @@ struct SimHarness {
     /// Where listed men go. Running: the contract is gone a day before
     /// the pool sweep writes the row that says why.
     stranded: StrandedCensus,
+    /// Squad shape and minutes grievance; running only to fold the
+    /// monthly-reset pool counters.
+    squad_shape: SquadShapeCensus,
 }
 
 impl SimHarness {
@@ -4684,6 +4941,7 @@ impl SimHarness {
             player_side: PlayerSideCensus::default(),
             mandates: MandateCensus::default(),
             stranded: StrandedCensus::default(),
+            squad_shape: SquadShapeCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
@@ -4720,6 +4978,7 @@ impl SimHarness {
             self.loan_assets.observe(&self.data, day);
             self.mandates.observe(&self.data, day);
             self.stranded.observe(&self.data, day);
+            self.squad_shape.observe(&self.data);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -4741,6 +5000,7 @@ impl SimHarness {
                 LoanAssetPrinter::print(&self.loan_assets);
                 MandatePrinter::print(&self.mandates);
                 StrandedPrinter::print(&self.stranded, &self.data);
+                self.squad_shape.print(&self.data);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
@@ -4752,6 +5012,7 @@ impl SimHarness {
         LoanAssetPrinter::print(&self.loan_assets);
         MandatePrinter::print(&self.mandates);
         StrandedPrinter::print(&self.stranded, &self.data);
+        self.squad_shape.print(&self.data);
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()

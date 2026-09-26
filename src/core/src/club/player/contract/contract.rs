@@ -260,6 +260,25 @@ impl PlayerSquadStatus {
         }
     }
 
+    /// A planned role, lowered to the one the man would actually hold on
+    /// arrival. A club cannot promise a shirt its own depth chart gives to
+    /// somebody else; a development promise is not a claim on a shirt and
+    /// passes through, and an arrival off the senior ladder (a surplus body,
+    /// or a boy still behind the starters) is what gets promised instead.
+    pub fn capped_at(&self, arrival: &PlayerSquadStatus) -> PlayerSquadStatus {
+        if matches!(
+            self,
+            PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster
+        ) {
+            return self.clone();
+        }
+        if Self::senior_ladder(arrival) < Self::senior_ladder(self) {
+            arrival.clone()
+        } else {
+            self.clone()
+        }
+    }
+
     /// The two development labels, chosen on how the youngster compares
     /// with the squad he is registered in. The one place both the rank
     /// ladder and the youth-squad path mint them, so they can never drift.
@@ -459,6 +478,10 @@ pub struct PlayerClubContract {
 }
 
 impl PlayerClubContract {
+    /// How long a negotiated role binds — a season, whether it was agreed
+    /// at signing or won in a renewal.
+    pub const PROMISE_BINDING_DAYS: i64 = 365;
+
     pub fn new(salary: u32, expired: NaiveDate) -> Self {
         PlayerClubContract {
             shirt_number: None,
@@ -1065,6 +1088,30 @@ mod squad_status_calc_tests {
     use super::*;
 
     // `team_cas` is this group's abilities, sorted descending (best first).
+
+    #[test]
+    fn a_planned_role_is_capped_at_the_arrival_status() {
+        let regular = PlayerSquadStatus::FirstTeamRegular;
+        assert_eq!(
+            regular.capped_at(&PlayerSquadStatus::MainBackupPlayer),
+            PlayerSquadStatus::MainBackupPlayer,
+            "a man ranked behind the incumbent is promised the backup role he will hold"
+        );
+        assert_eq!(
+            regular.capped_at(&PlayerSquadStatus::KeyPlayer),
+            PlayerSquadStatus::FirstTeamRegular,
+            "the cap only ever lowers the planned role"
+        );
+        assert_eq!(
+            regular.capped_at(&PlayerSquadStatus::NotNeeded),
+            PlayerSquadStatus::NotNeeded
+        );
+        assert_eq!(
+            PlayerSquadStatus::HotProspectForTheFuture.capped_at(&PlayerSquadStatus::NotNeeded),
+            PlayerSquadStatus::HotProspectForTheFuture,
+            "a development promise is not a claim on a shirt"
+        );
+    }
 
     #[test]
     fn second_keeper_is_a_backup_not_a_regular() {

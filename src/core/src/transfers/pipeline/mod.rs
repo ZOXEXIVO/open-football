@@ -774,6 +774,31 @@ impl TransferRequest {
         self
     }
 
+    /// The ability floor a zero-fee signing must clear. The discount lowers
+    /// a floor that measures a level of play; a request carrying an
+    /// improvement over the man in the shirt (`min_gain > 0`) keeps its
+    /// floor whole — a free man who does not improve on the incumbent is
+    /// not an upgrade at any price.
+    pub fn free_agent_floor(&self, zero_fee_slack: u8) -> u8 {
+        if self.min_gain > 0 {
+            self.min_ability
+        } else {
+            self.min_ability.saturating_sub(zero_fee_slack)
+        }
+    }
+
+    /// Whether an age falls inside the band the club briefed for.
+    pub fn fits_age(&self, age: u8) -> bool {
+        (self.preferred_age_min..=self.preferred_age_max).contains(&age)
+    }
+
+    /// Whether a free agent meets this request's own terms. His career
+    /// pressure widens what he will accept; it never lowers what the club
+    /// asked for.
+    pub fn admits(&self, age: u8, ability: u8, zero_fee_slack: u8) -> bool {
+        ability >= self.free_agent_floor(zero_fee_slack) && self.fits_age(age)
+    }
+
     /// True for emergency-planner depth requests that are serviced from
     /// the free-agent market only. The paid pipeline (scout assignment,
     /// market shortlists, staff-recommendation attachment, loan scans)
@@ -2860,5 +2885,54 @@ mod loan_standoff_tests {
         assert_eq!(plan.loan_placements.len(), 1);
         plan.prune_rejected(day + Duration::days(400));
         assert!(plan.loan_placements.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod free_agent_terms_tests {
+    use super::*;
+
+    fn request(reason: TransferNeedReason, min_ability: u8, min_gain: i16) -> TransferRequest {
+        let mut r = TransferRequest::new(
+            1,
+            PlayerPositionType::Goalkeeper,
+            TransferNeedPriority::Important,
+            reason,
+            min_ability,
+            min_ability.saturating_add(5),
+            0.0,
+        );
+        r.min_gain = min_gain;
+        r
+    }
+
+    #[test]
+    fn an_upgrade_floor_takes_no_zero_fee_discount() {
+        let upgrade = request(TransferNeedReason::QualityUpgrade, 120, 4);
+        assert_eq!(upgrade.free_agent_floor(5), 120);
+        assert!(
+            !upgrade.admits(26, 117, 5),
+            "below the incumbent is not an upgrade"
+        );
+        assert!(upgrade.admits(26, 120, 5));
+    }
+
+    #[test]
+    fn a_cover_floor_takes_the_zero_fee_discount() {
+        let cover = request(TransferNeedReason::DepthCover, 120, 0);
+        assert_eq!(cover.free_agent_floor(5), 115);
+        assert!(cover.admits(26, 116, 5));
+    }
+
+    #[test]
+    fn the_age_band_binds() {
+        let heir = request(TransferNeedReason::SuccessionPlanning, 100, 0);
+        let (lo, hi) = (heir.preferred_age_min, heir.preferred_age_max);
+        assert!(heir.admits(lo, 130, 5));
+        assert!(
+            !heir.admits(hi + 1, 130, 5),
+            "older than the band is not a successor"
+        );
+        assert!(!heir.admits(lo.saturating_sub(1), 130, 5));
     }
 }

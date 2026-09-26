@@ -29,6 +29,7 @@ use crate::transfers::gate::appraisal::{
     TermsRefusalCause,
 };
 use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::gate::stance::{
     AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
 };
@@ -1582,7 +1583,7 @@ impl NegotiationPass {
         // country's clubs), so a Russia ↔ Ukraine bid that survived the
         // earlier scouting/shortlist filters can still arrive here. Refuse
         // it before the medical roll so a stale negotiation, restored save,
-        Self::stage_medical(
+        if !Self::stage_medical(
             country,
             neg_data,
             neg_id,
@@ -1590,7 +1591,9 @@ impl NegotiationPass {
             is_foreign,
             is_pool_free_agent,
             outcomes,
-        );
+        ) {
+            return;
+        }
         let is_injured = if is_foreign {
             false
         } else {
@@ -2289,7 +2292,9 @@ impl NegotiationPass {
 
     /// Everything the medical needs settled before the roll: the foreign
     /// arrival's paperwork, the pool free agent's provenance, and the
-    /// saga beats a medical booking is owed.
+    /// saga beats a medical booking is owed. Returns whether the move may
+    /// still go to the medical — a refused one must not be rolled, and
+    /// must never be accepted.
     fn stage_medical(
         country: &mut Country,
         neg_data: &NegotiationData,
@@ -2298,7 +2303,7 @@ impl NegotiationPass {
         is_foreign: bool,
         is_pool_free_agent: bool,
         outcomes: &mut NegotiationOutcomes,
-    ) {
+    ) -> bool {
         // or alternate creation path can't complete a closed route.
         if is_foreign
             && TransferRoutePolicy::is_blocked(&neg_data.selling_country_code, &country.code, date)
@@ -2322,76 +2327,91 @@ impl NegotiationPass {
                 neg_data.player_id,
                 false,
             );
-            return;
+            return false;
         }
 
         // Verify the player is still at the selling club (domestic) or not
         // already claimed by another deferred transfer (foreign)
-        if is_foreign {
-            // Reject if another negotiation for this player is already deferred
-            if outcomes
+        let still_available = if is_foreign {
+            !outcomes
                 .deferred
                 .iter()
                 .any(|d| d.player_id == neg_data.player_id)
-            {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                ApproachPass::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-            }
         } else if is_pool_free_agent {
             // Pool membership can't be verified from country scope —
             // first-come-first-served dedup happens at execution time
             // in `execute_global_free_agent_signing`. Only guard
             // against a second pool signing staged this same tick.
-            if outcomes
+            !outcomes
                 .free_agent_signings
                 .iter()
                 .any(|s| s.player_id == neg_data.player_id)
-            {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                ApproachPass::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
-            }
         } else {
-            let player_at_selling_club = country
+            country
                 .clubs
                 .iter()
                 .find(|c| c.id == neg_data.selling_club_id)
                 .map(|c| c.teams.contains_player(neg_data.player_id))
-                .unwrap_or(false);
-
-            if !player_at_selling_club {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation
-                        .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
-                }
-                NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
-                ApproachPass::on_negotiation_resolved(
-                    country,
-                    neg_data.buying_club_id,
-                    neg_data.player_id,
-                    false,
-                );
+                .unwrap_or(false)
+        };
+        if !still_available {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation
+                    .reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
             }
+            if !is_foreign && !is_pool_free_agent {
+                NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
+            }
+            ApproachPass::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return false;
         }
+
+        // A staged free-agent pursuit completes days after the club
+        // decided on him. If it has filled the position since, the man
+        // would arrive surplus — it walks away, as it would never have
+        // staged the offer against today's squad.
+        let arrival = country
+            .transfer_market
+            .negotiations
+            .get(&neg_id)
+            .and_then(|n| n.free_agent_arrival);
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
+        let now_surplus = arrival.is_some_and(|arrival| {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.buying_club_id)
+                .is_some_and(|buyer| {
+                    arrival.lands_surplus_in(&SquadFitSnapshot::build(
+                        buyer,
+                        arrival.group,
+                        date,
+                        registration,
+                    ))
+                })
+        });
+        if now_surplus {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.reject_with_reason(NegotiationRejectionReason::SquadNoLongerNeedsHim);
+            }
+            ApproachPass::on_negotiation_resolved(
+                country,
+                neg_data.buying_club_id,
+                neg_data.player_id,
+                false,
+            );
+            return false;
+        }
+
+        true
     }
 
-    /// He passed it. Execute the move, install the contract, and file every
-    /// beat the arrival is owed.
+    /// He passed it. Execute the move    /// beat the arrival is owed.
     fn medical_passed(
         country: &mut Country,
         country_id: u32,
@@ -5495,6 +5515,288 @@ mod tests {
             NegotiationPass::engagement_chance(true, false, true, Some(&subsidised))
                 > NegotiationPass::engagement_chance(true, false, true, Some(&unpaid)),
             "a development loan the parent is funding is a better conversation"
+        );
+    }
+}
+
+#[cfg(test)]
+mod medical_stage_tests {
+    //! What the medical checks before it rolls: a refused move is never
+    //! rolled or accepted, and a staged free-agent pursuit is let go when
+    //! the buyer has filled the position while it was in flight.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use crate::shared::fullname::FullName;
+    use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::deal::negotiation::{FreeAgentArrival, TransferNegotiation};
+    use crate::transfers::deal::offer::TransferOffer;
+    use crate::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerFieldPositionGroup,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct Med;
+
+    impl Med {
+        const SELLER_ID: u32 = 1;
+        const BUYER_ID: u32 = 2;
+        const PLAYER_ID: u32 = 100;
+        const NEG_ID: u32 = 7;
+
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 7, 10).unwrap()
+        }
+
+        fn keeper(id: u32, ca: u8) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Keeper".to_string(), format!("K{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(1999, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes {
+                    current_ability: ca,
+                    potential_ability: ca,
+                    ..Default::default()
+                })
+                .contract(Some(PlayerClubContract::new(
+                    40_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        fn club(id: u32, players: Vec<Player>) -> Club {
+            let team = Team::builder()
+                .id(id * 10)
+                .league_id(Some(1))
+                .club_id(id)
+                .name(format!("club-{id}"))
+                .slug(format!("club-{id}"))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(6000, 6000, 6000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            Club::new(
+                id,
+                format!("Club {id}"),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn country(seller: Vec<Player>, buyer: Vec<Player>) -> Country {
+            let league = League::new(
+                1,
+                "L".to_string(),
+                "l".to_string(),
+                1,
+                6000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                false,
+            );
+            Country::builder()
+                .id(1)
+                .code("en".to_string())
+                .slug("england".to_string())
+                .name("England".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![league]))
+                .clubs(vec![
+                    Self::club(Self::SELLER_ID, seller),
+                    Self::club(Self::BUYER_ID, buyer),
+                ])
+                .build()
+                .unwrap()
+        }
+
+        /// A free move of the keeper, staged as a depth pursuit.
+        fn stage(country: &mut Country, arrival: Option<FreeAgentArrival>) -> NegotiationData {
+            let offer = TransferOffer::new(
+                CurrencyValue::new(0.0, Currency::Usd),
+                Self::BUYER_ID,
+                Self::date(),
+            );
+            let mut negotiation = TransferNegotiation::new(
+                Self::NEG_ID,
+                Self::PLAYER_ID,
+                0,
+                Self::SELLER_ID,
+                Self::BUYER_ID,
+                offer,
+                Self::date(),
+                0.5,
+                0.6,
+                27,
+                0.5,
+            );
+            negotiation.free_agent_arrival = arrival;
+            let phase = negotiation.phase.clone();
+            country
+                .transfer_market
+                .negotiations
+                .insert(Self::NEG_ID, negotiation);
+            NegotiationData {
+                player_id: Self::PLAYER_ID,
+                selling_club_id: Self::SELLER_ID,
+                buying_club_id: Self::BUYER_ID,
+                offer_amount: 0.0,
+                is_loan: false,
+                has_option_to_buy: false,
+                is_unsolicited: false,
+                phase,
+                selling_rep: 0.5,
+                buying_rep: 0.6,
+                player_age: 27,
+                player_ambition: 0.5,
+                asking_price: 0.0,
+                has_market_listing: true,
+                player_is_available: true,
+                listing_origin: None,
+                selling_country_id: None,
+                selling_continent_id: None,
+                selling_country_code: String::new(),
+                player_sold_from: None,
+                player_name: "Keeper".to_string(),
+                selling_club_name: "Club 1".to_string(),
+                offered_annual_wage: Some(40_000),
+                staged_reservation_wage: Some(40_000),
+                staged_stance: None,
+                staged_sporting_drop: None,
+                staged_loan_verdict: None,
+                buying_league_reputation: 6000,
+                selling_league_reputation: 6000,
+                player_stage_inclination: 0.0,
+                sell_on_percentage: None,
+                loan_future_fee: None,
+                personal_terms: None,
+                foreign_seller_importance: None,
+                foreign_seller_floor: None,
+                mandate: None,
+                foreign_seller_finances: None,
+            }
+        }
+
+        fn run(country: &mut Country, neg_data: &NegotiationData) -> TransferNegotiation {
+            let mut outcomes = NegotiationOutcomes {
+                deferred: Vec::new(),
+                free_agent_signings: Vec::new(),
+                free_agent_rejected_ids: Vec::new(),
+                player_signals: Vec::new(),
+            };
+            NegotiationPass::resolve_medical(
+                country,
+                1,
+                Self::NEG_ID,
+                neg_data,
+                Self::date(),
+                &mut TransferActivitySummary::new(),
+                &mut outcomes,
+            );
+            country.transfer_market.negotiations[&Self::NEG_ID].clone()
+        }
+
+        fn arrival(ca: u8) -> FreeAgentArrival {
+            FreeAgentArrival {
+                group: PlayerFieldPositionGroup::Goalkeeper,
+                ability: ca,
+                potential: ca,
+                age: 27,
+            }
+        }
+    }
+
+    #[test]
+    fn a_refused_move_is_never_rolled_or_accepted() {
+        // The player has already left the selling club.
+        let mut country = Med::country(Vec::new(), Vec::new());
+        let neg_data = Med::stage(&mut country, None);
+
+        let negotiation = Med::run(&mut country, &neg_data);
+
+        assert_eq!(negotiation.status, NegotiationStatus::Rejected);
+        assert_eq!(
+            negotiation.rejection_reason,
+            Some(NegotiationRejectionReason::SellerRefusedToNegotiate)
+        );
+    }
+
+    #[test]
+    fn a_staged_free_agent_is_let_go_once_the_position_is_filled() {
+        let mut country = Med::country(
+            vec![Med::keeper(Med::PLAYER_ID, 110)],
+            vec![
+                Med::keeper(1, 140),
+                Med::keeper(2, 130),
+                Med::keeper(3, 120),
+            ],
+        );
+        let neg_data = Med::stage(&mut country, Some(Med::arrival(110)));
+
+        let negotiation = Med::run(&mut country, &neg_data);
+
+        assert_eq!(
+            negotiation.rejection_reason,
+            Some(NegotiationRejectionReason::SquadNoLongerNeedsHim)
+        );
+        assert!(
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == Med::SELLER_ID)
+                .unwrap()
+                .teams
+                .contains_player(Med::PLAYER_ID),
+            "the keeper never moves"
+        );
+    }
+
+    #[test]
+    fn a_staged_free_agent_with_a_role_still_goes_to_the_medical() {
+        let mut country = Med::country(
+            vec![Med::keeper(Med::PLAYER_ID, 110)],
+            vec![Med::keeper(1, 140)],
+        );
+        let neg_data = Med::stage(&mut country, Some(Med::arrival(110)));
+
+        let negotiation = Med::run(&mut country, &neg_data);
+
+        assert_ne!(
+            negotiation.rejection_reason,
+            Some(NegotiationRejectionReason::SquadNoLongerNeedsHim)
         );
     }
 }

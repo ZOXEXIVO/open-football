@@ -14,9 +14,10 @@
 use super::depth::{
     DepthNegotiationAction, EmergencyDepthRequestPlanner, FreeAgentNegotiationStager,
 };
-use super::pricing::{FreeAgentMarketCalculator, FreeAgentOfferPricing};
+use super::pricing::{BuyerRoleFit, FreeAgentMarketCalculator, FreeAgentOfferPricing};
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::club::staff::perception::PotentialEstimator;
+use crate::club::team::SquadLadder;
 use crate::country::result::transfers::config::TransferConfig;
 use crate::country::result::transfers::execution::{DevelopmentLoanPathway, TransferExecutor};
 use crate::country::result::transfers::free::FreeAgentPass;
@@ -26,11 +27,11 @@ use crate::country::result::transfers::types::{
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::MarketMap;
 use crate::transfers::deal::negotiation::{
-    NegotiationPhase, NegotiationStatus, TransferNegotiation,
+    FreeAgentArrival, NegotiationPhase, NegotiationStatus, TransferNegotiation,
 };
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
-use crate::transfers::gate::fit::SquadRegistrationLimits;
+use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::market::region::ScoutingRegion;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{TransferNeedReason, TransferRequest, TransferRequestStatus};
@@ -76,6 +77,7 @@ struct ExpiryOutcome {
 /// rather than of the club doing the asking.
 struct FreeAgentMarket<'a> {
     country: &'a Country,
+    date: NaiveDate,
     candidates: &'a [FreeAgentCandidate],
     visibility: &'a FreeAgentMarketVisibility,
     registration: &'a SquadRegistrationLimits,
@@ -109,6 +111,9 @@ struct FreeAgentBuyer<'a> {
     /// Resolved by type, not by position: a club main team is not always the
     /// first entry in its team list.
     main_team: Option<&'a Team>,
+    /// Where a newcomer would stand in the main squad — the role every
+    /// offer is priced and promised on.
+    ladder: SquadLadder,
     club_score: f32,
     league_reputation: u16,
     negotiator_skill: u8,
@@ -203,7 +208,7 @@ impl FreeAgentMarketPass {
         // FIRST — pushed ahead of the emergency / request / clearing
         // passes so their `signings.iter().any(...)` dedup leaves him be.
         // Pass 3 executes it through the ordinary in-country path.
-        FreeAgentPass::collect_pre_contract_signings(country, &mut signings);
+        FreeAgentPass::collect_pre_contract_signings(country, date, &mut signings);
 
         // ── Pass 2a (NEW): Emergency squad fill ─────────────────────
         // Runs BEFORE the request-driven matcher so clubs sitting
@@ -270,6 +275,7 @@ impl FreeAgentMarketPass {
             country,
             &FreeAgentMarket {
                 country,
+                date,
                 candidates: &candidates,
                 visibility: &visibility,
                 registration: &registration,
@@ -619,6 +625,9 @@ impl FreeAgentMarketPass {
         // lowest of the three — understated every buyer's band and
         // biased the whole pool toward `AboveMaximumAbility`.
         let main_team = club.teams.main().or_else(|| club.teams.teams.first());
+        let Some(ladder) = main_team.map(|t| t.squad_ladder()) else {
+            return ClubOutcome::Next;
+        };
         let buyer_club_score = main_team
             .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
             .unwrap_or(0.0);
@@ -643,6 +652,7 @@ impl FreeAgentMarketPass {
         let buyer = FreeAgentBuyer {
             club,
             main_team,
+            ladder,
             club_score: buyer_club_score,
             league_reputation: buyer_league_reputation,
             negotiator_skill: buyer_negotiator_skill,
@@ -711,6 +721,17 @@ impl FreeAgentMarketPass {
         if request.status == TransferRequestStatus::Negotiating {
             return RequestOutcome::Next;
         }
+        // One arrival per position group per day. The squad snapshot the
+        // gates read was taken before today's signings, so a second man
+        // into the same group would be ranked against a squad that no
+        // longer exists.
+        if state.signings.iter().any(|s| s.lands_in(club.id, group))
+            || depth_offers
+                .iter()
+                .any(|d| d.to_club_id == club.id && d.arrival.group == group)
+        {
+            return RequestOutcome::Next;
+        }
 
         let buyer_ctx = RequestBuyerContext {
             club_score: buyer_club_score,
@@ -722,16 +743,17 @@ impl FreeAgentMarketPass {
             visibility,
             foreign_slots: buyer_foreign_slots,
             benefactor: buyer_benefactor,
+            ladder: &buyer.ladder,
+            fit: SquadFitSnapshot::build(club, group, market.date, *market.registration),
         };
-        let nominal_floor = request.min_ability.saturating_sub(ability_slack);
 
-        // Gate pass — the same sliding career-pressure
-        // tolerances as before (quality band, country rep,
-        // cross-continent, region prestige), but every
-        // passing candidate is collected instead of only the
-        // single best, and each gate failure is recorded so
-        // the diagnosis layer can explain long sits.
-        let mut ranked: Vec<(&FreeAgentCandidate, f32)> = Vec::new();
+        // Gate pass — the request's own terms, the squad-fit
+        // rule, then the sliding career-pressure tolerances
+        // (country rep, cross-continent, region prestige). Every
+        // passing candidate is collected with the role he would
+        // be offered, and each gate failure is recorded so the
+        // diagnosis layer can explain long sits.
+        let mut ranked: Vec<(&FreeAgentCandidate, f32, BuyerRoleFit)> = Vec::new();
         for c in candidates.iter() {
             if c.club_id == club.id {
                 continue;
@@ -747,13 +769,14 @@ impl FreeAgentMarketPass {
             match RequestCandidateGates::evaluate(
                 c,
                 &buyer_ctx,
+                request,
                 group,
                 is_depth_request,
-                nominal_floor,
+                ability_slack,
             ) {
-                Ok(()) => {
-                    let priority = RequestCandidateOrdering::priority(c, &buyer_ctx, group);
-                    ranked.push((c, priority));
+                Ok(role) => {
+                    let priority = RequestCandidateOrdering::priority(c, &buyer_ctx, group, role);
+                    ranked.push((c, priority, role));
                 }
                 Err(reason) => {
                     if c.is_global_pool {
@@ -792,7 +815,7 @@ impl FreeAgentMarketPass {
         // pick failed a roll, which let an unrealistic strong
         // candidate starve every signable player behind them.
         let mut attempts = 0usize;
-        for (best, _priority) in ranked {
+        for (best, _priority, role) in ranked {
             if attempts >= config.free_agent_attempts_per_request {
                 break;
             }
@@ -824,6 +847,7 @@ impl FreeAgentMarketPass {
                     urgency_bonus,
                 },
                 best,
+                role,
                 market,
                 state,
             ) {
@@ -841,6 +865,7 @@ impl FreeAgentMarketPass {
         buyer: &FreeAgentBuyer<'_>,
         brief: &RequestBrief<'_>,
         best: &FreeAgentCandidate,
+        role: BuyerRoleFit,
         market: &FreeAgentMarket<'_>,
         state: &mut MatchState<'_>,
     ) -> CandidateOutcome {
@@ -905,6 +930,7 @@ impl FreeAgentMarketPass {
             let pricing = FreeAgentOfferPricing::compute(
                 best,
                 group,
+                role,
                 buyer_club_score,
                 buyer_league_reputation,
                 buyer_negotiator_skill,
@@ -944,6 +970,12 @@ impl FreeAgentMarketPass {
                 from_club_name: best.club_name.clone(),
                 to_club_id: club.id,
                 request_id: request.id,
+                arrival: FreeAgentArrival {
+                    group,
+                    ability: best.ability,
+                    potential: best.potential,
+                    age: best.age,
+                },
                 terms,
                 selling_rep,
                 buying_rep: buyer_club_score,
@@ -966,7 +998,7 @@ impl FreeAgentMarketPass {
         // expiring contracts (no career pressure; pre-decay
         // behaviour keeps the existing balance).
         if best.is_global_pool
-            && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, market, state)
+            && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, role, market, state)
         {
             return outcome;
         }
@@ -983,6 +1015,7 @@ impl FreeAgentMarketPass {
         let terms = FreeAgentOfferPricing::compute(
             best,
             group,
+            role,
             buyer_club_score,
             buyer_league_reputation,
             buyer_negotiator_skill,
@@ -1013,6 +1046,7 @@ impl FreeAgentMarketPass {
         buyer: &FreeAgentBuyer<'_>,
         brief: &RequestBrief<'_>,
         best: &FreeAgentCandidate,
+        role: BuyerRoleFit,
         market: &FreeAgentMarket<'_>,
         state: &mut MatchState<'_>,
     ) -> Option<CandidateOutcome> {
@@ -1028,6 +1062,7 @@ impl FreeAgentMarketPass {
         let pricing = FreeAgentOfferPricing::compute(
             best,
             group,
+            role,
             buyer_club_score,
             buyer_league_reputation,
             buyer_negotiator_skill,

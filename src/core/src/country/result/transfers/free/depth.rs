@@ -27,6 +27,7 @@ use super::EmergencySignedTerms;
 use crate::Country;
 use crate::PlayerFieldPositionGroup;
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::deal::negotiation::FreeAgentArrival;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::market::{TransferListing, TransferListingType};
@@ -133,6 +134,10 @@ pub(super) struct DepthNegotiationAction {
     pub from_club_name: String,
     pub to_club_id: u32,
     pub request_id: u32,
+    /// Who the pursuit expects to sign. Every later door that day counts
+    /// him as already in the squad, and the medical re-checks the squad
+    /// against him before the deal completes.
+    pub arrival: FreeAgentArrival,
     pub terms: EmergencySignedTerms,
     pub selling_rep: f32,
     pub buying_rep: f32,
@@ -215,6 +220,7 @@ impl FreeAgentNegotiationStager {
                 negotiation.player_name = action.player_name.clone();
                 negotiation.selling_club_name = action.from_club_name.clone();
                 negotiation.buying_league_reputation = action.buying_league_reputation;
+                negotiation.free_agent_arrival = Some(action.arrival);
             }
 
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.to_club_id) {

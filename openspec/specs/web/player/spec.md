@@ -247,7 +247,9 @@ their shared dressing-room pool with whom they have a bond/friendship/tension/ri
 The system SHALL provide, for a player, a personal/psychological profile: personality radar (eight hidden
 traits), morale reading with a positive/negative happiness-factor ledger, current concerns, manager relationship,
 favourite clubs, biographical info (age, languages, condition, contract), reputation ladder (current/home/world),
-career plan, active wants, and remembered-club sentiment.
+career plan, active wants, and remembered-club sentiment. A happiness factor SHALL be listed among current concerns
+only when the ledger itself rates it a major concern. The club's development pathway SHALL describe a planned loan as a
+plan while the player is still at his club, and as a loan only while he is actually away.
 
 #### Scenario: Requesting the personal profile
 - **WHEN** a user requests the personal page for a player
@@ -264,6 +266,18 @@ career plan, active wants, and remembered-club sentiment.
 #### Scenario: Player with no memories of the current club
 - **WHEN** the player has no recorded memory of his current club (e.g. just signed, or currently a free agent)
 - **THEN** the system SHALL omit the "what he remembers" block rather than rendering it empty
+
+#### Scenario: A minor factor stays off the concerns headline
+- **WHEN** the player's playing-time factor is weighing on him but sits above the major-concern band
+- **THEN** it appears in the "weighing on him" ledger as a concern and is not listed among current concerns
+
+#### Scenario: A planned loan reads as a plan
+- **WHEN** the club's pathway has marked the player for a loan and he is still at the club
+- **THEN** the club's view of him reads "To be loaned out"
+
+#### Scenario: A player away on loan reads as on loan
+- **WHEN** the club's pathway has him on a loan and he is currently away at the borrowing club
+- **THEN** the club's view of him reads "Out on loan"
 
 ### Requirement: Manual roster-editing actions
 The system SHALL provide mutating actions, invoked against a specific player id, for an editor to directly alter
@@ -293,3 +307,17 @@ an active loan, view/edit contract terms, execute a manual transfer, and execute
   are not already expired
 - **THEN** the system SHALL update the contract (and loan, if present, capped to not outlive the parent contract)
   and reject the request if any submitted date is not in the future
+
+### Requirement: The player transfers page explains a listing by its own reason
+The player's transfers page SHALL show, beside a transfer or loan listing status, the reason recorded with the club
+decision that listed him. A later, unrelated decision SHALL NOT be shown as the listing's reason. When the player
+carries no listing, the page SHALL show no listing reason.
+
+#### Scenario: A pathway change after the listing does not replace its reason
+- **WHEN** the board loan-lists a player because he needs competitive matches, and a development-pathway change is
+  recorded after that listing
+- **THEN** the transfers page gives the loan listing's reason as "needs competitive matches", not the pathway stage
+
+#### Scenario: An unlisted player shows no listing reason
+- **WHEN** a player carries no transfer or loan listing
+- **THEN** the transfers page shows no listing reason, whatever his latest recorded decision is

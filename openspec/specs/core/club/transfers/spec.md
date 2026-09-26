@@ -18,3 +18,19 @@ The club SHALL be able to offer a player a contract proposal composed of salary,
 #### Scenario: Club negotiates a permanent signing for a first-team role
 - **WHEN** the club's transfer strategy builds an offer for a target it intends to promise a first-team role
 - **THEN** the resulting personal-terms package prices the wage against that promised status, and attaches signing bonus, agent fee, release-clause and installment terms according to the club's own financial stance and negotiation policy rather than a value computed independently of what was promised
+
+### Requirement: A signing's promised role never exceeds his arrival projection
+When the club builds personal terms for a paid signing, the role promise SHALL be the lower of two roles:
+- the role its recruitment brief planned for the shirt;
+- the squad status the club projects he would hold on arrival, judged on its own assessment of him.
+
+A club SHALL NOT promise a role that its own depth chart gives to somebody else.
+
+#### Scenario: A successor bought behind the number one
+- **WHEN** the club buys a goalkeeper to succeed its current number one, and its own assessment ranks him second in
+  the group
+- **THEN** the promise is at most the backup role he will hold, not a first-team regular's
+
+#### Scenario: An upgrade that clears the incumbent keeps the planned promise
+- **WHEN** the club buys an upgrade that its own assessment ranks first in his group
+- **THEN** the promise is the role the brief planned, capped only by the club's level

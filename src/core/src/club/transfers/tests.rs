@@ -5,13 +5,13 @@ use crate::club::board::{
 use crate::club::player::builder::PlayerBuilder;
 use crate::shared::fullname::FullName;
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::deal::offer::{TransferClause, TransferOffer};
+use crate::transfers::deal::offer::{PromisedSquadStatus, TransferClause, TransferOffer};
 use crate::transfers::pipeline::{
     TransferApproach, TransferNeedPriority, TransferNeedReason, TransferRequest,
 };
 use crate::{
     ClubPhilosophy, PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
-    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatusType,
+    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, PlayerStatusType,
 };
 use chrono::NaiveDate;
 
@@ -533,5 +533,90 @@ fn expiring_contract_and_listed_status_lower_offer() {
         "distressed seller ({}) should fetch less than baseline ({})",
         Fx::money_amount(&distressed_offer.base_fee),
         Fx::money_amount(&baseline_offer.base_fee),
+    );
+}
+
+// ============================================================
+// The promise never sits above the arrival projection
+// ============================================================
+
+impl Fx {
+    fn keeper_strategy() -> ClubTransferStrategy {
+        ClubTransferStrategy::from_club_context(
+            1,
+            Some(CurrencyValue {
+                amount: 5_000_000.0,
+                currency: Currency::Usd,
+            }),
+            100,
+            vec![PlayerPositionType::Goalkeeper],
+            &ClubPhilosophy::Balanced,
+            &Fx::vision(FinancialStance::Balanced),
+            0.5,
+        )
+    }
+
+    fn keeper(id: u32) -> Player {
+        Fx::make_player(
+            id,
+            Fx::d(2004, 1, 1),
+            PlayerPositionType::Goalkeeper,
+            110,
+            130,
+            Some(Fx::d(2029, 6, 30)),
+        )
+    }
+
+    fn promise_for(
+        request: &TransferRequest,
+        arrival: Option<PlayerSquadStatus>,
+    ) -> Option<PromisedSquadStatus> {
+        let player = Fx::keeper(40);
+        let mut ctx = Fx::ctx_for(Fx::d(2026, 7, 1), 2_000_000.0);
+        ctx.request = Some(request);
+        ctx.arrival_status = arrival;
+        PersonalTermsPackager::build(&Fx::keeper_strategy(), &player, &ctx, 3, 22)
+            .squad_status_promise
+    }
+}
+
+#[test]
+fn a_successor_ranked_behind_the_number_one_is_promised_at_most_a_backup_role() {
+    let succession = TransferRequest::new(
+        1,
+        PlayerPositionType::Goalkeeper,
+        TransferNeedPriority::Important,
+        TransferNeedReason::SuccessionPlanning,
+        100,
+        130,
+        2_000_000.0,
+    );
+    assert_eq!(
+        Fx::promise_for(&succession, Some(PlayerSquadStatus::MainBackupPlayer)),
+        Some(PromisedSquadStatus::MainBackupPlayer),
+        "the depth chart gives the shirt to the incumbent; the heir is promised the bench"
+    );
+    assert_eq!(
+        Fx::promise_for(&succession, Some(PlayerSquadStatus::NotNeeded)),
+        None,
+        "a man the club would carry as surplus is promised nothing"
+    );
+}
+
+#[test]
+fn an_upgrade_ranked_first_keeps_the_planned_promise() {
+    let mut upgrade = TransferRequest::new(
+        1,
+        PlayerPositionType::Goalkeeper,
+        TransferNeedPriority::Important,
+        TransferNeedReason::QualityUpgrade,
+        100,
+        130,
+        2_000_000.0,
+    );
+    upgrade.promised_status = PlayerSquadStatus::FirstTeamRegular;
+    assert_eq!(
+        Fx::promise_for(&upgrade, Some(PlayerSquadStatus::KeyPlayer)),
+        Some(PromisedSquadStatus::FirstTeamRegular)
     );
 }

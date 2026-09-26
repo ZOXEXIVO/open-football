@@ -640,7 +640,9 @@ impl Player {
                 // PlayerClubContract::promised_squad_status). A broken promise
                 // then surfaces as real playing-time unhappiness instead of
                 // being silently absorbed by the recompute.
-                let until = date.checked_add_signed(Duration::days(365)).unwrap_or(date);
+                let until = date
+                    .checked_add_signed(Duration::days(PlayerClubContract::PROMISE_BINDING_DAYS))
+                    .unwrap_or(date);
                 contract.promised_squad_status = Some((promised, until));
             }
         }

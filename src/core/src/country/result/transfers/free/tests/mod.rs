@@ -2,3 +2,4 @@
 
 mod emergency;
 mod expiry;
+mod terms;

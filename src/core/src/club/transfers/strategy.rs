@@ -144,6 +144,9 @@ pub struct TransferStrategyContext<'a> {
     pub scout_assessed_potential: Option<u8>,
     pub scout_confidence: Option<f32>,
     pub seller_is_rival: bool,
+    /// The squad status the buyer projects he would hold on arrival, on
+    /// its own assessment of him. The promise never sits above it.
+    pub arrival_status: Option<PlayerSquadStatus>,
 }
 
 impl<'a> TransferStrategyContext<'a> {
@@ -171,6 +174,7 @@ impl<'a> TransferStrategyContext<'a> {
             scout_assessed_potential: None,
             scout_confidence: None,
             seller_is_rival: false,
+            arrival_status: None,
         }
     }
 
@@ -857,7 +861,26 @@ impl PersonalTermsPackager {
         }
     }
 
+    /// The role the club promises: what it planned for the shirt, never
+    /// above where its own depth chart puts him on arrival. A man it would
+    /// have as surplus is promised nothing — never the motive fallback.
     fn squad_status_promise(
+        strategy: &ClubTransferStrategy,
+        player: &Player,
+        ctx: &TransferStrategyContext,
+        prospect: bool,
+        star: bool,
+    ) -> Option<PromisedSquadStatus> {
+        let planned = Self::planned_promise(strategy, player, ctx, prospect, star)?;
+        match ctx.arrival_status.as_ref() {
+            Some(arrival) => {
+                Self::promise_from_squad_status(&planned.as_squad_status().capped_at(arrival))
+            }
+            None => Some(planned),
+        }
+    }
+
+    fn planned_promise(
         strategy: &ClubTransferStrategy,
         _player: &Player,
         ctx: &TransferStrategyContext,

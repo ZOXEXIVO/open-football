@@ -40,8 +40,13 @@ pub enum FreeAgentBlockReason {
     AlreadySignedOrStaged,
     /// Below the buyer tier's minimum acceptable CA.
     BelowMinimumAbility,
+    /// Outside the age band the request was briefed for.
+    OutsideAgeBand,
     /// Above the buyer tier's ceiling — a star slumming gate.
     AboveMaximumAbility,
+    /// He would land surplus in the buyer's squad the day he arrived —
+    /// no role to offer him.
+    SurplusOnArrival,
     /// Buyer country reputation too far below the player's reference
     /// reputation even with the pressure-widened allowance.
     CountryReputationGap,
@@ -94,7 +99,9 @@ impl FreeAgentBlockReason {
             FreeAgentBlockReason::PositionMismatch => 2,
             FreeAgentBlockReason::AlreadySignedOrStaged => 3,
             FreeAgentBlockReason::BelowMinimumAbility => 4,
+            FreeAgentBlockReason::OutsideAgeBand => 4,
             FreeAgentBlockReason::AboveMaximumAbility => 5,
+            FreeAgentBlockReason::SurplusOnArrival => 5,
             FreeAgentBlockReason::CountryReputationGap => 6,
             FreeAgentBlockReason::CrossContinentPressureTooLow => 7,
             FreeAgentBlockReason::RegionPrestigeGap => 8,
@@ -118,7 +125,9 @@ impl FreeAgentBlockReason {
             FreeAgentBlockReason::PositionMismatch => "position_mismatch",
             FreeAgentBlockReason::AlreadySignedOrStaged => "already_signed_or_staged",
             FreeAgentBlockReason::BelowMinimumAbility => "below_minimum_ability",
+            FreeAgentBlockReason::OutsideAgeBand => "outside_age_band",
             FreeAgentBlockReason::AboveMaximumAbility => "above_maximum_ability",
+            FreeAgentBlockReason::SurplusOnArrival => "surplus_on_arrival",
             FreeAgentBlockReason::CountryReputationGap => "country_reputation_gap",
             FreeAgentBlockReason::CrossContinentPressureTooLow => {
                 "cross_continent_pressure_too_low"
@@ -355,8 +364,11 @@ impl FreeAgentStatusCategory {
     pub fn from_block_reason(reason: Option<FreeAgentBlockReason>) -> Self {
         match reason {
             Some(FreeAgentBlockReason::UnknownNationality) => Self::DataUnknown,
+            // The clubs that could use his position are already stocked
+            // with better men — to him that is no club needing his position.
             Some(FreeAgentBlockReason::NoMatchingRequest)
-            | Some(FreeAgentBlockReason::PositionMismatch) => Self::NoPositionNeed,
+            | Some(FreeAgentBlockReason::PositionMismatch)
+            | Some(FreeAgentBlockReason::SurplusOnArrival) => Self::NoPositionNeed,
             Some(FreeAgentBlockReason::WageReservationMismatch) => Self::WageTooHigh,
             Some(FreeAgentBlockReason::CountryReputationGap)
             | Some(FreeAgentBlockReason::RegionPrestigeGap)
@@ -364,6 +376,7 @@ impl FreeAgentStatusCategory {
             | Some(FreeAgentBlockReason::AboveMaximumAbility) => Self::ReputationWait,
             Some(FreeAgentBlockReason::AcceptanceRollFailed) => Self::OffersRefused,
             Some(FreeAgentBlockReason::BelowMinimumAbility)
+            | Some(FreeAgentBlockReason::OutsideAgeBand)
             | Some(FreeAgentBlockReason::ClubAtSquadCapacity)
             // Nobody in the markets that would take him has heard of
             // anyone like him. That reads to the player as silence, which

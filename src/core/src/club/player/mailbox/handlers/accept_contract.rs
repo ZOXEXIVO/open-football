@@ -23,6 +23,28 @@ impl AcceptContractHandler {
             .map(|c| (c.shirt_number, c.squad_status.clone()))
             .unwrap_or((None, PlayerSquadStatus::FirstTeamRegular));
 
+        // The role the club promised survives the paperwork. A renewal that
+        // wins him a role above the one he holds binds it for a season, as
+        // a signing promise does; one that restates his role binds nothing
+        // new, and an unexpired promise it replaces carries over with its
+        // own expiry.
+        let negotiated = proposal
+            .squad_status_promise
+            .as_ref()
+            .filter(|promised| promised.seniority_rank() > current_status.seniority_rank())
+            .map(|promised| {
+                (
+                    promised.clone(),
+                    now + Duration::days(PlayerClubContract::PROMISE_BINDING_DAYS),
+                )
+            });
+        let carried = player
+            .contract
+            .as_ref()
+            .and_then(|c| c.promised_squad_status.clone())
+            .filter(|(_, until)| now <= *until);
+        let promised_squad_status = negotiated.or(carried);
+
         let squad_status = proposal
             .squad_status_promise
             .clone()
@@ -75,10 +97,7 @@ impl AcceptContractHandler {
             last_yearly_rise_year: None,
             last_loyalty_paid_year: None,
             signing_bonus_paid: false,
-            // Role-promise floor is set on the transfer/personal-terms path;
-            // a mailbox renewal reflects the player's real standing, so it
-            // carries no separate promise here.
-            promised_squad_status: None,
+            promised_squad_status,
         });
 
         // Accepting a proposal installs a fresh deal, so any pre-contract
@@ -246,7 +265,12 @@ fn push_optional(out: &mut Vec<ContractBonus>, value: Option<u32>, kind: Contrac
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PlayerContractProposal;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerContractProposal, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills,
+    };
 
     fn rich_proposal() -> PlayerContractProposal {
         let mut p = PlayerContractProposal::basic(150_000, 4, 12, 30_000, 15_000, Some(25_000_000));
@@ -335,6 +359,100 @@ mod tests {
                 .iter()
                 .any(|c| matches!(c.bonus_type, ContractClauseType::MatchHighestEarner))
         );
+    }
+
+    fn player_with_promise(
+        status: PlayerSquadStatus,
+        promise: Option<(PlayerSquadStatus, NaiveDate)>,
+    ) -> Player {
+        let mut player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Re".into(), "Newal".into()))
+            .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        let mut contract =
+            PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2032, 6, 30).unwrap());
+        contract.squad_status = status;
+        contract.promised_squad_status = promise;
+        player.contract = Some(contract);
+        player
+    }
+
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2031, 11, 1).unwrap()
+    }
+
+    #[test]
+    fn a_promise_survives_an_extension() {
+        let until = today() + Duration::days(240);
+        let mut player = player_with_promise(
+            PlayerSquadStatus::FirstTeamRegular,
+            Some((PlayerSquadStatus::FirstTeamRegular, until)),
+        );
+        let proposal = PlayerContractProposal::basic(60_000, 4, 10, 0, 0, None);
+
+        AcceptContractHandler::process(&mut player, proposal, today());
+
+        assert_eq!(
+            player.contract.unwrap().promised_squad_status,
+            Some((PlayerSquadStatus::FirstTeamRegular, until)),
+            "an extension that states no role keeps the promise with its own expiry"
+        );
+    }
+
+    #[test]
+    fn a_negotiated_promotion_binds() {
+        let mut player = player_with_promise(PlayerSquadStatus::MainBackupPlayer, None);
+        let mut proposal = PlayerContractProposal::basic(60_000, 3, 10, 0, 0, None);
+        proposal.squad_status_promise = Some(PlayerSquadStatus::FirstTeamSquadRotation);
+
+        AcceptContractHandler::process(&mut player, proposal, today());
+
+        assert_eq!(
+            player.contract.unwrap().promised_squad_status,
+            Some((
+                PlayerSquadStatus::FirstTeamSquadRotation,
+                today() + Duration::days(PlayerClubContract::PROMISE_BINDING_DAYS)
+            ))
+        );
+    }
+
+    #[test]
+    fn a_restated_role_does_not_bind() {
+        let mut player = player_with_promise(PlayerSquadStatus::KeyPlayer, None);
+        let mut proposal = PlayerContractProposal::basic(60_000, 4, 10, 0, 0, None);
+        proposal.squad_status_promise = Some(PlayerSquadStatus::KeyPlayer);
+
+        AcceptContractHandler::process(&mut player, proposal, today());
+
+        assert_eq!(player.contract.unwrap().promised_squad_status, None);
+    }
+
+    #[test]
+    fn an_expired_promise_does_not_carry_over() {
+        let mut player = player_with_promise(
+            PlayerSquadStatus::FirstTeamRegular,
+            Some((
+                PlayerSquadStatus::FirstTeamRegular,
+                today() - Duration::days(1),
+            )),
+        );
+        let proposal = PlayerContractProposal::basic(60_000, 4, 10, 0, 0, None);
+
+        AcceptContractHandler::process(&mut player, proposal, today());
+
+        assert_eq!(player.contract.unwrap().promised_squad_status, None);
     }
 
     #[test]

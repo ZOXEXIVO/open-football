@@ -10,6 +10,8 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use chrono::NaiveDate;
+use core::HappinessFactors;
+use core::PathwayStage;
 use core::Person;
 use core::Player;
 use core::PlayerSquadStatus;
@@ -640,6 +642,11 @@ impl MoraleVerdict {
 struct FactorSentiment;
 
 impl FactorSentiment {
+    /// At or below this a factor reads "major concern" — and only then is
+    /// it a headline concern. A factor merely weighing on him stays in the
+    /// ledger, so the headline and the ledger cannot disagree.
+    const MAJOR_CONCERN: f32 = -5.0;
+
     /// i18n key for the label describing a factor of the given value.
     fn i18n_key(value: f32) -> &'static str {
         if value > 5.0 {
@@ -648,11 +655,25 @@ impl FactorSentiment {
             "factor_positive"
         } else if value >= -1.0 {
             "factor_neutral"
-        } else if value > -5.0 {
+        } else if value > Self::MAJOR_CONCERN {
             "factor_concern"
         } else {
             "factor_major_concern"
         }
+    }
+
+    /// The happiness factors that are a headline concern, as i18n keys.
+    fn concern_keys(f: &HappinessFactors) -> Vec<&'static str> {
+        [
+            (f.playing_time, "concern_lacking_playing_time"),
+            (f.salary_satisfaction, "concern_unhappy_with_salary"),
+            (f.ambition_fit, "concern_ambition_not_met"),
+            (f.injury_frustration, "concern_frustrated_by_injuries"),
+        ]
+        .into_iter()
+        .filter(|(value, _)| *value <= Self::MAJOR_CONCERN)
+        .map(|(_, key)| key)
+        .collect()
     }
 }
 
@@ -755,23 +776,13 @@ fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
         }
     }
 
-    // Add happiness-derived concerns
-    let f = &player.happiness.factors;
-    if f.playing_time < -3.0
-        && !concerns
-            .iter()
-            .any(|c| c.contains(&i18n.t("concern_unhappy").to_string()))
-    {
-        concerns.push(i18n.t("concern_lacking_playing_time").to_string());
-    }
-    if f.salary_satisfaction < -3.0 {
-        concerns.push(i18n.t("concern_unhappy_with_salary").to_string());
-    }
-    if f.ambition_fit < -3.0 {
-        concerns.push(i18n.t("concern_ambition_not_met").to_string());
-    }
-    if f.injury_frustration < -3.0 {
-        concerns.push(i18n.t("concern_frustrated_by_injuries").to_string());
+    // A formal unhappiness already says it louder than the minutes do.
+    let unhappy = statuses.contains(&PlayerStatusType::Unh);
+    for key in FactorSentiment::concern_keys(&player.happiness.factors) {
+        if key == "concern_lacking_playing_time" && unhappy {
+            continue;
+        }
+        concerns.push(i18n.t(key).to_string());
     }
 
     concerns
@@ -903,6 +914,29 @@ fn get_neighbor_teams(
 #[cfg(test)]
 mod factor_sentiment_tests {
     use super::FactorSentiment;
+    use core::HappinessFactors;
+
+    #[test]
+    fn only_a_major_concern_makes_the_headline() {
+        let weighing = HappinessFactors {
+            playing_time: -4.0,
+            ..Default::default()
+        };
+        assert_eq!(FactorSentiment::i18n_key(-4.0), "factor_concern");
+        assert!(
+            FactorSentiment::concern_keys(&weighing).is_empty(),
+            "a concern weighs on him in the ledger without making the headline"
+        );
+
+        let major = HappinessFactors {
+            playing_time: -6.0,
+            ..Default::default()
+        };
+        assert_eq!(
+            FactorSentiment::concern_keys(&major),
+            vec!["concern_lacking_playing_time"]
+        );
+    }
 
     // A single moderate negative factor must read as a "Concern", not as a
     // "Very Unhappy"-style verdict — that register is reserved for overall
@@ -972,6 +1006,15 @@ impl CareerPlanCard {
     /// Below this the deadline is too far off to be news.
     const DEADLINE_SHOWN_FROM: f32 = 0.25;
 
+    /// The club's pathway as a fact about him today: a planned loan reads
+    /// as a plan while he is still here, and as a loan only once he is away.
+    fn pathway_key(player: &Player) -> &'static str {
+        match player.pathway_stage() {
+            PathwayStage::LoanOut if player.is_on_loan() => "pathway_stage_on_loan",
+            stage => stage.as_i18n_key(),
+        }
+    }
+
     fn of(player: &Player, today: NaiveDate, i18n: &I18n) -> Option<CareerPlanDto> {
         let plan = player.mind.career.plan?;
         let day = mind::MindClock::day(today);
@@ -993,7 +1036,7 @@ impl CareerPlanCard {
                 .as_ref()
                 .and_then(|p| p.last_verdict)
                 .map(|verdict| i18n.t(verdict.as_i18n_key()).to_string()),
-            pathway: i18n.t(player.pathway_stage().as_i18n_key()).to_string(),
+            pathway: i18n.t(Self::pathway_key(player)).to_string(),
             purpose: player
                 .mandate()
                 .filter(|mandate| mandate.is_purchase())
@@ -1139,6 +1182,55 @@ impl PlayerMindView {
         });
 
         (wants, mind)
+    }
+}
+
+#[cfg(test)]
+mod pathway_view_tests {
+    use super::*;
+    use core::club::player::builder::PlayerBuilder;
+    use core::shared::fullname::FullName;
+    use core::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    #[test]
+    fn a_planned_loan_reads_as_a_plan_until_he_is_away() {
+        let today = NaiveDate::from_ymd_opt(2031, 11, 1).unwrap();
+        let mut player = PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("Seb".to_string(), "Nava".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(2008, 5, 19).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+        player.on_pathway_advanced(1, PathwayStage::LoanOut, 90, today);
+        assert_eq!(
+            CareerPlanCard::pathway_key(&player),
+            "pathway_stage_loan_out"
+        );
+
+        player.contract_loan = Some(PlayerClubContract::new_loan(
+            10_000,
+            NaiveDate::from_ymd_opt(2032, 6, 30).unwrap(),
+            1,
+            10,
+            2,
+        ));
+        assert_eq!(
+            CareerPlanCard::pathway_key(&player),
+            "pathway_stage_on_loan"
+        );
     }
 }
 

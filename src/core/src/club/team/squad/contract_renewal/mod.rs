@@ -13,8 +13,8 @@ use crate::club::staff::perception::PotentialEstimator;
 use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
 use crate::{
-    PlayerContractProposal, PlayerFieldPositionGroup, PlayerMessage, PlayerMessageType,
-    PlayerSquadStatus, PlayerStatusType, Team, TeamType,
+    PlayerClubContract, PlayerContractProposal, PlayerFieldPositionGroup, PlayerMessage,
+    PlayerMessageType, PlayerSquadStatus, PlayerStatusType, Team, TeamType,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -512,6 +512,14 @@ impl ContractRenewalManager {
             return None;
         }
 
+        // A renewal is a verdict on what he has done under this deal, and
+        // a deal the club wrote last week has shown it nothing. Checked
+        // ahead of every override: the one-year trial a free agent signs
+        // is the length the club chose, not an asset about to walk.
+        if !Self::has_served_enough(contract, date) {
+            return None;
+        }
+
         // Players on the transfer list are never offered new contracts —
         // renewing a player the club is actively selling is contradictory
         // paperwork that kept unsold listings alive for years. The
@@ -637,6 +645,22 @@ impl ContractRenewalManager {
             .map(|scan| scan.stuck_years >= stuck_bar)
             .unwrap_or(false)
     }
+
+    /// Whether the player has served enough of his current deal for the
+    /// club to judge him under it: half its term, never more than
+    /// [`Self::MAX_TENURE_TO_JUDGE_DAYS`]. A contract with no recorded
+    /// start has been running since before anyone kept count.
+    fn has_served_enough(contract: &PlayerClubContract, date: NaiveDate) -> bool {
+        let Some(started) = contract.started else {
+            return true;
+        };
+        let term = (contract.expiration - started).num_days().max(0);
+        (date - started).num_days() >= (term / 2).min(Self::MAX_TENURE_TO_JUDGE_DAYS)
+    }
+
+    /// Half a season: long enough to have seen him play, short enough
+    /// that a short deal still gets its renewal window.
+    const MAX_TENURE_TO_JUDGE_DAYS: i64 = 180;
 
     /// Squad-importance rank for renewal prioritization (higher = keep first).
     fn status_priority(status: &PlayerSquadStatus) -> u8 {
@@ -1891,6 +1915,38 @@ mod expiry_evaluate_tests {
             "the last chance cannot be attempt-capped"
         );
         assert_eq!(candidate.months_remaining, 0);
+    }
+
+    #[test]
+    fn a_one_year_deal_is_not_renewed_the_day_after_signing() {
+        let today = ExpiryFixtures::d(2031, 7, 2);
+        let mut p = ExpiryFixtures::player_with_expiration(ExpiryFixtures::d(2032, 7, 1));
+        p.contract.as_mut().unwrap().started = Some(ExpiryFixtures::d(2031, 7, 1));
+        assert!(
+            ContractRenewalManager::evaluate(&p, today, TeamType::Main).is_none(),
+            "the club has seen nothing of him under a deal it wrote yesterday"
+        );
+        let half_a_season_on = ExpiryFixtures::d(2031, 12, 29);
+        assert!(
+            ContractRenewalManager::evaluate(&p, half_a_season_on, TeamType::Main).is_some(),
+            "a regular with six months left, judged under the deal, is a renewal case"
+        );
+    }
+
+    #[test]
+    fn a_long_running_contract_is_not_delayed_by_tenure() {
+        let today = ExpiryFixtures::d(2031, 7, 2);
+        let mut p = ExpiryFixtures::player_with_expiration(ExpiryFixtures::d(2032, 7, 1));
+        p.contract.as_mut().unwrap().started = Some(ExpiryFixtures::d(2028, 7, 1));
+        assert!(ContractRenewalManager::evaluate(&p, today, TeamType::Main).is_some());
+    }
+
+    #[test]
+    fn the_expiry_day_offer_ignores_tenure() {
+        let today = ExpiryFixtures::d(2031, 7, 20);
+        let mut p = ExpiryFixtures::player_with_expiration(today);
+        p.contract.as_mut().unwrap().started = Some(ExpiryFixtures::d(2031, 7, 1));
+        assert!(ContractRenewalManager::evaluate_for_expiry(&p, today).is_some());
     }
 
     #[test]

@@ -23,7 +23,9 @@ use super::pricing::{BuyerRoleFit, FreeAgentMarketCalculator};
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::transfer::{MarketStage, PreContractAgreement};
+use crate::club::staff::perception::PotentialEstimator;
 use crate::country::result::transfers::config::TransferConfig;
+use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::view::club::ClubView;
 use crate::utils::IntegerUtils;
@@ -56,6 +58,8 @@ struct LeavingPlayer {
     current_club_id: u32,
     group: PlayerFieldPositionGroup,
     ability: u8,
+    /// What a buying club can see of his ceiling — never hidden PA.
+    potential: u8,
     current_reputation: i16,
     age: u8,
     days_to_expiry: i64,
@@ -99,7 +103,7 @@ impl PreContractManager {
             if roll > chance {
                 continue;
             }
-            if let Some(decision) = Self::choose_buyer(country, player, date) {
+            if let Some(decision) = Self::choose_buyer(country, player, date, config) {
                 staged.push(decision);
             }
         }
@@ -231,6 +235,7 @@ impl PreContractManager {
                         current_club_id: club.id,
                         group: player.position().position_group(),
                         ability,
+                        potential: PotentialEstimator::observable_ceiling(player, date),
                         current_reputation: player.player_attributes.current_reputation,
                         age: player.age(date),
                         days_to_expiry,
@@ -272,16 +277,18 @@ impl PreContractManager {
     }
 
     /// Pick the best domestic buyer for a leaving player: a club (other
-    /// than his current one) with an open transfer request for his
-    /// position group, roster room, and a tier whose quality band fits
-    /// him. Among candidates the strongest fitting club wins — the
+    /// than his current one) with an open transfer request whose terms he
+    /// meets, roster room, a role for him that does not leave him surplus,
+    /// and a tier whose quality band fits him. Among candidates the strongest fitting club wins — the
     /// realistic destination a player negotiates toward. Returns the
     /// staged agreement with priced terms, or `None` when no club fits.
     fn choose_buyer(
         country: &Country,
         player: &LeavingPlayer,
         date: NaiveDate,
+        config: &TransferConfig,
     ) -> Option<StagedPreContract> {
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         let mut best: Option<(u32, f32, u32, u8, Option<PlayerSquadStatus>)> = None;
         for club in &country.clubs {
             if club.id == player.current_club_id || club.teams.teams.is_empty() {
@@ -298,12 +305,27 @@ impl PreContractManager {
                 r.status != TransferRequestStatus::Fulfilled
                     && r.status != TransferRequestStatus::Abandoned
                     && r.position.position_group() == player.group
+                    && r.admits(player.age, player.ability, config.free_agent_ability_slack)
             });
             if !has_request {
                 continue;
             }
 
             let Some(main_team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
+                continue;
+            };
+            let fit = SquadFitSnapshot::build(club, player.group, date, registration);
+            if !fit.is_emergency()
+                && fit.would_be_surplus(player.ability, player.potential, player.age)
+            {
+                continue;
+            }
+            let Some(role) = BuyerRoleFit::arriving(
+                &main_team.squad_ladder(),
+                player.ability,
+                player.age,
+                player.group,
+            ) else {
                 continue;
             };
             let club_score = main_team.reputation.overall_score().clamp(0.0, 1.0);
@@ -338,6 +360,7 @@ impl PreContractManager {
 
                 let (annual_wage, contract_years, promised_status) = Self::price_terms(
                     player,
+                    role,
                     club_score,
                     league_reputation,
                     negotiator_skill,
@@ -375,6 +398,7 @@ impl PreContractManager {
     /// desperate) so he lands a proper multi-year deal, not a trial.
     fn price_terms(
         player: &LeavingPlayer,
+        role: BuyerRoleFit,
         club_score: f32,
         league_reputation: u16,
         negotiator_skill: u8,
@@ -389,8 +413,6 @@ impl PreContractManager {
             club_score,
             league_reputation,
         );
-        let role =
-            FreeAgentMarketCalculator::infer_buyer_role(player.ability, club_score, player.group);
         let annual_wage = FreeAgentMarketCalculator::offer_wage(
             market_wage,
             role,
@@ -406,13 +428,7 @@ impl PreContractManager {
             player.age,
             player.ability,
         );
-        let promised_status = match role {
-            BuyerRoleFit::KeyPlayer => Some(PlayerSquadStatus::KeyPlayer),
-            BuyerRoleFit::Starter => Some(PlayerSquadStatus::FirstTeamRegular),
-            BuyerRoleFit::Rotation => Some(PlayerSquadStatus::FirstTeamSquadRotation),
-            BuyerRoleFit::Backup | BuyerRoleFit::Emergency => None,
-        };
-        (annual_wage, contract_years, promised_status)
+        (annual_wage, contract_years, role.promised_status())
     }
 }
 
@@ -941,6 +957,108 @@ mod tests {
             "a loaned player must be skipped by the pre-contract pass"
         );
         assert!(!PreContractFixtures::pre_contract_move_to(&country, 200));
+    }
+
+    fn keeper(id: u32, ca: u8) -> Player {
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Keeper".to_string(), format!("K{id}")))
+            .birth_date(PreContractFixtures::d(1998, 1, 1))
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes {
+                current_ability: ca,
+                ..Default::default()
+            })
+            .build()
+            .unwrap()
+    }
+
+    /// A buyer with an open keeper request and these keepers already.
+    fn keeper_buyer(id: u32, keepers: &[u8]) -> Club {
+        let players = keepers
+            .iter()
+            .enumerate()
+            .map(|(i, &ca)| keeper(id * 100 + i as u32, ca))
+            .collect();
+        let mut club =
+            PreContractFixtures::club(id, PreContractFixtures::team(id * 10, id, players));
+        club.transfer_plan.initialized = true;
+        club.transfer_plan
+            .transfer_requests
+            .push(TransferRequest::new(
+                1,
+                PlayerPositionType::Goalkeeper,
+                TransferNeedPriority::Important,
+                TransferNeedReason::DepthCover,
+                50,
+                90,
+                0.0,
+            ));
+        club
+    }
+
+    fn leaving_keeper(ability: u8) -> LeavingPlayer {
+        LeavingPlayer {
+            player_id: 1,
+            current_club_id: 100,
+            group: PlayerFieldPositionGroup::Goalkeeper,
+            ability,
+            potential: ability,
+            current_reputation: 2400,
+            age: 27,
+            days_to_expiry: 60,
+        }
+    }
+
+    #[test]
+    fn a_pre_contract_lapses_when_the_buyer_has_since_stocked_the_position() {
+        let today = PreContractFixtures::d(2026, 6, 30);
+        let mut leaving = keeper(1, 80);
+        leaving.contract = Some(PlayerClubContract::new(60_000, today));
+        leaving.stage_pre_contract(PreContractFixtures::agreement_to(200, today), today);
+        let club_b =
+            PreContractFixtures::club(100, PreContractFixtures::team(10, 100, vec![leaving]));
+        let stocked = keeper_buyer(200, &[140, 130, 120]);
+        let mut country = PreContractFixtures::country(vec![club_b, stocked]);
+
+        PreContractFixtures::run_free_agents(&mut country, today);
+
+        assert!(
+            !PreContractFixtures::pre_contract_move_to(&country, 200),
+            "a buyer that has filled the position since the agreement lets it lapse"
+        );
+    }
+
+    #[test]
+    fn a_pre_contract_promises_the_role_he_would_hold_at_the_buyer() {
+        let today = PreContractFixtures::d(2026, 3, 1);
+        let config = TransferConfig::default();
+
+        let behind_two = PreContractFixtures::country(vec![keeper_buyer(200, &[90, 85])]);
+        let staged =
+            PreContractManager::choose_buyer(&behind_two, &leaving_keeper(80), today, &config)
+                .expect("a third keeper still has a backup's role");
+        assert_eq!(
+            staged.agreement.promised_status, None,
+            "a third keeper is a backup, and a backup is promised nothing"
+        );
+
+        let first_choice = PreContractFixtures::country(vec![keeper_buyer(200, &[60])]);
+        let staged =
+            PreContractManager::choose_buyer(&first_choice, &leaving_keeper(80), today, &config)
+                .expect("a better keeper than the incumbent has a role");
+        assert_eq!(
+            staged.agreement.promised_status,
+            Some(PlayerSquadStatus::KeyPlayer)
+        );
     }
 }
 

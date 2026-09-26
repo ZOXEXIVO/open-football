@@ -6,7 +6,7 @@ use crate::club::staff::coach::standing::StandingEvidence;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
-    MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
+    MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadLadder, SquadSocialViewBuilder,
     SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder, TeamCoachingScores,
     TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot, TeamType,
 };
@@ -208,6 +208,12 @@ impl Team {
         } else {
             main_rep / 2
         }
+    }
+
+    /// Where every member stands in his position group, and where a
+    /// newcomer would — the ranking squad status and every signing share.
+    pub fn squad_ladder(&self) -> SquadLadder {
+        SquadLadder::of(self)
     }
 
     /// Monthly tick — squad statuses and captaincy reappointment. Runs

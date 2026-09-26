@@ -114,10 +114,15 @@ impl WeeklyMarket {
                                     PursuitStage::WindowShut
                                 }
                                 // A route the simulation itself refuses
-                                // is not a deal that fell over, and a
-                                // rejection with no reason recorded is
-                                // not one the paper can explain.
-                                Some(NegotiationRejectionReason::CountryPairRouteBlocked)
+                                // is not a deal that fell over, a club
+                                // quietly letting a free agent go once it
+                                // has filled the position is not a story,
+                                // and a rejection with no reason recorded
+                                // is not one the paper can explain.
+                                Some(
+                                    NegotiationRejectionReason::CountryPairRouteBlocked
+                                    | NegotiationRejectionReason::SquadNoLongerNeedsHim,
+                                )
                                 | None => continue,
                             }
                         }

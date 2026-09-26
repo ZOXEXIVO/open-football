@@ -15,6 +15,7 @@ use crate::club::board::mandate::{FeeEnvelope, MandatePurpose, SigningMandate};
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::player::transfer::FreeAgentBlockReason;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutMonitoringStatus;
 use crate::transfers::TransferWindowManager;
@@ -337,6 +338,20 @@ impl ApproachBuilder {
         } else {
             None
         };
+        let scout_assessed_ability = monitoring
+            .map(|m| m.current_assessed_ability)
+            .or_else(|| scouting_report.map(|r| r.assessed_ability));
+        // Where the club believes he would stand the day he arrives: its
+        // own reading of him, placed in its own depth chart. The promise
+        // it makes cannot sit above it.
+        let arrival_status = club.teams.main().map(|main| {
+            main.squad_ladder().arrival_status(
+                scout_assessed_ability
+                    .unwrap_or_else(|| AbilityEstimator::observable_level(player)),
+                player.age(date),
+                player.position().position_group(),
+            )
+        });
         let strategy_ctx = TransferStrategyContext {
             date,
             request,
@@ -353,9 +368,7 @@ impl ApproachBuilder {
             price_level,
             shortlist_rank: drift.shortlist_rank,
             competition_count: drift.competition_count,
-            scout_assessed_ability: monitoring
-                .map(|m| m.current_assessed_ability)
-                .or_else(|| scouting_report.map(|r| r.assessed_ability)),
+            scout_assessed_ability,
             scout_assessed_potential: monitoring
                 .map(|m| m.current_assessed_potential)
                 .or_else(|| scouting_report.map(|r| r.assessed_potential)),
@@ -363,6 +376,7 @@ impl ApproachBuilder {
                 .map(|m| m.confidence)
                 .or_else(|| scouting_report.map(|r| r.confidence)),
             seller_is_rival: is_rival,
+            arrival_status,
         };
 
         let offer =

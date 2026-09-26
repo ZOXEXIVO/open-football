@@ -8,15 +8,16 @@
 //! transfer module — the project convention is "no global helpers".
 
 use super::{EmergencySignedTerms, FreeAgentCandidate};
-use crate::PlayerFieldPositionGroup;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::transfer::MarketStage;
+use crate::club::team::SquadLadder;
 use crate::transfers::squad::bands::TierBands;
+use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 
-/// Inferred role the buyer is signing the player for. Drives wage
-/// asks, role-fit scoring, and acceptance. The matcher rarely knows
-/// the buyer's intended role explicitly, so we read it off the
-/// player's CA relative to the buyer's tier-anchored starter / ceiling.
+/// The role the buyer is signing the player for. Drives wage asks,
+/// role-fit scoring, acceptance and any role promise — so it is read off
+/// where he would actually stand in the buyer's squad, never off the
+/// league baseline alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuyerRoleFit {
     KeyPlayer,
@@ -24,6 +25,69 @@ pub enum BuyerRoleFit {
     Rotation,
     Backup,
     Emergency,
+}
+
+impl BuyerRoleFit {
+    /// The role a club can honestly offer a man arriving at `status`.
+    /// `None` when he would arrive surplus — there is no role to offer.
+    /// A backup below the club's first-team level is the stop-gap
+    /// `Emergency` fit, which the wage chain prices lower.
+    pub fn for_arrival(status: &PlayerSquadStatus, below_rotation_band: bool) -> Option<Self> {
+        match status {
+            PlayerSquadStatus::KeyPlayer => Some(BuyerRoleFit::KeyPlayer),
+            PlayerSquadStatus::FirstTeamRegular => Some(BuyerRoleFit::Starter),
+            PlayerSquadStatus::FirstTeamSquadRotation => Some(BuyerRoleFit::Rotation),
+            PlayerSquadStatus::NotNeeded => None,
+            _ if below_rotation_band => Some(BuyerRoleFit::Emergency),
+            _ => Some(BuyerRoleFit::Backup),
+        }
+    }
+
+    /// The role `ladder`'s club would offer a candidate of this ability,
+    /// age and group.
+    pub fn arriving(
+        ladder: &SquadLadder,
+        ability: u8,
+        age: u8,
+        group: PlayerFieldPositionGroup,
+    ) -> Option<Self> {
+        let status = ladder.arrival_status(ability, age, group);
+        Self::for_arrival(
+            &status,
+            ladder.level().is_below_rotation_band(ability, group),
+        )
+    }
+
+    /// The status a signing in this role is promised. Backup and below
+    /// carry no promise: the player took the modest role on its merits.
+    pub fn promised_status(self) -> Option<PlayerSquadStatus> {
+        match self {
+            BuyerRoleFit::KeyPlayer => Some(PlayerSquadStatus::KeyPlayer),
+            BuyerRoleFit::Starter => Some(PlayerSquadStatus::FirstTeamRegular),
+            BuyerRoleFit::Rotation => Some(PlayerSquadStatus::FirstTeamSquadRotation),
+            BuyerRoleFit::Backup | BuyerRoleFit::Emergency => None,
+        }
+    }
+
+    /// The lower of two roles — a route that pitches a modest squad role
+    /// never offers more than the man would hold.
+    pub fn at_most(self, ceiling: BuyerRoleFit) -> BuyerRoleFit {
+        if self.rank() > ceiling.rank() {
+            ceiling
+        } else {
+            self
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            BuyerRoleFit::KeyPlayer => 4,
+            BuyerRoleFit::Starter => 3,
+            BuyerRoleFit::Rotation => 2,
+            BuyerRoleFit::Backup => 1,
+            BuyerRoleFit::Emergency => 0,
+        }
+    }
 }
 
 /// One candidate priced for one buyer: inferred role, the player's
@@ -39,35 +103,9 @@ pub(super) struct FreeAgentOfferPricing {
 }
 
 impl FreeAgentOfferPricing {
-    /// Price one candidate for one slot at one buyer: market wage →
+    /// Price one candidate in one role at one buyer: market wage →
     /// reservation (decays with career pressure) → role-weighted offer.
     pub(super) fn compute(
-        candidate: &FreeAgentCandidate,
-        group: PlayerFieldPositionGroup,
-        buyer_club_score: f32,
-        buyer_league_reputation: u16,
-        buyer_negotiator_skill: u8,
-        buyer_country_reputation: u16,
-    ) -> Self {
-        let role =
-            FreeAgentMarketCalculator::infer_buyer_role(candidate.ability, buyer_club_score, group);
-        Self::compute_with_role(
-            candidate,
-            group,
-            role,
-            buyer_club_score,
-            buyer_league_reputation,
-            buyer_negotiator_skill,
-            buyer_country_reputation,
-        )
-    }
-
-    /// Same wage chain with an explicit role override. The market-
-    /// clearing pass prices its offers as Backup / Emergency squad
-    /// roles regardless of how well the player's CA fits the buyer's
-    /// tier — the pitch is "join the squad on a modest short deal",
-    /// never a starter's package.
-    pub(super) fn compute_with_role(
         candidate: &FreeAgentCandidate,
         group: PlayerFieldPositionGroup,
         role: BuyerRoleFit,
@@ -515,34 +553,6 @@ impl FreeAgentMarketCalculator {
             BuyerRoleFit::Rotation => 0.60,
             BuyerRoleFit::Backup => 0.35,
             BuyerRoleFit::Emergency => 0.20,
-        }
-    }
-
-    /// Infer the buyer's role intent from CA versus their tier's
-    /// starter and ceiling. The matcher rarely passes an explicit role
-    /// for free agents, so this gives every signing a defensible
-    /// classification without requiring upstream changes.
-    pub fn infer_buyer_role(
-        ca: u8,
-        club_reputation_score: f32,
-        group: PlayerFieldPositionGroup,
-    ) -> BuyerRoleFit {
-        let starter = TierBands::tier_starter_ca_score(club_reputation_score, group) as i16;
-        let ceiling = TierBands::tier_target_ceiling_score(club_reputation_score, group) as i16;
-        let headroom = ceiling - starter;
-        let high_anchor = starter + (headroom * 2 / 3);
-        let ca_i = ca as i16;
-
-        if ca_i >= high_anchor {
-            BuyerRoleFit::KeyPlayer
-        } else if ca_i >= starter {
-            BuyerRoleFit::Starter
-        } else if ca_i >= starter - 8 {
-            BuyerRoleFit::Rotation
-        } else if ca_i >= starter - 18 {
-            BuyerRoleFit::Backup
-        } else {
-            BuyerRoleFit::Emergency
         }
     }
 
@@ -1258,16 +1268,41 @@ mod tests {
     }
 
     #[test]
-    fn role_inference_buckets() {
-        // Continental-tier midfielder: starter ~ 95-110 range.
-        let group = PlayerFieldPositionGroup::Midfielder;
-        let club_score = 0.7;
-        let starter_role = FreeAgentMarketCalculator::infer_buyer_role(150, club_score, group);
-        assert_eq!(starter_role, BuyerRoleFit::KeyPlayer);
-        let backup_role = FreeAgentMarketCalculator::infer_buyer_role(70, club_score, group);
-        assert!(matches!(
-            backup_role,
-            BuyerRoleFit::Backup | BuyerRoleFit::Emergency
-        ));
+    fn the_role_offered_is_the_role_he_would_hold() {
+        assert_eq!(
+            BuyerRoleFit::for_arrival(&PlayerSquadStatus::KeyPlayer, false),
+            Some(BuyerRoleFit::KeyPlayer)
+        );
+        assert_eq!(
+            BuyerRoleFit::for_arrival(&PlayerSquadStatus::FirstTeamRegular, false),
+            Some(BuyerRoleFit::Starter)
+        );
+        assert_eq!(
+            BuyerRoleFit::for_arrival(&PlayerSquadStatus::MainBackupPlayer, false),
+            Some(BuyerRoleFit::Backup)
+        );
+        assert_eq!(
+            BuyerRoleFit::for_arrival(&PlayerSquadStatus::MainBackupPlayer, true),
+            Some(BuyerRoleFit::Emergency),
+            "a backup below the club's first-team level is a stop-gap"
+        );
+        assert_eq!(
+            BuyerRoleFit::for_arrival(&PlayerSquadStatus::NotNeeded, false),
+            None,
+            "a man who would arrive surplus is offered nothing"
+        );
+        assert_eq!(BuyerRoleFit::Backup.promised_status(), None);
+        assert_eq!(
+            BuyerRoleFit::Starter.promised_status(),
+            Some(PlayerSquadStatus::FirstTeamRegular)
+        );
+        assert_eq!(
+            BuyerRoleFit::Starter.at_most(BuyerRoleFit::Backup),
+            BuyerRoleFit::Backup
+        );
+        assert_eq!(
+            BuyerRoleFit::Emergency.at_most(BuyerRoleFit::Backup),
+            BuyerRoleFit::Emergency
+        );
     }
 }

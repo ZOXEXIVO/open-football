@@ -15,14 +15,15 @@ use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
+use crate::club::team::SquadLadder;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::transfers::deal::reason::TransferReason;
-use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
+use crate::transfers::gate::fit::{ForeignSlotCount, SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::market::region::ScoutingRegion;
-use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::pipeline::{TransferRequest, TransferRequestStatus};
 use crate::transfers::squad::needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
     EmergencySlotStrictness, EmergencySquadFillStrategy, EmergencyStrictness, FirstTeamSquadNeeds,
@@ -58,7 +59,7 @@ use crate::transfers::deal::negotiation::{
 #[cfg(test)]
 use crate::transfers::deal::offer::TransferOffer;
 #[cfg(test)]
-use crate::transfers::pipeline::{TransferNeedReason, TransferRequest};
+use crate::transfers::pipeline::TransferNeedReason;
 
 /// Country ids already reported by the unknown-nationality fallback in
 /// `snapshot_global_free_agents`. The data hole is permanent for a given
@@ -469,6 +470,16 @@ pub(super) struct FreeAgentSigning {
     pub fills_group: Option<PlayerFieldPositionGroup>,
 }
 
+impl FreeAgentSigning {
+    /// Whether this signing lands in `group` at `club_id`. A squad
+    /// snapshot taken before today's signings cannot see him, so every
+    /// door treats a pending arrival in the same group as the squad it is
+    /// signing into.
+    pub(super) fn lands_in(&self, club_id: u32, group: PlayerFieldPositionGroup) -> bool {
+        self.to_club_id == club_id && self.fills_group == Some(group)
+    }
+}
+
 /// Tier anchors for wage / role inference on the emergency path — the same
 /// scale the request-driven path prices against, so an emergency deal fits
 /// on the same market as the rest of the pipeline.
@@ -515,7 +526,12 @@ impl FreeAgentPass {
     /// pre-contract whose buyer no longer exists / has no room is silently
     /// dropped — the player falls through to the pool and the sweep clears
     /// the stale agreement.
-    fn collect_pre_contract_signings(country: &Country, signings: &mut Vec<FreeAgentSigning>) {
+    fn collect_pre_contract_signings(
+        country: &Country,
+        date: NaiveDate,
+        signings: &mut Vec<FreeAgentSigning>,
+    ) {
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         for club in &country.clubs {
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -545,6 +561,24 @@ impl FreeAgentPass {
                     if buyer.teams.teams.is_empty() || !ClubView::can_accept_player(buyer) {
                         continue;
                     }
+                    // …and a role for him on the day he arrives. The squad
+                    // the agreement was priced against has had months to
+                    // change; a buyer that has since filled the position
+                    // lets the agreement lapse, as one out of room does.
+                    let group = player.position().position_group();
+                    if signings.iter().any(|s| s.lands_in(buyer.id, group)) {
+                        continue;
+                    }
+                    let fit = SquadFitSnapshot::build(buyer, group, date, registration);
+                    if !fit.is_emergency()
+                        && fit.would_be_surplus(
+                            player.player_attributes.current_ability,
+                            PotentialEstimator::observable_ceiling(player, date),
+                            player.age(date),
+                        )
+                    {
+                        continue;
+                    }
 
                     let role = match agreement.promised_status {
                         Some(PlayerSquadStatus::KeyPlayer) => BuyerRoleFit::KeyPlayer,
@@ -564,7 +598,7 @@ impl FreeAgentPass {
                             contract_years: agreement.contract_years,
                             role,
                         }),
-                        fills_group: Some(player.position().position_group()),
+                        fills_group: Some(group),
                     });
                 }
             }
@@ -793,6 +827,7 @@ impl FreeAgentPass {
             let buyer_league_reputation = anchors.league_reputation;
             let buyer_negotiator_skill = anchors.negotiator_skill;
             let buyer_foreign_slots = anchors.foreign_slots;
+            let ladder = club.teams.main().map(|t| t.squad_ladder());
 
             let mut club_signed = 0usize;
             // Player ids that already rejected an emergency offer
@@ -880,10 +915,18 @@ impl FreeAgentPass {
                     continue;
                 };
 
+                // Offered the role his arrival would give him. A side that
+                // cannot be fielded still takes who it can get, so a man
+                // who would otherwise read as surplus is the stop-gap.
+                let role = ladder
+                    .as_ref()
+                    .and_then(|l| BuyerRoleFit::arriving(l, best.ability, best.age, slot.group))
+                    .unwrap_or(BuyerRoleFit::Emergency);
                 let Some(pricing) = Self::emergency_offer_accepted(
                     best,
                     slot,
                     club,
+                    role,
                     buyer_club_score,
                     buyer_league_reputation,
                     buyer_negotiator_skill,
@@ -954,7 +997,7 @@ impl FreeAgentPass {
     ) {
         // Build the open-capacity buyer set once (lowest tier first) and
         // share it across both clearing tiers.
-        let buyers = MarketClearingBuyer::rows_for_country(country);
+        let buyers = MarketClearingBuyer::rows_for_country(country, date);
         if buyers.is_empty() {
             return;
         }
@@ -1148,26 +1191,24 @@ impl FreeAgentPass {
                 last_country_id: candidate.last_country_id,
             };
 
-            let Some((buyer, min_ca, max_ca)) =
-                Self::choose_clearing_buyer(candidate, buyers, &tier, &candidate_market, recorder)
-            else {
+            let Some((buyer, min_ca, max_ca)) = Self::choose_clearing_buyer(
+                candidate,
+                buyers,
+                &tier,
+                &candidate_market,
+                signings,
+                recorder,
+            ) else {
                 continue;
             };
 
-            // Market clearing never pitches a starter's role — the
-            // deal is "join the squad on a short, modest contract",
-            // priced as Backup (or Emergency when even that overstates
-            // the fit).
-            let inferred = FreeAgentMarketCalculator::infer_buyer_role(
-                candidate.ability,
-                buyer.club_score,
-                candidate.position_group,
-            );
-            let role = match inferred {
-                BuyerRoleFit::Emergency => BuyerRoleFit::Emergency,
-                _ => BuyerRoleFit::Backup,
+            // The buyer was chosen because the man has a role there;
+            // `choose_clearing_buyer` already refused every club where he
+            // would land surplus.
+            let Some(role) = buyer.clearing_role(candidate) else {
+                continue;
             };
-            let pricing = FreeAgentOfferPricing::compute_with_role(
+            let pricing = FreeAgentOfferPricing::compute(
                 candidate,
                 candidate.position_group,
                 role,
@@ -1390,6 +1431,7 @@ impl FreeAgentPass {
         buyers: &'b [MarketClearingBuyer],
         tier: &MarketClearingTier,
         candidate_market: &ClearingMarketKnowledge<'_>,
+        pending: &[FreeAgentSigning],
         recorder: &mut BlockReasonRecorder,
     ) -> Option<(&'b MarketClearingBuyer, u8, u8)> {
         // Which buyer takes him. The soft tier keeps the lowest-tier
@@ -1405,6 +1447,9 @@ impl FreeAgentPass {
         // difference between "nobody wants him" and "nobody can
         // register him", which is a different answer for the player.
         let mut unregistrable_fits = 0usize;
+        // Clubs whose band fits but where he would land surplus — a club
+        // already stocked with better men at his position.
+        let mut stocked_fits = 0usize;
         for buyer in buyers {
             let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                 buyer.club_score,
@@ -1420,6 +1465,14 @@ impl FreeAgentPass {
                 too_good_everywhere = false;
             }
             if candidate.ability >= min_ca && candidate.ability <= max_ca {
+                if buyer.clearing_role(candidate).is_none()
+                    || pending
+                        .iter()
+                        .any(|s| s.lands_in(buyer.club_id, candidate.position_group))
+                {
+                    stocked_fits += 1;
+                    continue;
+                }
                 // A club with no registration slot left for a foreigner
                 // is not a landing spot, however well he fits: signing
                 // him produces an omitted registration, not a squad
@@ -1442,6 +1495,9 @@ impl FreeAgentPass {
                 candidate.player_id,
                 FreeAgentBlockReason::NoRegistrationSlot,
             );
+        }
+        if fitting.is_empty() && stocked_fits > 0 {
+            recorder.record(candidate.player_id, FreeAgentBlockReason::SurplusOnArrival);
         }
         let chosen =
             Self::sample_clearing_buyer(&fitting, candidate.position_group, candidate_market);
@@ -1603,6 +1659,7 @@ impl FreeAgentPass {
         best: &FreeAgentCandidate,
         slot: EmergencyGroupSlot,
         club: &Club,
+        role: BuyerRoleFit,
         buyer_club_score: f32,
         buyer_league_reputation: u16,
         buyer_negotiator_skill: u8,
@@ -1619,6 +1676,7 @@ impl FreeAgentPass {
         let pricing = FreeAgentOfferPricing::compute(
             best,
             slot.group,
+            role,
             buyer_club_score,
             buyer_league_reputation,
             buyer_negotiator_skill,
@@ -2365,32 +2423,42 @@ struct RequestBuyerContext<'a> {
     /// gate (memory `loan_market_argmax_predictability`: gates read truth,
     /// rankings read belief).
     benefactor: f32,
+    /// Where a newcomer would stand in the buyer's main squad.
+    ladder: &'a SquadLadder,
+    /// The recruitment fit rule every paid path applies, for the
+    /// request's position group.
+    fit: SquadFitSnapshot,
 }
 
-/// Hard-filter classifier for the request-driven matcher. The same
-/// sliding career-pressure gates the legacy filter closure applied
-/// (quality band, country rep, cross-continent, region prestige), but
-/// returning the specific block reason instead of a bare `false` so
-/// skipped global-pool candidates stay explainable in diagnosis.
+/// Hard-filter classifier for the request-driven matcher: the request's
+/// own terms, the squad-fit rule, and the sliding career-pressure gates
+/// (country rep, cross-continent, region prestige), returning the
+/// specific block reason so skipped global-pool candidates stay
+/// explainable in diagnosis.
 struct RequestCandidateGates;
 
 impl RequestCandidateGates {
+    /// `Ok` carries the role he would be offered — the one his arrival
+    /// projection gives him in the buyer's squad.
     fn evaluate(
         candidate: &FreeAgentCandidate,
         buyer: &RequestBuyerContext<'_>,
+        request: &TransferRequest,
         group: PlayerFieldPositionGroup,
         is_depth_request: bool,
-        nominal_floor: u8,
-    ) -> Result<(), FreeAgentBlockReason> {
-        // Quality fit: tier-anchored band, slackened by pressure. The
-        // request's own min-ability floor (minus the configured slack)
-        // still applies — whichever is lower wins, because a free
-        // agent below the nominal target is acceptable at zero fee.
-        let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
-            buyer.club_score,
-            group,
-            candidate.career_pressure,
-        );
+        zero_fee_slack: u8,
+    ) -> Result<BuyerRoleFit, FreeAgentBlockReason> {
+        // The request's own terms bind. Career pressure widens what the
+        // player will accept (the rep / region / continent gates below);
+        // it never lowers what the club asked for — a free "upgrade" who
+        // does not improve on the incumbent is how a club ends up with
+        // eight goalkeepers.
+        if candidate.ability < request.free_agent_floor(zero_fee_slack) {
+            return Err(FreeAgentBlockReason::BelowMinimumAbility);
+        }
+        if !request.fits_age(candidate.age) {
+            return Err(FreeAgentBlockReason::OutsideAgeBand);
+        }
         let max_ca = FreeAgentMarketCalculator::max_acceptable_ca(
             buyer.club_score,
             group,
@@ -2404,12 +2472,21 @@ impl RequestCandidateGates {
         } else {
             max_ca
         };
-        if candidate.ability < min_ca.min(nominal_floor) {
-            return Err(FreeAgentBlockReason::BelowMinimumAbility);
-        }
         if candidate.ability > max_ca {
             return Err(FreeAgentBlockReason::AboveMaximumAbility);
         }
+        // No signing lands surplus: the fit rule every paid path applies,
+        // then the role his arrival would give him. A side too thin to
+        // field takes who it can get.
+        if !buyer.fit.is_emergency()
+            && buyer
+                .fit
+                .would_be_surplus(candidate.ability, candidate.potential, candidate.age)
+        {
+            return Err(FreeAgentBlockReason::SurplusOnArrival);
+        }
+        let role = BuyerRoleFit::arriving(buyer.ladder, candidate.ability, candidate.age, group)
+            .ok_or(FreeAgentBlockReason::SurplusOnArrival)?;
         // Sliding country-rep gate.
         let rep_drop = FreeAgentMarketCalculator::rep_drop_allowed(
             candidate.career_pressure,
@@ -2457,7 +2534,7 @@ impl RequestCandidateGates {
         {
             return Err(FreeAgentBlockReason::NoRegistrationSlot);
         }
-        Ok(())
+        Ok(role)
     }
 }
 
@@ -2473,6 +2550,7 @@ impl RequestCandidateOrdering {
         candidate: &FreeAgentCandidate,
         buyer: &RequestBuyerContext<'_>,
         group: PlayerFieldPositionGroup,
+        role: BuyerRoleFit,
     ) -> f32 {
         let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
             buyer.club_score,
@@ -2490,6 +2568,7 @@ impl RequestCandidateOrdering {
         let pricing = FreeAgentOfferPricing::compute(
             candidate,
             group,
+            role,
             buyer.club_score,
             buyer.league_reputation,
             buyer.negotiator_skill,
@@ -2546,7 +2625,10 @@ impl RequestCandidateOrdering {
 
     /// Descending on priority; raw quality as the tiebreak so equal-
     /// priority candidates keep the legacy strongest-first order.
-    fn cmp(a: &(&FreeAgentCandidate, f32), b: &(&FreeAgentCandidate, f32)) -> Ordering {
+    fn cmp(
+        a: &(&FreeAgentCandidate, f32, BuyerRoleFit),
+        b: &(&FreeAgentCandidate, f32, BuyerRoleFit),
+    ) -> Ordering {
         b.1.partial_cmp(&a.1)
             .unwrap_or(Ordering::Equal)
             .then_with(|| {
@@ -2605,6 +2687,10 @@ struct MarketClearingBuyer {
     /// Room left under the league's foreigner quota. The clearing tiers
     /// are the market's backstop, not an exemption from registration.
     foreign_slots: ForeignSlotCount,
+    /// Where a newcomer would stand in the main squad.
+    ladder: SquadLadder,
+    /// The recruitment fit rule, per position group.
+    fit: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
 }
 
 /// How well the clubs of one country know the market a single clearing
@@ -2671,39 +2757,40 @@ impl MarketClearingBuyer {
     /// spot for a long-unemployed journeyman is the small club that can
     /// use a cheap body, not the strongest club that happens to have
     /// space.
-    fn rows_for_country(country: &Country) -> Vec<MarketClearingBuyer> {
+    fn rows_for_country(country: &Country, date: NaiveDate) -> Vec<MarketClearingBuyer> {
         let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         let mut buyers: Vec<MarketClearingBuyer> = country
             .clubs
             .iter()
             .filter(|club| !club.teams.teams.is_empty() && ClubView::can_accept_player(club))
-            .map(|club| {
-                let main_team = club.teams.main().or_else(|| club.teams.teams.first());
+            .filter_map(|club| {
+                let main_team = club.teams.main().or_else(|| club.teams.teams.first())?;
                 // overall_score — the unit the tier anchor curves expect.
-                let club_score = main_team
-                    .map(|t| t.reputation.overall_score().clamp(0.0, 1.0))
-                    .unwrap_or(0.0);
+                let club_score = main_team.reputation.overall_score().clamp(0.0, 1.0);
                 let league_reputation = main_team
-                    .and_then(|t| t.league_id)
+                    .league_id
                     .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                     .map(|l| l.reputation)
                     .unwrap_or(0);
                 let negotiator_skill = main_team
-                    .and_then(|t| t.staffs.find_negotiator())
+                    .staffs
+                    .find_negotiator()
                     .map(|s| (s.staff_attributes.mental.man_management as u32 * 5).min(100) as u8)
                     .unwrap_or(50);
                 let (mut gk, mut def, mut mid, mut fwd) = (0u8, 0u8, 0u8, 0u8);
-                if let Some(team) = main_team {
-                    for player in &team.players.players {
-                        match player.position().position_group() {
-                            PlayerFieldPositionGroup::Goalkeeper => gk = gk.saturating_add(1),
-                            PlayerFieldPositionGroup::Defender => def = def.saturating_add(1),
-                            PlayerFieldPositionGroup::Midfielder => mid = mid.saturating_add(1),
-                            PlayerFieldPositionGroup::Forward => fwd = fwd.saturating_add(1),
-                        }
+                for player in &main_team.players.players {
+                    match player.position().position_group() {
+                        PlayerFieldPositionGroup::Goalkeeper => gk = gk.saturating_add(1),
+                        PlayerFieldPositionGroup::Defender => def = def.saturating_add(1),
+                        PlayerFieldPositionGroup::Midfielder => mid = mid.saturating_add(1),
+                        PlayerFieldPositionGroup::Forward => fwd = fwd.saturating_add(1),
                     }
                 }
-                MarketClearingBuyer {
+                let fit = PlayerFieldPositionGroup::ALL
+                    .iter()
+                    .map(|&g| (g, SquadFitSnapshot::build(club, g, date, registration)))
+                    .collect();
+                Some(MarketClearingBuyer {
                     club_id: club.id,
                     club_score,
                     league_reputation,
@@ -2713,7 +2800,9 @@ impl MarketClearingBuyer {
                     mid,
                     fwd,
                     foreign_slots: registration.count(club),
-                }
+                    ladder: main_team.squad_ladder(),
+                    fit,
+                })
             })
             .collect();
         buyers.sort_by(|a, b| {
@@ -2722,6 +2811,21 @@ impl MarketClearingBuyer {
                 .unwrap_or(Ordering::Equal)
         });
         buyers
+    }
+
+    /// The role this club can offer a long-unemployed man: the one his
+    /// arrival would give him, never above a squad role — the clearing
+    /// pitch is a short, modest deal. `None` when he would land surplus.
+    fn clearing_role(&self, candidate: &FreeAgentCandidate) -> Option<BuyerRoleFit> {
+        let group = candidate.position_group;
+        let fit = self.fit.get(&group)?;
+        if !fit.is_emergency()
+            && fit.would_be_surplus(candidate.ability, candidate.potential, candidate.age)
+        {
+            return None;
+        }
+        BuyerRoleFit::arriving(&self.ladder, candidate.ability, candidate.age, group)
+            .map(|role| role.at_most(BuyerRoleFit::Backup))
     }
 
     /// Current head-count in `group` for this buyer.

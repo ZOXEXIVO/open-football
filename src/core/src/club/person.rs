@@ -36,7 +36,13 @@ impl CareerRunway {
     /// For callers holding an age rather than a person — a market
     /// summary, a squad row.
     pub fn at(age: u8) -> f32 {
-        ((Self::PRIME_END - age as f32) / Self::PRIME_SPAN).clamp(0.0, 1.0)
+        Self::at_years(age as f32)
+    }
+
+    /// The same curve read at an exact age, for callers holding a birth
+    /// date — a whole-year age still steps on the birthday.
+    pub fn at_years(age: f32) -> f32 {
+        ((Self::PRIME_END - age) / Self::PRIME_SPAN).clamp(0.0, 1.0)
     }
 }
 
