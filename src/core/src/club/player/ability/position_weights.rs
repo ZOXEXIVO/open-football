@@ -46,10 +46,9 @@ pub const SK_MATCH_READINESS: usize = 36;
 
 /// Per-exact-position attribute weight table (37 slots).
 ///
-/// Weights are the single source of truth for two things:
-///   1. Skill generation — how the CA target is shaped into individual attributes.
-///   2. CA scoring — `PlayerSkills::calculate_ability_for_position` weighs each
-///      attribute by its relevance to the role.
+/// These shape generated attribute profiles. CA scoring has its own weights,
+/// calibrated against recorded profiles in `skills::weights`; generation
+/// preferences and measured attribute costs are different quantities.
 ///
 /// Range: 0.0 (irrelevant) .. ~2.0 (defining). The match_readiness slot is
 /// always 0 — it's a fitness state, not a skill.

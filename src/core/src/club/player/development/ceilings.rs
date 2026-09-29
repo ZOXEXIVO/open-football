@@ -10,6 +10,7 @@ use super::skills_array::{
     SK_ACCELERATION, SK_AGILITY, SK_BALANCE, SK_JUMPING, SK_NATURAL_FITNESS, SK_PACE, SKILL_COUNT,
     SkillCategory, SkillKey, skill_category,
 };
+use crate::PlayerSkills;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::player::Player;
 
@@ -31,24 +32,50 @@ impl PositionalSkillCeilings {
     /// ceiling holds it back — which is what makes a teenager play like a
     /// teenager instead of like the player he is going to become.
     ///
+    /// Maturity is a share of the player's *ability*: a family at 0.72
+    /// holds the attributes of a player of 0.72 × PA. On the calibrated CA
+    /// scale, whose zero sits near attribute level 6, the same share of
+    /// the attribute level is a far smaller share of ability: read that
+    /// way, the ceiling capped each age at its typical player rather than
+    /// its best.
+    ///
+    /// The part of each family that only matches build
+    /// ([`SkillMaturation::match_share`]) opens with the football he is
+    /// getting: training brings every young player along, but only one
+    /// who plays grows into the whole of his age's share. The other
+    /// channels differ in rate only, and rates converge on the same
+    /// ceiling — whoever falls behind trains it back.
+    ///
     /// Ceilings gate growth and never cut (see the module docs): a player
     /// already above his age ceiling — an import, an existing save, a late
-    /// developer — keeps every point he has and simply stops gaining
-    /// until his age catches up.
-    pub fn for_player(player: &Player, age: u32) -> Self {
-        let pa = player.player_attributes.potential_ability as f32;
-        let base_ceiling = (pa / 200.0 * 20.0).clamp(1.0, 20.0);
-        let weights = position_dev_weights(pos_group_from(player.position()));
+    /// developer, a regular who lost his place — keeps every point he has
+    /// and simply stops gaining until his age, or his football, catches up.
+    pub fn for_player(player: &Player, age: f32) -> Self {
+        let position = player.position();
+        let weights = position_dev_weights(pos_group_from(position));
+        let potential = player.player_attributes.potential_ability as f32;
+        let unplayed = 1.0 - player.load.match_exposure();
+        let mut levels = [None; MaturationGroup::COUNT];
         let mut arr = [1.0f32; SKILL_COUNT];
         for i in 0..SKILL_COUNT {
-            let maturity = SkillMaturation::ratio(age, Self::maturation_group(i));
-            arr[i] = (base_ceiling * weights[i] * maturity).clamp(1.0, 20.0);
+            let group = Self::maturation_group(i);
+            let level = *levels[group as usize].get_or_insert_with(|| {
+                let held_share = SkillMaturation::ratio(age, group)
+                    * (1.0 - SkillMaturation::match_share(group) * unplayed);
+                let held = (potential * held_share).round() as u8;
+                PlayerSkills::shaped_skill_level(position, held, &weights)
+            });
+            arr[i] = (level * weights[i]).clamp(1.0, 20.0);
         }
         PositionalSkillCeilings { arr }
     }
 
     pub fn get(&self, key: SkillKey) -> f32 {
         self.arr[key.idx()]
+    }
+
+    pub(super) fn at(&self, idx: usize) -> f32 {
+        self.arr[idx]
     }
 
     /// Bridge one skill onto its maturation family. Separate enums on

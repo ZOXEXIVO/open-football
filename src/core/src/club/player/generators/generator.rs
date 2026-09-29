@@ -13,7 +13,7 @@ use crate::{
     Physical, Player, PlayerAttributes, PlayerClubContract, PlayerDecisionHistory, PlayerFoots,
     PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType, PlayerPositions,
     PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
-    PlayerTraining, PlayerTrainingHistory, Relations, Technical,
+    PlayerTraining, PlayerTrainingHistory, PositionWeights, Relations, Technical,
 };
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -153,141 +153,11 @@ fn position_type_from(pos: PlayerPositionType) -> PositionType {
     }
 }
 
-/// Position distribution weights. Higher = more CA budget allocated to this skill.
-/// These are NOT multipliers — they are proportional shares of the CA budget.
-/// A weight of 1.8 gets ~2.25x the budget of a weight of 0.8, producing naturally
-/// higher skills for key attributes without collapsing weak ones.
-fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
-    let mut w = [0.8f32; SKILL_COUNT];
-    match position {
-        PositionType::Goalkeeper => {
-            // GK-critical
-            w[SK_POSITIONING] = 1.8;
-            w[SK_CONCENTRATION] = 1.6;
-            w[SK_AGILITY] = 1.7;
-            w[SK_ANTICIPATION] = 1.5;
-            w[SK_COMPOSURE] = 1.5;
-            w[SK_JUMPING] = 1.5;
-            w[SK_BRAVERY] = 1.4;
-            w[SK_DECISIONS] = 1.3;
-            w[SK_STRENGTH] = 1.1;
-            // Modern GK — ball-playing ability
-            w[SK_FIRST_TOUCH] = 1.1;
-            w[SK_PASSING] = 1.1;
-            w[SK_TECHNIQUE] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_PACE] = 0.8;
-            w[SK_STAMINA] = 0.8;
-            w[SK_LEADERSHIP] = 1.0;
-            w[SK_BALANCE] = 1.0;
-            w[SK_DETERMINATION] = 1.0;
-            w[SK_TEAMWORK] = 1.0;
-            w[SK_PENALTY_TAKING] = 0.4;
-            // Secondary outfield — professional level for all skills
-            w[SK_FINISHING] = 0.5;
-            w[SK_LONG_SHOTS] = 0.5;
-            w[SK_CROSSING] = 0.5;
-            w[SK_CORNERS] = 0.5;
-            w[SK_FREE_KICKS] = 0.55;
-            w[SK_HEADING] = 0.55;
-            w[SK_OFF_THE_BALL] = 0.5;
-            w[SK_DRIBBLING] = 0.55;
-            w[SK_LONG_THROWS] = 0.6;
-            w[SK_TACKLING] = 0.55;
-            w[SK_MARKING] = 0.55;
-            w[SK_WORK_RATE] = 0.6;
-            w[SK_FLAIR] = 0.5;
-            w[SK_ACCELERATION] = 0.7;
-        }
-        PositionType::Defender => {
-            w[SK_TACKLING] = 1.6;
-            w[SK_MARKING] = 1.6;
-            w[SK_POSITIONING] = 1.5;
-            w[SK_HEADING] = 1.4;
-            w[SK_STRENGTH] = 1.4;
-            w[SK_CONCENTRATION] = 1.4;
-            w[SK_ANTICIPATION] = 1.3;
-            w[SK_BRAVERY] = 1.3;
-            w[SK_PACE] = 1.1;
-            w[SK_JUMPING] = 1.1;
-            w[SK_PASSING] = 1.0;
-            w[SK_TEAMWORK] = 1.1;
-            w[SK_DECISIONS] = 1.1;
-            w[SK_COMPOSURE] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_STAMINA] = 1.0;
-            w[SK_FINISHING] = 0.3;
-            w[SK_DRIBBLING] = 0.4;
-            w[SK_FLAIR] = 0.3;
-            w[SK_LONG_SHOTS] = 0.3;
-            w[SK_OFF_THE_BALL] = 0.4;
-            w[SK_VISION] = 0.5;
-            w[SK_CROSSING] = 0.5;
-            w[SK_CORNERS] = 0.3;
-            w[SK_FREE_KICKS] = 0.4;
-        }
-        PositionType::Midfielder => {
-            w[SK_PASSING] = 1.5;
-            w[SK_VISION] = 1.4;
-            w[SK_STAMINA] = 1.3;
-            w[SK_TECHNIQUE] = 1.3;
-            w[SK_FIRST_TOUCH] = 1.3;
-            w[SK_DECISIONS] = 1.3;
-            w[SK_TEAMWORK] = 1.3;
-            w[SK_WORK_RATE] = 1.2;
-            w[SK_DRIBBLING] = 1.1;
-            w[SK_TACKLING] = 1.0;
-            w[SK_POSITIONING] = 1.0;
-            w[SK_COMPOSURE] = 1.1;
-            w[SK_ANTICIPATION] = 1.1;
-            w[SK_CONCENTRATION] = 1.0;
-            w[SK_PACE] = 1.0;
-            w[SK_ACCELERATION] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_BALANCE] = 1.0;
-            w[SK_HEADING] = 0.5;
-            w[SK_LONG_THROWS] = 0.4;
-            w[SK_FINISHING] = 0.5;
-            w[SK_MARKING] = 0.6;
-            w[SK_STRENGTH] = 0.7;
-        }
-        PositionType::Striker => {
-            w[SK_FINISHING] = 1.7;
-            w[SK_OFF_THE_BALL] = 1.5;
-            w[SK_COMPOSURE] = 1.4;
-            w[SK_DRIBBLING] = 1.3;
-            w[SK_PACE] = 1.3;
-            w[SK_FIRST_TOUCH] = 1.3;
-            w[SK_ANTICIPATION] = 1.3;
-            w[SK_ACCELERATION] = 1.3;
-            w[SK_HEADING] = 1.1;
-            w[SK_TECHNIQUE] = 1.1;
-            w[SK_STRENGTH] = 1.0;
-            w[SK_AGILITY] = 1.0;
-            w[SK_BALANCE] = 1.0;
-            w[SK_DECISIONS] = 1.0;
-            w[SK_DETERMINATION] = 1.0;
-            w[SK_BRAVERY] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_TACKLING] = 0.2;
-            w[SK_MARKING] = 0.2;
-            w[SK_POSITIONING] = 0.4;
-            w[SK_CONCENTRATION] = 0.6;
-            w[SK_LONG_THROWS] = 0.3;
-            w[SK_CORNERS] = 0.3;
-            w[SK_FREE_KICKS] = 0.4;
-        }
-    }
-    w
-}
-
 /// Apply a random role archetype to create variety within position groups.
 /// Roles aggressively reshape the weight distribution — a Poacher and a Target Man
 /// should look fundamentally different, not subtly different.
 /// Boost magnitudes: +0.8 to +1.5 for key skills, −0.5 to −1.0 for suppressed skills.
-fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
-    let roll = rand::random::<f32>();
-
+fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionType, roll: f32) {
     match position {
         PositionType::Goalkeeper => {
             if roll < 0.35 {
@@ -570,9 +440,9 @@ fn apply_talent_spikes(skills: &mut [f32; SKILL_COUNT], mean_skill: f32) {
 
     // (group_start, group_end, spikes_up, spikes_down)
     let groups: [(usize, usize, usize, usize); 3] = [
-        (0, 14, 2, 2),           // Technical: 14 skills, 2 up / 2 down
-        (14, 28, 3, 2),          // Mental: 14 skills, 3 up / 2 down
-        (28, SKILL_COUNT, 2, 1), // Physical: 9 skills, 2 up / 1 down
+        (0, 14, 2, 2),                  // Technical: 14 skills, 2 up / 2 down
+        (14, 28, 3, 2),                 // Mental: 14 skills, 3 up / 2 down
+        (28, SK_MATCH_READINESS, 2, 1), // Physical: 8 skills, 2 up / 1 down
     ];
 
     for &(start, end, n_up, n_down) in &groups {
@@ -650,7 +520,7 @@ fn skills_from_array(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
 
 /// Generate GK-specific skills from the PA budget.
 /// Role archetypes: Shot Stopper, Sweeper Keeper, Commanding, All-Rounder
-fn generate_gk_skills(pa_final: f32, age: u32) -> Goalkeeping {
+fn generate_gk_skills(pa_final: f32, age: u32, roll: f32) -> Goalkeeping {
     use crate::Goalkeeping;
 
     let gk_age_ratio = match age {
@@ -667,7 +537,6 @@ fn generate_gk_skills(pa_final: f32, age: u32) -> Goalkeeping {
     let spread = (pa_final * 0.45).max(2.0);
     let noise = 1.5;
 
-    let roll = rand::random::<f32>();
     let w: [f32; 13] = if roll < 0.35 {
         // Shot Stopper
         [
@@ -678,7 +547,7 @@ fn generate_gk_skills(pa_final: f32, age: u32) -> Goalkeeping {
         [
             0.8, 1.0, 1.0, 1.2, 1.5, 1.1, 1.3, 1.2, 1.4, 0.7, 1.1, 1.5, 1.2,
         ]
-    } else if roll < 0.82 {
+    } else if roll < 0.85 {
         // Commanding
         [
             1.6, 1.5, 1.4, 0.5, 0.7, 1.2, 0.9, 1.0, 0.7, 1.3, 1.1, 0.9, 0.8,
@@ -1036,14 +905,9 @@ impl PlayerGenerator {
             state.record(potential_ability);
         }
 
-        let pos_type = position_type_from(position);
-        let skills = Self::generate_skills(&pos_type, age, rep_factor, potential_ability);
+        let skills = Self::generate_skills(position, age, rep_factor, potential_ability);
 
         let current_ability = skills.calculate_ability_for_position(position);
-
-        // PA must never be lower than CA — position-weighted skill calculation
-        // can produce CA above the raw PA when skills align well with the position
-        let potential_ability = potential_ability.max(current_ability);
 
         // Higher PA → higher chance of secondary position
         let positions = Self::generate_positions(position, potential_ability);
@@ -1310,7 +1174,7 @@ impl PlayerGenerator {
         }
     }
 
-    /// PA-anchored skill generation (same model as database generator).
+    /// Academy skill generation from PA and age-dependent maturity.
     ///
     /// PA maps to a "fully developed" skill level. Position weights create
     /// differentiation via ADDITIVE spread so even low-PA youth have clear
@@ -1324,23 +1188,21 @@ impl PlayerGenerator {
     ///   5. Cohesion, floors, affinities, talent spikes
     ///   6. Clamp to [1, age_cap]
     fn generate_skills(
-        position: &PositionType,
+        position: PlayerPositionType,
         age: u32,
         rep_factor: f32,
         potential_ability: u8,
     ) -> PlayerSkills {
-        let pa = potential_ability as f32;
-        // PA → target skill level at peak (PA 1→1, PA 100→10.5, PA 200→20)
-        let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
+        let pa_final = PlayerSkills::ability_skill_level(potential_ability);
 
         // Position spread: how much key/weak skills deviate from group mean.
         // Ensures differentiation at ALL ability levels including youth:
-        //   PA 50 (pa_final ~5.7): spread ~2.8 → key ~8, weak ~3
-        //   PA 100 (pa_final ~10.5): spread ~5.2 → key ~14, weak ~5
+        // This shapes strengths; the final weighted CA is bounded by PA.
         let spread = (pa_final * 0.5).max(2.5);
 
-        let mut pos_w = position_weights(position);
-        apply_role_archetype(&mut pos_w, position);
+        let mut pos_w = PositionWeights::for_position(position);
+        let archetype_roll = rand::random::<f32>();
+        apply_role_archetype(&mut pos_w, &position_type_from(position), archetype_roll);
 
         // Noise per group — youth have more technical noise (raw talent variation)
         let base_noise = 1.5 + rep_factor * 1.0;
@@ -1354,7 +1216,7 @@ impl PlayerGenerator {
 
         let mut skills = [0.0f32; SKILL_COUNT];
 
-        for i in 0..SKILL_COUNT {
+        for i in 0..SK_MATCH_READINESS {
             let noise = match skill_group(i) {
                 0 => tech_noise,
                 1 => mental_noise,
@@ -1368,7 +1230,9 @@ impl PlayerGenerator {
             // disagree, and an academy player could be developed to a full
             // adult mind years before the generator would have built him
             // one.
-            let group_mean = pa_final * SkillMaturation::ratio(age, Self::maturation_group(i));
+            // Mid-year: a player "of this age" is half a year into it.
+            let maturity = SkillMaturation::ratio(age as f32 + 0.5, Self::maturation_group(i));
+            let group_mean = pa_final * maturity;
 
             // Additive position spread: key skills (w>1) get bonus, weak (w<1) get penalty
             let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;
@@ -1384,9 +1248,9 @@ impl PlayerGenerator {
         }
 
         // Physical cohesion: light pull toward group mean
-        let p_count = (SKILL_COUNT - 28) as f32;
-        let p_avg: f32 = skills[28..SKILL_COUNT].iter().sum::<f32>() / p_count;
-        for skill in &mut skills[28..SKILL_COUNT] {
+        let p_count = (SK_MATCH_READINESS - 28) as f32;
+        let p_avg: f32 = skills[28..SK_MATCH_READINESS].iter().sum::<f32>() / p_count;
+        for skill in &mut skills[28..SK_MATCH_READINESS] {
             *skill = *skill * 0.85 + p_avg * 0.15;
         }
 
@@ -1440,8 +1304,14 @@ impl PlayerGenerator {
         let mut result = skills_from_array(&skills);
 
         // Generate GK-specific skills for goalkeepers
-        if matches!(position, PositionType::Goalkeeper) {
-            result.goalkeeping = generate_gk_skills(pa_final, age);
+        if matches!(position, PlayerPositionType::Goalkeeper) {
+            result.goalkeeping = generate_gk_skills(pa_final, age, archetype_roll);
+        }
+        result.clamp_attributes(cap);
+        // Floors and talent spikes shape the profile, but must not silently
+        // raise the sampled biological ceiling, especially at low PA.
+        if result.calculate_ability_for_position(position) > potential_ability {
+            result.fit_to_ability(position, potential_ability, cap, None);
         }
 
         result
@@ -1638,7 +1508,8 @@ fn cross_side_position(primary: PlayerPositionType) -> Option<PlayerPositionType
 
 #[cfg(test)]
 mod academy_realism_tests {
-    use super::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator};
+    use super::{AcademyGenerationContext, AcademyIntakeState, PlayerGenerator, age_skill_cap};
+    use crate::club::player::registry::{SkillCategory, SkillId};
     use crate::{PeopleNameGeneratorData, PlayerPositionType};
     use chrono::NaiveDate;
 
@@ -1680,6 +1551,44 @@ mod academy_realism_tests {
 
     fn elite_ctx() -> AcademyGenerationContext {
         AcademyGenerationContext::from_components(20, 1.0, 1.0, 1.0, 1.0, 9500, 9500, 9500, 90)
+    }
+
+    #[test]
+    fn generated_skills_respect_sampled_pa_and_age_caps() {
+        for position in [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::WingbackRight,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::Striker,
+        ] {
+            for age in [14, 17, 19] {
+                for pa in [20, 40, 80, 140, 200] {
+                    for _ in 0..12 {
+                        let skills = PlayerGenerator::generate_skills(position, age, 0.5, pa);
+                        assert!(
+                            skills.calculate_ability_for_position(position) <= pa,
+                            "{position:?}, age {age}, PA {pa}"
+                        );
+                        for (id, value) in skills.iter_all() {
+                            if id == SkillId::MatchReadiness {
+                                assert!((10.0..15.0).contains(&value));
+                            } else if id.category() != SkillCategory::Goalkeeping
+                                || position == PlayerPositionType::Goalkeeper
+                            {
+                                assert!(
+                                    (1.0..=age_skill_cap(age)).contains(&value),
+                                    "{position:?}, age {age}, PA {pa}, {id:?}={value}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn cps_score(ctx: &AcademyGenerationContext) -> f32 {

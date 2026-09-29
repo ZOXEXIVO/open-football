@@ -227,8 +227,7 @@ mod tests {
     impl Fx {
         /// Flat skills (every technical / mental / physical / goalkeeping
         /// attribute equal) tuned so the position-weighted visible ability
-        /// lands on `target`. Inverts `PlayerSkills::skill_to_ability`:
-        /// ability = ((v-1)/19) * 199 + 1, so v = 1 + (target-1)/199*19.
+        /// lands on `target`. Inverts `PlayerSkills::skill_to_ability`.
         fn skills_for(target: u8) -> PlayerSkills {
             PlayerSkills::flat_for_ability(target)
         }

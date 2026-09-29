@@ -1,7 +1,7 @@
 use super::{AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyTier, ClubAcademy};
 use crate::Staff;
 use crate::context::GlobalContext;
-use crate::{Person, Player, PlayerFieldPositionGroup};
+use crate::{Person, Player, PlayerFieldPositionGroup, PlayerSkills};
 use chrono::{Datelike, NaiveDate};
 
 /// Deterministic per-(player, date, salt) roll in `[0.0, 1.0)`, mirroring
@@ -710,8 +710,7 @@ impl SkillCeilings {
             _ => 15.0,
         };
 
-        let pa = player.player_attributes.potential_ability as f32;
-        let base = (pa / 200.0 * 20.0).clamp(1.0, 20.0);
+        let base = PlayerSkills::ability_skill_level(player.player_attributes.potential_ability);
         let w = AcademyCeilingWeights::for_group(group);
 
         // Each skill gets `min(age_cap, (base * weight).clamp(1.0, 20.0))`,

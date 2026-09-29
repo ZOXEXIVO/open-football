@@ -550,6 +550,19 @@ impl Player {
         }
         // No decay for first 3 days (normal rest period)
     }
+
+    /// One day of an off-season camp: sharpness returns faster at better
+    /// facilities. Attributes stay with the weekly development tick and
+    /// the club's pre-season sessions, which run through the summer too
+    /// and answer to the player's potential and age ceilings.
+    pub(crate) fn on_offseason_camp_day(&mut self, training_quality: f32) {
+        if self.player_attributes.is_injured {
+            return;
+        }
+        let gain = 0.3 + training_quality * 0.4;
+        self.skills.physical.match_readiness =
+            (self.skills.physical.match_readiness + gain).min(20.0);
+    }
 }
 
 #[cfg(test)]

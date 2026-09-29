@@ -48,6 +48,10 @@ const FORM_ALPHA: f32 = 0.33;
 /// isn't picked. An active player's form signal is left untouched.
 const FORM_FADE_DAILY: f32 = 0.9517;
 
+/// The least a player starting every week holds in the 30-day window —
+/// it dips to ~336 on the eve of his next match.
+const REGULAR_MINUTES_30: f32 = 330.0;
+
 /// Weekly minutes at which selection starts penalising the player (≈5 × 90).
 pub const FATIGUE_LOAD_THRESHOLD: f32 = 450.0;
 /// Weekly minutes treated as dangerous overload — injury risk kicks in too.
@@ -74,6 +78,10 @@ pub struct PlayerLoad {
     pub minutes_last_7: f32,
     /// Recency-weighted competitive minutes over the trailing ~30 days.
     pub minutes_last_30: f32,
+    /// Recency-weighted minutes in friendlies and youth or reserve league
+    /// games over the trailing ~30 days. Kept apart from the competitive
+    /// window, which rotation and selection read.
+    pub friendly_minutes_last_30: f32,
     /// Packed per-day bit array; bit 0 = today. Counts matches in last 14 days.
     pub matches_last_14_bits: u16,
     /// EMA of effective match ratings (1.0–10.0). Zero until the first match.
@@ -104,6 +112,7 @@ impl PlayerLoad {
         Self {
             minutes_last_7: 0.0,
             minutes_last_30: 0.0,
+            friendly_minutes_last_30: 0.0,
             matches_last_14_bits: 0,
             form_rating: 0.0,
             last_decay_day_ordinal: 0,
@@ -151,6 +160,7 @@ impl PlayerLoad {
 
         self.minutes_last_7 *= d7;
         self.minutes_last_30 *= d30;
+        self.friendly_minutes_last_30 *= d30;
         self.physical_load_7 *= d7;
         self.physical_load_30 *= d30;
         self.high_intensity_load_7 *= d7;
@@ -183,6 +193,9 @@ impl PlayerLoad {
         if self.minutes_last_30 < 0.1 {
             self.minutes_last_30 = 0.0;
         }
+        if self.friendly_minutes_last_30 < 0.1 {
+            self.friendly_minutes_last_30 = 0.0;
+        }
         if self.physical_load_7 < 0.1 {
             self.physical_load_7 = 0.0;
         }
@@ -197,12 +210,16 @@ impl PlayerLoad {
         }
     }
 
-    /// Record a competitive match. Friendlies don't burden minute windows
-    /// (rotation/selection should ignore preseason XIs), but call
-    /// `record_match_load` separately for friendly load if you want it
-    /// counted at a reduced rate.
+    /// Record a match's minutes. Friendlies — youth and reserve leagues
+    /// included — only fill their own window: rotation and selection
+    /// ignore preseason XIs. Call `record_match_load` separately for the
+    /// physical load.
     pub fn record_match_minutes(&mut self, minutes: f32, is_friendly: bool) {
-        if is_friendly || minutes <= 0.0 {
+        if minutes <= 0.0 {
+            return;
+        }
+        if is_friendly {
+            self.friendly_minutes_last_30 += minutes;
             return;
         }
         self.minutes_last_7 += minutes;
@@ -266,6 +283,15 @@ impl PlayerLoad {
         } else {
             self.form_rating = self.form_rating * (1.0 - FORM_ALPHA) + rating * FORM_ALPHA;
         }
+    }
+
+    /// Share of a regular's football the player has had lately: 1.0 for
+    /// one who starts a match a week, 0.0 for one who has not played.
+    /// Friendlies and youth or reserve league games count half — football,
+    /// but not at the level a senior match asks of him.
+    pub fn match_exposure(&self) -> f32 {
+        let minutes = self.minutes_last_30 + self.friendly_minutes_last_30 * 0.5;
+        (minutes / REGULAR_MINUTES_30).clamp(0.0, 1.0)
     }
 
     pub fn matches_last_14(&self) -> u8 {

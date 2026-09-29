@@ -7,9 +7,9 @@
 //! structured reintegration program after injury, and a mentality
 //! program for fragile young talents. Plans progress monthly and
 //! expire naturally; effects touch position familiarity, injury
-//! proneness, foot balance, one lagging specialty skill, or the
-//! personality axes — never CA — so the development calibration is
-//! untouched.
+//! proneness, foot balance or the personality axes — never an
+//! attribute. A specialty plan's extra reps run in the daily training
+//! sessions, under the ceilings and potential every gain answers to.
 
 use super::TeamBehaviour;
 use crate::club::person::Person;
@@ -57,8 +57,6 @@ impl TrainingDirection {
     const SPECIFIC_SKILL_MAX_AGE: u8 = 26;
     const SPECIFIC_SKILL_LAG: f32 = 2.5;
     const SPECIFIC_SKILL_ELIGIBLE_MAX: f32 = 12.0;
-    const SPECIFIC_SKILL_CAP: f32 = 14.0;
-    const SPECIFIC_SKILL_STEP: f32 = 0.5;
     const SPECIFIC_SKILL_MAX_DAYS: i64 = 180;
     /// Reintegration program runs until the medical recovery flag
     /// clears (or a hard cap for the pathological case).
@@ -151,23 +149,6 @@ impl TrainingDirection {
         }
     }
 
-    fn bump_skill(player: &mut Player, skill: &SkillType, step: f32, cap: f32) -> f32 {
-        let t = &mut player.skills.technical;
-        let value = match skill {
-            SkillType::FreeKicks => &mut t.free_kicks,
-            SkillType::Penalties => &mut t.penalty_taking,
-            SkillType::LongShots => &mut t.long_shots,
-            SkillType::Heading => &mut t.heading,
-            SkillType::Tackling => &mut t.tackling,
-            SkillType::Crossing => &mut t.crossing,
-            SkillType::Dribbling => &mut t.dribbling,
-        };
-        if *value < cap {
-            *value = (*value + step).min(cap);
-        }
-        *value
-    }
-
     /// True when the player is young and mentally fragile on at least
     /// one of the axes the mentality program can move.
     pub(super) fn mental_development_eligible(player: &Player, age: u8) -> bool {
@@ -258,15 +239,12 @@ impl TrainingDirection {
                     }
                 }
                 TrainingFocus::SpecificSkill(skill) => {
-                    let value = Self::bump_skill(
-                        player,
-                        skill,
-                        Self::SPECIFIC_SKILL_STEP,
-                        Self::SPECIFIC_SKILL_CAP,
-                    );
-                    if value >= Self::SPECIFIC_SKILL_CAP
-                        || age_days >= Self::SPECIFIC_SKILL_MAX_DAYS
-                    {
+                    // Half the lag that earned the plan counts as caught
+                    // up, so a skill at the threshold is not dropped the
+                    // month after its first gain.
+                    let caught_up = Self::skill_value(player, skill)
+                        >= player.skills.technical.average() - Self::SPECIFIC_SKILL_LAG / 2.0;
+                    if caught_up || age_days >= Self::SPECIFIC_SKILL_MAX_DAYS {
                         done = true;
                     }
                 }
@@ -504,6 +482,7 @@ mod tests {
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
     };
+    use chrono::Months;
 
     fn player_with_positions(id: u32, positions: Vec<(PlayerPositionType, u8)>) -> Player {
         PlayerBuilder::new()
@@ -603,5 +582,52 @@ mod tests {
             .unwrap()
             .level;
         assert_eq!(level, 15, "retraining tops out at solid-backup familiarity");
+    }
+
+    fn specialty_plan(player: &mut Player, skill: SkillType, start: NaiveDate) {
+        player.individual_training = Some(IndividualTrainingPlan {
+            player_id: player.id,
+            focus_areas: vec![TrainingFocus::SpecificSkill(skill)],
+            intensity_modifier: 1.0,
+            special_instructions: Vec::new(),
+            started: Some(start),
+        });
+    }
+
+    /// The monthly pass runs a specialty plan and never writes the skill:
+    /// its reps belong to the training sessions, under the ceilings and
+    /// potential every gain answers to.
+    #[test]
+    fn specialty_plan_leaves_the_skill_to_the_training_ground() {
+        let mut p = player_with_positions(1, vec![(PlayerPositionType::DefenderCenter, 20)]);
+        p.skills.technical.raise_floor(12.0);
+        p.skills.technical.crossing = 7.0;
+        let start = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        specialty_plan(&mut p, SkillType::Crossing, start);
+        let before = p.skills;
+        for month in 0..5 {
+            let today = start + Months::new(month);
+            assert!(
+                !TrainingDirection::progress(&mut p, today),
+                "a lagging skill's plan ended in month {month}"
+            );
+        }
+        assert_eq!(p.skills.technical.crossing, before.technical.crossing);
+        assert_eq!(p.skills.technical.average(), before.technical.average());
+        assert!(
+            TrainingDirection::progress(&mut p, start + Months::new(6)),
+            "the block runs its course"
+        );
+    }
+
+    /// Once the skill has caught up with his technique the plan is done.
+    #[test]
+    fn specialty_plan_ends_when_the_skill_catches_up() {
+        let mut p = player_with_positions(1, vec![(PlayerPositionType::DefenderCenter, 20)]);
+        p.skills.technical.raise_floor(12.0);
+        p.skills.technical.crossing = 11.5;
+        let start = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        specialty_plan(&mut p, SkillType::Crossing, start);
+        assert!(TrainingDirection::progress(&mut p, start));
     }
 }

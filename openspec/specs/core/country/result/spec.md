@@ -25,13 +25,21 @@ At season start, for every club with a configured foreign-player limit, the exce
 - **WHEN** squad registration enforcement runs for that country
 - **THEN** no players are marked Unregistered and no reserve/youth-squad rosters are touched
 
-### Requirement: Preseason training camps recover match readiness and stamina within fixed bands
+### Requirement: Preseason training camps rebuild match readiness only
 
-During preseason, every non-injured player's match readiness SHALL rise (scaled by the club's training facility quality) up to a ceiling of 20, and stamina SHALL rise toward a ceiling of 20 scaled by natural fitness; injured players are skipped entirely.
+During preseason, the country SHALL give every club player one off-season camp day per tick, scaled by the club's
+training-facility quality. A camp day SHALL raise a non-injured player's match readiness toward a ceiling of 20. It
+SHALL NOT change stamina or any other technical, mental, physical or goalkeeping attribute; those change only through
+the development tick and the club's training sessions. Injured players SHALL be skipped entirely.
 
 #### Scenario: A player is injured during a preseason tick
 - **WHEN** preseason training camps process a club's roster
 - **THEN** an injured player's match readiness and stamina are left unchanged that tick
+
+#### Scenario: A fit player's summer in camp
+- **WHEN** preseason camps run every off-season day for a fit player
+- **THEN** his match readiness rises with facility quality, and his stamina, concentration, composure, decisions, first
+  touch, passing and technique are not raised by the camps
 
 ### Requirement: Season-end trophy and promotion events are fired once per league table
 

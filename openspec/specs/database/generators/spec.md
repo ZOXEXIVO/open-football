@@ -111,3 +111,53 @@ A generated scout SHALL start with full knowledge of his employing club's home c
 #### Scenario: Scouts at clubs in different countries start knowing different foreign markets
 - **WHEN** two clubs in different countries with different shipped import corridors each generate a scout
 - **THEN** the two scouts' seeded foreign market knowledge SHALL reflect their respective countries' own import corridors, not a shared generic list
+
+### Requirement: A hydrated player's visible ability agrees with his recorded ability
+
+A player hydrated from a seed record with a recorded CA SHALL have attributes whose position-weighted score equals that
+CA, or stays within the 6-point import tolerance of it when recorded attributes make the exact value unreachable. The
+skill-derived CA SHALL never exceed the player's resolved PA.
+
+#### Scenario: A record without attributes, anywhere on the scale
+- **WHEN** records for any primary position and any CA from 1 to 200 are hydrated with PA equal to CA
+- **THEN** each player's stored CA, his skill-derived CA and his PA all equal the recorded CA
+
+#### Scenario: The drift allowance meets the potential ceiling
+- **WHEN** a record's attributes would score above its CA and its PA equals its CA
+- **THEN** the hydrated profile is fitted so its skill-derived CA does not exceed that PA
+
+### Requirement: Partial attribute records keep their recorded values and plausible gaps
+
+When a seed record carries only some attributes, the procedurally generated profile SHALL first be fitted to the
+recorded CA, and the recorded values SHALL then be laid over it. Generated slots SHALL flex only within ×0.8..1.25 to
+close any remaining gap. Recorded values SHALL move only when the gap left exceeds the import tolerance. In that case
+the whole unflexed profile SHALL be scaled to the edge of the tolerance, so the record keeps its shape.
+
+#### Scenario: An elite keeper recorded without most technical attributes
+- **WHEN** a CA 178 goalkeeper is hydrated from a record that omits corners, crossing, finishing, long shots, long
+  throws, marking and tackling
+- **THEN** none of those unrecorded attributes collapses to the bottom of the scale, his recorded one-on-ones stays
+  within 0.2 of its recorded value, and his CA is 178
+
+#### Scenario: Missing slots can absorb the gap
+- **WHEN** a record's gap to its CA can be closed by its missing slots within the flex band
+- **THEN** the hydrated player scores exactly that CA, and every recorded value is unchanged
+
+### Requirement: An unspecified recorded ability is derived, not stored
+
+A seed record whose CA is 0 SHALL be treated as unspecified. The hydrated player's CA, and the reputation derived from
+it, SHALL come from his generated skills. The hydrated player's CA SHALL NOT be stored as 0.
+
+#### Scenario: A record with CA 0
+- **WHEN** a record with CA 0 is hydrated
+- **THEN** the player's stored CA equals his skill-derived CA, and his derived reputation uses that value
+
+### Requirement: Resolving a potential band never rerolls the current player
+
+A negative (scouting-band) PA SHALL be resolved from a random stream separate from the one that generates the
+player's attributes and personality. Changing only a record's PA SHALL leave his current attributes and personality
+unchanged.
+
+#### Scenario: The same record with a fixed PA and with a PA band
+- **WHEN** one record is hydrated once with a fixed PA and once with a negative PA band
+- **THEN** both hydrations produce identical outfield and goalkeeping attributes and identical professionalism

@@ -19,6 +19,9 @@ use core::{
 use log::warn;
 use std::cmp::Reverse;
 
+#[cfg(test)]
+mod audit;
+
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
 const SK_CORNERS: usize = 0;
@@ -166,24 +169,11 @@ impl SkillGroup {
 /// Apply a random role archetype to create variety within position groups.
 /// The base weights come from `core::PositionWeights::for_position` (per
 /// exact position); these archetype shifts add the "Poacher vs Target Man"
-/// flavour on top. Used as `RoleArchetype::apply(&mut weights, &bucket, rng)`.
+/// flavour on top. The same roll also selects the goalkeeper skill profile.
 pub struct RoleArchetype;
 
 impl RoleArchetype {
-    pub fn apply(
-        weights: &mut [f32; SKILL_COUNT],
-        position: &PositionType,
-        rng: &mut HydrationRng,
-    ) {
-        Self::apply_inner(weights, position, rng);
-    }
-
-    fn apply_inner(
-        weights: &mut [f32; SKILL_COUNT],
-        position: &PositionType,
-        rng: &mut HydrationRng,
-    ) {
-        let roll = rng.f32();
+    pub fn apply(weights: &mut [f32; SKILL_COUNT], position: &PositionType, roll: f32) {
         match position {
             PositionType::Goalkeeper => {
                 if roll < 0.35 {
@@ -970,8 +960,7 @@ impl PlayerGenerator {
         // every attribute at the PA-implied level flattened real players
         // whose PA sits near CA into spread-less profiles with no standout
         // skills. Elite pace next to mediocre finishing is normal football.
-        let target_ca_f = target_ca.max(1) as f32;
-        let ca_skill_target = (target_ca_f - 1.0) / 199.0 * 19.0 + 1.0;
+        let ca_skill_target = PlayerSkills::ability_skill_level(target_ca);
 
         // Per-group age ratios still vary (mentality lags physicals etc.),
         // but they now scale the *target CA* baseline rather than PA.
@@ -1013,7 +1002,8 @@ impl PlayerGenerator {
 
         let bucket = PositionType::from_player_position(primary_position);
         let mut pos_w = PositionWeights::for_position(primary_position);
-        RoleArchetype::apply(&mut pos_w, &bucket, rng);
+        let archetype_roll = rng.f32();
+        RoleArchetype::apply(&mut pos_w, &bucket, archetype_roll);
 
         let base_noise = 1.4 + rep_factor * 0.8;
         let tech_noise = if age <= 18 {
@@ -1114,7 +1104,8 @@ impl PlayerGenerator {
 
         let mut result = SkillsArray::into_skills(&skills);
         if matches!(primary_position, PlayerPositionType::Goalkeeper) {
-            result.goalkeeping = Self::generate_gk_skills(ca_skill_target, age, &pos_w, rng);
+            result.goalkeeping =
+                Self::generate_gk_skills(ca_skill_target, age, archetype_roll, rng);
         }
         result
     }
@@ -1131,7 +1122,7 @@ impl PlayerGenerator {
     fn generate_gk_skills(
         ca_skill_target: f32,
         age: u32,
-        _pos_w: &[f32; SKILL_COUNT],
+        roll: f32,
         rng: &mut HydrationRng,
     ) -> Goalkeeping {
         // GK skills develop like mental — peak in late 20s/early 30s (experience matters)
@@ -1150,7 +1141,6 @@ impl PlayerGenerator {
         let noise = 1.5;
 
         // GK role archetype — creates variety between keepers
-        let roll = rng.f32();
         // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
         let (_archetype_name, w) = if roll < 0.35 {
             // Shot Stopper — elite reflexes, handling, positioning
@@ -1192,7 +1182,7 @@ impl PlayerGenerator {
                     1.2, // throwing
                 ],
             )
-        } else if roll < 0.82 {
+        } else if roll < 0.85 {
             // Commanding — aerial dominance, communication, set-piece defense
             (
                 "commanding",
@@ -1675,8 +1665,11 @@ impl PlayerGenerator {
         // Negative PA records carry an FM-style scouting band; roll the
         // concrete value once so skills and attributes agree on the same PA,
         // and never let it land below the recorded CA.
+        // PA bands use a separate stream: changing only future potential
+        // must not reroll the player's current attributes or personality.
+        let mut potential_rng = HydrationRng::from_seed(record.id as u64 ^ 0x504F_5445_4E54_4941);
         let potential_ability =
-            PotentialAbility::resolve(record.potential_ability, &mut rng).max(record_ca);
+            PotentialAbility::resolve(record.potential_ability, &mut potential_rng).max(record_ca);
         let mut skills = Self::generate_skills(
             primary,
             age,
@@ -1701,7 +1694,7 @@ impl PlayerGenerator {
             .map(|a| RecordedSkills::from_attrs(&a.player))
             .filter(|r| !r.is_empty())
         {
-            Some(recorded) => recorded.fit(&mut skills, primary, record_ca),
+            Some(recorded) => recorded.fit(&mut skills, primary, record_ca, potential_ability),
             None => SkillRescaler::to_target_ca(&mut skills, primary, record_ca),
         }
         skills.physical.match_readiness = FitnessState::match_readiness(age, &mut rng);
@@ -2448,7 +2441,14 @@ fn build_player_attributes(
     // every missing field falls back to an ability-curve derivation so
     // partial overrides (e.g. a scraper that only captured world fame)
     // still produce coherent home/current numbers.
-    let (derived_current, derived_home, derived_world) = derive_reputation_from_ability(record_ca);
+    let derived_ca = skills.calculate_ability_for_position(primary);
+    let reputation_ca = if record_ca == 0 {
+        derived_ca
+    } else {
+        record_ca
+    };
+    let (derived_current, derived_home, derived_world) =
+        derive_reputation_from_ability(reputation_ca);
     let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
         Some(r) => (
             r.current.unwrap_or(derived_current),
@@ -2464,8 +2464,9 @@ fn build_player_attributes(
     // generator could not realise the recorded value — keep the derived
     // number but say so, since silently altering authoritative data hides
     // both data problems and generator regressions.
-    let derived_ca = skills.calculate_ability_for_position(primary);
-    let current_ability = if (derived_ca as i32 - record_ca as i32).abs() <= ODB_CA_DRIFT {
+    let current_ability = if record_ca == 0 {
+        derived_ca
+    } else if (derived_ca as i32 - record_ca as i32).abs() <= ODB_CA_DRIFT {
         record_ca
     } else {
         warn!(
@@ -2512,153 +2513,19 @@ fn build_player_attributes(
     }
 }
 
-/// Uniformly scale generated skills toward a target CA so the position-
-/// weighted ability calculation lands on the requested number. Two passes
-/// because `calculate_ability_for_position` is only roughly linear in the
-/// skill average for non-extreme inputs.
+/// Fit skills to the same position-weighted CA used by the simulation.
 pub struct SkillRescaler;
 
 impl SkillRescaler {
     pub fn to_target_ca(skills: &mut PlayerSkills, primary: PlayerPositionType, target_ca: u8) {
-        if target_ca == 0 {
-            return;
-        }
-        let current = skills.calculate_ability_for_position(primary).max(1);
-        let factor = (target_ca as f32 / current as f32).clamp(0.40, 2.50);
-        if (factor - 1.0).abs() < 0.02 {
-            return;
-        }
-        Self::scale_in_place(skills, factor);
-        let after = skills.calculate_ability_for_position(primary).max(1);
-        let f2 = (target_ca as f32 / after as f32).clamp(0.85, 1.15);
-        if (f2 - 1.0).abs() > 0.01 {
-            Self::scale_in_place(skills, f2);
+        // Zero is an unspecified database CA, not the bottom of the 1..200 scale.
+        if target_ca > 0 {
+            skills.fit_to_ability(primary, target_ca, 20.0, None);
         }
     }
 
-    /// Clamp every outfield skill to `cap`. Used after `to_target_ca` to
-    /// re-enforce the age cap (rescaling can push young-player skills above
-    /// the cap when the rep blend implies a CA the age can't yet support).
     pub fn clamp_to_cap(skills: &mut PlayerSkills, cap: f32) {
-        macro_rules! c {
-            ($v:expr) => {
-                $v = $v.min(cap).max(1.0)
-            };
-        }
-        let t = &mut skills.technical;
-        c!(t.corners);
-        c!(t.crossing);
-        c!(t.dribbling);
-        c!(t.finishing);
-        c!(t.first_touch);
-        c!(t.free_kicks);
-        c!(t.heading);
-        c!(t.long_shots);
-        c!(t.long_throws);
-        c!(t.marking);
-        c!(t.passing);
-        c!(t.penalty_taking);
-        c!(t.tackling);
-        c!(t.technique);
-        let m = &mut skills.mental;
-        c!(m.aggression);
-        c!(m.anticipation);
-        c!(m.bravery);
-        c!(m.composure);
-        c!(m.concentration);
-        c!(m.decisions);
-        c!(m.determination);
-        c!(m.flair);
-        c!(m.leadership);
-        c!(m.off_the_ball);
-        c!(m.positioning);
-        c!(m.teamwork);
-        c!(m.vision);
-        c!(m.work_rate);
-        let p = &mut skills.physical;
-        c!(p.acceleration);
-        c!(p.agility);
-        c!(p.balance);
-        c!(p.jumping);
-        c!(p.natural_fitness);
-        c!(p.pace);
-        c!(p.stamina);
-        c!(p.strength);
-        let g = &mut skills.goalkeeping;
-        c!(g.aerial_reach);
-        c!(g.command_of_area);
-        c!(g.communication);
-        c!(g.eccentricity);
-        c!(g.first_touch);
-        c!(g.handling);
-        c!(g.kicking);
-        c!(g.one_on_ones);
-        c!(g.passing);
-        c!(g.punching);
-        c!(g.reflexes);
-        c!(g.rushing_out);
-        c!(g.throwing);
-    }
-
-    fn scale_in_place(skills: &mut PlayerSkills, factor: f32) {
-        macro_rules! s {
-            ($v:expr) => {
-                $v = ($v * factor).clamp(1.0, 20.0)
-            };
-        }
-        let t = &mut skills.technical;
-        s!(t.corners);
-        s!(t.crossing);
-        s!(t.dribbling);
-        s!(t.finishing);
-        s!(t.first_touch);
-        s!(t.free_kicks);
-        s!(t.heading);
-        s!(t.long_shots);
-        s!(t.long_throws);
-        s!(t.marking);
-        s!(t.passing);
-        s!(t.penalty_taking);
-        s!(t.tackling);
-        s!(t.technique);
-        let m = &mut skills.mental;
-        s!(m.aggression);
-        s!(m.anticipation);
-        s!(m.bravery);
-        s!(m.composure);
-        s!(m.concentration);
-        s!(m.decisions);
-        s!(m.determination);
-        s!(m.flair);
-        s!(m.leadership);
-        s!(m.off_the_ball);
-        s!(m.positioning);
-        s!(m.teamwork);
-        s!(m.vision);
-        s!(m.work_rate);
-        let p = &mut skills.physical;
-        s!(p.acceleration);
-        s!(p.agility);
-        s!(p.balance);
-        s!(p.jumping);
-        s!(p.natural_fitness);
-        s!(p.pace);
-        s!(p.stamina);
-        s!(p.strength);
-        let g = &mut skills.goalkeeping;
-        s!(g.aerial_reach);
-        s!(g.command_of_area);
-        s!(g.communication);
-        s!(g.eccentricity);
-        s!(g.first_touch);
-        s!(g.handling);
-        s!(g.kicking);
-        s!(g.one_on_ones);
-        s!(g.passing);
-        s!(g.punching);
-        s!(g.reflexes);
-        s!(g.rushing_out);
-        s!(g.throwing);
+        skills.clamp_attributes(cap);
     }
 }
 
@@ -2668,8 +2535,6 @@ pub struct RecordedSkills {
 }
 
 impl RecordedSkills {
-    const FIT_PASSES: usize = 24;
-
     pub fn from_attrs(a: &OdbPlayerAttrs) -> Self {
         let v = |x: Option<u8>| x.filter(|&n| (1..=20).contains(&n)).map_or(0.0, f32::from);
         let (t, m, p, g) = (&a.technical, &a.mental, &a.physical, &a.goalkeeping);
@@ -2752,50 +2617,38 @@ impl RecordedSkills {
         });
     }
 
-    /// Generated slots absorb the CA gap first. Recorded values move only
-    /// when the gap left exceeds `ODB_CA_DRIFT`, and then only to its edge,
-    /// scaling the whole profile so the record keeps its shape.
-    pub fn fit(&self, skills: &mut PlayerSkills, primary: PlayerPositionType, target_ca: u8) {
-        self.overlay(skills);
-        if target_ca == 0 {
-            return;
-        }
-        let target = target_ca as i32;
-        let current = self.approach(skills, primary, target, 1, true);
-        if (current - target).abs() > ODB_CA_DRIFT {
-            let edge = target - ODB_CA_DRIFT * (target - current).signum();
-            self.approach(skills, primary, edge, 0, false);
-        }
-    }
-
-    /// Scale toward `aim` until within `tolerance`, returning the CA reached.
-    /// With `keep_recorded` the recorded slots are restored after each pass,
-    /// so only the generated ones carry the change.
-    fn approach(
+    /// The generated profile is first fitted to the recorded CA, as any
+    /// generated player's is, so the slots the record lacks start from a
+    /// CA-consistent estimate. After the overlay they flex within a band to
+    /// close the gap; recorded values move only when the gap left exceeds
+    /// `ODB_CA_DRIFT`, and then only to its edge, scaling the whole profile
+    /// so the record keeps its shape.
+    pub fn fit(
         &self,
         skills: &mut PlayerSkills,
         primary: PlayerPositionType,
-        aim: i32,
-        tolerance: i32,
-        keep_recorded: bool,
-    ) -> i32 {
-        let mut current = skills.calculate_ability_for_position(primary) as i32;
-        for _ in 0..Self::FIT_PASSES {
-            if (current - aim).abs() <= tolerance {
-                break;
-            }
-            let factor = (aim as f32 / current.max(1) as f32).clamp(0.5, 2.0);
-            SkillRescaler::scale_in_place(skills, factor);
-            if keep_recorded {
-                self.overlay(skills);
-            }
-            let next = skills.calculate_ability_for_position(primary) as i32;
-            if next == current {
-                break; // saturated at 1 or 20
-            }
-            current = next;
+        target_ca: u8,
+        potential_ability: u8,
+    ) {
+        if target_ca == 0 {
+            self.overlay(skills);
+            return;
         }
-        current
+        skills.fit_to_ability(primary, target_ca, 20.0, None);
+        self.overlay(skills);
+        let original = *skills;
+        let target = target_ca as i32;
+        let current = skills.fit_to_ability(primary, target_ca, 20.0, Some(&self.values)) as i32;
+        // The drift allowance may preserve recorded values, but cannot
+        // leave actual, skill-derived ability above the future ceiling.
+        let upper = (target + ODB_CA_DRIFT).min(potential_ability.max(target_ca) as i32);
+        if current < target - ODB_CA_DRIFT || current > upper {
+            let edge = current.clamp(target - ODB_CA_DRIFT, upper).max(1);
+            // Scale from the unflexed profile, so generated slots move with
+            // the record instead of compounding their band with its scale.
+            *skills = original;
+            skills.fit_to_ability(primary, edge as u8, 20.0, None);
+        }
     }
 
     fn each(dst: &mut PlayerSkills, src: &PlayerSkills, mut f: impl FnMut(&mut f32, f32)) {
@@ -3330,7 +3183,7 @@ mod generator_validation_tests {
     #[test]
     fn adult_target_ca_convergence_tight() {
         // Adults (age 24..28) should land on target CA within a tight band:
-        // the rescaler's two-pass loop converges, and the age cap is high
+        // the rescaler converges, and the age cap is high
         // enough not to clamp them.
         let g = make_gen();
         let players = sample(
@@ -3362,10 +3215,8 @@ mod generator_validation_tests {
 
     #[test]
     fn young_players_intentionally_undershoot_target_ca() {
-        // 16yo prospects at a top club have target CA ~55 (rep 0.95 × role 0.65 × age 0.55).
-        // Age cap at 16 is 14.0, which maps to CA ≈ 137 max in the skill→ability curve,
-        // but in practice noise + position weights produce CA much lower than target.
-        // The CONTRACT: young players' final CA may be below their target, never above.
+        // Young prospects retain age-limited profiles. After fitting to the
+        // role's target, the age cap may only lower their skill-derived CA.
         let g = make_gen();
         let players = sample(
             &g,
@@ -3660,77 +3511,57 @@ mod generator_validation_tests {
 
     #[test]
     fn fullback_and_wingback_profiles_differ() {
-        // After rescaling to the same target CA, raw skill values converge
-        // closely between similar positions. The position signature shows
-        // up in *which* attributes dominate. Wing-backs should put their
-        // best work into pace + stamina + crossing + dribbling (attacking
-        // wide play); full-backs into marking + positioning + heading
-        // (defensive duty). Compare those composite signatures.
-        let g = make_gen();
-        let mut wb_attack_total = 0.0;
-        let mut wb_defend_total = 0.0;
-        let mut fb_attack_total = 0.0;
-        let mut fb_defend_total = 0.0;
-        let mut wb_count = 0;
-        let mut fb_count = 0;
-        for _ in 0..600 {
-            let p = g.generate(
-                1,
-                1,
-                PositionType::Defender,
-                7500,
-                7500,
-                6500,
-                TeamType::Main,
-                SquadRole::Starter,
-                24,
-                28,
-            );
-            let primary = p.positions.positions.first().map(|x| x.position).unwrap();
-            let attack = p.skills.physical.pace
-                + p.skills.physical.stamina
-                + p.skills.technical.crossing
-                + p.skills.technical.dribbling;
-            let defend = p.skills.technical.marking
-                + p.skills.mental.positioning
-                + p.skills.technical.heading
-                + p.skills.physical.strength;
-            match primary {
-                PlayerPositionType::WingbackLeft | PlayerPositionType::WingbackRight => {
-                    wb_attack_total += attack;
-                    wb_defend_total += defend;
-                    wb_count += 1;
-                }
-                PlayerPositionType::DefenderLeft | PlayerPositionType::DefenderRight => {
-                    fb_attack_total += attack;
-                    fb_defend_total += defend;
-                    fb_count += 1;
-                }
-                _ => {}
+        // Compare exact positions at equal age and CA. A random squad can
+        // contain too few fullbacks; shared seeds isolate the role profile.
+        let signature = |position| {
+            let (mut attack, mut defend) = (0.0, 0.0);
+            for seed in 0..300 {
+                let mut rng = HydrationRng::from_seed(seed);
+                let mut skills = PlayerGenerator::generate_skills(
+                    position, 26, 0.75, 140, 1, "it", 20.0, &mut rng,
+                );
+                SkillRescaler::to_target_ca(&mut skills, position, 140);
+                assert_eq!(skills.calculate_ability_for_position(position), 140);
+                attack += skills.physical.pace
+                    + skills.physical.stamina
+                    + skills.technical.crossing
+                    + skills.technical.dribbling;
+                // Tackling and concentration are fullback key skills;
+                // heading and strength are centre-back specialisms.
+                defend += skills.technical.tackling
+                    + skills.technical.marking
+                    + skills.mental.positioning
+                    + skills.mental.concentration;
             }
-        }
-        if wb_count > 30 && fb_count > 30 {
-            let wb_attack = wb_attack_total / wb_count as f32;
-            let wb_defend = wb_defend_total / wb_count as f32;
-            let fb_attack = fb_attack_total / fb_count as f32;
-            let fb_defend = fb_defend_total / fb_count as f32;
-            eprintln!(
-                "WB(n={}): attack={:.1} defend={:.1}; FB(n={}): attack={:.1} defend={:.1}",
-                wb_count, wb_attack, wb_defend, fb_count, fb_attack, fb_defend
-            );
-            // WB attack signature outweighs their own defend signature; FB
-            // is the inverse. This is the position differentiation we want.
+            (attack / 300.0, defend / 300.0)
+        };
+        for (fullback, wingback) in [
+            (
+                PlayerPositionType::DefenderLeft,
+                PlayerPositionType::WingbackLeft,
+            ),
+            (
+                PlayerPositionType::DefenderRight,
+                PlayerPositionType::WingbackRight,
+            ),
+        ] {
+            let (fb_attack, fb_defend) = signature(fullback);
+            let (wb_attack, wb_defend) = signature(wingback);
             assert!(
-                wb_attack > wb_defend - 1.0,
-                "WB attack signature should match or beat defend signature ({} vs {})",
-                wb_attack,
-                wb_defend
+                wb_attack > wb_defend,
+                "wingback attack={wb_attack}, defend={wb_defend}"
             );
             assert!(
                 fb_defend > fb_attack - 5.0,
-                "FB defend signature should be in line with attack signature ({} vs {})",
-                fb_defend,
-                fb_attack
+                "fullback attack={fb_attack}, defend={fb_defend}"
+            );
+            assert!(
+                wb_attack > fb_attack + 2.0,
+                "wingback attack={wb_attack}, fullback={fb_attack}"
+            );
+            assert!(
+                fb_defend > wb_defend + 2.0,
+                "fullback defence={fb_defend}, wingback={wb_defend}"
             );
         }
     }
@@ -3979,6 +3810,51 @@ mod potential_ability_tests {
             let pa = PotentialAbility::resolve(-42, &mut rng);
             assert!(pa <= 20, "unknown code must roll the 0-20 band, got {pa}");
         }
+    }
+}
+
+#[cfg(test)]
+mod ability_fitting_tests {
+    use super::*;
+
+    #[test]
+    fn rescaling_reaches_every_ca_for_outfielders_and_keepers() {
+        for position in [PlayerPositionType::Striker, PlayerPositionType::Goalkeeper] {
+            for target in 1..=200 {
+                let mut skills = PlayerSkills::flat_for_ability(100);
+                skills.technical.finishing = 20.0;
+                skills.technical.tackling = 1.0;
+                skills.goalkeeping.reflexes = 20.0;
+                skills.physical.match_readiness = 13.5;
+                SkillRescaler::to_target_ca(&mut skills, position, target);
+                assert_eq!(
+                    skills.calculate_ability_for_position(position),
+                    target,
+                    "{position:?}, target {target}"
+                );
+                assert_eq!(skills.physical.match_readiness, 13.5);
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_slots_do_not_move_when_missing_slots_can_absorb_the_gap() {
+        let position = PlayerPositionType::MidfielderCenter;
+        let mut skills = PlayerSkills::flat_for_ability(100);
+        skills.technical.finishing = 20.0;
+        let mut values = skills;
+        values.technical.passing = 0.0;
+        values.mental.vision = 0.0;
+        let recorded = RecordedSkills { values };
+        let mut feasible = skills;
+        feasible.technical.passing *= 1.2;
+        feasible.mental.vision *= 1.2;
+        let target = feasible.calculate_ability_for_position(position);
+        recorded.fit(&mut skills, position, target, 200);
+        assert_eq!(skills.calculate_ability_for_position(position), target);
+        assert_eq!(skills.technical.finishing, 20.0);
+        assert_eq!(skills.mental.composure, values.mental.composure);
+        assert!(skills.technical.passing > values.mental.composure);
     }
 }
 
@@ -4292,17 +4168,31 @@ mod odb_hydration_tests {
 
     #[test]
     fn hydrated_player_carries_the_recorded_caps() {
-        use crate::loaders::OdbInternational;
+        use crate::loaders::players::OdbInternational;
         let data = empty_data();
         let mut r = record(900_009, 150, 160, vec![("ST", 20)]);
-        r.international = Some(OdbInternational { apps: 121, goals: 85, u21_apps: 14, u21_goals: 8 });
+        r.international = Some(OdbInternational {
+            apps: 121,
+            goals: 85,
+            u21_apps: 14,
+            u21_goals: 8,
+        });
         let a = PlayerGenerator::generate_from_odb(&r, 1, "gb", &data).player_attributes;
         assert_eq!((a.international_apps, a.international_goals), (121, 85));
-        assert_eq!((a.under_21_international_apps, a.under_21_international_goals), (14, 8));
+        assert_eq!(
+            (
+                a.under_21_international_apps,
+                a.under_21_international_goals
+            ),
+            (14, 8)
+        );
 
         let uncapped = record(900_010, 150, 160, vec![("ST", 20)]);
         let a = PlayerGenerator::generate_from_odb(&uncapped, 1, "gb", &data).player_attributes;
-        assert_eq!((a.international_apps, a.under_21_international_apps), (0, 0));
+        assert_eq!(
+            (a.international_apps, a.under_21_international_apps),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -4348,6 +4238,48 @@ mod odb_hydration_tests {
         );
         assert_eq!(a.player_attributes.height, b.player_attributes.height);
         assert_eq!(a.attributes.ambition, b.attributes.ambition);
+    }
+
+    #[test]
+    fn pa_bands_do_not_reroll_current_skills() {
+        let data = empty_data();
+        let fixed = record(555_002, 100, 180, vec![("GK", 20)]);
+        let mut band = fixed.clone();
+        band.potential_ability = -10;
+        let a = PlayerGenerator::generate_from_odb(&fixed, 1, "it", &data);
+        let b = PlayerGenerator::generate_from_odb(&band, 1, "it", &data);
+        assert_eq!(outfield_skill_values(&a), outfield_skill_values(&b));
+        assert_eq!(a.skills.goalkeeping.reflexes, b.skills.goalkeeping.reflexes);
+        assert_eq!(a.attributes.professionalism, b.attributes.professionalism);
+    }
+
+    #[test]
+    fn recorded_ca_matches_visible_skills_across_the_scale() {
+        let data = empty_data();
+        for code in ["GK", "DC", "DL", "WBR", "DM", "MC", "AML", "AMC", "ST"] {
+            for ca in [1, 10, 20, 60, 100, 150, 195, 200] {
+                let r = record(555_003, ca, ca as i16, vec![(code, 20)]);
+                let p = PlayerGenerator::generate_from_odb(&r, 1, "it", &data);
+                assert_eq!(p.player_attributes.current_ability, ca, "{code}");
+                assert_eq!(
+                    p.skills.calculate_ability_for_position(p.position()),
+                    ca,
+                    "{code}"
+                );
+                assert_eq!(p.player_attributes.potential_ability, ca, "{code}");
+            }
+        }
+    }
+
+    #[test]
+    fn recorded_skill_drift_never_exceeds_pa() {
+        let mut skills = PlayerSkills::flat_for_ability(100);
+        let recorded = RecordedSkills { values: skills };
+        recorded.fit(&mut skills, PlayerPositionType::MidfielderCenter, 95, 95);
+        assert_eq!(
+            skills.calculate_ability_for_position(PlayerPositionType::MidfielderCenter),
+            95
+        );
     }
 
     #[test]
@@ -4480,8 +4412,8 @@ mod odb_hydration_tests {
             }}"#,
         );
         let p = PlayerGenerator::generate_from_odb(&r, 1, "ru", &data);
-        // His FM values derive CA 116 here, one past the drift edge, so they
-        // move by that one point's worth and no further.
+        // A mostly recorded keeper must retain his supplied profile while
+        // staying within the import tolerance of his source CA.
         let g = &p.skills.goalkeeping;
         for (got, want) in [
             (g.handling, 13.0),
@@ -4508,6 +4440,35 @@ mod odb_hydration_tests {
             "derived CA {derived}"
         );
         assert_eq!(p.player_attributes.current_ability, 123);
+    }
+
+    #[test]
+    fn elite_partial_keeper_keeps_unrecorded_slots_off_the_floor() {
+        let data = empty_data();
+        let mut r = record(19_058_734, 178, 182, vec![("GK", 20)]);
+        r.attrs = attrs(
+            r#"{"player": {
+              "technical": {"dri": 8, "hea": 7, "pas": 14, "pen": 5, "fir": 14, "tec": 13, "fre": 2},
+              "mental": {"otb": 11, "vis": 12, "ant": 17, "dec": 16, "pos": 17, "fla": 13, "tea": 12, "wor": 17, "ldr": 13, "bra": 14, "agg": 12, "det": 19, "cmp": 16, "cnt": 16},
+              "physical": {"acc": 13, "str": 14, "sta": 10, "pac": 12, "jum": 14, "bal": 16, "agi": 17, "nat": 16},
+              "goalkeeping": {"han": 17, "aer": 14, "cmd": 14, "com": 14, "kic": 15, "thr": 14, "one": 18, "ref": 17, "ecc": 11, "rus": 16, "pun": 13}
+            }}"#,
+        );
+        let p = PlayerGenerator::generate_from_odb(&r, 1, "br", &data);
+        let t = &p.skills.technical;
+        for (name, value) in [
+            ("corners", t.corners),
+            ("crossing", t.crossing),
+            ("finishing", t.finishing),
+            ("long_shots", t.long_shots),
+            ("long_throws", t.long_throws),
+            ("marking", t.marking),
+            ("tackling", t.tackling),
+        ] {
+            assert!(value > 3.0, "unrecorded {name} collapsed to {value}");
+        }
+        assert!((p.skills.goalkeeping.one_on_ones - 18.0).abs() < 0.2);
+        assert_eq!(p.player_attributes.current_ability, 178);
     }
 
     #[test]

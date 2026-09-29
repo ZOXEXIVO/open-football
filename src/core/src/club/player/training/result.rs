@@ -118,7 +118,7 @@ impl PlayerTrainingResult {
             // its current level, never cut.
             let ceilings = PositionalSkillCeilings::for_player(
                 player,
-                DateUtils::age(player.birth_date, current_date) as u32,
+                DateUtils::age_in_years(player.birth_date, current_date),
             );
             let raise = |current: f32, gain: f32, key: SkillKey| -> f32 {
                 let ceiling = ceilings.get(key).max(current);

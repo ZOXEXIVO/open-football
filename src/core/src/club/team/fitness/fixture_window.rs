@@ -26,8 +26,14 @@ impl TeamFixtureWindow {
         self.recent.iter().copied().find(|d| *d <= today)
     }
 
+    /// Competitive fixtures in the seven days centred on `today`: two or
+    /// more is a double-match week, which training plans around.
+    pub fn fixtures_this_week(&self, today: NaiveDate) -> u8 {
+        self.fixtures_within(today, 3)
+    }
+
     /// Number of fixtures (recent or upcoming) within `days` calendar
-    /// days of `today`. Drives the double-match-week dampener.
+    /// days of `today`.
     pub fn fixtures_within(&self, today: NaiveDate, days: i64) -> u8 {
         let half = Duration::days(days);
         let lo = today - half;
@@ -43,5 +49,49 @@ impl TeamFixtureWindow {
             .filter(|d| **d > today && **d <= hi)
             .count();
         (r + u).min(u8::MAX as usize) as u8
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, month, day).unwrap()
+    }
+
+    /// The window as the country pipeline writes it on `today`: fixtures
+    /// already played are recent (newest first), the rest upcoming.
+    fn window(today: NaiveDate, fixtures: &[NaiveDate]) -> TeamFixtureWindow {
+        let mut recent: Vec<NaiveDate> = fixtures.iter().copied().filter(|f| *f <= today).collect();
+        recent.sort_unstable_by(|a, b| b.cmp(a));
+        TeamFixtureWindow {
+            refreshed: Some(today),
+            upcoming: fixtures.iter().copied().filter(|f| *f > today).collect(),
+            recent,
+        }
+    }
+
+    #[test]
+    fn a_weekly_schedule_is_never_a_double_match_week() {
+        let saturdays = [d(10, 3), d(10, 10), d(10, 17), d(10, 24)];
+        for day in 4..=20 {
+            let today = d(10, day);
+            assert!(
+                window(today, &saturdays).fixtures_this_week(today) < 2,
+                "one match a week read as congested on {today}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_midweek_fixture_makes_a_double_match_week() {
+        let fixtures = [d(10, 3), d(10, 7), d(10, 10)];
+        for today in [d(10, 5), d(10, 7), d(10, 8)] {
+            assert!(
+                window(today, &fixtures).fixtures_this_week(today) >= 2,
+                "Saturday-Wednesday-Saturday not read as congested on {today}"
+            );
+        }
     }
 }

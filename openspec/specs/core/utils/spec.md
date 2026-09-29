@@ -6,7 +6,9 @@ Provides cross-cutting utilities shared by the whole simulation — CPU feature 
 ## Requirements
 
 ### Requirement: Calendar predicates for simulation cadence
-The system SHALL expose date predicates used to drive periodic simulation events: birthday matching, age-in-years, quarter start, year start, year end, month beginning, and the next Saturday on or after a given date.
+The system SHALL expose date predicates used to drive periodic simulation events: birthday matching, age in whole
+years, age in fractional years, quarter start, year start, year end, month beginning, and the next Saturday on or after
+a given date.
 
 #### Scenario: Checking a birthday
 - **WHEN** a player's birth date and the current simulation date share the same month and day
@@ -15,6 +17,10 @@ The system SHALL expose date predicates used to drive periodic simulation events
 #### Scenario: Computing age
 - **WHEN** age is computed from a birth date and a current date
 - **THEN** the result is the whole number of 365-day years elapsed between the two dates
+
+#### Scenario: Computing fractional age
+- **WHEN** fractional age is computed from a birth date and a current date
+- **THEN** the result is the elapsed days divided by 365, and its whole part equals the whole-year age
 
 #### Scenario: Finding the next Saturday
 - **WHEN** the next Saturday is requested for a given date

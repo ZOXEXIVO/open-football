@@ -95,11 +95,12 @@ impl MaturityModel {
     /// the 0–10000 league rep and `player_ca` is 0–200.
     ///
     /// Football model — optimal monthly minute bands (per
-    /// [`MaturityModel::optimal_minutes_band`]):
+    /// [`MaturityModel::optimal_minutes_band`]). The window is a 30-day
+    /// sum: a weekly 90-minute start holds ~380, two a week ~770.
     ///   * 14-15: 100–300 useful, 300–600 diminishing, above → outright burn-out
-    ///   * 16-17: 300–900 useful, 900–1500 diminishing
-    ///   * 18-21: 600–1800 useful, 1800–2500 diminishing
-    ///   * 22-29: 600–2200 useful (peak window)
+    ///   * 16-17: 200–600 useful, 600–1100 diminishing
+    ///   * 18-21: 250–800 useful, 800–1200 diminishing
+    ///   * 22-29: 250–850 useful (peak window), 850–1300 diminishing
     ///
     /// `low > 0` for the under-16 band is deliberate: zero senior minutes is
     /// the default state for a 14yo (training only with the academy) and
@@ -144,10 +145,10 @@ impl MaturityModel {
     fn optimal_minutes_band(age: u8) -> (f32, f32, f32) {
         match age {
             0..=15 => (100.0, 300.0, 600.0),
-            16..=17 => (300.0, 900.0, 1500.0),
-            18..=21 => (600.0, 1800.0, 2500.0),
-            22..=29 => (600.0, 2200.0, 3000.0),
-            _ => (300.0, 1800.0, 3000.0),
+            16..=17 => (200.0, 600.0, 1100.0),
+            18..=21 => (250.0, 800.0, 1200.0),
+            22..=29 => (250.0, 850.0, 1300.0),
+            _ => (200.0, 800.0, 1300.0),
         }
     }
 

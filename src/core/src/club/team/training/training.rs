@@ -135,16 +135,16 @@ impl TeamTraining {
                 .find(|m| m.date.date() <= today)
                 .map(|m| m.date.date())
         });
-        let recent_matches = if next_match_date.is_some() || prev_match_date.is_some() {
-            team.fixture_window.fixtures_within(today, 7) + Self::matches_last_14_days(team, date)
+        let fixtures_this_week = if team.fixture_window.refreshed.is_some() {
+            team.fixture_window.fixtures_this_week(today)
         } else {
-            Self::matches_last_14_days(team, date)
+            Self::matches_last_7_days(team, date)
         };
         let weekly_plan = WeeklyTrainingPlan::generate_for_date(
             today,
             prev_match_date,
             next_match_date,
-            recent_matches,
+            fixtures_this_week,
             phase,
             &Self::get_coach_philosophy(coach),
         );
@@ -734,11 +734,11 @@ impl TeamTraining {
         }
     }
 
-    /// Count competitive matches in the last 14 days from match
-    /// history. Used as a fallback when the league-side fixture window
-    /// has not been written yet (early simulation tick or unit test).
-    fn matches_last_14_days(team: &Team, date: NaiveDateTime) -> u8 {
-        let cutoff = date.date() - Duration::days(14);
+    /// Count matches in the last seven days from match history. Used as
+    /// a fallback when the league-side fixture window has not been
+    /// written yet (early simulation tick or unit test).
+    fn matches_last_7_days(team: &Team, date: NaiveDateTime) -> u8 {
+        let cutoff = date.date() - Duration::days(7);
         team.match_history
             .items()
             .iter()
@@ -1060,7 +1060,7 @@ impl WeeklyTrainingPlan {
         today: NaiveDate,
         previous_match: Option<NaiveDate>,
         next_match: Option<NaiveDate>,
-        fixtures_within_7d: u8,
+        fixtures_this_week: u8,
         phase: PeriodizationPhase,
         philosophy: &CoachingPhilosophy,
     ) -> Self {
@@ -1072,9 +1072,9 @@ impl WeeklyTrainingPlan {
         .into_iter()
         .flatten()
         .collect();
-        // Two competitive matches inside any rolling 7-day window is
-        // the canonical congestion threshold for top-flight schedules.
-        let congested = fixtures_within_7d >= 2;
+        // Two competitive matches inside the week around today is the
+        // canonical congestion threshold for top-flight schedules.
+        let congested = fixtures_this_week >= 2;
 
         let today_sessions = Self::sessions_for_real_date(
             today,
@@ -1113,7 +1113,9 @@ impl WeeklyTrainingPlan {
     /// Pick the right band of sessions for `today` based on real
     /// calendar distance to the next/previous fixture. Strict on the
     /// "match day = no training" rule, so a kickoff date never picks
-    /// up a phantom session.
+    /// up a phantom session — including once the day's match is played
+    /// and already filed as the previous one, which is how clubs see it:
+    /// the league plays before the clubs train.
     fn sessions_for_real_date(
         today: NaiveDate,
         previous_match: Option<NaiveDate>,
@@ -1122,7 +1124,7 @@ impl WeeklyTrainingPlan {
         philosophy: &CoachingPhilosophy,
         congested: bool,
     ) -> Vec<TrainingSession> {
-        if Some(today) == next_match {
+        if Some(today) == next_match || Some(today) == previous_match {
             return vec![];
         }
         let md_plus = previous_match

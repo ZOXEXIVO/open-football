@@ -53,4 +53,6 @@ pub use rolls::{FixedRolls, RollSource, ThreadRolls};
 pub use skills_array::{SkillCategory, SkillKey};
 
 #[cfg(test)]
+mod career_tests;
+#[cfg(test)]
 mod tests;

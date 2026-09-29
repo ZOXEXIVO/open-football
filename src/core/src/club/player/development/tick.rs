@@ -32,7 +32,6 @@ use super::position_weights::*;
 use super::rolls::{RollSource, ThreadRolls};
 use super::skills_array::*;
 
-use crate::club::player::maturation::SkillMaturation;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 use chrono::{Datelike, NaiveDate};
@@ -71,7 +70,6 @@ impl Player {
         rolls: &mut impl RollSource,
     ) {
         let age = DateUtils::age(self.birth_date, now);
-        let pa = self.player_attributes.potential_ability as f32;
         let ca = self.player_attributes.current_ability;
 
         // Body state gates everything else.
@@ -90,12 +88,11 @@ impl Player {
             return;
         }
 
-        let pos = self.position();
-        let pos_group = pos_group_from(pos);
-        let dev_weights = position_dev_weights(pos_group);
-
-        // Base ceiling from PA (PA 200 -> ceiling 20.0)
-        let base_ceiling = (pa / 200.0 * 20.0).clamp(1.0, 20.0);
+        let dev_weights = position_dev_weights(pos_group_from(self.position()));
+        let ceilings = PositionalSkillCeilings::for_player(
+            self,
+            DateUtils::age_in_years(self.birth_date, now),
+        );
 
         // ── Compute shared multipliers ────────────────────────────────
 
@@ -125,7 +122,9 @@ impl Player {
         // the same scale as before for backward-compatible behaviour at
         // adult ages, but its weight is dwarfed by exposure_mult for
         // youngsters now.
-        let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
+        let mut official = self.statistics.clone();
+        official.merge_from(&self.cup_statistics);
+        let official_games = official.total_games();
         let friendly_games = self.friendly_statistics.total_games();
         let official_bonus =
             DevelopmentModifiers::official_match_bonus(official_games, friendly_games);
@@ -133,10 +132,10 @@ impl Player {
         // Rating multiplier feeds long-form development scaling, so use
         // the regressed season average rather than the raw weighted form.
         // A youngster with three 8.5s shouldn't have his attributes growing
-        // at top-talent speed just because the sample is tiny.
-        let pos = self.position().position_group();
+        // at top-talent speed just because the sample is tiny. League and
+        // cup games alike: a youngster blooded in the cups has ratings too.
         let rating_mult = DevelopmentModifiers::rating_multiplier(
-            self.statistics.average_rating_realistic(pos),
+            official.average_rating_realistic(self.position().position_group()),
             official_games,
         );
 
@@ -208,17 +207,10 @@ impl Player {
             let effective_age = (age as i16 - peak_offset as i16).clamp(14, 45) as u8;
 
             // Per-skill ceiling: position weight determines how high this
-            // skill can go, and maturation determines how much of that a
-            // player this age has grown into. Potential says where he
-            // finishes; it never said when. Without the age term a boy
-            // grew his decisions and composure to a finished
-            // professional's level while still in an academy — the same
-            // player the generator would have built at 0.55 of it — and
-            // then played, and rated, like the man he had not become.
-            // Both halves now read `SkillMaturation`.
-            let maturity =
-                SkillMaturation::ratio(age as u32, PositionalSkillCeilings::maturation_group(i));
-            let skill_ceiling = (base_ceiling * dev_weights[i] * maturity).clamp(1.0, 20.0);
+            // skill can go, and maturation how much of that a player this
+            // age has grown into. Potential says where he finishes; it
+            // never said when.
+            let skill_ceiling = ceilings.at(i);
 
             // Per-skill gap factor (replaces global PA-CA gap).
             let gap = DevelopmentModifiers::skill_gap_factor(skills[i], skill_ceiling);

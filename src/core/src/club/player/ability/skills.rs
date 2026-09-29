@@ -1,4 +1,6 @@
-use crate::club::player::position::{PlayerFieldPositionGroup, PlayerPositionType};
+use crate::club::player::position::PlayerPositionType;
+mod fitting;
+mod weights;
 use crate::club::player::position_weights::{
     PositionWeights, SK_ACCELERATION, SK_AGGRESSION, SK_AGILITY, SK_ANTICIPATION, SK_BALANCE,
     SK_BRAVERY, SK_COMPOSURE, SK_CONCENTRATION, SK_CORNERS, SK_CROSSING, SK_DECISIONS,
@@ -8,6 +10,7 @@ use crate::club::player::position_weights::{
     SK_STAMINA, SK_STRENGTH, SK_TACKLING, SK_TEAMWORK, SK_TECHNIQUE, SK_VISION, SK_WORK_RATE,
     SKILL_COUNT,
 };
+use weights::AbilityWeights;
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PlayerSkills {
@@ -53,17 +56,27 @@ impl PlayerSkills {
         Self::skill_to_ability(overall)
     }
 
-    /// Position-weighted ability calculation — every skill is weighed by how
-    /// much it matters for this *exact* position (DC vs WBL vs AMC etc.).
-    /// Goalkeepers route through the dedicated GK calculation that accounts
-    /// for the Goalkeeping attributes alongside the outfield ones.
+    /// Position-weighted ability calibrated against recorded CA/attribute
+    /// pairs. Scoring weights are separate from the role-shaping weights:
+    /// a generation preference is not an attribute's measured CA cost.
     pub fn calculate_ability_for_position(&self, position: PlayerPositionType) -> u8 {
-        if position.position_group() == PlayerFieldPositionGroup::Goalkeeper {
-            return self.calculate_gk_ability();
-        }
-        let weights = PositionWeights::for_position(position);
-        let weighted_avg = self.weighted_skill_average(&weights);
-        Self::skill_to_ability(weighted_avg)
+        self.ability_score_for_position(position)
+            .round()
+            .clamp(1.0, 200.0) as u8
+    }
+
+    /// Continuous score for fitting. Keeping the unclamped value prevents
+    /// endpoint plateaus from flattening a CA-200 player to all twenties.
+    fn ability_score_for_position(&self, position: PlayerPositionType) -> f32 {
+        let weights = AbilityWeights::for_position(position);
+        let total: f32 = weights.iter().sum();
+        let average: f32 = self
+            .iter_all()
+            .zip(weights)
+            .map(|((_, value), weight)| value * weight)
+            .sum::<f32>()
+            / total;
+        average * 19.0 - 110.0
     }
 
     /// Compute Σ(skill_i · w_i) / Σ(w_i) using the position-weight table.
@@ -116,52 +129,28 @@ impl PlayerSkills {
         acc / total
     }
 
-    /// GK ability uses goalkeeping attributes as the primary factor,
-    /// supplemented by key mental and physical skills.
-    fn calculate_gk_ability(&self) -> u8 {
-        let gk = &self.goalkeeping;
-
-        // Core goalkeeping: handling, reflexes, one-on-ones, aerial reach,
-        // command of area, communication, rushing out, punching
-        let key_gk = (gk.handling
-            + gk.reflexes
-            + gk.one_on_ones
-            + gk.aerial_reach
-            + gk.command_of_area
-            + gk.communication
-            + gk.rushing_out
-            + gk.punching)
-            / 8.0;
-
-        // Key mental: positioning, concentration, anticipation, composure, decisions
-        let key_mental = (self.mental.positioning
-            + self.mental.concentration
-            + self.mental.anticipation
-            + self.mental.composure
-            + self.mental.decisions)
-            / 5.0;
-
-        // Key physical: agility, jumping, strength, acceleration
-        let key_physical = (self.physical.agility
-            + self.physical.jumping
-            + self.physical.strength
-            + self.physical.acceleration)
-            / 4.0;
-
-        // Key technical: kicking, first touch, passing (modern GK distribution)
-        let key_technical = (gk.kicking + gk.first_touch + gk.passing + gk.throwing) / 4.0;
-
-        // GK ability: goalkeeping-dominant
-        let weighted =
-            key_gk * 0.40 + key_mental * 0.25 + key_physical * 0.20 + key_technical * 0.15;
-        Self::skill_to_ability(weighted)
+    /// Empirical CA scale. Complete source profiles fit a substantially
+    /// steeper slope than mapping all-1 to CA 1 and all-20 to CA 200.
+    /// Clamping keeps weak/extreme profiles inside the game's 1..200 scale.
+    fn skill_to_ability(avg: f32) -> u8 {
+        (avg * 19.0 - 110.0).round().clamp(1.0, 200.0) as u8
     }
 
-    /// Map a skill average (1.0-20.0) to ability (1-200).
-    /// Skills are 1-based so normalize from 1-20 range before scaling.
-    fn skill_to_ability(avg: f32) -> u8 {
-        let normalized = ((avg - 1.0) / 19.0).clamp(0.0, 1.0);
-        (normalized * 199.0 + 1.0).round().clamp(1.0, 200.0) as u8
+    /// Skill baseline corresponding to an ability budget. Shared by
+    /// generation and development so they use the same scale as CA scoring.
+    pub fn ability_skill_level(ability: u8) -> f32 {
+        (ability.clamp(1, 200) as f32 + 110.0) / 19.0
+    }
+
+    /// Level `L` at which the profile `L × shape` (registry order) scores
+    /// `ability` for this position. Development shapes skills by role, CA
+    /// prices them by measured cost; sized by the flat level alone, a role
+    /// whose shape under-weights its costly attributes never reached its PA.
+    pub fn shaped_skill_level(position: PlayerPositionType, ability: u8, shape: &[f32; 50]) -> f32 {
+        let weights = AbilityWeights::for_position(position);
+        let share = weights.iter().zip(shape).map(|(w, s)| w * s).sum::<f32>()
+            / weights.iter().sum::<f32>();
+        Self::ability_skill_level(ability) / share
     }
 
     /// Build a flat skill set (every attribute equal) whose visible ability —
@@ -171,7 +160,7 @@ impl PlayerSkills {
     /// construct a synthetic player of a known, *visible* level without
     /// touching the hidden `current_ability` digit.
     pub fn flat_for_ability(target: u8) -> PlayerSkills {
-        let v = 1.0 + (target.max(1) as f32 - 1.0) / 199.0 * 19.0;
+        let v = Self::ability_skill_level(target);
         let mut skills = PlayerSkills::default();
         skills.technical.raise_floor(v);
         skills.mental.raise_floor(v);
@@ -363,16 +352,6 @@ impl Technical {
         self.tackling = self.tackling.max(min);
         self.technique = self.technique.max(min);
     }
-
-    /// Small recovery of technique-related skills between matches.
-    /// Simulates sharpness returning through regular practice.
-    pub fn rest(&mut self) {
-        const RECOVERY: f32 = 0.02;
-        // Core technique skills recover slightly with practice
-        self.first_touch = (self.first_touch + RECOVERY).min(20.0);
-        self.passing = (self.passing + RECOVERY).min(20.0);
-        self.technique = (self.technique + RECOVERY).min(20.0);
-    }
 }
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -428,15 +407,6 @@ impl Mental {
         self.vision = self.vision.max(min);
         self.work_rate = self.work_rate.max(min);
     }
-
-    /// Mental recovery between matches — concentration and composure
-    /// restore naturally with rest days.
-    pub fn rest(&mut self) {
-        const RECOVERY: f32 = 0.03;
-        self.concentration = (self.concentration + RECOVERY).min(20.0);
-        self.composure = (self.composure + RECOVERY).min(20.0);
-        self.decisions = (self.decisions + RECOVERY * 0.5).min(20.0);
-    }
 }
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -475,18 +445,6 @@ impl Physical {
         self.pace = self.pace.max(min);
         self.stamina = self.stamina.max(min);
         self.strength = self.strength.max(min);
-    }
-
-    /// Physical recovery between matches — stamina and match readiness
-    /// recover based on natural_fitness. `match_readiness` is on the
-    /// 0–20 scale (the source of truth across this crate); the previous
-    /// `min(100.0)` cap was leftover scale drift that let readiness
-    /// silently exceed its real bounds.
-    pub fn rest(&mut self) {
-        // Natural fitness determines recovery rate (0-20 scale → 0.5%-2% per rest)
-        let recovery_rate = 0.005 + (self.natural_fitness / 20.0) * 0.015;
-        self.stamina = (self.stamina + recovery_rate * 20.0).min(20.0);
-        self.match_readiness = (self.match_readiness + recovery_rate * 3.0).min(20.0);
     }
 }
 
@@ -568,27 +526,6 @@ mod tests {
     }
 
     #[test]
-    fn test_technical_rest() {
-        let mut technical = Technical {
-            corners: 10.0,
-            crossing: 20.0,
-            dribbling: 30.0,
-            finishing: 40.0,
-            first_touch: 50.0,
-            free_kicks: 60.0,
-            heading: 70.0,
-            long_shots: 80.0,
-            long_throws: 90.0,
-            marking: 100.0,
-            passing: 110.0,
-            penalty_taking: 120.0,
-            tackling: 130.0,
-            technique: 140.0,
-        };
-        technical.rest();
-    }
-
-    #[test]
     fn test_mental_average() {
         let mental = Mental {
             aggression: 10.0,
@@ -611,27 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mental_rest() {
-        let mut mental = Mental {
-            aggression: 10.0,
-            anticipation: 20.0,
-            bravery: 30.0,
-            composure: 40.0,
-            concentration: 50.0,
-            decisions: 60.0,
-            determination: 70.0,
-            flair: 80.0,
-            leadership: 90.0,
-            off_the_ball: 100.0,
-            positioning: 110.0,
-            teamwork: 120.0,
-            vision: 130.0,
-            work_rate: 140.0,
-        };
-        mental.rest();
-    }
-
-    #[test]
     fn test_physical_average() {
         let physical = Physical {
             acceleration: 10.0,
@@ -645,21 +561,5 @@ mod tests {
             match_readiness: 90.0,
         };
         assert_eq!(physical.average(), 45.0); // (10 + 20 + 30 + 40 + 50 + 60 + 70 + 80) / 8
-    }
-
-    #[test]
-    fn test_physical_rest() {
-        let mut physical = Physical {
-            acceleration: 10.0,
-            agility: 20.0,
-            balance: 30.0,
-            jumping: 40.0,
-            natural_fitness: 50.0,
-            pace: 60.0,
-            stamina: 70.0,
-            strength: 80.0,
-            match_readiness: 90.0,
-        };
-        physical.rest();
     }
 }

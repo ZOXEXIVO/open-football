@@ -7,9 +7,9 @@ use crate::club::ClubPhilosophy;
 use crate::club::player::skills::{Goalkeeping, Mental, Physical, Technical};
 use crate::{
     ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
-    PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSquadStatus, PlayerStatusType,
-    RelationshipChange, SelectionOmissionReason, StaffCollection, TeamBuilder, TeamReputation,
-    TeamType, TrainingSchedule,
+    PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSkills, PlayerSquadStatus,
+    PlayerStatusType, RelationshipChange, SelectionOmissionReason, StaffCollection, TeamBuilder,
+    TeamReputation, TeamType, TrainingSchedule,
 };
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration, NaiveTime, Utc};
@@ -180,7 +180,10 @@ fn call_up_readiness_does_not_use_a_weak_fringe_player_or_empty_group_as_a_pass(
 #[test]
 fn call_up_starting_standard_tightens_for_important_matches() {
     let (team, mut youth) = call_up_fixture();
-    FixtureSkills::stamp(&mut youth, 14.0);
+    // A 20-CA gap passes the routine band (24), but not the must-win
+    // band (10), independently of the attribute-to-ability calibration.
+    let reference = CallUpReadiness::reference(&youth, &team.players.players()).unwrap();
+    youth.skills = PlayerSkills::flat_for_ability(reference - 20);
     let mut available = team.players.players();
     available.push(&youth);
     let pool_contains = |importance, friendly| {

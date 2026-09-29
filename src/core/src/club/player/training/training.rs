@@ -2369,6 +2369,41 @@ mod training_load_tests {
         assert!(today_sessions.is_empty(), "no training on match day");
     }
 
+    /// The league plays before the clubs train, so by the time a club
+    /// plans its day the match is already filed as the previous one.
+    #[test]
+    fn generate_for_date_no_training_after_todays_match_is_played() {
+        use crate::{
+            CoachingPhilosophy, PeriodizationPhase, RotationPreference, TacticalFocus,
+            TrainingIntensityPreference, WeeklyTrainingPlan,
+        };
+        let philosophy = CoachingPhilosophy {
+            tactical_focus: TacticalFocus::Possession,
+            training_intensity: TrainingIntensityPreference::Medium,
+            youth_focus: false,
+            rotation_preference: RotationPreference::Moderate,
+        };
+        let today = NaiveDate::from_ymd_opt(2026, 2, 14).unwrap();
+        let next = NaiveDate::from_ymd_opt(2026, 2, 21).unwrap();
+        let plan = WeeklyTrainingPlan::generate_for_date(
+            today,
+            Some(today),
+            Some(next),
+            1,
+            PeriodizationPhase::MidSeason,
+            &philosophy,
+        );
+        let today_sessions = plan.sessions.get(&today.weekday()).unwrap();
+        assert!(
+            today_sessions.is_empty(),
+            "the squad trained after playing: {:?}",
+            today_sessions
+                .iter()
+                .map(|s| s.session_type.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn double_match_week_drops_high_intensity_sessions() {
         use crate::{

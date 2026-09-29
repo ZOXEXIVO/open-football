@@ -15,6 +15,13 @@ impl DateUtils {
         (age_duration.num_days() / 365) as u8
     }
 
+    /// Age in fractional years on the same 365-day basis as [`Self::age`],
+    /// which is its whole part.
+    #[inline]
+    pub fn age_in_years(birthdate: NaiveDate, now: NaiveDate) -> f32 {
+        now.signed_duration_since(birthdate).num_days() as f32 / 365.0
+    }
+
     #[inline]
     pub fn is_quarter_start(date: NaiveDate) -> bool {
         date.day() == 1 && date.month().is_multiple_of(3)

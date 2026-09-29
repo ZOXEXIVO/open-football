@@ -729,9 +729,9 @@ fn well_managed_19yo_still_develops_well() {
         baseline_skills(),
         pa,
         person_pro(15.0, 14.0),
-        1200.0, // sweet spot for 18-21
-        1400.0,
-        320.0,
+        600.0, // sweet spot for 18-21
+        700.0,
+        160.0,
         9200,
         2500,
     );
@@ -897,9 +897,9 @@ fn under_16_physical_growth_capped_far_below_adult_peer() {
         baseline_skills(),
         pa,
         person_pro(15.0, 14.0),
-        1200.0,
-        1400.0,
-        300.0,
+        600.0,
+        700.0,
+        160.0,
         9500,
         2000,
     );
@@ -1323,23 +1323,27 @@ fn friendly_only_play_is_not_worse_than_no_play() {
 
 #[test]
 fn teenage_ceiling_holds_the_mind_back_but_not_the_body() {
-    let boy = make_player(
+    let mut boy = make_player(
         d(2009, 1, 1),
         PlayerPositionType::MidfielderCenter,
         baseline_skills(),
         180,
         PersonAttributes::default(),
     );
-    let young = PositionalSkillCeilings::for_player(&boy, 17);
-    let peak = PositionalSkillCeilings::for_player(&boy, 28);
+    // A regular, so the ceilings differ by age alone.
+    boy.load.minutes_last_30 = 400.0;
+    let young = PositionalSkillCeilings::for_player(&boy, 17.5);
+    let peak = PositionalSkillCeilings::for_player(&boy, 28.5);
 
     let mind_young = young.get(SkillKey::Decisions);
     let mind_peak = peak.get(SkillKey::Decisions);
     let body_young = young.get(SkillKey::Pace);
     let body_peak = peak.get(SkillKey::Pace);
 
+    // Maturity is a share of ability: at 17 his mind holds the decisions
+    // of a player of 0.55 of his potential, points short of his peak's.
     assert!(
-        mind_young < mind_peak * 0.65,
+        mind_peak - mind_young >= 4.0,
         "a 17-year-old's decision-making ceiling must sit far below his peak — \
          {mind_young} vs {mind_peak}"
     );
@@ -1366,7 +1370,7 @@ fn age_ceiling_never_cuts_what_a_player_already_has() {
         180,
         PersonAttributes::default(),
     );
-    let ceilings = PositionalSkillCeilings::for_player(&prodigy, 17);
+    let ceilings = PositionalSkillCeilings::for_player(&prodigy, 17.5);
     let ceiling = ceilings.get(SkillKey::Decisions);
     assert!(
         ceiling < 17.0,
@@ -1390,10 +1394,10 @@ fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
         120,
         PersonAttributes::default(),
     );
-    let young = PositionalSkillCeilings::for_player(&boy, 17).get(SkillKey::GkHandling);
-    let peak = PositionalSkillCeilings::for_player(&boy, 31).get(SkillKey::GkHandling);
+    let young = PositionalSkillCeilings::for_player(&boy, 17.5).get(SkillKey::GkHandling);
+    let peak = PositionalSkillCeilings::for_player(&boy, 31.5).get(SkillKey::GkHandling);
     assert!(
-        young < peak * 0.7,
+        peak - young >= 2.5,
         "a 17-year-old keeper's handling ceiling must trail his peak — {young} vs {peak}"
     );
 }
@@ -1419,7 +1423,7 @@ fn dump_maturation_ceilings() {
         "age", "decisions", "passing", "pace"
     );
     for age in [16u32, 17, 19, 21, 24, 28, 31] {
-        let c = PositionalSkillCeilings::for_player(&cm, age);
+        let c = PositionalSkillCeilings::for_player(&cm, age as f32 + 0.5);
         println!(
             "{:>4} {:>10.2} {:>10.2} {:>10.2}",
             age,
@@ -1462,7 +1466,7 @@ fn dump_wonderkid_ceilings() {
             "age", "dribbling", "technique", "pace", "decisions", "composure"
         );
         for age in [17u32, 19, 21, 24, 28] {
-            let c = PositionalSkillCeilings::for_player(p, age);
+            let c = PositionalSkillCeilings::for_player(p, age as f32 + 0.5);
             println!(
                 "{:>4} {:>9.2} {:>9.2} {:>7.2} {:>9.2} {:>9.2}",
                 age,

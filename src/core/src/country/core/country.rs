@@ -826,7 +826,7 @@ impl Country {
         CountryResult::simulate_international_competitions(self, current_date);
         CountryResult::update_economic_factors(self, current_date);
         if self.season_dates().is_off_season(current_date) {
-            CountryResult::simulate_preseason_activities(self, current_date);
+            CountryResult::simulate_preseason_activities(self);
         }
 
         // Phase 1b (NEW PARALLEL PATH): drive each LeagueResult's per-match
