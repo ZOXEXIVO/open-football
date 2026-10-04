@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::potential_stars::{PotentialStarsView, StarRating};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -31,7 +31,7 @@ pub struct CountrySquadTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -184,7 +184,7 @@ async fn render_country_squad(
         sub_title_suffix: String::new(),
         sub_title: continent.name.clone(),
         sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {

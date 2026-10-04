@@ -7,7 +7,7 @@ use crate::common::season_step::SeasonStep;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::matches::collector::PlayerMatchCollector;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
@@ -39,7 +39,7 @@ pub struct PlayerMatchesTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -157,7 +157,7 @@ pub async fn player_matches_action(
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: team_opt
             .and_then(|t| {
                 simulator_data

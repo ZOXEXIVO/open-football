@@ -2,7 +2,8 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::potential_stars::{PotentialStarsView, StarRating};
-use crate::views::{self, MenuSection};
+use crate::leagues::address::LeagueAddress;
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -39,7 +40,7 @@ pub struct WatchlistPlayerDto {
     pub team_name: String,
     pub team_slug: String,
     pub league_name: String,
-    pub league_slug: String,
+    pub league_url: String,
     pub played: u16,
     pub played_subs: u16,
     pub value: String,
@@ -68,7 +69,7 @@ pub struct WatchlistPageTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -108,7 +109,9 @@ pub async fn watchlist_page_action(
                     team_name: team.name.clone(),
                     team_slug: team.slug.clone(),
                     league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                    league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
+                    league_url: league
+                        .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
+                        .unwrap_or_default(),
                     value: FormattingUtils::format_money(player.value(
                         now,
                         league.map(|l| l.reputation).unwrap_or(0),
@@ -158,7 +161,7 @@ pub async fn watchlist_page_action(
         sub_title_suffix: String::new(),
         sub_title: String::new(),
         sub_title_link: String::new(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: String::new(),
         foreground_color: String::new(),
         menu_sections,
@@ -241,7 +244,7 @@ fn base_watchlist_dto(
         team_name: String::new(),
         team_slug: String::new(),
         league_name: String::new(),
-        league_slug: String::new(),
+        league_url: String::new(),
         played: player.statistics.played,
         played_subs: player.statistics.played_subs,
         value: "-".to_string(),

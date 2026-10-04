@@ -7,7 +7,7 @@ use crate::common::potential_stars::{PotentialStarsView, StarRating};
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
@@ -47,7 +47,7 @@ pub struct PlayerGetTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -442,7 +442,7 @@ pub async fn player_get_action(
             sub_title_suffix: String::new(),
             sub_title: team.name.clone(),
             sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
-            sub_title_country_code: String::new(),
+            sub_title_flag: None,
             header_color: simulator_data
                 .club(team.club_id)
                 .map(|c| c.colors.background.clone())
@@ -555,7 +555,7 @@ pub async fn player_get_action(
         sub_title_suffix: String::new(),
         sub_title,
         sub_title_link: String::new(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: "#808080".to_string(),
         foreground_color: "#ffffff".to_string(),
         menu_sections: Vec::new(),

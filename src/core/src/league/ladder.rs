@@ -64,6 +64,90 @@ impl<'a> LeagueLadder<'a> {
         Some(candidates.remove(0))
     }
 
+    /// Where the sides relegated from `league`'s table go: `(lower league,
+    /// sides)` per boundary, in league-id order.
+    ///
+    /// A single division above a tier split into groups of one competition
+    /// (Segunda above Primera Federación's two groups) feeds EVERY group.
+    /// Places are handed out champions-first — one to each group in turn,
+    /// then each group's runner-up, and so on — until the division above
+    /// has no relegation places left, so no group is starved while another
+    /// promotes its third. Every other boundary is the lone `lower_partner`.
+    pub fn relegation_split(&self, league: &League) -> Vec<(&'a League, usize)> {
+        if league.settings.tier == 0 || league.settings.relegation_spots == 0 {
+            return Vec::new();
+        }
+        let relegation_spots = league.settings.relegation_spots as usize;
+
+        let groups = self.lower_groups(league);
+        if groups.is_empty() {
+            return self
+                .lower_partner(league.id)
+                .map(|lower| {
+                    let places = relegation_spots.min(lower.settings.promotion_spots as usize);
+                    vec![(lower, places)]
+                })
+                .unwrap_or_default();
+        }
+
+        let mut places = vec![0usize; groups.len()];
+        let mut left = relegation_spots;
+        let deepest = groups
+            .iter()
+            .map(|g| g.settings.promotion_spots as usize)
+            .max()
+            .unwrap_or(0);
+        for rank in 0..deepest {
+            for (i, group) in groups.iter().enumerate() {
+                if left > 0 && (group.settings.promotion_spots as usize) > rank {
+                    places[i] += 1;
+                    left -= 1;
+                }
+            }
+        }
+        groups
+            .into_iter()
+            .zip(places)
+            .filter(|&(_, n)| n > 0)
+            .collect()
+    }
+
+    /// The groups an ungrouped `league` relegates into, ordered by id —
+    /// empty unless every promoting league one tier down is a group of the
+    /// same competition and there are at least two of them.
+    fn lower_groups(&self, league: &League) -> Vec<&'a League> {
+        if league.settings.league_group.is_some() {
+            return Vec::new();
+        }
+        let mut lower: Vec<&League> = self
+            .leagues
+            .iter()
+            .filter(|l| {
+                l.id != league.id
+                    && l.settings.tier == league.settings.tier + 1
+                    && l.settings.promotion_spots > 0
+            })
+            .collect();
+        let Some(competition) = lower
+            .first()
+            .and_then(|l| l.settings.league_group.as_ref())
+            .map(|g| g.competition.as_str())
+        else {
+            return Vec::new();
+        };
+        let one_competition = lower.iter().all(|l| {
+            l.settings
+                .league_group
+                .as_ref()
+                .is_some_and(|g| g.competition == competition)
+        });
+        if lower.len() < 2 || !one_competition {
+            return Vec::new();
+        }
+        lower.sort_unstable_by_key(|l| l.id);
+        lower
+    }
+
     /// Sides that drop out of this league's own table. Split-season
     /// leagues relegate off the annual aggregate, never a tournament table.
     pub fn relegated_from_table(&self, league: &League) -> usize {
@@ -101,14 +185,20 @@ impl<'a> LeagueLadder<'a> {
         self.leagues
             .iter()
             .filter(|upper| upper.settings.tier + 1 == league.settings.tier)
-            .filter(|upper| {
-                self.lower_partner(upper.id)
-                    .is_some_and(|l| l.id == league.id)
-            })
             .map(|upper| {
                 let zones = self.split_zones(upper);
                 if zones.len() < 2 {
-                    return self.swap_count(upper);
+                    return self
+                        .relegation_split(upper)
+                        .into_iter()
+                        .find(|(lower, _)| lower.id == league.id)
+                        .map_or(0, |(_, places)| places);
+                }
+                if !self
+                    .lower_partner(upper.id)
+                    .is_some_and(|l| l.id == league.id)
+                {
+                    return 0;
                 }
                 // A split competition's k-th relegated side is replaced by
                 // the k-th paired group's champion.
@@ -119,17 +209,10 @@ impl<'a> LeagueLadder<'a> {
     }
 
     fn swap_count(&self, league: &League) -> usize {
-        if league.settings.tier == 0 || league.settings.relegation_spots == 0 {
-            return 0;
-        }
-        self.lower_partner(league.id)
-            .map(|lower| {
-                league
-                    .settings
-                    .relegation_spots
-                    .min(lower.settings.promotion_spots) as usize
-            })
-            .unwrap_or(0)
+        self.relegation_split(league)
+            .iter()
+            .map(|&(_, places)| places)
+            .sum()
     }
 
     /// Zones of the split-season grouped competition `league` belongs to,

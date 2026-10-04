@@ -3,8 +3,9 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::played_fixture::PlayedFixture;
 use crate::common::season_step::SeasonStep;
+use crate::leagues::address::LeagueAddress;
 use crate::teams::newspaper::NewspaperCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
@@ -39,7 +40,7 @@ pub struct TeamScheduleTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -272,9 +273,9 @@ pub async fn team_schedule_get_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
+            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: simulator_data
             .club(team.club_id)
             .map(|c| c.colors.background.clone())

@@ -1,7 +1,8 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection};
+use crate::leagues::address::LeagueAddress;
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -27,7 +28,7 @@ pub struct CountryGetTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -43,7 +44,7 @@ pub struct CountryGetTemplate {
 }
 
 pub struct LeagueDto {
-    pub slug: String,
+    pub url: String,
     pub name: String,
 }
 
@@ -120,7 +121,7 @@ pub async fn country_get_action(
     let mut sections: Vec<CompetitionGroupDto> = Vec::new();
     for l in ordered {
         let dto = LeagueDto {
-            slug: l.slug.clone(),
+            url: LeagueAddress::new(&country.slug, &l.slug).url(&route_params.lang),
             name: l.name.clone(),
         };
         match &l.settings.league_group {
@@ -176,7 +177,7 @@ pub async fn country_get_action(
         sub_title_suffix: String::new(),
         sub_title: continent.name.clone(),
         sub_title_link: format!("/{}/countries", route_params.lang),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {

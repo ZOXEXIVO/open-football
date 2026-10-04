@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::MenuSection;
+use crate::views::{MenuSection, SubTitleFlag};
 use crate::worker::WorkerStatus;
 use crate::{ApiError, ApiResult, GameAppData, I18n, LlmSettings};
 use askama::Template;
@@ -28,7 +28,7 @@ pub struct CountryListTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -172,7 +172,7 @@ pub async fn country_list_action(
         sub_title_suffix: String::new(),
         sub_title: i18n.t("select_country_sub").to_string(),
         sub_title_link: format!("/{}", route_params.lang),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: String::new(),
         foreground_color: String::new(),
         menu_sections: vec![],

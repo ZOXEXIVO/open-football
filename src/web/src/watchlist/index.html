@@ -68,8 +68,8 @@
                         {% endif %}
                     </td>
                     <td class="wl-league">
-                        {% if !player.league_slug.is_empty() %}
-                        <a href="/{{ lang }}/leagues/{{ player.league_slug }}">{{ player.league_name }}</a>
+                        {% if !player.league_url.is_empty() %}
+                        <a href="{{ player.league_url }}">{{ player.league_name }}</a>
                         {% endif %}
                     </td>
                     <td class="wl-ability">

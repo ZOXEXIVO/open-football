@@ -2,9 +2,10 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
+use crate::leagues::address::{LeagueAddress, LeaguePage};
 use crate::leagues::newspaper::LeagueNewspaperCounter;
-use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData, I18n};
+use crate::views::{self, MenuSection, SubTitleFlag};
+use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 #[derive(Deserialize)]
 pub struct LeagueGetRequest {
     pub lang: String,
+    pub country_slug: String,
     pub league_slug: String,
 }
 
@@ -39,13 +41,13 @@ pub struct LeagueGetTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
     pub lang: String,
-    pub league_slug: String,
+    pub league_url: String,
     /// Monthly editions on the division's shelf, for the tabbar badge.
     pub newspaper_count: usize,
     /// Split-season leagues label their standings with the current
@@ -78,7 +80,7 @@ pub struct LeaguePlayerStatItem {
 
 pub struct CompetitionReputationItem {
     pub league_name: String,
-    pub league_slug: String,
+    pub league_url: String,
     pub country_name: String,
     pub country_code: String,
 }
@@ -212,22 +214,17 @@ pub async fn league_get_action(
 
     let simulator_data = guard.as_ref().unwrap();
 
-    let league_id = simulator_data
-        .indexes
-        .as_ref()
-        .unwrap()
-        .slug_indexes
-        .get_league_by_slug(&route_params.league_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "League with slug {} not found",
-                route_params.league_slug
-            ))
-        })?;
-
-    let league = simulator_data.league(league_id).unwrap();
-
-    let country = simulator_data.country(league.country_id).unwrap();
+    let (league, country) = match LeagueAddress::resolve(
+        simulator_data,
+        &route_params.lang,
+        &route_params.country_slug,
+        &route_params.league_slug,
+        "",
+    )? {
+        LeaguePage::Found(league, country) => (league, country),
+        LeaguePage::Moved(response) => return Ok(response),
+    };
+    let league_id = league.id;
 
     // Domestic cups and grouped-competition playoffs have their own
     // bracket pages; bounce there so this handler only ever renders a
@@ -477,6 +474,7 @@ pub async fn league_get_action(
         .iter()
         .flat_map(|continent| &continent.countries)
         .flat_map(|country| {
+            let lang = &route_params.lang;
             country
                 .leagues
                 .leagues
@@ -486,7 +484,7 @@ pub async fn league_get_action(
                     (
                         league.reputation,
                         league.name.clone(),
-                        league.slug.clone(),
+                        LeagueAddress::new(&country.slug, &league.slug).url(lang),
                         country.name.clone(),
                         country.code.clone(),
                     )
@@ -500,9 +498,9 @@ pub async fn league_get_action(
         .into_iter()
         .take(10)
         .map(
-            |(_, league_name, league_slug, country_name, country_code)| CompetitionReputationItem {
+            |(_, league_name, league_url, country_name, country_code)| CompetitionReputationItem {
                 league_name,
-                league_slug,
+                league_url,
                 country_name,
                 country_code,
             },
@@ -718,6 +716,7 @@ pub async fn league_get_action(
         .collect();
 
     let league_title = views::league_display_name(league, &i18n, simulator_data);
+    let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
 
     Ok(LeagueGetTemplate {
         css_version: CSS_VERSION,
@@ -729,7 +728,7 @@ pub async fn league_get_action(
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_country_code: country.code.clone(),
+        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
@@ -742,11 +741,10 @@ pub async fn league_get_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("/{}/leagues/{}", route_params.lang, league.slug);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
-                current_path: &current_path,
+                current_path: &league_url,
                 country_name: &country.name,
                 country_slug: &country.slug,
             };
@@ -766,7 +764,7 @@ pub async fn league_get_action(
                     .collect::<Vec<_>>(),
             )
         },
-        league_slug: league.slug.clone(),
+        league_url,
         newspaper_count: LeagueNewspaperCounter::count(league),
         split_season,
         tournament_label,

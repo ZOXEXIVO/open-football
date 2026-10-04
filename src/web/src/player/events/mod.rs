@@ -2,8 +2,9 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, player_from_slug, resolve_player_page};
+use crate::leagues::address::LeagueAddress;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, EventI18n, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -213,7 +214,7 @@ pub struct PlayerEventsTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -285,17 +286,17 @@ pub async fn player_events_action(
         player.full_name.display_last_name()
     );
 
-    let league_slug = team_opt
+    let league_url = team_opt
         .and_then(|t| t.league_id)
         .and_then(|id| simulator_data.league(id))
-        .map(|l| l.slug.clone());
+        .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang));
     let events = build_events(
         player,
         &i18n,
         &events_i18n,
         simulator_data,
         &route_params.lang,
-        league_slug.as_deref(),
+        league_url.as_deref(),
     );
     let severity_tiles = EventFilter::severity_tiles(&events_i18n);
     let mood_tiles = EventFilter::mood_tiles(&events_i18n);
@@ -318,7 +319,7 @@ pub async fn player_events_action(
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: team_opt
             .and_then(|t| {
                 simulator_data
@@ -768,7 +769,7 @@ fn build_events(
     events_i18n: &EventI18n,
     simulator_data: &SimulatorData,
     lang: &str,
-    league_slug: Option<&str>,
+    league_url: Option<&str>,
 ) -> Vec<PlayerEventDto> {
     let mut events: Vec<_> = PlayerEventsCounter::visible_iter(player)
         .map(|e| {
@@ -777,7 +778,7 @@ fn build_events(
                 .and_then(|pid| resolve_partner(simulator_data, pid));
 
             let description =
-                build_description(e, resolved_partner.as_ref(), events_i18n, lang, league_slug);
+                build_description(e, resolved_partner.as_ref(), events_i18n, lang, league_url);
 
             // When the description already names + links the partner
             // inline, suppress the template's trailing dash-suffix so the
@@ -3710,12 +3711,12 @@ fn build_description(
     partner: Option<&(String, String)>,
     events_i18n: &EventI18n,
     lang: &str,
-    league_slug: Option<&str>,
+    league_url: Option<&str>,
 ) -> DescriptionRender {
     if matches!(event.event_type, HappinessEventType::TeamOfTheWeekSelection) {
         let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
-        let html = if let Some(slug) = league_slug {
-            let url = format!("/{}/leagues/{}/awards", lang, slug);
+        let html = if let Some(league_url) = league_url {
+            let url = format!("{}/awards", league_url);
             let link = format!(
                 r#"<a href="{}">{}</a>"#,
                 url,
@@ -3736,8 +3737,8 @@ fn build_description(
         HappinessEventType::YoungTeamOfTheWeekSelection
     ) {
         let raw = events_i18n.t(event_type_to_i18n_key(&event.event_type));
-        let html = if let Some(slug) = league_slug {
-            let url = format!("/{}/leagues/{}/awards", lang, slug);
+        let html = if let Some(league_url) = league_url {
+            let url = format!("{}/awards", league_url);
             let link = format!(
                 r#"<a href="{}">{}</a>"#,
                 url,
@@ -6365,7 +6366,7 @@ mod tests {
             sub_title_suffix: String::new(),
             sub_title: "Triestina".to_string(),
             sub_title_link: format!("/{lang}/teams/triestina"),
-            sub_title_country_code: String::new(),
+            sub_title_flag: None,
             header_color: "#8b0000".to_string(),
             foreground_color: "#ffffff".to_string(),
             menu_sections: Vec::new(),

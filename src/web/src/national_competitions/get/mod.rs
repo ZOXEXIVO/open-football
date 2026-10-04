@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection, NationalCompetitionLink};
+use crate::views::{self, MenuSection, NationalCompetitionLink, SubTitleFlag};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -35,7 +35,7 @@ pub struct NationalCompetitionsGetTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -358,7 +358,7 @@ async fn render(
         sub_title_suffix: String::new(),
         sub_title,
         sub_title_link: String::new(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: "#326295".to_string(),
         foreground_color: "#ffffff".to_string(),
         menu_sections,

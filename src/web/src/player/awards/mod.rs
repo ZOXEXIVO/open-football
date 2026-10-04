@@ -2,9 +2,10 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::leagues::address::LeagueAddress;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -77,9 +78,9 @@ pub struct LeagueBlock {
     pub league_slug: String,
     pub league_id: Option<u32>,
     /// True when this block is a domestic cup (FA Cup, Copa del Rey,
-    /// …). Cups don't have an awards page under `/leagues/<slug>/awards`
-    /// — they route through `/cups/<slug>`. Templates use this to pick
-    /// the right link target and to apply silverware-tinted styling.
+    /// …). Cups don't have a league awards page — they route through
+    /// `/cups/<slug>`. Templates use this to pick the right link target
+    /// and to apply silverware-tinted styling.
     pub is_cup: bool,
     /// Precomputed link target for the league/cup header + per-card
     /// chip. Empty when the block points at the global Continental /
@@ -116,7 +117,7 @@ pub struct PlayerAwardsTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -214,7 +215,7 @@ pub async fn player_awards_action(
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: team_opt
             .and_then(|t| {
                 simulator_data
@@ -633,7 +634,10 @@ fn build_league_blocks(
         } else if is_cup {
             format!("/cups/{}", league_slug)
         } else {
-            format!("/leagues/{}/awards", league_slug)
+            format!(
+                "{}/awards",
+                LeagueAddress::new(&country_slug, &league_slug).path()
+            )
         };
 
         blocks.push(LeagueBlock {

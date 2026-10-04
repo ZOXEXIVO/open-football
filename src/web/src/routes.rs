@@ -12,6 +12,7 @@ use crate::europa_league::europa_league_routes;
 use crate::face::face_routes;
 use crate::game::game_routes;
 use crate::i18n::{SUPPORTED_LANG_CODES, detect_language};
+use crate::leagues::address::LeagueAddress;
 use crate::leagues::league_routes;
 use crate::r#match::routes::match_routes;
 use crate::national_competitions::national_competitions_routes;
@@ -65,11 +66,21 @@ async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
         ));
     }
 
-    // All club team pages — daily
+    // Senior league pages (youth divisions are `friendly`) and all club team
+    // pages — daily
     let guard = state.data.read().await;
     if let Some(ref sim) = *guard {
         for continent in &sim.continents {
             for country in &continent.countries {
+                for league in country.leagues.leagues.iter().filter(|l| !l.friendly) {
+                    let address = LeagueAddress::new(&country.slug, &league.slug);
+                    for lang in SUPPORTED_LANG_CODES {
+                        xml.push_str(&format!(
+                            "  <url>\n    <loc>https://open-football.org{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>daily</changefreq>\n  </url>\n",
+                            address.url(lang), date
+                        ));
+                    }
+                }
                 for club in &country.clubs {
                     for team in &club.teams.teams {
                         if team.team_type != core::TeamType::Main {

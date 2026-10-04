@@ -195,6 +195,7 @@ impl CountryResult {
             .enumerate()
             .flat_map(|(ci, club)| club.teams.iter().map(move |t| (t.id, ci)))
             .collect();
+        let reserve_ceilings = Self::reserve_ceilings(country);
 
         // Trophy reputation boost: league champions and promoted sides get
         // a durable rep bump that lingers for 2 seasons (see Achievement).
@@ -230,6 +231,11 @@ impl CountryResult {
                 // rather than two huge wins.
                 let promo_slots = league.settings.promotion_spots as usize;
                 let lower_tier_with_promo = league.settings.tier > 1 && promo_slots > 0;
+                // A reserve side topping the table stays down; the next
+                // eligible side goes up in its place.
+                let promotable = |team_id: u32| {
+                    Self::may_go_up(&reserve_ceilings, team_id, league.settings.tier.saturating_sub(1))
+                };
                 // Grouped competitions with a playoff crown their champion
                 // through the bracket (MLS Cup, Torneo Apertura/Clausura)
                 // — topping a zone/conference table is not a title, so no
@@ -248,7 +254,7 @@ impl CountryResult {
                         HappinessEventType::TrophyWon,
                         trophy_prestige,
                     ));
-                    if lower_tier_with_promo {
+                    if lower_tier_with_promo && promotable(champion.team_id) {
                         // Lower-league champions are *also* promoted — the
                         // promotion emotion is the dominant one.
                         events.push((
@@ -258,10 +264,16 @@ impl CountryResult {
                         ));
                     }
                 }
-                if promo_slots > 0 {
+                if lower_tier_with_promo {
                     // Non-title promoted clubs (positions 2..=promo_slots).
                     // Champion already handled above with the dual emit.
-                    for row in table.iter().take(promo_slots).skip(1) {
+                    let top = table[0].team_id;
+                    for row in table
+                        .iter()
+                        .filter(|r| promotable(r.team_id))
+                        .take(promo_slots)
+                        .filter(|r| r.team_id != top)
+                    {
                         trophies.push((row.team_id, AchievementType::Promotion));
                         events.push((row.team_id, HappinessEventType::PromotionCelebration, 1.0));
                     }
@@ -1954,6 +1966,7 @@ impl CountryResult {
         // market's promotion add-on clauses key on the buying club, and
         // this pipeline is the only place that knows who went up.
         let mut promoted_club_ids: Vec<u32> = Vec::new();
+        let reserve_ceilings = Self::reserve_ceilings(country);
 
         // Split-season grouped competitions (Argentine Primera) relegate
         // by the ANNUAL cross-zone table — both drops can come from one
@@ -1962,87 +1975,34 @@ impl CountryResult {
         // loop below.
         let (split_pairs, split_handled) =
             Self::split_competition_swap_pairs(&country.leagues.leagues);
-        for (tier1_id, tier2_id, promotion_spots, relegated, promoted) in split_pairs {
+        for (tier1_id, tier2_id, relegated, promoted) in split_pairs {
+            let relegated: Vec<(u32, u32)> = relegated.iter().map(|&t| (t, tier2_id)).collect();
+            let promoted: Vec<(u32, u32)> = promoted.iter().map(|&t| (t, tier2_id)).collect();
             Self::apply_promotion_relegation_swap(
                 country,
                 date,
                 tier1_id,
-                tier2_id,
-                promotion_spots,
                 &relegated,
                 &promoted,
                 &mut promoted_club_ids,
             );
         }
 
-        // For each league with relegation_spots > 0, find its paired league
         for &(tier1_id, tier1_tier, relegation_spots, _) in &league_info {
             if relegation_spots == 0 || tier1_tier == 0 || split_handled.contains(&tier1_id) {
                 continue;
             }
-
-            // Find the paired lower league — group-aware, so a two-zone top
-            // flight maps each zone to its own second-division group instead
-            // of every zone piling into the first one.
-            let (tier2_id, promotion_spots) =
-                match LeagueLadder::new(&country.leagues.leagues).lower_partner(tier1_id) {
-                    Some(l) => (l.id, l.settings.promotion_spots),
-                    None => continue,
-                };
-
-            let nominal_swap = relegation_spots.min(promotion_spots) as usize;
-
-            // Read final tables
-            let relegated_candidates: Vec<u32> = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier1_id)
-                .and_then(|l| l.final_table.as_ref())
-                .map(|table| {
-                    table
-                        .iter()
-                        .rev()
-                        .take(nominal_swap)
-                        .map(|r| r.team_id)
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let promoted_candidates: Vec<u32> = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier2_id)
-                .and_then(|l| l.final_table.as_ref())
-                .map(|table| table.iter().take(nominal_swap).map(|r| r.team_id).collect())
-                .unwrap_or_default();
-
-            // Must balance: never relegate more than we promote (or vice versa)
-            // or the top league silently shrinks each season.
-            let swap_count = relegated_candidates.len().min(promoted_candidates.len());
-            if swap_count == 0 {
+            let Some((relegated, promoted)) =
+                Self::boundary_swap(&country.leagues.leagues, tier1_id, &reserve_ceilings)
+            else {
                 continue;
-            }
-            if swap_count < nominal_swap {
-                info!(
-                    "⚠️ Promotion/relegation pair {}→{} truncated: wanted {}, got {} (missing final_table entries)",
-                    tier1_id, tier2_id, nominal_swap, swap_count
-                );
-            }
-            let relegated_team_ids: Vec<u32> =
-                relegated_candidates.into_iter().take(swap_count).collect();
-            let promoted_team_ids: Vec<u32> =
-                promoted_candidates.into_iter().take(swap_count).collect();
-
+            };
             Self::apply_promotion_relegation_swap(
                 country,
                 date,
                 tier1_id,
-                tier2_id,
-                promotion_spots,
-                &relegated_team_ids,
-                &promoted_team_ids,
+                &relegated,
+                &promoted,
                 &mut promoted_club_ids,
             );
         }
@@ -2058,18 +2018,170 @@ impl CountryResult {
         }
     }
 
+    /// The season-end swap across `tier1_id`'s lower boundary, read off the
+    /// frozen final tables: `(relegated, promoted)` as `(team, lower
+    /// league)` pairs — the league a relegated side drops into, or the one a
+    /// promoted side leaves.
+    ///
+    /// Each lower league promotes its share from `LeagueLadder::
+    /// relegation_split` and takes back exactly as many relegated sides, so
+    /// a tier split into groups keeps every group at constant size. The
+    /// relegated sides are dealt out worst-first, one per group in turn.
+    ///
+    /// Reserve sides never go up into their first team's tier (Jong Ajax
+    /// below Ajax, Castilla below Real Madrid); the next eligible side in
+    /// the table takes the place.
+    #[allow(clippy::type_complexity)]
+    fn boundary_swap(
+        leagues: &[crate::league::League],
+        tier1_id: u32,
+        reserve_ceilings: &HashMap<u32, u8>,
+    ) -> Option<(Vec<(u32, u32)>, Vec<(u32, u32)>)> {
+        let upper = leagues.iter().find(|l| l.id == tier1_id)?;
+        let split: Vec<(u32, usize)> = LeagueLadder::new(leagues)
+            .relegation_split(upper)
+            .into_iter()
+            .map(|(lower, places)| (lower.id, places))
+            .collect();
+        let nominal_swap: usize = split.iter().map(|&(_, places)| places).sum();
+        if nominal_swap == 0 {
+            return None;
+        }
+
+        // Worst first.
+        let relegated_candidates: Vec<u32> = upper
+            .final_table
+            .as_ref()
+            .map(|table| {
+                table
+                    .iter()
+                    .rev()
+                    .take(nominal_swap)
+                    .map(|r| r.team_id)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Champions first across the lower leagues, then runners-up, so a
+        // truncated swap drops the lowest-placed promotions.
+        let lower_tops: Vec<(u32, Vec<u32>)> = split
+            .iter()
+            .map(|&(lower_id, places)| {
+                let top = leagues
+                    .iter()
+                    .find(|l| l.id == lower_id)
+                    .and_then(|l| l.final_table.as_ref())
+                    .map(|t| {
+                        t.iter()
+                            .map(|r| r.team_id)
+                            .filter(|&team| {
+                                Self::may_go_up(reserve_ceilings, team, upper.settings.tier)
+                            })
+                            .take(places)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (lower_id, top)
+            })
+            .collect();
+        let deepest = lower_tops.iter().map(|(_, top)| top.len()).max().unwrap_or(0);
+        let mut promoted: Vec<(u32, u32)> = Vec::new();
+        for rank in 0..deepest {
+            for (lower_id, top) in &lower_tops {
+                if let Some(&team) = top.get(rank) {
+                    promoted.push((team, *lower_id));
+                }
+            }
+        }
+
+        // Must balance: never relegate more than we promote (or vice versa)
+        // or the top league silently shrinks each season.
+        let swap_count = relegated_candidates.len().min(promoted.len());
+        if swap_count == 0 {
+            return None;
+        }
+        if swap_count < nominal_swap {
+            info!(
+                "⚠️ Promotion/relegation below {} truncated: wanted {}, got {} (missing final_table entries)",
+                tier1_id, nominal_swap, swap_count
+            );
+        }
+        promoted.truncate(swap_count);
+
+        // Each lower league takes back as many sides as it sent up.
+        let mut vacancies: Vec<(u32, usize)> = split
+            .iter()
+            .map(|&(lower_id, _)| {
+                let sent = promoted.iter().filter(|&&(_, from)| from == lower_id).count();
+                (lower_id, sent)
+            })
+            .collect();
+        let lowers = vacancies.len();
+        let mut relegated: Vec<(u32, u32)> = Vec::with_capacity(swap_count);
+        let mut next = 0;
+        for team in relegated_candidates.into_iter().take(swap_count) {
+            while vacancies[next % lowers].1 == 0 {
+                next += 1;
+            }
+            let slot = &mut vacancies[next % lowers];
+            slot.1 -= 1;
+            relegated.push((team, slot.0));
+            next += 1;
+        }
+
+        Some((relegated, promoted))
+    }
+
+    /// Every reserve side in a league (B team, U23, Jong) mapped to the tier
+    /// its club's first team plays in.
+    fn reserve_ceilings(country: &Country) -> HashMap<u32, u8> {
+        let tier_of: HashMap<u32, u8> = country
+            .leagues
+            .leagues
+            .iter()
+            .map(|l| (l.id, l.settings.tier))
+            .collect();
+        let mut ceilings = HashMap::new();
+        for club in &country.clubs {
+            let Some(main_tier) = club
+                .teams
+                .teams
+                .iter()
+                .find(|t| t.team_type == TeamType::Main)
+                .and_then(|t| t.league_id)
+                .and_then(|id| tier_of.get(&id).copied())
+            else {
+                continue;
+            };
+            for team in club.teams.teams.iter() {
+                if team.team_type != TeamType::Main && team.league_id.is_some() {
+                    ceilings.insert(team.id, main_tier);
+                }
+            }
+        }
+        ceilings
+    }
+
+    /// Whether `team_id` may be promoted into `tier`: a reserve side must
+    /// stay strictly below its first team.
+    fn may_go_up(reserve_ceilings: &HashMap<u32, u8>, team_id: u32, tier: u8) -> bool {
+        reserve_ceilings
+            .get(&team_id)
+            .is_none_or(|&main_tier| tier > main_tier)
+    }
+
     /// Swap pairs for split-season grouped competitions (Argentine
     /// Primera): relegation reads the ANNUAL cross-zone table, so the
     /// dropped sides may both come from one zone. Each returned pair is
-    /// `(zone_id, group_id, promotion_spots, relegated, promoted)` where
-    /// the promoted side fills the exact vacancy the relegated side left
-    /// (keeping both the zones and the lower groups at constant size).
+    /// `(zone_id, group_id, relegated, promoted)` where the promoted side
+    /// fills the exact vacancy the relegated side left (keeping both the
+    /// zones and the lower groups at constant size).
     /// The second value lists every zone id the split path claimed, so
     /// the generic per-league loop skips them.
     #[allow(clippy::type_complexity)]
     fn split_competition_swap_pairs(
         leagues: &[crate::league::League],
-    ) -> (Vec<(u32, u32, u8, Vec<u32>, Vec<u32>)>, HashSet<u32>) {
+    ) -> (Vec<(u32, u32, Vec<u32>, Vec<u32>)>, HashSet<u32>) {
         use std::collections::BTreeMap;
 
         // competition name → zone leagues (tier-1, split, grouped).
@@ -2086,7 +2198,7 @@ impl CountryResult {
             }
         }
 
-        let mut pairs: Vec<(u32, u32, u8, Vec<u32>, Vec<u32>)> = Vec::new();
+        let mut pairs: Vec<(u32, u32, Vec<u32>, Vec<u32>)> = Vec::new();
         let mut handled: HashSet<u32> = HashSet::new();
 
         for (_, mut zones) in competitions {
@@ -2126,10 +2238,10 @@ impl CountryResult {
             // Paired lower-division groups, one per zone (same mapping the
             // generic path uses).
             let ladder = LeagueLadder::new(leagues);
-            let groups: Vec<(u32, u8)> = zones
+            let groups: Vec<u32> = zones
                 .iter()
                 .filter_map(|z| ladder.lower_partner(z.id))
-                .map(|l| (l.id, l.settings.promotion_spots))
+                .map(|l| l.id)
                 .collect();
             if groups.len() != zones.len() {
                 continue;
@@ -2151,7 +2263,7 @@ impl CountryResult {
             // Pair k-th relegated side with the k-th group: its champion
             // is promoted straight into the vacated zone.
             for (i, &(rel_team, rel_zone)) in relegated.iter().enumerate() {
-                let (group_id, promotion_spots) = groups[i];
+                let group_id = groups[i];
                 let promoted: Vec<u32> = leagues
                     .iter()
                     .find(|l| l.id == group_id)
@@ -2161,13 +2273,7 @@ impl CountryResult {
                 if promoted.is_empty() {
                     continue;
                 }
-                pairs.push((
-                    rel_zone,
-                    group_id,
-                    promotion_spots,
-                    vec![rel_team],
-                    promoted,
-                ));
+                pairs.push((rel_zone, group_id, vec![rel_team], promoted));
             }
             for z in &zones {
                 handled.insert(z.id);
@@ -2177,21 +2283,33 @@ impl CountryResult {
         (pairs, handled)
     }
 
-    /// Apply one promotion/relegation swap between a top league and its
-    /// paired lower league: move the teams, fire the season-outcome events
+    /// Apply one promotion/relegation swap between a top league and the
+    /// league(s) below it: move the teams, fire the season-outcome events
     /// and contract clauses, move sub-teams to the matching youth leagues,
     /// and record the promoted club ids for transfer-clause settlement.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `relegated` pairs each side with the lower league it drops into and
+    /// `promoted` each side with the lower league it leaves — one call
+    /// covers every lower group, so survival bonuses are paid once.
     fn apply_promotion_relegation_swap(
         country: &mut Country,
         date: NaiveDate,
         tier1_id: u32,
-        tier2_id: u32,
-        promotion_spots: u8,
-        relegated_team_ids: &[u32],
-        promoted_team_ids: &[u32],
+        relegated: &[(u32, u32)],
+        promoted: &[(u32, u32)],
         promoted_club_ids: &mut Vec<u32>,
     ) {
+        let relegated_to: HashMap<u32, u32> = relegated.iter().copied().collect();
+        let relegated_team_ids: Vec<u32> = relegated.iter().map(|&(team, _)| team).collect();
+        let promoted_team_ids: Vec<u32> = promoted.iter().map(|&(team, _)| team).collect();
+        let mut lower_ids: Vec<u32> = relegated
+            .iter()
+            .chain(promoted)
+            .map(|&(_, lower)| lower)
+            .collect();
+        lower_ids.sort_unstable();
+        lower_ids.dedup();
+
         let swap_count = relegated_team_ids.len().max(1);
 
         promoted_club_ids.extend(
@@ -2247,13 +2365,14 @@ impl CountryResult {
             .leagues
             .leagues
             .iter()
-            .find(|l| l.id == tier2_id)
-            .and_then(|l| l.final_table.as_ref())
-            .map(|t| {
-                let window = (promotion_spots as usize + 2).min(t.len());
-                t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>()
+            .filter(|l| lower_ids.contains(&l.id))
+            .filter_map(|l| {
+                let t = l.final_table.as_ref()?;
+                let window = (l.settings.promotion_spots as usize + 2).min(t.len());
+                Some(t.iter().take(window).map(|r| r.team_id).collect::<Vec<_>>())
             })
-            .unwrap_or_default();
+            .flatten()
+            .collect();
 
         // Division the relegated clubs are falling out of — the pool
         // their parachute payments are a share of.
@@ -2274,13 +2393,13 @@ impl CountryResult {
             let mut bonus_total: i64 = 0;
 
             for team in &mut club.teams.teams {
-                if relegated_team_ids.contains(&team.id) {
+                if let Some(&lower_id) = relegated_to.get(&team.id) {
                     info!(
                         "⬇️ Relegation: team {} ({}) moves to league {}",
-                        team.name, team.id, tier2_id
+                        team.name, team.id, lower_id
                     );
-                    team.move_to_league(tier2_id);
-                    new_main_league_id = Some(tier2_id);
+                    team.move_to_league(lower_id);
+                    new_main_league_id = Some(lower_id);
                     // Year-defining wound — emit per player. The promo
                     // counterpart already ran in season_awards via the
                     // PromotionCelebration emit; we don't duplicate the
@@ -2384,7 +2503,7 @@ impl CountryResult {
                 .any(|t| promoted_team_ids.contains(&t.id));
             if club_was_in_window && !club_was_promoted {
                 for team in &mut club.teams.teams {
-                    if team.league_id == Some(tier2_id) {
+                    if team.league_id.is_some_and(|id| lower_ids.contains(&id)) {
                         for player in team.players.iter_mut() {
                             if let Some(c) = player.contract.as_mut() {
                                 let _ = c.take_non_promotion_release();
@@ -2737,12 +2856,12 @@ mod tests {
         // its champion is promoted into that exact zone.
         assert_eq!(pairs[0].0, 100, "zone the vacancy opened in");
         assert_eq!(pairs[0].1, 200);
-        assert_eq!(pairs[0].3, vec![13]);
-        assert_eq!(pairs[0].4, vec![31]);
+        assert_eq!(pairs[0].2, vec![13]);
+        assert_eq!(pairs[0].3, vec![31]);
         assert_eq!(pairs[1].0, 101);
         assert_eq!(pairs[1].1, 201);
-        assert_eq!(pairs[1].3, vec![23]);
-        assert_eq!(pairs[1].4, vec![41]);
+        assert_eq!(pairs[1].2, vec![23]);
+        assert_eq!(pairs[1].3, vec![41]);
     }
 
     #[test]
@@ -2759,10 +2878,10 @@ mod tests {
         let (pairs, _) = CountryResult::split_competition_swap_pairs(&leagues);
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|p| p.0 == 100), "both vacancies in Zona A");
-        let mut relegated: Vec<u32> = pairs.iter().flat_map(|p| p.3.clone()).collect();
+        let mut relegated: Vec<u32> = pairs.iter().flat_map(|p| p.2.clone()).collect();
         relegated.sort_unstable();
         assert_eq!(relegated, vec![12, 13]);
-        let mut promoted: Vec<u32> = pairs.iter().flat_map(|p| p.4.clone()).collect();
+        let mut promoted: Vec<u32> = pairs.iter().flat_map(|p| p.3.clone()).collect();
         promoted.sort_unstable();
         assert_eq!(promoted, vec![31, 41]);
     }
@@ -2837,6 +2956,48 @@ mod tests {
             LeagueLadder::new(&leagues).relegated_from_table(&leagues[0]),
             0
         );
+    }
+
+    #[test]
+    fn single_division_relegates_into_every_group_below() {
+        // Segunda above Primera Federación's two groups: four go down,
+        // two come up from each group.
+        let leagues = vec![
+            league_with_group(10, 2, 3, 4, None, ""),
+            league_with_group(20, 3, 2, 0, Some("Primera Federación"), "Grupo 1"),
+            league_with_group(21, 3, 2, 0, Some("Primera Federación"), "Grupo 2"),
+        ];
+        let ladder = LeagueLadder::new(&leagues);
+        let split: Vec<(u32, usize)> = ladder
+            .relegation_split(&leagues[0])
+            .into_iter()
+            .map(|(l, places)| (l.id, places))
+            .collect();
+        assert_eq!(split, vec![(20, 2), (21, 2)]);
+        assert_eq!(ladder.relegated_from_table(&leagues[0]), 4);
+        assert_eq!(ladder.promoted_from_table(&leagues[1]), 2);
+        assert_eq!(ladder.promoted_from_table(&leagues[2]), 2);
+    }
+
+    #[test]
+    fn group_promotion_places_go_champions_first() {
+        // Three places over two groups that promote two each: both
+        // champions, then the first group's runner-up.
+        let mut leagues = vec![
+            league_with_group(10, 2, 3, 3, None, ""),
+            league_with_group(20, 3, 2, 0, Some("Primera Federación"), "Grupo 1"),
+            league_with_group(21, 3, 2, 0, Some("Primera Federación"), "Grupo 2"),
+        ];
+        let ladder = LeagueLadder::new(&leagues);
+        assert_eq!(ladder.relegated_from_table(&leagues[0]), 3);
+        assert_eq!(ladder.promoted_from_table(&leagues[1]), 2);
+        assert_eq!(ladder.promoted_from_table(&leagues[2]), 1);
+
+        // A single place goes to the first group's champion alone.
+        leagues[0].settings.relegation_spots = 1;
+        let ladder = LeagueLadder::new(&leagues);
+        assert_eq!(ladder.promoted_from_table(&leagues[1]), 1);
+        assert_eq!(ladder.promoted_from_table(&leagues[2]), 0);
     }
 
     fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {
@@ -3400,6 +3561,139 @@ mod tests {
                 assert_eq!(team.league_id, Some(1));
             }
         }
+    }
+
+    #[test]
+    fn a_reserve_side_never_goes_up_into_its_first_teams_tier() {
+        // Club 10's B team (100) tops tier 2 while its first team plays in
+        // tier 1, so the runner-up (21) takes the one promotion place.
+        let b_team = TeamBuilder::new()
+            .id(100)
+            .league_id(Some(2))
+            .club_id(10)
+            .name("Team100".to_string())
+            .slug("team100".to_string())
+            .team_type(TeamType::B)
+            .players(PlayerCollection::new(Vec::new()))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(make_training_schedule())
+            .build()
+            .unwrap();
+        let mut clubs = vec![make_club(10, vec![make_simple_team(10, 10, 1), b_team])];
+        clubs.extend((11u32..=13).map(|id| make_club(id, vec![make_simple_team(id, id, 1)])));
+        clubs.extend((21u32..=23).map(|id| make_club(id, vec![make_simple_team(id, id, 2)])));
+        let tier1 = make_league_with_settings(
+            1,
+            1,
+            0,
+            1,
+            vec![(10, 30, 70), (11, 30, 60), (12, 30, 30), (13, 30, 20)],
+        );
+        let tier2 = make_league_with_settings(
+            2,
+            2,
+            1,
+            0,
+            vec![(100, 30, 80), (21, 30, 70), (22, 30, 40), (23, 30, 25)],
+        );
+        let mut country = build_country(clubs, vec![tier1, tier2]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        let league_of = |team_id: u32| {
+            country
+                .clubs
+                .iter()
+                .flat_map(|c| c.teams.iter())
+                .find(|t| t.id == team_id)
+                .and_then(|t| t.league_id)
+        };
+        assert_eq!(league_of(100), Some(2), "the B team stays below its first team");
+        assert_eq!(league_of(21), Some(1), "the next eligible side goes up");
+        assert_eq!(league_of(13), Some(2));
+        assert_eq!(league_of(10), Some(1));
+    }
+
+    #[test]
+    fn single_division_swaps_with_every_group_below() {
+        // League 1 (teams 10..=15) drops its bottom four into two groups
+        // (leagues 2 and 3) that promote two each.
+        let mut clubs: Vec<Club> = (10u32..=15)
+            .map(|id| make_club(id, vec![make_simple_team(id, id, 1)]))
+            .collect();
+        clubs.extend((20u32..=23).map(|id| make_club(id, vec![make_simple_team(id, id, 2)])));
+        clubs.extend((30u32..=33).map(|id| make_club(id, vec![make_simple_team(id, id, 3)])));
+        let upper = make_league_with_settings(
+            1,
+            2,
+            0,
+            4,
+            vec![
+                (10, 30, 70),
+                (11, 30, 60),
+                (12, 30, 50),
+                (13, 30, 40),
+                (14, 30, 30),
+                (15, 30, 20),
+            ],
+        );
+        let mut groups = vec![
+            make_league_with_settings(
+                2,
+                3,
+                2,
+                0,
+                vec![(20, 30, 80), (21, 30, 70), (22, 30, 40), (23, 30, 25)],
+            ),
+            make_league_with_settings(
+                3,
+                3,
+                2,
+                0,
+                vec![(30, 30, 80), (31, 30, 70), (32, 30, 40), (33, 30, 25)],
+            ),
+        ];
+        for (group, name) in groups.iter_mut().zip(["Grupo 1", "Grupo 2"]) {
+            group.settings.league_group = Some(crate::league::LeagueGroup {
+                name: name.to_string(),
+                competition: "Primera Federación".to_string(),
+                total_groups: 2,
+                playoff: None,
+            });
+        }
+        let mut leagues = vec![upper];
+        leagues.extend(groups);
+        let mut country = build_country(clubs, leagues);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        let league_of = |club_id: u32| {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .and_then(|c| c.teams.iter().next())
+                .and_then(|t| t.league_id)
+        };
+        // The top two of BOTH groups go up.
+        for id in [20, 21, 30, 31] {
+            assert_eq!(league_of(id), Some(1), "team {id} promoted");
+        }
+        // The bottom four are dealt out worst-first, one group at a time.
+        assert_eq!(league_of(15), Some(2));
+        assert_eq!(league_of(14), Some(3));
+        assert_eq!(league_of(13), Some(2));
+        assert_eq!(league_of(12), Some(3));
+        assert_eq!(league_of(11), Some(1));
+        // Every division keeps its size.
+        let size = |league_id: u32| {
+            [10u32, 11, 12, 13, 14, 15, 20, 21, 22, 23, 30, 31, 32, 33]
+                .into_iter()
+                .filter(|&id| league_of(id) == Some(league_id))
+                .count()
+        };
+        assert_eq!((size(1), size(2), size(3)), (6, 4, 4));
     }
 
     // ── Parent-side loan renewals ─────────────────────────────────

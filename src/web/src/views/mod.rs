@@ -1,5 +1,7 @@
 use crate::I18n;
+use crate::leagues::address::LeagueAddress;
 use core::Club;
+use core::Country;
 use core::SimulatorData;
 use core::league::League;
 
@@ -52,6 +54,21 @@ pub fn league_display_name(league: &League, i18n: &I18n, simulator_data: &Simula
         league.name.clone()
     } else {
         format!("{} {}", country_adj, league.name)
+    }
+}
+
+/// The flag beside the header's subtitle, leading to the country's leagues.
+pub struct SubTitleFlag {
+    pub code: String,
+    pub url: String,
+}
+
+impl SubTitleFlag {
+    pub fn of(country: &Country, lang: &str) -> Self {
+        SubTitleFlag {
+            code: country.code.clone(),
+            url: format!("/{}/countries/{}/leagues", lang, country.slug),
+        }
     }
 }
 
@@ -256,9 +273,10 @@ fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection
 }
 
 /// Build the country's league-pyramid menu section: each league links to
-/// `/leagues/{slug}`, collapsing to the first two with a toggle when there
-/// are more. Active state is derived from `current_path`, so the same
-/// builder serves the league, country and cup pages.
+/// its page under `p.country_slug`, collapsing to the first two with a
+/// toggle when there are more. Active state is derived from
+/// `current_path`, so the same builder serves the league, country and cup
+/// pages.
 fn leagues_section(p: &MenuParams, country_leagues: &[(&str, &str)]) -> MenuSection {
     let is_active = |url: &str| -> bool {
         p.current_path == url || p.current_path.starts_with(&format!("{}/", url))
@@ -266,7 +284,7 @@ fn leagues_section(p: &MenuParams, country_leagues: &[(&str, &str)]) -> MenuSect
     let items: Vec<MenuItem> = country_leagues
         .iter()
         .map(|(name, slug)| {
-            let url = format!("/{}/leagues/{}", p.lang, slug);
+            let url = LeagueAddress::new(p.country_slug, slug).url(p.lang);
             MenuItem {
                 active: is_active(&url),
                 title: name.to_string(),
@@ -410,7 +428,7 @@ pub fn team_menu(
             leagues
                 .iter()
                 .map(|(league_name, league_slug)| {
-                    let league_url = format!("/{}/leagues/{}", p.lang, league_slug);
+                    let league_url = LeagueAddress::new(p.country_slug, league_slug).url(p.lang);
                     MenuItem {
                         active: false,
                         title: league_name.to_string(),

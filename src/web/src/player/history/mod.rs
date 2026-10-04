@@ -3,9 +3,10 @@ pub mod routes;
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::friendly_source::FriendlySourceSlug;
 use crate::common::slug::{PlayerPage, resolve_player_page};
+use crate::leagues::address::LeagueAddress;
 use crate::player::events::PlayerEventsCounter;
 use crate::player::newspaper::PlayerNewsCounter;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -35,7 +36,7 @@ pub struct PlayerHistoryTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -74,7 +75,8 @@ pub struct PlayerHistorySeasonItem {
     pub country_name: String,
     pub country_slug: String,
     pub league_name: String,
-    pub league_slug: String,
+    /// Empty when no league answers to the row's slug any more.
+    pub league_url: String,
     pub breakdown: Vec<PlayerHistoryCompetitionStats>,
 }
 
@@ -480,7 +482,9 @@ pub async fn player_history_action(
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
                 league_name,
-                league_slug,
+                league_url: LeagueAddress::by_slug(simulator_data, &league_slug)
+                    .map(|address| address.url(&route_params.lang))
+                    .unwrap_or_default(),
                 breakdown,
             }
         })
@@ -514,7 +518,7 @@ pub async fn player_history_action(
             sub_title_suffix: String::new(),
             sub_title,
             sub_title_link: String::new(),
-            sub_title_country_code: String::new(),
+            sub_title_flag: None,
             header_color: "#808080".to_string(),
             foreground_color: "#ffffff".to_string(),
             menu_sections: Vec::new(),
@@ -552,7 +556,7 @@ pub async fn player_history_action(
             sub_title_suffix: String::new(),
             sub_title: team.name.clone(),
             sub_title_link: format!("/{}/teams/{}", route_params.lang, team.slug),
-            sub_title_country_code: String::new(),
+            sub_title_flag: None,
             header_color: simulator_data
                 .club(team.club_id)
                 .map(|c| c.colors.background.clone())

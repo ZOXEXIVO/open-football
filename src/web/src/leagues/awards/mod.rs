@@ -2,12 +2,13 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
+use crate::leagues::address::{LeagueAddress, LeaguePage};
 use crate::leagues::newspaper::LeagueNewspaperCounter;
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::PlayerFieldPositionGroup;
 use core::SimulatorData;
 use core::league::{
@@ -20,6 +21,7 @@ use std::collections::HashMap;
 #[derive(Deserialize)]
 pub struct LeagueAwardsRequest {
     pub lang: String,
+    pub country_slug: String,
     pub league_slug: String,
 }
 
@@ -35,13 +37,13 @@ pub struct LeagueAwardsTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub i18n: I18n,
     pub lang: String,
-    pub league_slug: String,
+    pub league_url: String,
     /// Monthly editions on the division's shelf, for the tabbar badge.
     /// Every league template that renders the tabbar carries this —
     /// there is no shared base struct, so a new league tab must add it
@@ -172,7 +174,7 @@ pub struct SeasonNamedAward {
 pub async fn league_awards_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueAwardsRequest>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
@@ -180,25 +182,17 @@ pub async fn league_awards_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
-
-    let league_id = indexes
-        .slug_indexes
-        .get_league_by_slug(&route_params.league_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("League '{}' not found", route_params.league_slug))
-        })?;
-
-    let league = simulator_data
-        .league(league_id)
-        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", league_id)))?;
-
-    let country = simulator_data.country(league.country_id).ok_or_else(|| {
-        ApiError::NotFound(format!("Country with ID {} not found", league.country_id))
-    })?;
+    let (league, country) = match LeagueAddress::resolve(
+        simulator_data,
+        &route_params.lang,
+        &route_params.country_slug,
+        &route_params.league_slug,
+        "/awards",
+    )? {
+        LeaguePage::Found(league, country) => (league, country),
+        LeaguePage::Moved(response) => return Ok(response),
+    };
+    let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
 
     let league_title = views::league_display_name(league, &i18n, simulator_data);
 
@@ -328,7 +322,7 @@ pub async fn league_awards_action(
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_country_code: country.code.clone(),
+        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
@@ -341,7 +335,7 @@ pub async fn league_awards_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("/{}/leagues/{}/awards", route_params.lang, league.slug);
+            let current_path = format!("{}/awards", league_url);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -363,7 +357,7 @@ pub async fn league_awards_action(
                     .collect::<Vec<_>>(),
             )
         },
-        league_slug: league.slug.clone(),
+        league_url,
         newspaper_count: LeagueNewspaperCounter::count(league),
         hero_player,
         young_hero_player,
@@ -384,7 +378,8 @@ pub async fn league_awards_action(
         season_highlights,
         lang: route_params.lang,
         i18n,
-    })
+    }
+    .into_response())
 }
 
 fn is_player_generated(data: &SimulatorData, player_id: u32) -> bool {

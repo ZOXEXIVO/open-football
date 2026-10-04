@@ -1,12 +1,13 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
+use crate::leagues::address::{LeagueAddress, LeaguePage};
 use crate::teams::newspaper::{IssueView, PaperFor, PressDesk, PressFocus};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::SimulatorData;
 use core::league::League;
 use serde::Deserialize;
@@ -14,6 +15,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct LeagueNewspaperRequest {
     pub lang: String,
+    pub country_slug: String,
     pub league_slug: String,
 }
 
@@ -33,7 +35,7 @@ pub struct LeagueNewspaperTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -41,7 +43,7 @@ pub struct LeagueNewspaperTemplate {
     /// Press copy, scoped apart from `i18n`.
     pub news: NewsI18n,
     pub lang: String,
-    pub league_slug: String,
+    pub league_url: String,
     /// Editions on the shelf, for the tabbar badge.
     pub newspaper_count: usize,
     /// Newest month first. Empty until the division's first press run.
@@ -51,7 +53,7 @@ pub struct LeagueNewspaperTemplate {
 pub async fn league_newspaper_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueNewspaperRequest>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let news = state.news_i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -60,25 +62,17 @@ pub async fn league_newspaper_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
-
-    let league_id = indexes
-        .slug_indexes
-        .get_league_by_slug(&route_params.league_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("League '{}' not found", route_params.league_slug))
-        })?;
-
-    let league = simulator_data
-        .league(league_id)
-        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", league_id)))?;
-
-    let country = simulator_data.country(league.country_id).ok_or_else(|| {
-        ApiError::NotFound(format!("Country with ID {} not found", league.country_id))
-    })?;
+    let (league, country) = match LeagueAddress::resolve(
+        simulator_data,
+        &route_params.lang,
+        &route_params.country_slug,
+        &route_params.league_slug,
+        "/newspaper",
+    )? {
+        LeaguePage::Found(league, country) => (league, country),
+        LeaguePage::Moved(response) => return Ok(response),
+    };
+    let league_url = LeagueAddress::new(&country.slug, &league.slug).url(&route_params.lang);
 
     let league_title = views::league_display_name(league, &i18n, simulator_data);
     let masthead = PressDesk::masthead(league.newsroom.masthead_key(), &league.name, &news);
@@ -95,7 +89,7 @@ pub async fn league_newspaper_action(
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_country_code: country.code.clone(),
+        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections: {
@@ -108,7 +102,7 @@ pub async fn league_newspaper_action(
                 .collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            let current_path = format!("/{}/leagues/{}/newspaper", route_params.lang, league.slug);
+            let current_path = format!("{}/newspaper", league_url);
             let mp = views::MenuParams {
                 i18n: &i18n,
                 lang: &route_params.lang,
@@ -130,13 +124,14 @@ pub async fn league_newspaper_action(
                     .collect::<Vec<_>>(),
             )
         },
-        league_slug: league.slug.clone(),
+        league_url,
         newspaper_count: LeagueNewspaperCounter::count(league),
         issues,
         lang: route_params.lang,
         i18n,
         news,
-    })
+    }
+    .into_response())
 }
 
 /// How many monthly editions the division has on the shelf, for the
@@ -190,6 +185,7 @@ impl LeaguePress {
 mod tests {
     use super::LeagueNewspaperTemplate;
     use crate::teams::newspaper::{IssueView, PortraitView, Prose, Span, StoryView};
+    use crate::views::SubTitleFlag;
     use crate::{I18n, NewsI18n};
     use askama::Template;
     use std::collections::HashMap;
@@ -376,14 +372,17 @@ mod tests {
                 sub_title_suffix: String::new(),
                 sub_title: "Italy".to_string(),
                 sub_title_link: "/en/countries/italy".to_string(),
-                sub_title_country_code: "it".to_string(),
+                sub_title_flag: Some(SubTitleFlag {
+                    code: "it".to_string(),
+                    url: "/en/countries/italy/leagues".to_string(),
+                }),
                 header_color: "#1e272d".to_string(),
                 foreground_color: "#ffffff".to_string(),
                 menu_sections: Vec::new(),
                 i18n: I18n::for_test(Self::chrome()),
                 news: NewsI18n::for_test(Self::press()),
                 lang: "en".to_string(),
-                league_slug: "italian-serie-a".to_string(),
+                league_url: "/en/leagues/italy/italian-serie-a".to_string(),
                 newspaper_count: issues.len(),
                 issues,
             }
@@ -462,7 +461,7 @@ mod tests {
 
         assert_eq!(printed, 2);
         assert!(html.contains(&format!("<span class=\"fm-tab-badge\">{}</span>", printed)));
-        assert!(html.contains("/en/leagues/italian-serie-a/newspaper"));
+        assert!(html.contains("/en/leagues/italy/italian-serie-a/newspaper"));
         assert!(
             html.contains("np-archive-rule"),
             "back issues are ruled off"
@@ -478,6 +477,17 @@ mod tests {
         assert!(html.contains("Nothing has been printed about this division yet."));
         assert!(!html.contains("np-sheet"));
         assert!(!html.contains("fm-tab-badge"));
+    }
+
+    /// The header flag leads to the country's leagues by its slug; the
+    /// code it is drawn with is not a country address.
+    #[test]
+    fn the_header_flag_leads_to_the_countrys_leagues() {
+        let html = Page::template(Vec::new()).render().unwrap();
+
+        assert!(html.contains(r#"href="/en/countries/italy/leagues""#));
+        assert!(html.contains("flag flag-it"));
+        assert!(!html.contains("/countries/it/"));
     }
 
     /// Writes a self-contained copy of the division's press page so it

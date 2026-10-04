@@ -1,7 +1,8 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection};
+use crate::leagues::address::LeagueAddress;
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -27,7 +28,7 @@ pub struct PlayoffHistoryTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -82,10 +83,10 @@ pub async fn playoff_history_action(
     // The history route only serves playoffs; a normal league slug is
     // bounced to its standings page.
     if !league.is_cup {
-        return Ok(
-            Redirect::to(&format!("/{}/leagues/{}", route_params.lang, league.slug))
-                .into_response(),
-        );
+        return Ok(Redirect::to(
+            &LeagueAddress::of(simulator_data, league).url(&route_params.lang),
+        )
+        .into_response());
     }
 
     let country = simulator_data.country(league.country_id).unwrap();
@@ -192,7 +193,7 @@ pub async fn playoff_history_action(
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/{}/countries/{}", route_params.lang, country.slug),
-        sub_title_country_code: country.code.clone(),
+        sub_title_flag: Some(SubTitleFlag::of(country, &route_params.lang)),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
         menu_sections,

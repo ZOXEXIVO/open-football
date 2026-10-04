@@ -4,7 +4,7 @@ use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VE
 use crate::common::slug::{PlayerPage, resolve_player_page};
 use crate::player::events::PlayerEventsCounter;
 use crate::teams::newspaper::{IssueView, Paper, PaperFor, PressDesk, PressFocus, PressTeam};
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -138,7 +138,7 @@ pub struct PlayerNewspaperTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -236,7 +236,7 @@ pub async fn player_newspaper_action(
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", route_params.lang, t.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: team_opt
             .and_then(|t| {
                 simulator_data
@@ -570,7 +570,7 @@ mod tests {
                 sub_title_suffix: String::new(),
                 sub_title: "Córdoba".to_string(),
                 sub_title_link: "/en/teams/cordoba".to_string(),
-                sub_title_country_code: String::new(),
+                sub_title_flag: None,
                 header_color: "#1e272d".to_string(),
                 foreground_color: "#ffffff".to_string(),
                 menu_sections: Vec::new(),

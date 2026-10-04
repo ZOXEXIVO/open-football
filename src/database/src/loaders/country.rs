@@ -1,3 +1,4 @@
+use core::shared::fullname::slug_from_display;
 use serde::Deserialize;
 
 use super::compiled::compiled;
@@ -114,15 +115,15 @@ impl CountryLoader {
             .iter()
             .cloned()
             .map(|mut country| {
-                // Attach the named cup (if configured) by country slug.
-                // Matching is case-insensitive on the trimmed slug so a
-                // stray space or capitalisation in the data doesn't drop
-                // the cup — the fallback generator covers any misses.
-                let key = country.slug.trim().to_ascii_lowercase();
+                // The data writes slugs as display text ("czech republic",
+                // "côte d'ivoire"). Folded once here, every URL and the slug
+                // index carry the same URL-safe form. The cup table is keyed
+                // by the same display text, so it is matched folded too.
+                country.slug = slug_from_display(&country.slug);
                 country.domestic_cup = db
                     .domestic_cups
                     .iter()
-                    .find(|c| c.country_slug.trim().to_ascii_lowercase() == key)
+                    .find(|c| slug_from_display(&c.country_slug) == country.slug)
                     .cloned();
                 // Same pattern for the transfer card, keyed by code rather
                 // than slug — the code is what the data tree's directories
@@ -181,6 +182,58 @@ mod tests {
         assert_eq!(cup_name("afghanistan"), None);
     }
 
+    /// Slugs go into URLs, so the data's display text ("south africa",
+    /// "st. vincent / grenadines") must come out URL-safe — and folding must
+    /// not merge two countries the data tells apart.
+    #[test]
+    fn country_slugs_are_url_safe_and_stay_distinct() {
+        use std::collections::HashSet;
+
+        let countries = CountryLoader::load();
+        for country in &countries {
+            assert!(
+                !country.slug.is_empty()
+                    && country
+                        .slug
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "country {} has a slug unfit for a URL: {:?}",
+                country.id,
+                country.slug
+            );
+        }
+
+        let raw: HashSet<&str> = super::compiled()
+            .countries
+            .iter()
+            .map(|c| c.slug.as_str())
+            .collect();
+        let folded: HashSet<&str> = countries.iter().map(|c| c.slug.as_str()).collect();
+        assert_eq!(folded.len(), raw.len(), "folding merged two country slugs");
+
+        let slug_of = |code: &str| {
+            countries
+                .iter()
+                .find(|c| c.code == code)
+                .map(|c| c.slug.as_str())
+        };
+        assert_eq!(slug_of("za"), Some("south-africa"));
+        assert_eq!(slug_of("ci"), Some("cote-d-ivoire"));
+    }
+
+    /// The cup table names its country by the data's display text, so a cup
+    /// whose country slug folds must still land on it.
+    #[test]
+    fn named_cups_follow_their_country_through_the_fold() {
+        let countries = CountryLoader::load();
+        let czech = countries
+            .iter()
+            .find(|c| c.slug == "czech-republic")
+            .expect("czech republic folds to czech-republic");
+
+        assert!(czech.domestic_cup.is_some(), "the Czech cup was dropped");
+    }
+
     /// Every country the data tree models must ship a transfer card. A
     /// missing one is silent at runtime — the pairs simply derive — so the
     /// only place it can be caught is here.
@@ -189,10 +242,10 @@ mod tests {
         let countries = CountryLoader::load();
         let modelled: Vec<&str> = [
             "ae", "al", "am", "ar", "at", "au", "az", "be", "bg", "br", "by", "ch", "cl", "cm",
-            "co", "cy", "cz", "de", "dk", "dz", "ee", "eg", "es", "fi", "fj", "fr", "gb", "ge",
-            "gh", "gr", "hr", "hu", "id", "il", "ir", "is", "it", "jp", "ke", "kz", "lt", "lv",
-            "ma", "ml", "mt", "mx", "ng", "nl", "no", "nz", "pe", "pl", "pt", "py", "ro", "rs",
-            "ru", "sa", "se", "si", "sk", "td", "tr", "ua", "us", "uy", "uz", "ve", "za",
+            "cn", "co", "cy", "cz", "de", "dk", "dz", "ee", "eg", "es", "fi", "fj", "fr", "gb",
+            "ge", "gh", "gr", "hr", "hu", "id", "il", "ir", "is", "it", "jp", "ke", "kz", "lt",
+            "lv", "ma", "ml", "mt", "mx", "ng", "nl", "no", "nz", "pe", "pl", "pt", "py", "ro",
+            "rs", "ru", "sa", "se", "si", "sk", "td", "tr", "ua", "us", "uy", "uz", "ve", "za",
         ]
         .to_vec();
         for code in modelled {

@@ -199,8 +199,8 @@ mod tests {
     }
 
     /// A career row at a club this database does not model must still show a
-    /// name. Schalke 04 (920) has no club.json anywhere in the tree, but it is
-    /// where several modelled players spent seasons.
+    /// name. Celtic (1569) has no club.json anywhere in the tree — Scotland is
+    /// not modelled — but it is where several modelled players spent seasons.
     #[test]
     fn unmodelled_history_clubs_still_have_names() {
         let names = crate::loaders::history_club_names();
@@ -208,8 +208,8 @@ mod tests {
             !names.is_empty(),
             "history_clubs section missing from database.db"
         );
-        assert_eq!(names.get(&920).map(String::as_str), Some("FC Schalke 04"));
-        assert_eq!(names.get(&2247).map(String::as_str), Some("Hertha BSC"));
+        assert_eq!(names.get(&1569).map(String::as_str), Some("Celtic"));
+        assert_eq!(names.get(&1570).map(String::as_str), Some("Rangers"));
 
         // ...and it must not shadow a club the tree DOES model.
         let countries = CountryLoader::load();

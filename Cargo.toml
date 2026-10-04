@@ -25,7 +25,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.8.100"
+version = "1.8.130"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"
@@ -115,7 +115,7 @@ database = { path = "src/database" }
 log = { version = "0.4.33", features = ["release_max_level_info"] }
 env_logger = "0.11.11"
 color-eyre = "0.6.5"
-tokio = { version = "1.53.1", features = ["full"] }
+tokio = { version = "1.53.2", features = ["full"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.7"

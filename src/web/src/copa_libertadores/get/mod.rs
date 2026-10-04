@@ -1,7 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
-use crate::views::{self, MenuSection};
+use crate::views::{self, MenuSection, SubTitleFlag};
 use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -26,7 +26,7 @@ pub struct CopaLibertadoresGetTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -177,7 +177,7 @@ pub async fn copa_libertadores_get_action(
         sub_title_suffix: String::new(),
         sub_title: "CONMEBOL".to_string(),
         sub_title_link: String::new(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: "#7a1020".to_string(),
         foreground_color: "#ffffff".to_string(),
         menu_sections: views::copa_libertadores_menu(&i18n, &route_params.lang, &current_path),

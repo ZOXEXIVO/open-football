@@ -4,7 +4,7 @@ use axum::routing::get;
 
 pub fn routes() -> Router<GameAppData> {
     Router::new().route(
-        "/{lang}/leagues/{league_slug}",
+        "/{lang}/leagues/{country_slug}/{league_slug}",
         get(super::league_get_action),
     )
 }

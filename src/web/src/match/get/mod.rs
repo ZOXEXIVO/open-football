@@ -6,6 +6,7 @@ use crate::common::default_handler::{
 };
 use crate::common::slug::player_history_slug;
 use crate::face::skin::CountrySkin;
+use crate::leagues::address::LeagueAddress;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -651,7 +652,7 @@ pub async fn match_get_action(
     let (competition_name, competition_url) = if let Some(l) = league {
         (
             views::league_display_name(l, &i18n, simulator_data),
-            format!("/{}/leagues/{}", route_params.lang, l.slug),
+            LeagueAddress::of(simulator_data, l).url(&route_params.lang),
         )
     } else {
         let name = match match_result.league_slug.as_str() {

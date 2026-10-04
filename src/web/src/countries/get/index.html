@@ -12,7 +12,7 @@
         {% endif %}
         <div class="fm-league-list">
             {% for league in section.leagues %}
-            <a href="/{{ lang }}/leagues/{{ league.slug }}" class="fm-league-item">
+            <a href="{{ league.url }}" class="fm-league-item">
                 <i class="fa fa-trophy"></i>
                 <span>{{ league.name }}</span>
             </a>

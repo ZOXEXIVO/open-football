@@ -2,7 +2,8 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::player_history_slug;
-use crate::views::{self, MenuSection, NeighborMenus};
+use crate::leagues::address::LeagueAddress;
+use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n, NewsI18n};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -45,7 +46,7 @@ pub struct TeamNewspaperTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
-    pub sub_title_country_code: String,
+    pub sub_title_flag: Option<SubTitleFlag>,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -383,9 +384,9 @@ pub async fn team_newspaper_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league
-            .map(|l| format!("/{}/leagues/{}", route_params.lang, l.slug))
+            .map(|l| LeagueAddress::of(simulator_data, l).url(&route_params.lang))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_flag: None,
         header_color: club.colors.background.clone(),
         foreground_color: club.colors.foreground.clone(),
         menu_sections,
@@ -2315,8 +2316,8 @@ mod render_tests {
                 sub_title_prefix: String::new(),
                 sub_title_suffix: String::new(),
                 sub_title: "Spanish Segunda".to_string(),
-                sub_title_link: "/en/leagues/spanish-segunda".to_string(),
-                sub_title_country_code: String::new(),
+                sub_title_link: "/en/leagues/spain/spanish-second-division".to_string(),
+                sub_title_flag: None,
                 header_color: "#1e272d".to_string(),
                 foreground_color: "#ffffff".to_string(),
                 menu_sections: Vec::new(),
