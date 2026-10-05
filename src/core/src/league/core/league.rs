@@ -507,6 +507,12 @@ pub struct LeagueGroup {
     pub name: String,
     pub competition: String,
     pub total_groups: u8,
+    /// Rank of the group inside its tier. Regional groups all sit at 0;
+    /// a ranked group at N > 0 is the division directly below the
+    /// level-(N-1) group of the same tier (Russian Second League
+    /// Division A: Gold 0, Silver 1), so promotion and relegation cross
+    /// between them like a tier boundary. Drives [`crate::league::LeagueLadder`].
+    pub level: u8,
     /// When set, the competition crowns a single champion via an
     /// end-of-season knockout playoff seeded from every group's final
     /// standings (MLS Cup, Serie C promotion playoff, …). Drives

@@ -2,6 +2,10 @@ use crate::league::League;
 
 /// A country's divisions read as a pyramid: which league each one drops
 /// into, and how many sides really cross each boundary at season end.
+///
+/// The rungs are `(tier, group level)` steps. Regional groups share their
+/// tier's rung; a ranked group (Russian Division A Silver below Gold) is a
+/// rung of its own inside the tier.
 pub struct LeagueLadder<'a> {
     leagues: &'a [League],
 }
@@ -11,42 +15,68 @@ impl<'a> LeagueLadder<'a> {
         LeagueLadder { leagues }
     }
 
-    /// The tier-(T+1) league that `league_id` relegates into.
+    /// `league`'s rung: its tier and its group's level inside the tier.
+    fn step(league: &League) -> (u8, u8) {
+        let level = league.settings.league_group.as_ref().map_or(0, |g| g.level);
+        (league.settings.tier, level)
+    }
+
+    /// The rung directly below `league`: the next ranked group of its own
+    /// tier when there is one, otherwise the top of the next tier.
+    fn step_below(&self, league: &League) -> (u8, u8) {
+        let (tier, level) = Self::step(league);
+        level
+            .checked_add(1)
+            .map(|next| (tier, next))
+            .filter(|&next| self.leagues.iter().any(|l| Self::step(l) == next))
+            .unwrap_or((tier + 1, 0))
+    }
+
+    /// Ids of the parallel groups `league` shares its rung with in its
+    /// competition, itself included, in id order. Empty when ungrouped.
+    fn zone_ids(&self, league: &League) -> Vec<u32> {
+        let Some(group) = league.settings.league_group.as_ref() else {
+            return Vec::new();
+        };
+        let step = Self::step(league);
+        let mut zones: Vec<u32> = self
+            .leagues
+            .iter()
+            .filter(|l| {
+                Self::step(l) == step
+                    && l.settings
+                        .league_group
+                        .as_ref()
+                        .is_some_and(|g| g.competition == group.competition)
+            })
+            .map(|l| l.id)
+            .collect();
+        zones.sort_unstable();
+        zones
+    }
+
+    /// The league one rung down that `league_id` relegates into.
     ///
-    /// When the relegating tier and the tier below are BOTH split into
-    /// groups of the same competition, zones pair to groups by position
-    /// (zone 0 → group 0, zone 1 → group 1), so each zone relegates into a
-    /// distinct group instead of every zone piling into the first one.
+    /// When the relegating rung and the rung below are BOTH split into
+    /// groups, zones pair to groups by position (zone 0 → group 0, zone 1
+    /// → group 1), so each zone relegates into a distinct group instead of
+    /// every zone piling into the first one.
     pub fn lower_partner(&self, league_id: u32) -> Option<&'a League> {
         let league = self.leagues.iter().find(|l| l.id == league_id)?;
-        let tier = league.settings.tier;
-        let lower_tier = tier + 1;
+        let below = self.step_below(league);
         let mut candidates: Vec<&League> = self
             .leagues
             .iter()
             .filter(|l| {
-                l.id != league_id && l.settings.tier == lower_tier && l.settings.promotion_spots > 0
+                l.id != league_id && Self::step(l) == below && l.settings.promotion_spots > 0
             })
             .collect();
         if candidates.is_empty() {
             return None;
         }
 
-        if let Some(group) = league.settings.league_group.as_ref() {
-            let mut zones: Vec<u32> = self
-                .leagues
-                .iter()
-                .filter(|l| {
-                    l.settings.tier == tier
-                        && l.settings
-                            .league_group
-                            .as_ref()
-                            .is_some_and(|g| g.competition == group.competition)
-                })
-                .map(|l| l.id)
-                .collect();
-            zones.sort_unstable();
-
+        let zones = self.zone_ids(league);
+        if !zones.is_empty() {
             let mut grouped: Vec<&League> = candidates
                 .iter()
                 .copied()
@@ -67,11 +97,12 @@ impl<'a> LeagueLadder<'a> {
     /// Where the sides relegated from `league`'s table go: `(lower league,
     /// sides)` per boundary, in league-id order.
     ///
-    /// A single division above a tier split into groups of one competition
-    /// (Segunda above Primera Federación's two groups) feeds EVERY group.
-    /// Places are handed out champions-first — one to each group in turn,
-    /// then each group's runner-up, and so on — until the division above
-    /// has no relegation places left, so no group is starved while another
+    /// A division alone on its rung above a rung split into groups of one
+    /// competition (Segunda above Primera Federación's two groups, Division
+    /// A Silver above Division B's zones) feeds EVERY group. Places are
+    /// handed out champions-first — one to each group in turn, then each
+    /// group's runner-up, and so on — until the division above has no
+    /// relegation places left, so no group is starved while another
     /// promotes its third. Every other boundary is the lone `lower_partner`.
     pub fn relegation_split(&self, league: &League) -> Vec<(&'a League, usize)> {
         if league.settings.tier == 0 || league.settings.relegation_spots == 0 {
@@ -112,20 +143,20 @@ impl<'a> LeagueLadder<'a> {
             .collect()
     }
 
-    /// The groups an ungrouped `league` relegates into, ordered by id —
-    /// empty unless every promoting league one tier down is a group of the
-    /// same competition and there are at least two of them.
+    /// The groups `league` relegates into, ordered by id — empty unless
+    /// `league` has no parallel zone on its rung, every promoting league
+    /// one rung down is a group of the same competition and there are at
+    /// least two of them.
     fn lower_groups(&self, league: &League) -> Vec<&'a League> {
-        if league.settings.league_group.is_some() {
+        if self.zone_ids(league).len() > 1 {
             return Vec::new();
         }
+        let below = self.step_below(league);
         let mut lower: Vec<&League> = self
             .leagues
             .iter()
             .filter(|l| {
-                l.id != league.id
-                    && l.settings.tier == league.settings.tier + 1
-                    && l.settings.promotion_spots > 0
+                l.id != league.id && Self::step(l) == below && l.settings.promotion_spots > 0
             })
             .collect();
         let Some(competition) = lower
@@ -184,7 +215,7 @@ impl<'a> LeagueLadder<'a> {
         }
         self.leagues
             .iter()
-            .filter(|upper| upper.settings.tier + 1 == league.settings.tier)
+            .filter(|upper| self.step_below(upper) == Self::step(league))
             .map(|upper| {
                 let zones = self.split_zones(upper);
                 if zones.len() < 2 {

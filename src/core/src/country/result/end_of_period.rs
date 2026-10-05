@@ -2383,6 +2383,15 @@ impl CountryResult {
             .find(|l| l.id == tier1_id)
             .map(|l| l.settings.tier.max(1))
             .unwrap_or(1);
+        // Ranked groups of one tier (Russian Division A Gold above Silver)
+        // trade sides without anyone changing tier — no revenue is lost or
+        // regained, so parachutes are neither granted nor ended.
+        let crosses_tier = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| lower_ids.contains(&l.id))
+            .any(|l| l.settings.tier > vacated_tier);
 
         // Swap league_ids on teams and move sub-teams to matching friendly league
         for club in &mut country.clubs {
@@ -2529,13 +2538,15 @@ impl CountryResult {
                 .teams
                 .iter()
                 .any(|t| relegated_team_ids.contains(&t.id));
-            if club_was_relegated {
-                club.finance.parachute = Some(ParachuteEntitlement {
-                    from_tier: vacated_tier,
-                    seasons_elapsed: 0,
-                });
-            } else if club_was_promoted {
-                club.finance.parachute = None;
+            if crosses_tier {
+                if club_was_relegated {
+                    club.finance.parachute = Some(ParachuteEntitlement {
+                        from_tier: vacated_tier,
+                        seasons_elapsed: 0,
+                    });
+                } else if club_was_promoted {
+                    club.finance.parachute = None;
+                }
             }
 
             // Move sub-teams to the matching youth league of the new main league
@@ -2789,6 +2800,7 @@ mod tests {
                     name: group_name.to_string(),
                     competition: c.to_string(),
                     total_groups: 2,
+                    level: 0,
                     playoff: None,
                 }),
                 split_season: false,
@@ -2998,6 +3010,158 @@ mod tests {
         let ladder = LeagueLadder::new(&leagues);
         assert_eq!(ladder.promoted_from_table(&leagues[1]), 1);
         assert_eq!(ladder.promoted_from_table(&leagues[2]), 0);
+    }
+
+    /// Russia's lower pyramid: First League (10) above Division A Gold
+    /// (20) and Silver (21, ranked one level below Gold inside tier 3),
+    /// above Division B's four zones (30..=33).
+    fn ranked_group_pyramid() -> Vec<League> {
+        let mut silver = league_with_group(21, 3, 2, 4, Some("Division A"), "Silver");
+        if let Some(group) = silver.settings.league_group.as_mut() {
+            group.level = 1;
+        }
+        let mut leagues = vec![
+            league_with_group(10, 2, 0, 2, None, ""),
+            league_with_group(20, 3, 2, 2, Some("Division A"), "Gold"),
+            silver,
+        ];
+        for (id, zone) in (30u32..).zip(["South", "Northwest", "Center", "Ural-Volga"]) {
+            leagues.push(league_with_group(id, 4, 1, 0, Some("Division B"), zone));
+        }
+        leagues
+    }
+
+    #[test]
+    fn ranked_groups_are_rungs_inside_their_tier() {
+        let leagues = ranked_group_pyramid();
+        let ladder = LeagueLadder::new(&leagues);
+        let split = |idx: usize| -> Vec<(u32, usize)> {
+            ladder
+                .relegation_split(&leagues[idx])
+                .into_iter()
+                .map(|(l, places)| (l.id, places))
+                .collect()
+        };
+        // First League drops into Gold only; Gold into Silver; Silver
+        // feeds every Division B zone.
+        assert_eq!(split(0), vec![(20, 2)]);
+        assert_eq!(split(1), vec![(21, 2)]);
+        assert_eq!(split(2), vec![(30, 1), (31, 1), (32, 1), (33, 1)]);
+
+        assert_eq!(ladder.promoted_from_table(&leagues[1]), 2);
+        assert_eq!(ladder.promoted_from_table(&leagues[2]), 2);
+        assert_eq!(ladder.relegated_from_table(&leagues[2]), 4);
+        for zone in &leagues[3..] {
+            assert_eq!(ladder.promoted_from_table(zone), 1, "zone {}", zone.id);
+            assert_eq!(ladder.relegated_from_table(zone), 0, "zone {}", zone.id);
+        }
+    }
+
+    #[test]
+    fn ranked_groups_swap_sides_every_season() {
+        // Gold 20..=25, Silver 40..=47, zones 60.., 70.., 80.., 90..
+        let gold_ids: Vec<u32> = (20..=25).collect();
+        let silver_ids: Vec<u32> = (40..=47).collect();
+        let zone_ids: Vec<Vec<u32>> = [60u32, 70, 80, 90]
+            .iter()
+            .map(|&base| (base..base + 3).collect())
+            .collect();
+        let table = |ids: &[u32]| -> Vec<(u32, u8, u8)> {
+            ids.iter()
+                .enumerate()
+                .map(|(i, &id)| (id, 30, 90 - (i as u8) * 5))
+                .collect()
+        };
+
+        let mut clubs: Vec<Club> = Vec::new();
+        let mut add = |ids: &[u32], league_id: u32| {
+            clubs.extend(
+                ids.iter()
+                    .map(|&id| make_club(id, vec![make_simple_team(id, id, league_id)])),
+            );
+        };
+        add(&gold_ids, 20);
+        add(&silver_ids, 21);
+        for (ids, league_id) in zone_ids.iter().zip(30u32..) {
+            add(ids, league_id);
+        }
+
+        let mut leagues = Vec::new();
+        for template in ranked_group_pyramid().into_iter().skip(1) {
+            let ids: &[u32] = match template.id {
+                20 => &gold_ids,
+                21 => &silver_ids,
+                id => &zone_ids[(id - 30) as usize],
+            };
+            let s = &template.settings;
+            let mut league = make_league_with_settings(
+                template.id,
+                s.tier,
+                s.promotion_spots,
+                s.relegation_spots,
+                table(ids),
+            );
+            league.settings.league_group = s.league_group.clone();
+            leagues.push(league);
+        }
+        let mut country = build_country(clubs, leagues);
+        // Two Gold sides drop with a parachute already running from an
+        // earlier fall out of the First League.
+        for id in [24u32, 25] {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == id) {
+                club.finance.parachute = Some(ParachuteEntitlement {
+                    from_tier: 2,
+                    seasons_elapsed: 1,
+                });
+            }
+        }
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        let league_of = |club_id: u32| {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .and_then(|c| c.teams.iter().next())
+                .and_then(|t| t.league_id)
+        };
+        // Gold ↔ Silver: two each way.
+        assert_eq!((league_of(24), league_of(25)), (Some(21), Some(21)));
+        assert_eq!((league_of(40), league_of(41)), (Some(20), Some(20)));
+        // Silver's bottom four go one to each zone; every zone champion
+        // goes up.
+        for id in [44u32, 45, 46, 47] {
+            assert!(
+                (30..=33).contains(&league_of(id).unwrap_or(0)),
+                "silver {id} relegated"
+            );
+        }
+        for ids in &zone_ids {
+            assert_eq!(league_of(ids[0]), Some(21), "zone champion {}", ids[0]);
+        }
+        // Every division keeps its size.
+        let size = |league_id: u32| {
+            country
+                .clubs
+                .iter()
+                .filter(|c| c.teams.iter().next().and_then(|t| t.league_id) == Some(league_id))
+                .count()
+        };
+        assert_eq!([20u32, 21, 30, 31, 32, 33].map(size), [6, 8, 3, 3, 3, 3]);
+        // A same-tier drop neither grants nor resets a parachute.
+        let parachute = |club_id: u32| {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .and_then(|c| c.finance.parachute)
+                .map(|p| (p.from_tier, p.seasons_elapsed))
+        };
+        assert_eq!(parachute(24), Some((2, 1)));
+        assert_eq!(parachute(40), None);
+        // Falling out of tier 3 still grants one.
+        assert_eq!(parachute(47), Some((3, 0)));
     }
 
     fn build_country(clubs: Vec<Club>, leagues: Vec<League>) -> Country {
@@ -3659,6 +3823,7 @@ mod tests {
                 name: name.to_string(),
                 competition: "Primera Federación".to_string(),
                 total_groups: 2,
+                level: 0,
                 playoff: None,
             });
         }

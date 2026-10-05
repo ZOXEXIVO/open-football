@@ -1104,6 +1104,7 @@ mod tests {
                 name: "Playoff".into(),
                 competition: "Test League".into(),
                 total_groups: 2,
+                level: 0,
                 playoff: None,
             }),
             split_season: false,

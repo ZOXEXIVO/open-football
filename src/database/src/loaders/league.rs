@@ -48,6 +48,11 @@ pub struct LeagueGroupEntity {
     pub competition: String,
     /// Number of groups in the parent competition (e.g. 3 for Serie C)
     pub total_groups: u8,
+    /// Rank of the group inside its tier: 0 for regional groups, N for a
+    /// group directly below the level-(N-1) one (Russian Division A Gold 0,
+    /// Silver 1).
+    #[serde(default)]
+    pub level: u8,
     /// Optional end-of-season playoff. When present, the competition crowns
     /// a single champion via a knockout bracket seeded from every group's
     /// final standings (MLS Cup, Serie C promotion playoff, …).

@@ -75,6 +75,7 @@ impl DatabaseGenerator {
                         name: g.name.clone(),
                         competition: g.competition.clone(),
                         total_groups: g.total_groups,
+                        level: g.level,
                         playoff: g.playoff.as_ref().map(|p| LeaguePlayoffConfig {
                             qualifiers_per_group: p.qualifiers_per_group,
                             format: p
