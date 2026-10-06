@@ -215,6 +215,7 @@ impl PlayerStanceBuilder {
             seller_continent_id: country.continent_id,
             seller_country_id: country.id,
             seller_region: ScoutingRegion::from_country(country.continent_id, &country.code),
+            level_floor: player.level_floor(date, seller_league_rep),
             ..PlayerStance::neutral()
         };
 
@@ -339,6 +340,7 @@ impl PlayerStanceBuilder {
             seller_continent_id: summary.continent_id,
             seller_country_id: summary.country_id,
             seller_region,
+            level_floor: summary.level_floor(),
             ..PlayerStance::neutral()
         }
     }
@@ -407,6 +409,15 @@ impl OfferViewBuilder {
         let language_affinity = stance
             .language_profile
             .affinity_for(Language::country_language_mask(&buyer_country.code));
+        let league_level = buyer_country
+            .clubs
+            .iter()
+            .find(|c| c.id == buyer_club_id)
+            .and_then(|c| c.teams.main().or_else(|| c.teams.teams.first()))
+            .and_then(|t| t.league_id)
+            .and_then(|lid| buyer_country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
         OfferView {
             kind,
             buyer_club_id,
@@ -416,6 +427,7 @@ impl OfferViewBuilder {
             offered_wage,
             promised_status,
             sporting_drop,
+            league_level,
             prestige_drop: stance.seller_region.league_prestige() - buyer_region.league_prestige(),
             crosses_continent: stance.seller_continent_id != buyer_country.continent_id,
             language_affinity,

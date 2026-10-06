@@ -34,10 +34,13 @@
 //! league suddenly starts or stops exporting players — a stronger league
 //! simply sheds fewer of them.
 
-use crate::TeamType;
+use crate::club::player::mind::{MindClock, MindSituation};
 use crate::club::player::player::Player;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::perception::AbilityEstimator;
+use crate::transfers::squad::bands::TierBands;
 use crate::utils::DateUtils;
+use crate::{Person, PlayerFieldPositionGroup, TeamType};
 use chrono::NaiveDate;
 
 /// Tunables for [`BigStagePull`]. Every value is a shape parameter of a
@@ -377,6 +380,144 @@ impl BigStagePull {
     }
 }
 
+/// What a player can be read as having earned — the inputs to the floor
+/// under the football he will play.
+#[derive(Debug, Clone, Copy)]
+pub struct StandingReading {
+    /// His observable level, 1..200.
+    pub level: u8,
+    pub group: PlayerFieldPositionGroup,
+    /// Blended market reputation, 0..10000.
+    pub effective_rep: i16,
+    /// The division he plays in now, and how much of a regular he is
+    /// there — 0 when nobody has seen enough of him to say.
+    pub league_rep: u16,
+    pub starter_share: f32,
+    pub caps: u16,
+    pub age: u8,
+    /// How far months on the market have lowered his sights, 0..1.
+    pub resignation: f32,
+    /// How firmly his own plan is a step down, 0..1.
+    pub plan_widening: f32,
+}
+
+/// The lowest level of football a player will play at, on the league
+/// reputation scale: the standing he has a claim on, less what he will
+/// still go under it for.
+///
+/// Measured against the DIVISION he would play in, never the club. A
+/// relegated name keeps a top-flight reputation for seasons, and a
+/// consent read off it saw a third-tier side as a top-flight one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LevelFloor {
+    pub standing: f32,
+    pub tolerance: f32,
+}
+
+impl LevelFloor {
+    /// A division's worth of reputation — the step down anybody takes
+    /// before his name is in question.
+    pub const STEP_DOWN: f32 = 2_000.0;
+    /// Age at or below which the band is at its widest: a season in
+    /// men's football is worth more to a boy than his name is. It widens
+    /// with youth; it never vanishes.
+    const YOUTH_AGE: u8 = 23;
+    const YOUTH_SPAN: f32 = 7.0;
+    const YOUTH_WIDENING: f32 = 0.8;
+    /// What months unsold take off the floor at full resignation —
+    /// every unsold month re-reads what level actually wants him.
+    pub const RESIGNATION_SPAN: f32 = 3_000.0;
+    /// … and what a plan to go down a level and play takes off it.
+    const PLAN_SPAN: f32 = 1_500.0;
+    /// Reputation under the floor at which a division stops being
+    /// football he would play at all.
+    pub const REFUSAL_SPAN: f32 = 1_000.0;
+    /// Caps at which an international's name carries its full reach …
+    const CAPS_ESTABLISHED: f32 = 30.0;
+    /// … and how much further it carries than his club form alone.
+    const CAPS_RENOWN: f32 = 0.25;
+    /// Start share at which he is a regular where he plays.
+    const REGULAR_SHARE: f32 = 0.45;
+
+    /// No view: nothing to object to.
+    pub fn none() -> Self {
+        LevelFloor {
+            standing: 0.0,
+            tolerance: 0.0,
+        }
+    }
+
+    /// The strongest of three claims: the level his ability starts at,
+    /// the name he has made, and the division he is a regular in — and
+    /// never above the division he already plays in, which is a level he
+    /// has accepted whatever the other two say.
+    pub fn of(reading: &StandingReading) -> Self {
+        let ability = TierBands::level_score(reading.level, reading.group) * 10_000.0;
+        let capped = (reading.caps as f32 / Self::CAPS_ESTABLISHED).clamp(0.0, 1.0);
+        let renown = reading.effective_rep.max(0) as f32 * (1.0 + Self::CAPS_RENOWN * capped);
+        let regular = (reading.starter_share / Self::REGULAR_SHARE).clamp(0.0, 1.0);
+        let established = reading.league_rep as f32 * regular;
+        let claim = ability.max(renown).max(established);
+        LevelFloor {
+            standing: if reading.league_rep > 0 {
+                claim.min(reading.league_rep as f32)
+            } else {
+                claim
+            },
+            tolerance: Self::tolerance(reading.age, reading.resignation, reading.plan_widening),
+        }
+    }
+
+    /// How far under his standing he will still go.
+    pub fn tolerance(age: u8, resignation: f32, plan_widening: f32) -> f32 {
+        let youth = (Self::YOUTH_AGE.saturating_sub(age) as f32 / Self::YOUTH_SPAN).clamp(0.0, 1.0);
+        Self::STEP_DOWN * (1.0 + Self::YOUTH_WIDENING * youth)
+            + resignation.clamp(0.0, 1.0) * Self::RESIGNATION_SPAN
+            + plan_widening.clamp(0.0, 1.0) * Self::PLAN_SPAN
+    }
+
+    pub fn floor(&self) -> f32 {
+        self.standing - self.tolerance
+    }
+
+    /// How far a division at `league_rep` sits under his floor, 0..1 —
+    /// nothing at the floor, everything a full refusal span under it.
+    /// No view of either side reads as nothing to object to.
+    pub fn below(&self, league_rep: f32) -> f32 {
+        if self.standing <= 0.0 || league_rep <= 0.0 {
+            return 0.0;
+        }
+        ((self.floor() - league_rep) / Self::REFUSAL_SPAN).clamp(0.0, 1.0)
+    }
+}
+
+impl Player {
+    /// The floor under the football he will play, read as he stands
+    /// today in the division at `league_rep`.
+    pub fn level_floor(&self, date: NaiveDate, league_rep: u16) -> LevelFloor {
+        let seen = self.happiness.appearances_tracked >= MindSituation::TRACKED_APPS;
+        LevelFloor::of(&StandingReading {
+            level: AbilityEstimator::observable_level(self),
+            group: self.position().position_group(),
+            effective_rep: self.player_attributes.effective_reputation(true),
+            league_rep,
+            starter_share: if seen {
+                self.happiness.starter_ratio
+            } else {
+                0.0
+            },
+            caps: self.player_attributes.international_apps,
+            age: self.age(date),
+            resignation: self.market_resignation(date),
+            plan_widening: self
+                .mind
+                .career
+                .plan_view(MindClock::day(date))
+                .renown_widening(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,5 +719,117 @@ mod tests {
         let weak = BigStagePull::assess(&p, today, &ctx(5000)).score;
         assert!(strong < mid, "{strong} !< {mid}");
         assert!(mid < weak, "{mid} !< {weak}");
+    }
+
+    // ── The floor ───────────────────────────────────────────────
+
+    /// Italy, from `league.json`: Serie A, Serie B, Serie C.
+    const SERIE_A: f32 = 8_750.0;
+    const SERIE_B: f32 = 5_500.0;
+    const SERIE_C: f32 = 3_500.0;
+
+    /// The case the floor was written for: a fifty-cap international,
+    /// level 128, just signed by a giant and not yet picked — so no
+    /// division he is a regular in, and a name his club form alone
+    /// would read as a fifth-tier reputation.
+    fn international(age: u8, resignation: f32) -> LevelFloor {
+        LevelFloor::of(&StandingReading {
+            level: 128,
+            group: PlayerFieldPositionGroup::Midfielder,
+            effective_rep: 5_400,
+            league_rep: SERIE_A as u16,
+            starter_share: 0.0,
+            caps: 51,
+            age,
+            resignation,
+            plan_widening: 0.0,
+        })
+    }
+
+    #[test]
+    fn an_international_does_not_play_in_the_third_tier() {
+        let floor = international(27, 0.0);
+        assert_eq!(floor.below(SERIE_A), 0.0);
+        assert_eq!(floor.below(SERIE_B), 0.0, "{}", floor.floor());
+        assert_eq!(floor.below(SERIE_C), 1.0, "{}", floor.floor());
+    }
+
+    /// His ability puts him a division under his name's reach; the
+    /// strongest claim is the one that stands.
+    #[test]
+    fn the_standing_is_the_strongest_of_his_claims() {
+        let by_ability = international(27, 0.0).standing;
+        let by_name = LevelFloor::of(&StandingReading {
+            level: 95,
+            effective_rep: 7_000,
+            caps: 0,
+            ..international_reading(27)
+        })
+        .standing;
+        let by_division = LevelFloor::of(&StandingReading {
+            level: 95,
+            effective_rep: 3_000,
+            starter_share: 0.8,
+            ..international_reading(27)
+        })
+        .standing;
+        assert!(by_ability > 6_500.0, "{by_ability}");
+        assert_eq!(by_name, 7_000.0);
+        assert_eq!(by_division, SERIE_A);
+    }
+
+    fn international_reading(age: u8) -> StandingReading {
+        StandingReading {
+            level: 128,
+            group: PlayerFieldPositionGroup::Midfielder,
+            effective_rep: 5_400,
+            league_rep: SERIE_A as u16,
+            starter_share: 0.0,
+            caps: 51,
+            age,
+            resignation: 0.0,
+            plan_widening: 0.0,
+        }
+    }
+
+    /// Caps carry a name further than club form does.
+    #[test]
+    fn caps_widen_what_his_name_is_worth() {
+        let capped = LevelFloor::of(&StandingReading {
+            level: 100,
+            ..international_reading(30)
+        })
+        .standing;
+        let uncapped = LevelFloor::of(&StandingReading {
+            level: 100,
+            caps: 0,
+            ..international_reading(30)
+        })
+        .standing;
+        assert!(capped > uncapped, "{capped} vs {uncapped}");
+    }
+
+    /// The band widens with youth and never vanishes; months unsold and
+    /// a plan to step down widen it further.
+    #[test]
+    fn the_tolerance_widens_with_youth_resignation_and_a_plan() {
+        let at_16 = LevelFloor::tolerance(16, 0.0, 0.0);
+        let at_19 = LevelFloor::tolerance(19, 0.0, 0.0);
+        let at_23 = LevelFloor::tolerance(23, 0.0, 0.0);
+        assert!(at_16 > at_19 && at_19 > at_23, "{at_16} {at_19} {at_23}");
+        assert_eq!(at_23, LevelFloor::STEP_DOWN);
+        assert_eq!(LevelFloor::tolerance(33, 0.0, 0.0), LevelFloor::STEP_DOWN);
+        assert!(LevelFloor::tolerance(27, 1.0, 0.0) > at_23);
+        assert!(LevelFloor::tolerance(27, 0.0, 1.0) > at_23);
+        assert!(
+            international(27, 1.0).below(SERIE_C) < 1.0,
+            "a season unsold re-reads what level wants him"
+        );
+    }
+
+    #[test]
+    fn no_view_objects_to_nothing() {
+        assert_eq!(LevelFloor::none().below(SERIE_C), 0.0);
+        assert_eq!(international(27, 0.0).below(0.0), 0.0);
     }
 }

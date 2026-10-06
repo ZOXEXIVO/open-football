@@ -117,3 +117,23 @@ The build-time-generated, minified CSS bundle SHALL preserve calc() operator spa
 #### Scenario: Minifier collapses a calc() operator's spacing
 - **WHEN** the generated bundle contains a `calc()` expression whose binary `+`/`-` operator lost the whitespace on one side
 - **THEN** this SHALL be treated as a defect in the generated bundle, since the declaration becomes invalid in every browser
+
+### Requirement: Sitemap lists language roots, about pages, senior league pages and first-team pages
+The system SHALL serve `/sitemap.xml` as an XML urlset with absolute `https://open-football.org` URLs and today's date as `lastmod`. For every supported language it SHALL list:
+
+- the language root and the About page, monthly
+- once a world is loaded, every senior (non-friendly) league at its country-scoped address and every first-team (Main) page, daily
+
+Friendly (youth/reserve) leagues, domestic cups, playoff brackets and non-first teams SHALL NOT be listed.
+
+#### Scenario: Senior league listed in every language
+- **WHEN** a crawler fetches `/sitemap.xml` and France runs Ligue 1
+- **THEN** the sitemap contains `https://open-football.org/{lang}/leagues/france/ligue-1` with a daily change frequency, for each supported language
+
+#### Scenario: Friendly league omitted
+- **WHEN** a country runs a friendly (youth/reserve) league
+- **THEN** that league's page does not appear in the sitemap
+
+#### Scenario: No world loaded
+- **WHEN** the sitemap is requested before a world is loaded
+- **THEN** it lists only the language roots and About pages

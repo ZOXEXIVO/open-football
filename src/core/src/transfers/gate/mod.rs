@@ -56,9 +56,9 @@ pub use stance::*;
 use crate::PathwayStage;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::mind::CareerPlanView;
+use crate::club::player::transfer::{LevelFloor, StandingReading};
 use crate::club::staff::DossierTuning;
 use crate::transfers::loan::agreement::LoanMoney;
-use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus, TeamType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,9 +492,32 @@ pub struct TransferPlausibilityInputs {
     /// decision is already taken — and reading his own mood instead
     /// capped the wrong men.
     pub pathway_stage: PathwayStage,
+    /// Senior caps — a name his club form alone cannot give him.
+    pub international_apps: u16,
 }
 
 impl TransferPlausibilityInputs {
+    /// The floor under the football he will play, read off what the
+    /// inputs carry — [`LevelFloor`].
+    pub fn level_floor(&self) -> LevelFloor {
+        let readable = self.seller_club_matches >= ImportanceFactors::READABLE_SAMPLE_MATCHES;
+        LevelFloor::of(&StandingReading {
+            level: self.player_ca,
+            group: self.position_group,
+            effective_rep: self.effective_player_reputation(),
+            league_rep: self.seller_league_rep,
+            starter_share: if readable {
+                (self.player_appearances as f32 / self.seller_club_matches as f32).clamp(0.0, 1.0)
+            } else {
+                0.0
+            },
+            caps: self.international_apps,
+            age: self.player_age,
+            resignation: self.listing_resignation,
+            plan_widening: self.player_plan.renown_widening(),
+        })
+    }
+
     /// Effective market reputation of the player on the 0..10000 scale —
     /// see [`EffectivePlayerReputation`]. Domestic moves weight home +
     /// current standing; cross-border moves lean on world reputation.
@@ -795,14 +818,6 @@ pub(crate) mod thresholds {
     /// Effective player reputation this far above the buyer's reach reads
     /// as a reputation step-down the player resists in his own market.
     pub const REP_STEP_DOWN_GAP: i16 = 2000;
-    /// Extra effective-reputation gap a loan destination may sit below a
-    /// recognised (post-development-age) player's standing at FULL market
-    /// resignation, on top of [`Self::REP_STEP_DOWN_GAP`]. Fresh on the
-    /// loan list he only considers destinations within the ordinary
-    /// step-down band; months unsold widen what he'll listen to, until at
-    /// full resignation the band spans a genuinely deep drop — the last
-    /// stop before his club's board starts talking about paying him off.
-    pub const LOAN_RENOWN_RESIGNATION_SPAN: f32 = 3000.0;
 
     /// Sporting drop at which even a FULLY resigned listed player stops
     /// endorsing a permanent step-down — beyond this the level gap is a
@@ -1555,8 +1570,6 @@ impl TransferMovePlausibility {
     ) -> Option<TransferMoveAssessment> {
         let strength = reading.strength;
         let importance = reading.importance;
-        let rep_drop = reading.rep_drop;
-        let resignation = reading.resignation;
         let hard_gate_open = reading.hard_gate_open;
 
         // Loan from a bigger club down to a smaller one for an important
@@ -1596,35 +1609,20 @@ impl TransferMovePlausibility {
         // asks whether the PARENT would send an important player there;
         // this asks whether HE would go. Importance measures standing in
         // the current squad, so a declined veteran at a giant reads
-        // unimportant — yet his NAME is intact, and a recognised player
-        // does not spend half a season at a club whose reach is a
-        // fraction of his own standing. The effective-reputation blend
-        // already re-weights renown for cross-border moves (world leads,
-        // home fame discounts), so one continuous rule serves both
-        // markets. Development-age players are exempt: their renown is a
-        // promise rather than a status, and dropping a long way for
-        // minutes is the whole point of their loan pathway. The tolerated
-        // gap widens continuously with market resignation — every unsold
-        // month re-reads what level actually wants him — his own transfer
-        // request endorses any destination he can reach, and a forced
+        // unimportant — yet what he has earned is intact, and a man does
+        // not spend half a season in a division under the floor his
+        // ability, his name and his caps put under him. The floor is read
+        // against the borrower's DIVISION, never its reputation: a
+        // relegated club keeps a top-flight name for seasons. It widens
+        // continuously with youth and with market resignation — every
+        // unsold month re-reads what level actually wants him. His own
+        // transfer request lets a club ask, and leaves the answer to his
+        // appraisal of the terms, which still weighs the floor; a forced
         // route bypasses as everywhere else.
-        //
-        // The development-age exemption is gone. It read "a young player's
-        // renown is a promise rather than a status" and then switched the
-        // gate off entirely below 24 — so a nineteen-year-old with a
-        // nine-figure name could be offered anywhere at all, which is not
-        // what "his renown counts for less" means. The band is now
-        // continuous in age: wide for a boy, ordinary at the development
-        // age, and never absent.
-        let renown_gap_tolerated = LoanAssetGuard::renown_gap_tolerated_with(
-            inputs.player_age,
-            resignation,
-            inputs.player_plan.renown_widening(),
-        );
         if inputs.is_loan
             && !inputs.is_transfer_requested
             && !matches!(strength, AvailabilityStrength::Forced)
-            && rep_drop as f32 > renown_gap_tolerated
+            && inputs.level_floor().below(inputs.buyer_league_rep as f32) > 0.0
         {
             return Some(make(
                 TransferMoveStage::CanShortlistInternally,
@@ -1771,6 +1769,7 @@ mod tests {
             buyer_top_earner: 0,
             parent_subsidy: 0.0,
             pathway_stage: PathwayStage::Rotation,
+            international_apps: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -1828,6 +1827,7 @@ mod tests {
             buyer_top_earner: 0,
             parent_subsidy: 0.0,
             pathway_stage: PathwayStage::Rotation,
+            international_apps: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -2292,12 +2292,11 @@ mod tests {
     struct Fx;
 
     impl Fx {
-        /// A buyer whose reputation reach sits `bands` of the band a
-        /// player of `age` tolerates below the player's own effective
-        /// standing.
+        /// A buyer whose division sits `bands` of the tolerance a player
+        /// of `age` has under the standing the fixture gives him.
         fn reach_below(inputs: &TransferPlausibilityInputs, age: u8, bands: f32) -> i16 {
-            let band = LoanAssetGuard::renown_gap_tolerated(age, 0.0);
-            (inputs.effective_player_reputation() as f32 - bands * band).max(100.0) as i16
+            let tolerance = LevelFloor::tolerance(age, 0.0, 0.0);
+            (inputs.level_floor().standing - bands * tolerance).max(100.0) as i16
         }
     }
 
@@ -2406,8 +2405,8 @@ mod tests {
     /// which is the shape this whole campaign exists to close.
     #[test]
     fn the_renown_loan_band_widens_with_youth_but_never_vanishes() {
-        let at_21 = LoanAssetGuard::renown_gap_tolerated(21, 0.0);
-        let at_33 = LoanAssetGuard::renown_gap_tolerated(33, 0.0);
+        let at_21 = LevelFloor::tolerance(21, 0.0, 0.0);
+        let at_33 = LevelFloor::tolerance(33, 0.0, 0.0);
         assert!(at_21 > at_33, "{at_21} vs {at_33}");
         assert!(at_33 > 0.0, "the band never closes to nothing");
 
@@ -3053,6 +3052,7 @@ mod tests {
             buyer_top_earner: 0,
             parent_subsidy: 0.0,
             pathway_stage: PathwayStage::Rotation,
+            international_apps: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -3354,6 +3354,7 @@ mod agent_channel_tests {
                 buyer_top_earner: 0,
                 parent_subsidy: 0.0,
                 pathway_stage: PathwayStage::Rotation,
+                international_apps: 0,
                 market_affinity: 1.0,
                 buyer_market_knowledge: 1.0,
             }
@@ -3406,6 +3407,7 @@ mod agent_channel_tests {
             buyer_top_earner: 0,
             parent_subsidy: 0.0,
             pathway_stage: PathwayStage::Rotation,
+            international_apps: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
             ..AgentFixtures::contented_standout()

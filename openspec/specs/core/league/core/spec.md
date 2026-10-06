@@ -6,11 +6,25 @@ Owns the `League` struct's own identity, format settings, financial scale, and t
 ## Requirements
 
 ### Requirement: League core identity and settings
-A league SHALL carry a stable identity (id, name, slug, country, tier, reputation) and format settings (season start/end windows, promotion/relegation spot counts, optional group/split-season configuration) that determine how its schedule and standings behave for the whole season.
+A league SHALL carry a stable identity (id, name, slug, country, tier, reputation) and format settings. The settings
+SHALL determine how its schedule, standings and season-end movement behave for the whole season. They are:
+
+- season start/end windows
+- promotion/relegation spot counts
+- an optional group or split-season configuration
+
+A group configuration SHALL name the group, its parent competition, the competition's group count, the group's level
+inside its tier, and an optional end-of-season playoff. Regional groups of a tier SHALL all sit at level 0. A ranked
+group at level N > 0 SHALL be the division directly below the level N−1 group of the same tier.
 
 #### Scenario: Split-season league configuration
 - **WHEN** a league is configured with `split_season = true` (e.g. an Argentine-style Apertura/Clausura competition)
 - **THEN** the league treats each half of the season as its own round-robin tournament with its own table, freezes the first tournament's final standings when the second begins, and computes relegation from the annual aggregate of both halves
+
+#### Scenario: Two ranked groups share a tier
+- **WHEN** a tier-3 competition has a Gold group at level 0 and a Silver group at level 1
+- **THEN** Silver is the division directly below Gold, with promotion and relegation between them, and both remain
+  tier 3
 
 ### Requirement: League financial scale derives from reputation
 A league's prize pool and TV deal total SHALL scale from its own reputation, its tier (top flight vs. lower tiers), and its country's reputation, rather than being configured directly per league.

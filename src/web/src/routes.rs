@@ -30,6 +30,7 @@ use axum::http::header::ACCEPT_LANGUAGE;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
+use core::SimulatorData;
 
 async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
     let accept_language = headers
@@ -42,34 +43,50 @@ async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
 
 async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    let mut xml = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-        <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
-    );
-
-    // Language root pages — monthly
-    for lang in SUPPORTED_LANG_CODES {
-        xml.push_str(&format!(
-            "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
-            lang, date
-        ));
-    }
-
-    // The about page is static copy, so it changes less often than
-    // anything else here — but it is the page a first-time visitor
-    // should be able to find.
-    for lang in SUPPORTED_LANG_CODES {
-        xml.push_str(&format!(
-            "  <url>\n    <loc>https://open-football.org/{}/about</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
-            lang, date
-        ));
-    }
-
-    // Senior league pages (youth divisions are `friendly`) and all club team
-    // pages — daily
     let guard = state.data.read().await;
-    if let Some(ref sim) = *guard {
+    let xml = Sitemap::render(guard.as_deref(), &date);
+
+    ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
+}
+
+struct Sitemap;
+
+impl Sitemap {
+    fn render(world: Option<&SimulatorData>, date: &str) -> String {
+        let mut xml = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+        );
+
+        // Language root pages — monthly
+        for lang in SUPPORTED_LANG_CODES {
+            xml.push_str(&format!(
+                "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
+                lang, date
+            ));
+        }
+
+        // The about page is static copy, so it changes less often than
+        // anything else here — but it is the page a first-time visitor
+        // should be able to find.
+        for lang in SUPPORTED_LANG_CODES {
+            xml.push_str(&format!(
+                "  <url>\n    <loc>https://open-football.org/{}/about</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
+                lang, date
+            ));
+        }
+
+        // Senior league pages (youth divisions are `friendly`) and all club team
+        // pages — daily
+        if let Some(sim) = world {
+            Self::push_world(&mut xml, sim, date);
+        }
+
+        xml.push_str("</urlset>\n");
+        xml
+    }
+
+    fn push_world(xml: &mut String, sim: &SimulatorData, date: &str) {
         for continent in &sim.continents {
             for country in &continent.countries {
                 for league in country.leagues.leagues.iter().filter(|l| !l.friendly) {
@@ -97,10 +114,6 @@ async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
             }
         }
     }
-
-    xml.push_str("</urlset>\n");
-
-    ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
 }
 
 /// Middleware that turns user-facing errors into redirects to the home page.
@@ -165,5 +178,143 @@ impl ServerRoutes {
             .merge(ai_routes())
             .fallback(default_handler)
             .layer(axum::middleware::from_fn(redirect_on_error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveTime};
+    use core::club::ClubAcademy;
+    use core::competitions::global::GlobalCompetitions;
+    use core::continent::Continent;
+    use core::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
+    use core::shared::Location;
+    use core::{
+        Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PlayerCollection,
+        StaffCollection, Team, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+
+    struct Fx;
+
+    impl Fx {
+        fn league(id: u32, slug: &str, friendly: bool) -> League {
+            League::new(
+                id,
+                slug.to_string(),
+                slug.to_string(),
+                1,
+                5_000,
+                LeagueSettings {
+                    season_starting_half: DayMonthPeriod::new(1, 8, 31, 12),
+                    season_ending_half: DayMonthPeriod::new(1, 1, 31, 5),
+                    tier: 1,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                    league_group: None,
+                    split_season: false,
+                },
+                friendly,
+            )
+        }
+
+        fn team(id: u32, slug: &str, league_id: u32, team_type: TeamType) -> Team {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(Some(league_id))
+                .club_id(1)
+                .name(slug.to_string())
+                .slug(slug.to_string())
+                .team_type(team_type)
+                .players(PlayerCollection::new(Vec::new()))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        /// France: Ligue 1 and a youth league; one club with a first team
+        /// and a B team.
+        fn world() -> SimulatorData {
+            let club = Club::new(
+                1,
+                "PSG".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![
+                    Self::team(10, "psg", 1, TeamType::Main),
+                    Self::team(11, "psg-b", 2, TeamType::B),
+                ]),
+                ClubFacilities::default(),
+            );
+            let country = Country::builder()
+                .id(1)
+                .code("FR".to_string())
+                .slug("france".to_string())
+                .name("France".to_string())
+                .continent_id(1)
+                .leagues(LeagueCollection::new(vec![
+                    Self::league(1, "ligue-1", false),
+                    Self::league(2, "ligue-u19", true),
+                ]))
+                .clubs(vec![club])
+                .build()
+                .unwrap();
+            SimulatorData::new(
+                NaiveDate::from_ymd_opt(2026, 8, 26)
+                    .unwrap()
+                    .and_hms_opt(12, 0, 0)
+                    .unwrap(),
+                vec![Continent::new(
+                    1,
+                    "Europe".to_string(),
+                    vec![country],
+                    Vec::new(),
+                )],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
+    }
+
+    #[test]
+    fn a_senior_league_is_listed_under_its_country_in_every_language() {
+        let xml = Sitemap::render(Some(&Fx::world()), "2026-08-26");
+
+        for lang in SUPPORTED_LANG_CODES {
+            assert!(
+                xml.contains(&format!(
+                    "<loc>https://open-football.org/{lang}/leagues/france/ligue-1</loc>\n    \
+                     <lastmod>2026-08-26</lastmod>\n    <changefreq>daily</changefreq>"
+                )),
+                "{lang}"
+            );
+            assert!(xml.contains(&format!(
+                "<loc>https://open-football.org/{lang}/teams/psg</loc>"
+            )));
+        }
+        assert!(
+            !xml.contains("ligue-u19"),
+            "a friendly league is not listed"
+        );
+        assert!(
+            !xml.contains("/teams/psg-b<"),
+            "only first teams are listed"
+        );
+    }
+
+    #[test]
+    fn before_a_world_loads_only_the_static_pages_are_listed() {
+        let xml = Sitemap::render(None, "2026-08-26");
+
+        assert_eq!(xml.matches("<url>").count(), 2 * SUPPORTED_LANG_CODES.len());
+        assert!(!xml.contains("/leagues/"));
     }
 }

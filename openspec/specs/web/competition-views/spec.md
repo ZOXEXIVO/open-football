@@ -51,9 +51,9 @@ slug derived from the competition's name.
 - **THEN** the system SHALL display the tournament groups instead of the qualifying groups
 
 ### Requirement: Domestic league standings page
-The system SHALL provide, for a given domestic league identified by slug, a page with the league table, the
-current/upcoming round's fixtures, continental-reputation cross-links, and top scorers/assisters/rated players
-for that league and season.
+The system SHALL provide, for a given domestic league identified by its country slug and league slug, a page with the
+league table, the current/upcoming round's fixtures, continental-reputation cross-links, and top
+scorers/assisters/rated players for that league and season.
 
 #### Scenario: Requesting a non-cup league by slug
 - **WHEN** a user requests a league page for a slug that resolves to a non-cup league
@@ -166,3 +166,48 @@ champion once decided, entrant count, round count, and top scorers/assisters for
 - **THEN** each card SHALL show the series win tally per side plus one score chip per game (including
   not-yet-played placeholder chips while the series is undecided); a single-game tie SHALL instead show the
   game score and any penalty-shootout tally directly
+
+### Requirement: League pages are addressed under their country
+The system SHALL serve each domestic league's overview, newspaper, transfers and awards pages at
+`/{lang}/leagues/{country_slug}/{league_slug}` followed by no suffix, `/newspaper`, `/transfers` or `/awards`
+respectively, where `{country_slug}` is the slug of the country that runs the league. Every link the site renders to a
+league page, or to one of its tabs, SHALL use this address.
+
+#### Scenario: Canonical address renders the page
+- **WHEN** a user requests `/en/leagues/france/ligue-1/transfers` and `ligue-1` is run by the country `france`
+- **THEN** the system SHALL render that league's transfers page
+
+#### Scenario: Links to a league carry its country
+- **WHEN** any page links to a league (country overview, left menu, league tab bar, team header, match scoreboard,
+  watchlist row, player history or awards, Team of the Week event, reputation list)
+- **THEN** the link SHALL be `/{lang}/leagues/{country_slug}/{league_slug}`, plus the tab suffix where one applies
+
+### Requirement: A league reached under the wrong country moves permanently to its own address
+The system SHALL identify a league by its league slug alone, and SHALL check the country segment against the league's
+own country. When the segment differs (another country, an unknown country, or a country slug not yet folded), the
+system SHALL respond `301 Moved Permanently`, with a `Location` of the league's own address on the same tab.
+
+#### Scenario: Wrong country segment
+- **WHEN** a user requests `/en/leagues/spain/ligue-1/awards` and `ligue-1` is run by `france`
+- **THEN** the system SHALL respond 301 with `Location: /en/leagues/france/ligue-1/awards`
+
+#### Scenario: Unknown league slug
+- **WHEN** the league slug resolves to no league, whatever the country segment
+- **THEN** the system SHALL return a not-found error
+
+### Requirement: Pre-country league URLs redirect permanently to the country-scoped address
+The system SHALL keep answering `/{lang}/leagues/{league_slug}` and its `/newspaper`, `/transfers` and `/awards` tabs.
+Each SHALL respond `301 Moved Permanently` (not 308) to the league's country-scoped address, with the tab segment and
+the query string carried over unchanged.
+
+#### Scenario: Old tab link with a query
+- **WHEN** a user requests `/en/leagues/ligue-1/transfers?season=2025`
+- **THEN** the system SHALL respond 301 with `Location: /en/leagues/france/ligue-1/transfers?season=2025`
+
+#### Scenario: Old overview link
+- **WHEN** a user requests `/en/leagues/ligue-1`
+- **THEN** the system SHALL respond 301 with `Location: /en/leagues/france/ligue-1`
+
+#### Scenario: Old link to a league that no longer exists
+- **WHEN** the old URL's league slug resolves to no league
+- **THEN** the system SHALL return a not-found error

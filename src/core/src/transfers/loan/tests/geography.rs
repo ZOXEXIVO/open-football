@@ -219,8 +219,7 @@ fn a_strange_country_costs_him_and_a_familiar_one_does_not() {
     let reading = |familiarity: f32, resignation: f32| ConsentReading {
         plan: CareerPlanView::none(),
         band_here: 0.9,
-        renown_gap: 0.0,
-        renown_band: 2000.0,
+        below_floor: 0.0,
         going_home: false,
         resignation,
         familiarity,
@@ -279,8 +278,7 @@ fn the_trace_line_carries_every_new_term() {
     let player = PlayerConsent::of(&ConsentReading {
         plan: CareerPlanView::none(),
         band_here: 0.9,
-        renown_gap: 0.0,
-        renown_band: 2000.0,
+        below_floor: 0.0,
         going_home: false,
         resignation: 0.0,
         familiarity: 0.0,

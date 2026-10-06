@@ -69,3 +69,28 @@ existing per-purpose subsidy.
 #### Scenario: Other loans are unchanged
 - **WHEN** a player is loaned out for development, without any stranded-listing review
 - **THEN** the wage split uses the subsidy his loan purpose already implies
+
+### Requirement: A player's consent to a loan is walled by his level floor
+The player's consent factor in a loan agreement SHALL be scaled by how far the borrower's division sits under his level
+floor:
+
+- unchanged at or above the floor
+- falling linearly across the refusal span
+- zero a full span under it, so the pairing falls below the agreement floor and is never offered
+
+His age, his months on the market and his own plan already widen the floor, so they SHALL NOT relieve this term a
+second time. A destination country he knows nothing about SHALL remain a cost, relieved by resignation and by his plan,
+and never a wall.
+
+#### Scenario: Half a span under his floor
+- **WHEN** a borrower's division sits half a refusal span under the player's floor
+- **THEN** his consent is half what it would be with the same borrower at the floor
+
+#### Scenario: A full span under his floor
+- **WHEN** a borrower's division sits a full refusal span or more under the player's floor
+- **THEN** his consent is zero, and the pairing is excluded from candidate lists however willing the parent and the
+  borrower are
+
+#### Scenario: A strange country is not a wall
+- **WHEN** a borrower's division is at or above the player's floor, but in a country he has no familiarity with
+- **THEN** his consent is reduced but not zero

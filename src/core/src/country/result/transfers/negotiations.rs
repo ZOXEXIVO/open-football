@@ -5399,6 +5399,7 @@ mod book_floor_tests {
 mod tests {
     use super::*;
     use crate::club::player::mind::{CareerArc, CareerPlanView, PlanStage};
+    use crate::club::player::transfer::{LevelFloor, StandingReading};
     use crate::transfers::loan::agreement::{ParentReading, ParentWillingness};
     use crate::transfers::loan::guard::LoanAssetGuard;
     use crate::{ClubLevelAnchor, ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup};
@@ -5452,7 +5453,6 @@ mod tests {
                 anchor: ClubLevelAnchor::for_reputation(0.62),
                 world_rep: 6_200,
                 league_rep: 7_000,
-                reach: 6_500,
             }
         }
 
@@ -5470,8 +5470,18 @@ mod tests {
                 2_000_000,
                 false,
                 false,
-                6_000,
                 0.0,
+                LevelFloor::of(&StandingReading {
+                    level: 135,
+                    group: Self::BACK,
+                    effective_rep: 6_000,
+                    league_rep: 9_200,
+                    starter_share: 0.9,
+                    caps: 0,
+                    age: 22,
+                    resignation: 0.0,
+                    plan_widening: 0.0,
+                }),
             )
         }
     }

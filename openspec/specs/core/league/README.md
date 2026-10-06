@@ -8,6 +8,7 @@ This is a landing page, not an OpenSpec capability — each behavior is document
 
 - [awards](awards/spec.md)
 - [core](core/spec.md)
+- [ladder](ladder/spec.md)
 - [news](news/spec.md)
 - [rules](rules/spec.md)
 - [schedule](schedule/spec.md)

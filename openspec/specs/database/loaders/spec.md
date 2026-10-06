@@ -42,11 +42,15 @@ A club record flagged as belonging to a parent club (a satellite directory such 
 - **THEN** the resulting team entry SHALL retain the satellite's own id and name, and SHALL be stamped with the league id of the competition it was found in
 
 ### Requirement: Named domestic cups and transfer cards resolve onto countries case-insensitively and independently
-A country's named domestic cup SHALL be resolved by matching the country's trimmed, lowercased slug against the cup table's country-slug field. A country's transfer-market card SHALL be resolved by matching the country's trimmed, lowercased code against the transfer table's code field. Neither resolution depends on the other, and either MAY be absent for a given country without affecting the other.
+A country's named domestic cup SHALL be resolved by folding the cup table's country-slug field with the same URL-safe fold applied to the country's own slug, and matching the two. A country's transfer-market card SHALL be resolved by matching the country's trimmed, lowercased code against the transfer table's code field. Neither resolution depends on the other, and either MAY be absent for a given country without affecting the other.
 
 #### Scenario: A country with a cup but no transfer card (or vice versa) loads correctly
 - **WHEN** a country's slug matches an entry in the domestic-cup table but its code has no match in the transfer-card table
 - **THEN** the country SHALL load with its domestic cup populated and its transfer card left absent
+
+#### Scenario: A cup keyed by display text follows its country through the fold
+- **WHEN** the cup table names its country "czech republic"
+- **THEN** the cup SHALL resolve onto the country loaded with slug `czech-republic`
 
 ### Requirement: Club identity, team, and league lookups by id are O(1) after first use
 Once a database entity collection is loaded, resolving a club, sub-team, or league by its numeric id SHALL not require a linear scan of the full collection on repeated lookups.
@@ -82,3 +86,25 @@ The loaded player index SHALL expose the maximum player id present across both c
 #### Scenario: The maximum id spans both clubbed and free-agent players
 - **WHEN** the loaded dataset's highest player id belongs to a free agent rather than a clubbed player
 - **THEN** the exposed maximum id SHALL still reflect that free agent's id
+
+### Requirement: Country slugs are folded to a URL-safe form at load
+Each loaded country's slug SHALL be its source slug transliterated to ASCII and lowercased, with every run of other characters collapsed to a single hyphen and no leading or trailing hyphen. Every resulting slug SHALL be non-empty and contain only `a-z`, `0-9` and `-`. Folding SHALL NOT make two distinct source slugs equal.
+
+#### Scenario: Display-text slugs become URL-safe
+- **WHEN** the source data gives the slugs "south africa" and "côte d'ivoire"
+- **THEN** the loaded countries carry `south-africa` and `cote-d-ivoire`
+
+#### Scenario: Folding keeps countries distinct
+- **WHEN** all countries are loaded
+- **THEN** the number of distinct folded slugs equals the number of distinct source slugs
+
+### Requirement: A league group without a declared level loads at level 0
+A league group record that omits its level SHALL load as level 0, a regional group. A declared level SHALL be carried unchanged into the runtime league.
+
+#### Scenario: Legacy group record
+- **WHEN** a league's group record has no level field
+- **THEN** the loaded group's level SHALL be 0
+
+#### Scenario: Ranked group record
+- **WHEN** a league's group record declares level 1
+- **THEN** the runtime league's group carries level 1

@@ -513,10 +513,9 @@ pub struct ConsentReading {
     pub plan: CareerPlanView,
     /// What he would BE at the borrower.
     pub band_here: f32,
-    /// How far the destination falls below his own renown, and the band
-    /// he tolerates.
-    pub renown_gap: f32,
-    pub renown_band: f32,
+    /// How far the borrower's division sits under the floor he will play
+    /// at, 0..1 — [`crate::club::player::transfer::LevelFloor::below`].
+    pub below_floor: f32,
     /// The move is toward his own country.
     pub going_home: bool,
     /// How far he has lowered his sights, 0..1.
@@ -538,6 +537,9 @@ pub struct PlayerConsent {
     pub plan_fit: f32,
     /// What the place cost him, for the trace.
     pub familiarity_cost: f32,
+    /// How much of the destination's division is football he plays at
+    /// all, 1..0 — nothing survives a full step under his floor.
+    pub floor_term: f32,
 }
 
 impl PlayerConsent {
@@ -549,46 +551,41 @@ impl PlayerConsent {
     const PLAN_WEIGHT: f32 = 0.35;
     /// A move toward his own country.
     const HOME: f32 = 0.2;
-    /// How far a destination below his own renown costs him, at a full
-    /// band of daylight.
-    const RENOWN_COST: f32 = 0.45;
-    /// …and how much of that months on the market take back.
+    /// How much of a strange place months on the market take back.
     const RESIGNATION_RELIEF: f32 = 0.6;
     /// Reading of the place at or above which it is simply somewhere he
     /// could live — his compatriots go there, or he speaks it.
     const FAMILIAR: f32 = 0.35;
-    /// What a year somewhere he knows nothing about costs him. Below the
-    /// renown cost on purpose: a strange country is a reason to say no,
-    /// and a smaller one than dropping two divisions.
+    /// What a year somewhere he knows nothing about costs him. A strange
+    /// country is a reason to say no, and a smaller one than a division
+    /// under his floor, which is the one thing here that IS a wall.
     const FAMILIARITY_COST: f32 = 0.30;
 
     pub fn of(reading: &ConsentReading) -> Self {
         let plan_fit = reading.plan.fit_for(reading.band_here, reading.going_home);
-        let renown = if reading.renown_band > 0.0 {
-            ((reading.renown_gap - reading.renown_band) / reading.renown_band).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let renown_cost =
-            Self::RENOWN_COST * renown * (1.0 - Self::RESIGNATION_RELIEF * reading.resignation);
-        // The same shape the renown cost uses, and relieved by the same
-        // two things: a man who has lowered his sights, and a man whose
-        // own arc is pushing him out of where he is, will go where the
-        // football is. A strange place is a cost, never a wall.
+        // Relieved by two things: a man who has lowered his sights, and a
+        // man whose own arc is pushing him out of where he is, will go
+        // where the football is. A strange place is a cost, never a wall.
         let strangeness = ((Self::FAMILIAR - reading.familiarity) / Self::FAMILIAR).clamp(0.0, 1.0);
         let relief = (Self::RESIGNATION_RELIEF * reading.resignation).max(plan_fit.max(0.0));
         let familiarity_cost =
             Self::FAMILIARITY_COST * strangeness * (1.0 - relief.clamp(0.0, 1.0));
-        let score = (Self::BASE
+        // The floor is the other way round: his sights, his arc and his
+        // age are already inside it, so what is left under it is a
+        // division he does not play in, whatever else the move offers.
+        let floor_term = 1.0 - reading.below_floor.clamp(0.0, 1.0);
+        let score = ((Self::BASE
             + Self::PLAN_WEIGHT * plan_fit
             + Self::HOME * f32::from(reading.going_home)
-            - renown_cost
             - familiarity_cost)
+            .clamp(0.0, 1.0)
+            * floor_term)
             .clamp(0.0, 1.0);
         PlayerConsent {
             score,
             plan_fit,
             familiarity_cost,
+            floor_term,
         }
     }
 }
@@ -716,7 +713,7 @@ impl LoanAgreement {
             "agreement={:.3} willingness={:.2} (hold={:.2} minutes={:.2} depth={:.2} \
              placement={:.2}) \
              appetite={:.2} (room={:.2} slots={:.2} minutes={:.2} band={:.2} floor={:.2}) \
-             consent={:.2} (plan={:+.2} strange={:.2}) affordability={:.2}",
+             consent={:.2} (plan={:+.2} strange={:.2} floor={:.2}) affordability={:.2}",
             Self::score(parent, borrower, player, money),
             parent.score,
             parent.starter_hold,
@@ -732,6 +729,7 @@ impl LoanAgreement {
             player.score,
             player.plan_fit,
             player.familiarity_cost,
+            player.floor_term,
             money.affordability,
         )
     }
@@ -788,8 +786,8 @@ pub struct AgreementInputs {
     /// rather than about his rung.
     pub club_band_target: Option<f32>,
     pub plan: CareerPlanView,
-    pub renown_gap: f32,
-    pub renown_band: f32,
+    /// How far the borrower's division sits under his floor, 0..1.
+    pub below_floor: f32,
     pub resignation: f32,
     pub going_home: bool,
     /// How familiar the borrower's country is to him, 0..1.
@@ -884,8 +882,7 @@ impl LoanAgreement {
         let consent = PlayerConsent::of(&ConsentReading {
             plan: inputs.plan,
             band_here,
-            renown_gap: inputs.renown_gap,
-            renown_band: inputs.renown_band,
+            below_floor: inputs.below_floor,
             going_home: inputs.going_home,
             resignation: inputs.resignation,
             familiarity: inputs.familiarity,
@@ -978,8 +975,7 @@ mod tests {
             ConsentReading {
                 plan: CareerPlanView::none(),
                 band_here: 0.9,
-                renown_gap: 0.0,
-                renown_band: 2000.0,
+                below_floor: 0.0,
                 going_home: false,
                 resignation: 0.0,
                 familiarity: 1.0,
@@ -1179,6 +1175,31 @@ mod tests {
         let expected = parent.score * borrower.score * consent.score * money.affordability;
         assert!(
             (LoanAgreement::score(&parent, &borrower, &consent, &money) - expected).abs() < 1e-6
+        );
+    }
+
+    /// A division under his floor is the one thing on the player's side
+    /// that is a wall: nothing else the destination offers survives it.
+    #[test]
+    fn a_division_under_his_floor_is_not_football_he_plays() {
+        let at = |below_floor: f32| {
+            PlayerConsent::of(&ConsentReading {
+                below_floor,
+                ..Fx::consent()
+            })
+        };
+        let open = at(0.0);
+        let half = at(0.5);
+        let under = at(1.0);
+        assert_eq!(open.floor_term, 1.0);
+        assert!((half.score - open.score * 0.5).abs() < 1e-6);
+        assert_eq!(under.score, 0.0);
+        let parent = ParentWillingness::of(&Fx::fringe());
+        let borrower = BorrowerAppetite::of(&Fx::borrower());
+        let money = LoanMoney::of(&Fx::money());
+        assert!(
+            LoanAgreement::score(&parent, &borrower, &under, &money) < LoanAgreement::FLOOR,
+            "a pair he refuses is not on the slate at all"
         );
     }
 }

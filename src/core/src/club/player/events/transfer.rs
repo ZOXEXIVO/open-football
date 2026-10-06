@@ -25,6 +25,7 @@ use crate::club::player::mind::SpellChange;
 use crate::club::player::player::{Player, SellOnObligation};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
+use crate::transfers::gate::TermsRefusalCause;
 use crate::{
     ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerSquadStatus,
     PlayerStatusType,
@@ -49,7 +50,10 @@ impl Player {
             // formal demand and `Lst` means the club put him up for sale
             // — then what the goal stack says, which catches the wants
             // he never said out loud.
-            let asked_to_go = self.statuses.has(PlayerStatusType::Req)
+            // A buyout is a deal he signed himself, at the club he had
+            // just spent a season at — not a club selling him on.
+            let asked_to_go = t.loan_buyout
+                || self.statuses.has(PlayerStatusType::Req)
                 || self.statuses.has(PlayerStatusType::Lst)
                 || self.mind.wants_to_leave() >= Self::MOVE_WAS_HIS_IDEA;
             if !asked_to_go {
@@ -70,6 +74,17 @@ impl Player {
             SpellChange::transfer(t.selling_club_id, t.from.league_slug == t.to.league_slug)
         };
         self.on_spell_change(change, t.buying_club_id, t.date);
+    }
+
+    /// The club he spent the season at wanted to keep him and he would
+    /// not sign. His own decision, so it goes on his record in his name.
+    pub fn on_buyout_declined(&mut self, cause: TermsRefusalCause, date: NaiveDate) {
+        self.decision_history.add(
+            date,
+            "dec_loan_buyout_declined".to_string(),
+            cause.as_i18n_key().to_string(),
+            "dec_decided_player".to_string(),
+        );
     }
 
     /// His spell turned over — sold, loaned out, home from a loan,

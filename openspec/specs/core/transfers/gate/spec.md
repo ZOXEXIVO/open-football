@@ -68,7 +68,28 @@ The system SHALL treat a candidate as squad-surplus (blocking recruitment) when 
 - **THEN** the squad-fit check is bypassed because the club needs bodies regardless of surplus concerns
 
 ### Requirement: Player-side appraisal weighs money against sporting, role, and personal factors
-The system SHALL evaluate whether a player accepts a move as a single utility score summed across weighted axes (money, sporting trajectory, promised role, destination prestige, home pull, pressure to leave, attachment to the current club, and personal circumstance/memory), and SHALL accept the move only when that utility, plus a fixed per-negotiation random disposition, exceeds zero.
+The system SHALL evaluate whether a player accepts a move as a single utility score summed across weighted axes, and
+SHALL accept the move only when that utility, plus a fixed per-negotiation random disposition, exceeds zero. The axes
+are:
+
+- money
+- sporting trajectory
+- promised role
+- destination prestige
+- home pull
+- pressure to leave
+- attachment to the current club
+- personal circumstance and memory
+- fit with his own career plan
+- the level floor
+
+The level-floor axis SHALL be zero or negative:
+
+- Its penalty SHALL grow with how far the division he would play in sits under his level floor.
+- The penalty SHALL be discounted by the weight money carries for him at that point of his career. A payday late in a
+  career, or on an expiring deal, can buy a division a player in his prime refuses.
+- When either the destination's division or his floor cannot be read, the axis SHALL be zero.
+- When a refusal's cause is named, the level-floor axis SHALL count toward a sporting step-down.
 
 #### Scenario: A raised offer that reaches the player's number is guaranteed accepted
 - **WHEN** a club raises an offer so that the computed utility plus the player's disposition exceeds zero
@@ -78,9 +99,45 @@ The system SHALL evaluate whether a player accepts a move as a single utility sc
 - **WHEN** a move represents a sporting step-down for an ambitious player
 - **THEN** the money axis must be raised enough to offset the sporting-axis penalty before total utility can turn positive
 
+#### Scenario: A loan a division under his floor is refused whatever the push
+- **WHEN** a 27-year-old international at a top-flight giant, listed, unhappy, asking to leave and promised a
+  first-team shirt, is offered a loan into a division a full refusal span under his floor
+- **THEN** he refuses, and the cause is a sporting step-down
+- **AND** the same offer from a club one division nearer, at or above his floor, is accepted
+
+#### Scenario: Late in a career the floor is for sale
+- **WHEN** a 33-year-old with the same floor, on an expiring deal, is offered a large wage and a key-player role in
+  that same division
+- **THEN** the level-floor penalty is small and he accepts
+- **AND** a 27-year-old offered a smaller raise there still refuses
+
+#### Scenario: An unread division objects to nothing
+- **WHEN** the destination's division or the player's floor cannot be read
+- **THEN** the level-floor axis contributes nothing to his utility
+
 ### Requirement: Reservation wage is derived, not separately authored
 The system SHALL derive a player's minimum acceptable wage algebraically as the wage at which his total appraisal utility equals zero, rather than computing it from an independent formula.
 
 #### Scenario: Reservation wage reflects a compensable step-down
 - **WHEN** a player's sporting-axis penalty from a step-down is known
 - **THEN** his reservation wage is exactly the wage that offsets that penalty and every other axis to zero net utility
+
+### Requirement: A loan under the player's level floor goes no further than internal shortlisting
+When a prospective loan's borrower plays in a division under the player's level floor, the system SHALL hold the move
+at the "may be shortlisted internally" stage, with a loan-not-credible reason. No public interest, negotiation or
+personal terms follow. The floor SHALL be read against the borrower's division, never the borrower club's own
+reputation.
+
+The gate SHALL NOT apply in two cases:
+
+- the player has formally requested a transfer, in which case his own appraisal of the terms decides
+- the route is forced
+
+#### Scenario: A big name in a lower division
+- **WHEN** a borrower whose club reputation is still top-flight after relegation now plays two divisions under an
+  international's floor
+- **THEN** the loan stops at internal shortlisting
+
+#### Scenario: A transfer request leaves the decision to him
+- **WHEN** the same international has formally requested a transfer
+- **THEN** the gate lets the approach through, and the borrower's division is weighed in his own appraisal of the terms

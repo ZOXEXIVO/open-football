@@ -721,8 +721,7 @@ impl ListingBroadcast {
                 stage: b.stage,
                 club_band_target: b.band_target,
                 plan: b.plan,
-                renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
-                renown_band: b.guard.as_ref().map(|g| g.renown_band()).unwrap_or(0.0),
+                below_floor: verdict.map(|v| v.below_floor).unwrap_or(0.0),
                 resignation: b
                     .guard
                     .as_ref()

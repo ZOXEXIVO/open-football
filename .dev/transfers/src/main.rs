@@ -3646,6 +3646,10 @@ struct LoanAssetRow {
     wage_share: f64,
     /// Loanee CA minus the borrower's best in his group.
     over_borrower_best: i16,
+    /// Senior caps, and the division the borrower plays in (1 = top
+    /// flight, 0 = no senior league) — what the level floor is read on.
+    caps: u16,
+    borrower_division: u8,
 }
 
 /// A youth-registered player whose observable level clears the first
@@ -3728,11 +3732,11 @@ impl LoanAssetCensus {
                         Some(t) => t,
                         None => continue,
                     };
-                    let borrower_league_rep = main
+                    let borrower_league = main
                         .league_id
-                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                        .map(|l| l.reputation)
-                        .unwrap_or(0);
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid));
+                    let borrower_league_rep = borrower_league.map(|l| l.reputation).unwrap_or(0);
+                    let borrower_division = borrower_league.map(|l| l.settings.tier).unwrap_or(0);
 
                     // ---- the trap census ------------------------------
                     //
@@ -3910,6 +3914,8 @@ impl LoanAssetCensus {
                                     0.0
                                 },
                                 over_borrower_best: ability as i16 - borrower_best as i16,
+                                caps: player.player_attributes.international_apps,
+                                borrower_division,
                             });
                         }
                     }
@@ -3963,6 +3969,7 @@ impl LoanAssetPrinter {
             return;
         }
         Self::print_tier_matrix(census);
+        Self::print_division_matrix(census);
         Self::print_band_matrix(census);
         Self::print_quantiles(census);
         Self::print_top_by_value(census);
@@ -4001,6 +4008,35 @@ impl LoanAssetPrinter {
             }
             println!();
         }
+    }
+
+    /// Where loanees play, by the borrower's DIVISION — and how often a
+    /// capped international is sent under the second one, the case the
+    /// level floor exists to close.
+    fn print_division_matrix(census: &LoanAssetCensus) {
+        println!("\n-- loans by borrower division (level floor census) --");
+        let line = |label: &str, min_caps: u16| {
+            let rows: Vec<&LoanAssetRow> =
+                census.rows.iter().filter(|r| r.caps >= min_caps).collect();
+            let at = |pick: &dyn Fn(u8) -> bool| {
+                rows.iter().filter(|r| pick(r.borrower_division)).count()
+            };
+            let below_second = at(&|d| d >= 3);
+            println!(
+                "  {:<12} n={:<5} d1={:<5} d2={:<5} d3={:<5} d4+={:<5} none={:<4} below d2: {:.1}%",
+                label,
+                rows.len(),
+                at(&|d| d == 1),
+                at(&|d| d == 2),
+                at(&|d| d == 3),
+                at(&|d| d >= 4),
+                at(&|d| d == 0),
+                Self::share(below_second, rows.len()),
+            );
+        };
+        line("all loans", 0);
+        line("capped 10+", 10);
+        line("capped 30+", 30);
     }
 
     fn print_band_matrix(census: &LoanAssetCensus) {

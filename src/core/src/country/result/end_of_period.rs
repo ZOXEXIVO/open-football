@@ -14,7 +14,16 @@ use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::league::LeagueLadder;
+use crate::transfers::MarketMap;
+use crate::transfers::deal::offer::PromisedSquadStatus;
+use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::{
+    AppraisalConfig, OfferKind, OfferViewBuilder, PlayerDisposition, PlayerOfferAppraisal,
+    PlayerStanceBuilder, StanceInputs, TermsRefusalCause, TransferPlausibilityEvaluator,
+};
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::squad::LevelBand;
+use crate::transfers::value::wage::BuyerLevelWage;
 use crate::utils::{DateUtils, FormattingUtils};
 use crate::world::SimulatorData;
 use crate::world::bootstrap::ClubIdentity;
@@ -41,6 +50,9 @@ struct LoanReturnEvent {
     /// negotiated option / obligation to buy as the loan expires — the
     /// player stays put and ownership transfers instead of returning.
     buyout: Option<(u32, bool)>,
+    /// The borrower wanted him and he would not sign: why, for his
+    /// record. He goes home like any other returning loanee.
+    declined_buyout: Option<TermsRefusalCause>,
 }
 
 /// Per-team view of which loaned-in players a borrower is warehousing.
@@ -195,7 +207,7 @@ impl CountryResult {
             .enumerate()
             .flat_map(|(ci, club)| club.teams.iter().map(move |t| (t.id, ci)))
             .collect();
-        let reserve_ceilings = Self::reserve_ceilings(country);
+        let ladder = LeagueLadder::new(&country.leagues.leagues);
 
         // Trophy reputation boost: league champions and promoted sides get
         // a durable rep bump that lingers for 2 seasons (see Achievement).
@@ -224,18 +236,13 @@ impl CountryResult {
                 let mut trophies: Vec<(u32, AchievementType)> = Vec::new();
                 let mut events: Vec<(u32, HappinessEventType, f32)> = Vec::new();
 
-                // For lower-tier leagues that *also* promote (Championship-style
+                // In a league that sends sides up (Championship-style
                 // setups), the title is real silverware but promotion is the
-                // career-visible moment. We fire both, but soften `TrophyWon`
-                // so the stack reads as "got promoted, also won the league"
-                // rather than two huge wins.
-                let promo_slots = league.settings.promotion_spots as usize;
-                let lower_tier_with_promo = league.settings.tier > 1 && promo_slots > 0;
-                // A reserve side topping the table stays down; the next
-                // eligible side goes up in its place.
-                let promotable = |team_id: u32| {
-                    Self::may_go_up(&reserve_ceilings, team_id, league.settings.tier.saturating_sub(1))
-                };
+                // career-visible moment, so `TrophyWon` is softened. Promotion
+                // itself is felt at the swap, by exactly the sides it moves
+                // up — a reserve champion or a group allotted fewer places
+                // than it declares has nothing to celebrate.
+                let sends_sides_up = ladder.promoted_from_table(league) > 0;
                 // Grouped competitions with a playoff crown their champion
                 // through the bracket (MLS Cup, Torneo Apertura/Clausura)
                 // — topping a zone/conference table is not a title, so no
@@ -248,35 +255,12 @@ impl CountryResult {
                     .is_some_and(|g| g.playoff.is_some());
                 if let Some(champion) = table.first().filter(|_| !playoff_crowned) {
                     trophies.push((champion.team_id, AchievementType::LeagueTitle));
-                    let trophy_prestige = if lower_tier_with_promo { 0.6 } else { 1.0 };
+                    let trophy_prestige = if sends_sides_up { 0.6 } else { 1.0 };
                     events.push((
                         champion.team_id,
                         HappinessEventType::TrophyWon,
                         trophy_prestige,
                     ));
-                    if lower_tier_with_promo && promotable(champion.team_id) {
-                        // Lower-league champions are *also* promoted — the
-                        // promotion emotion is the dominant one.
-                        events.push((
-                            champion.team_id,
-                            HappinessEventType::PromotionCelebration,
-                            1.0,
-                        ));
-                    }
-                }
-                if lower_tier_with_promo {
-                    // Non-title promoted clubs (positions 2..=promo_slots).
-                    // Champion already handled above with the dual emit.
-                    let top = table[0].team_id;
-                    for row in table
-                        .iter()
-                        .filter(|r| promotable(r.team_id))
-                        .take(promo_slots)
-                        .filter(|r| r.team_id != top)
-                    {
-                        trophies.push((row.team_id, AchievementType::Promotion));
-                        events.push((row.team_id, HappinessEventType::PromotionCelebration, 1.0));
-                    }
                 }
 
                 // Continental qualification — only top-tier leagues feed
@@ -321,55 +305,12 @@ impl CountryResult {
             player_team_events.append(&mut e);
         }
         for (team_id, ach_type) in trophy_awards {
-            for club in &mut country.clubs {
-                if club.teams.iter().any(|t| t.id == team_id) {
-                    // Reputation achievement on the team side; long-term
-                    // vision tracker on the board side.
-                    if let Some(team) = club.teams.iter_mut().find(|t| t.id == team_id) {
-                        team.on_season_trophy(Achievement::new(ach_type.clone(), date, 8));
-                    }
-                    club.board.on_achievement(ach_type.clone());
-
-                    // Trophy-triggered renewal bump. The board rewards
-                    // the manager directly — bigger silverware = bigger
-                    // bump, chairman loyalty also lifts. Fires in addition
-                    // to the season-start renewal offer so a winning
-                    // campaign is recognised even when the contract still
-                    // has >18 months left.
-                    let (salary_bump_pct, extension_years, loyalty_lift): (f32, i32, u8) =
-                        match ach_type {
-                            AchievementType::ContinentalTrophy => (0.25, 3, 20),
-                            AchievementType::LeagueTitle => (0.20, 2, 15),
-                            AchievementType::CupWin => (0.08, 1, 6),
-                            AchievementType::Promotion => (0.10, 1, 8),
-                            _ => (0.0, 0, 0),
-                        };
-                    if salary_bump_pct > 0.0 {
-                        let cur = club.board.chairman.manager_loyalty as u16;
-                        club.board.chairman.manager_loyalty =
-                            (cur + loyalty_lift as u16).min(100) as u8;
-                        if let Some(main_team) = club.teams.main_mut()
-                            && let Some(mgr) = main_team
-                                .staffs
-                                .find_mut_by_position(StaffPosition::Manager)
-                            && let Some(contract) = mgr.contract.as_mut()
-                        {
-                            contract.salary =
-                                ((contract.salary as f32) * (1.0 + salary_bump_pct)) as u32;
-                            if extension_years > 0 {
-                                let new_exp = contract
-                                    .expired
-                                    .with_year(contract.expired.year() + extension_years)
-                                    .unwrap_or(contract.expired);
-                                if new_exp > contract.expired {
-                                    contract.expired = new_exp;
-                                }
-                            }
-                            mgr.job_satisfaction = (mgr.job_satisfaction + 12.0).clamp(0.0, 100.0);
-                        }
-                    }
-                    break;
-                }
+            if let Some(club) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.teams.iter().any(|t| t.id == team_id))
+            {
+                Self::award_trophy(club, team_id, ach_type, date);
             }
         }
 
@@ -462,6 +403,52 @@ impl CountryResult {
                 for player in team.players.iter_mut() {
                     player.reset_season_disciplinary_state();
                 }
+            }
+        }
+    }
+
+    /// Bank a season trophy won by `team_id` on its club.
+    fn award_trophy(club: &mut Club, team_id: u32, ach_type: AchievementType, date: NaiveDate) {
+        // Reputation achievement on the team side; long-term
+        // vision tracker on the board side.
+        if let Some(team) = club.teams.iter_mut().find(|t| t.id == team_id) {
+            team.on_season_trophy(Achievement::new(ach_type.clone(), date, 8));
+        }
+        club.board.on_achievement(ach_type.clone());
+
+        // Trophy-triggered renewal bump. The board rewards
+        // the manager directly — bigger silverware = bigger
+        // bump, chairman loyalty also lifts. Fires in addition
+        // to the season-start renewal offer so a winning
+        // campaign is recognised even when the contract still
+        // has >18 months left.
+        let (salary_bump_pct, extension_years, loyalty_lift): (f32, i32, u8) = match ach_type {
+            AchievementType::ContinentalTrophy => (0.25, 3, 20),
+            AchievementType::LeagueTitle => (0.20, 2, 15),
+            AchievementType::CupWin => (0.08, 1, 6),
+            AchievementType::Promotion => (0.10, 1, 8),
+            _ => (0.0, 0, 0),
+        };
+        if salary_bump_pct > 0.0 {
+            let cur = club.board.chairman.manager_loyalty as u16;
+            club.board.chairman.manager_loyalty = (cur + loyalty_lift as u16).min(100) as u8;
+            if let Some(main_team) = club.teams.main_mut()
+                && let Some(mgr) = main_team
+                    .staffs
+                    .find_mut_by_position(StaffPosition::Manager)
+                && let Some(contract) = mgr.contract.as_mut()
+            {
+                contract.salary = ((contract.salary as f32) * (1.0 + salary_bump_pct)) as u32;
+                if extension_years > 0 {
+                    let new_exp = contract
+                        .expired
+                        .with_year(contract.expired.year() + extension_years)
+                        .unwrap_or(contract.expired);
+                    if new_exp > contract.expired {
+                        contract.expired = new_exp;
+                    }
+                }
+                mgr.job_satisfaction = (mgr.job_satisfaction + 12.0).clamp(0.0, 100.0);
             }
         }
     }
@@ -1103,11 +1090,26 @@ impl CountryResult {
                     }
                     // Option / obligation-to-buy — only a naturally
                     // expiring loan can carry one (the warehouse drain
-                    // never touches option loans).
-                    let buyout = if expiring {
-                        Self::decide_loan_buyout(player, loan_contract)
+                    // never touches option loans). An obligation binds
+                    // the clubs; an option still has to be signed by him.
+                    let (buyout, declined_buyout) = if expiring {
+                        match Self::decide_loan_buyout(player, loan_contract) {
+                            Some((fee, false)) => match Self::buyout_refusal(
+                                data,
+                                country,
+                                club,
+                                player,
+                                parent_club_id,
+                                fee,
+                                date,
+                            ) {
+                                Some(cause) => (None, Some(cause)),
+                                None => (Some((fee, false)), None),
+                            },
+                            other => (other, None),
+                        }
                     } else {
-                        None
+                        (None, None)
                     };
                     events.push(LoanReturnEvent {
                         player_id: player.id,
@@ -1121,6 +1123,7 @@ impl CountryResult {
                             league_slug: main_league_slug.clone(),
                         },
                         buyout,
+                        declined_buyout,
                     });
                 }
             }
@@ -1167,6 +1170,95 @@ impl CountryResult {
             .has_recent_event(&HappinessEventType::WantsLoanMadePermanent, 120);
         let rating_bar = if wants_to_stay { 6.45 } else { 6.6 };
         (apps >= 10 && rating >= rating_bar).then_some((fee, false))
+    }
+
+    /// The player's side of an option to buy. The borrower has decided
+    /// the loan worked; whether he turns a season there into a permanent
+    /// deal is the appraisal every personal-terms round runs, weighed
+    /// against the club that owns him. `None` when he signs.
+    #[allow(clippy::too_many_arguments)]
+    fn buyout_refusal(
+        data: &SimulatorData,
+        country: &Country,
+        borrower: &Club,
+        player: &Player,
+        parent_club_id: u32,
+        fee: u32,
+        date: NaiveDate,
+    ) -> Option<TermsRefusalCause> {
+        let (pci, pcoi, pcli, _) = data.find_club_main_team(parent_club_id)?;
+        let parent_country = &data.continents[pci].countries[pcoi];
+        let parent = &parent_country.clubs[pcli];
+        let borrower_rep = borrower.teams.main()?.reputation.overall_score();
+        let parent_rep = parent.teams.main()?.reputation.overall_score();
+        let borrower_league_rep = LoanPipeline::club_league_reputation(country, borrower);
+        let promised = player
+            .contract_loan
+            .as_ref()
+            .and_then(|loan| PromisedSquadStatus::of_status(&loan.squad_status));
+        // What he is where he has been playing all season, and how far
+        // the club that owns him sits above it.
+        let here = TransferPlausibilityBuilder::from_clubs(
+            country, borrower, borrower, player, fee as f64, false, false, date,
+        );
+        let from_parent = TransferPlausibilityBuilder::from_global(
+            country,
+            borrower,
+            parent_country,
+            parent,
+            player,
+            fee as f64,
+            false,
+            false,
+            date,
+            &MarketMap::default(),
+        );
+        let stance = PlayerStanceBuilder::build(&StanceInputs {
+            player,
+            seller_country: parent_country,
+            seller_club: parent,
+            buyer_club_id: borrower.id,
+            rep_diff: borrower_rep - parent_rep,
+            importance: TransferPlausibilityEvaluator::player_importance(&here),
+            listed_by_club: false,
+            available: false,
+            months_to_tournament: country.months_to_tournament_for(player.nationality_continent_id),
+            date,
+        });
+        let wage = BuyerLevelWage::evaluate(
+            player,
+            player.age(date),
+            borrower_rep,
+            borrower_league_rep,
+            promised,
+        );
+        let offer = OfferViewBuilder::build(
+            OfferKind::Permanent,
+            country,
+            borrower.id,
+            &stance,
+            wage as f64,
+            promised,
+            TransferPlausibilityEvaluator::sporting_drop(&from_parent),
+            borrower_rep,
+            &MarketMap::default(),
+        );
+        let cfg = AppraisalConfig::default();
+        let disposition = PlayerDisposition::for_negotiation(
+            country.id,
+            0,
+            player.id,
+            borrower.id,
+            cfg.disposition_sigma,
+        );
+        let appraisal = PlayerOfferAppraisal::appraise(&stance, &offer, disposition, &cfg);
+        debug!(
+            "Loan option: player {} weighs a permanent deal at club {}: {}",
+            player.id,
+            borrower.id,
+            appraisal.explain()
+        );
+        (!appraisal.accepts()).then(|| appraisal.refusal_cause(false))
     }
 
     /// Execute an option / obligation-to-buy at loan end: the borrower
@@ -1412,6 +1504,9 @@ impl CountryResult {
             }
             None => return,
         };
+        if let Some(cause) = event.declined_buyout {
+            player.on_buyout_declined(cause, date);
+        }
 
         // Capture the loan-spell record before `on_loan_return` freezes
         // and resets the borrower-season statistics.
@@ -1761,6 +1856,7 @@ impl CountryResult {
                         parent_club_id,
                         borrowing_info: Self::loan_team_info(country, club, team),
                         buyout: None,
+                        declined_buyout: None,
                     });
                 }
             }
@@ -2392,6 +2488,16 @@ impl CountryResult {
             .iter()
             .filter(|l| lower_ids.contains(&l.id))
             .any(|l| l.settings.tier > vacated_tier);
+        // A side in a senior division (Castilla, Jong Ajax, Zenit 2) moves
+        // on its own result alone; only youth and friendly sides follow
+        // their first team down or up.
+        let senior_league_ids: HashSet<u32> = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| l.id)
+            .collect();
 
         // Swap league_ids on teams and move sub-teams to matching friendly league
         for club in &mut country.clubs {
@@ -2408,11 +2514,11 @@ impl CountryResult {
                         team.name, team.id, lower_id
                     );
                     team.move_to_league(lower_id);
-                    new_main_league_id = Some(lower_id);
-                    // Year-defining wound — emit per player. The promo
-                    // counterpart already ran in season_awards via the
-                    // PromotionCelebration emit; we don't duplicate the
-                    // upward case here.
+                    if team.team_type == TeamType::Main {
+                        new_main_league_id = Some(lower_id);
+                    }
+                    // Year-defining wound — emit per player. The upward
+                    // counterpart fires once the whole swap has run.
                     // Inline emit (we hold &mut to team here, so the
                     // Self::apply_team_squad_event helper which takes
                     // &mut country would conflict).
@@ -2448,7 +2554,9 @@ impl CountryResult {
                         team.name, team.id, tier1_id
                     );
                     team.move_to_league(tier1_id);
-                    new_main_league_id = Some(tier1_id);
+                    if team.team_type == TeamType::Main {
+                        new_main_league_id = Some(tier1_id);
+                    }
                     // Symmetric to the relegation hooks above —
                     // PromotionWageIncrease bumps salary; players
                     // also keep their existing contracts (no clause
@@ -2532,19 +2640,20 @@ impl CountryResult {
             // up. Without this, dropping a division is a ~90% revenue
             // cut against a wage bill fixed by contracts already signed
             // — arithmetically unsurvivable, and the reason relegated
-            // clubs used to spiral straight to insolvency.
-            let club_was_relegated = club
-                .teams
-                .teams
-                .iter()
-                .any(|t| relegated_team_ids.contains(&t.id));
+            // clubs used to spiral straight to insolvency. The revenue at
+            // stake is the first team's: a B team crossing a tier neither
+            // costs the club a division's money nor wins it back.
+            let first_team_in =
+                |ids: &[u32]| club.teams.main().is_some_and(|t| ids.contains(&t.id));
+            let first_team_relegated = first_team_in(&relegated_team_ids);
+            let first_team_promoted = first_team_in(&promoted_team_ids);
             if crosses_tier {
-                if club_was_relegated {
+                if first_team_relegated {
                     club.finance.parachute = Some(ParachuteEntitlement {
                         from_tier: vacated_tier,
                         seasons_elapsed: 0,
                     });
-                } else if club_was_promoted {
+                } else if first_team_promoted {
                     club.finance.parachute = None;
                 }
             }
@@ -2552,7 +2661,11 @@ impl CountryResult {
             // Move sub-teams to the matching youth league of the new main league
             if let Some(new_league_id) = new_main_league_id {
                 for team in &mut club.teams.teams {
-                    if team.team_type != TeamType::Main {
+                    if team.team_type != TeamType::Main
+                        && !team
+                            .league_id
+                            .is_some_and(|id| senior_league_ids.contains(&id))
+                    {
                         let type_offset = match team.team_type {
                             TeamType::U18 => 100000,
                             TeamType::U19 => 110000,
@@ -2565,6 +2678,26 @@ impl CountryResult {
                     }
                 }
             }
+        }
+
+        // Promotion is felt by exactly the sides that went up — nobody
+        // knows who they are until the swap has run.
+        for &team_id in &promoted_team_ids {
+            if let Some(club) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.teams.iter().any(|t| t.id == team_id))
+            {
+                Self::award_trophy(club, team_id, AchievementType::Promotion, date);
+            }
+            Self::apply_team_squad_event(
+                country,
+                team_id,
+                HappinessEventType::PromotionCelebration,
+                365,
+                1.0,
+                date,
+            );
         }
     }
 
@@ -2662,6 +2795,7 @@ impl CountryResult {
 mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
+    use crate::club::mind::organs::memory::EpisodeKind;
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::mind::CareerArc;
     use crate::competitions::global::GlobalCompetitions;
@@ -3242,6 +3376,134 @@ mod tests {
         );
     }
 
+    /// A season of starts behind an option to buy, at a borrower in the
+    /// division `borrower_league` carries, owned by a top-flight giant.
+    fn option_world(borrower_league: u32, borrower_rep: u16) -> SimulatorData {
+        let team_with_rep = |id: u32, club_id: u32, league_id: u32, rep: u16, players| {
+            TeamBuilder::new()
+                .id(id)
+                .league_id(Some(league_id))
+                .club_id(club_id)
+                .name(format!("Team{}", id))
+                .slug(format!("team{}", id))
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(rep, rep, rep))
+                .training_schedule(make_training_schedule())
+                .build()
+                .unwrap()
+        };
+        let parent_team = team_with_rep(10, 100, 1, 8_900, vec![make_player_with_position(11)]);
+        let parent_club = make_club(100, vec![parent_team]);
+
+        // A fifty-cap international the giant has just bought: a name
+        // worth a top-flight division, whatever his club form says.
+        let mut loanee = make_player_with_position(55);
+        loanee.player_attributes.current_reputation = 7_000;
+        loanee.player_attributes.home_reputation = 7_000;
+        loanee.player_attributes.world_reputation = 7_000;
+        loanee.player_attributes.international_apps = 51;
+        loanee.contract = Some(PlayerClubContract::new(30_000, d(2028, 6, 30)));
+        loanee.statistics.played = 22;
+        loanee.statistics.rating_points = 6.9 * 22.0;
+        loanee.statistics.rating_weight = 22.0;
+        let mut loan = PlayerClubContract::new(30_000, d(2027, 5, 28));
+        loan.loan_from_club_id = Some(100);
+        loan.started = Some(d(2026, 9, 1));
+        loan.loan_future_fee = Some(2_000_000);
+        loanee.contract_loan = Some(loan);
+        let borrower_team = team_with_rep(20, 200, borrower_league, borrower_rep, vec![loanee]);
+        let borrower_club = make_club(200, vec![borrower_team]);
+
+        let top_flight = make_league_with_table(1, 8_750, vec![]);
+        let third_tier = make_league_with_table(2, 3_500, vec![]);
+        let country = build_country(
+            vec![parent_club, borrower_club],
+            vec![top_flight, third_tier],
+        );
+        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        SimulatorData::new(
+            d(2027, 5, 28).and_hms_opt(12, 0, 0).unwrap(),
+            vec![continent],
+            GlobalCompetitions::new(Vec::new()),
+        )
+    }
+
+    fn holds_player(data: &SimulatorData, club_id: u32) -> Option<&Player> {
+        data.country(1)
+            .unwrap()
+            .clubs
+            .iter()
+            .find(|c| c.id == club_id)
+            .and_then(|c| c.teams.teams[0].players.players.iter().find(|p| p.id == 55))
+    }
+
+    /// The borrower exercises its option; the player will not sign for
+    /// a division under his floor, so the option lapses and he goes
+    /// home with his own refusal on the record.
+    #[test]
+    fn an_international_declines_the_option_of_a_third_tier_club() {
+        let mut data = option_world(2, 3_500);
+        CountryResult::process_loan_returns(&mut data, 1, d(2027, 5, 28));
+
+        let returned = holds_player(&data, 100).expect("home with the parent");
+        assert!(returned.contract_loan.is_none());
+        assert!(
+            returned
+                .decision_history
+                .items
+                .iter()
+                .any(|row| row.movement == "dec_loan_buyout_declined"),
+            "his refusal is a decision in his name"
+        );
+        assert!(holds_player(&data, 200).is_none());
+    }
+
+    /// The same season, the same option, at a club in his own division:
+    /// he signs, and ownership flips in place.
+    #[test]
+    fn the_same_option_is_signed_at_a_club_in_his_own_division() {
+        let mut data = option_world(1, 7_000);
+        CountryResult::process_loan_returns(&mut data, 1, d(2027, 5, 28));
+
+        let bought = holds_player(&data, 200).expect("stays where he played");
+        assert!(bought.contract_loan.is_none(), "the loan became a purchase");
+        assert!(holds_player(&data, 100).is_none());
+    }
+
+    /// An obligation is not asked again at the end: he agreed to it with
+    /// the loan, so the parent did not sell him against his will — even
+    /// at a club under his floor.
+    #[test]
+    fn an_executed_obligation_is_his_own_move() {
+        let mut data = option_world(2, 3_500);
+        let loanee = data
+            .country_mut(1)
+            .unwrap()
+            .clubs
+            .iter_mut()
+            .find(|c| c.id == 200)
+            .and_then(|c| c.teams.teams[0].players.players.iter_mut().find(|p| p.id == 55))
+            .unwrap();
+        if let Some(loan) = loanee.contract_loan.as_mut() {
+            loan.loan_future_fee_obligation = true;
+        }
+        CountryResult::process_loan_returns(&mut data, 1, d(2027, 5, 28));
+
+        let bought = holds_player(&data, 200).expect("the obligation binds");
+        assert!(bought.contract_loan.is_none());
+        assert!(
+            !bought
+                .mind
+                .memory()
+                .episodes
+                .iter()
+                .any(|e| e.kind == EpisodeKind::SoldAgainstWill),
+            "no grudge against the club that owned him"
+        );
+    }
+
     // ── Mid-loan recall ─────────────────────────────────────────
 
     fn recall_world(recall_window: Option<NaiveDate>) -> SimulatorData {
@@ -3777,6 +4039,335 @@ mod tests {
         assert_eq!(league_of(21), Some(1), "the next eligible side goes up");
         assert_eq!(league_of(13), Some(2));
         assert_eq!(league_of(10), Some(1));
+    }
+
+    fn make_sub_team(
+        id: u32,
+        club_id: u32,
+        league_id: u32,
+        team_type: TeamType,
+        players: Vec<Player>,
+    ) -> crate::Team {
+        TeamBuilder::new()
+            .id(id)
+            .league_id(Some(league_id))
+            .club_id(club_id)
+            .name(format!("Team{}", id))
+            .slug(format!("team{}", id))
+            .team_type(team_type)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(100, 100, 200))
+            .training_schedule(make_training_schedule())
+            .build()
+            .unwrap()
+    }
+
+    fn league_of_team(country: &Country, team_id: u32) -> Option<u32> {
+        country
+            .clubs
+            .iter()
+            .flat_map(|c| c.teams.iter())
+            .find(|t| t.id == team_id)
+            .and_then(|t| t.league_id)
+    }
+
+    fn team_by_id(country: &Country, team_id: u32) -> &crate::Team {
+        country
+            .clubs
+            .iter()
+            .flat_map(|c| c.teams.iter())
+            .find(|t| t.id == team_id)
+            .unwrap()
+    }
+
+    fn celebrations(country: &Country, team_id: u32) -> usize {
+        team_by_id(country, team_id)
+            .players
+            .players
+            .iter()
+            .map(|p| happiness_event_count(p, &HappinessEventType::PromotionCelebration))
+            .sum()
+    }
+
+    /// Castilla tops the third tier while Real Madrid plays in the first:
+    /// it goes up into the second, and stays there.
+    #[test]
+    fn a_promoted_b_team_stays_in_the_division_it_went_up_into() {
+        let mut clubs = vec![make_club(
+            10,
+            vec![
+                make_simple_team(10, 10, 1),
+                make_sub_team(100, 10, 3, TeamType::B, Vec::new()),
+            ],
+        )];
+        clubs.extend((11u32..=12).map(|id| make_club(id, vec![make_simple_team(id, id, 1)])));
+        clubs.extend((21u32..=23).map(|id| make_club(id, vec![make_simple_team(id, id, 2)])));
+        clubs.extend((31u32..=33).map(|id| make_club(id, vec![make_simple_team(id, id, 3)])));
+        let tier1 =
+            make_league_with_settings(1, 1, 0, 0, vec![(10, 30, 70), (11, 30, 60), (12, 30, 30)]);
+        let tier2 =
+            make_league_with_settings(2, 2, 0, 1, vec![(21, 30, 70), (22, 30, 60), (23, 30, 30)]);
+        let tier3 = make_league_with_settings(
+            3,
+            3,
+            1,
+            0,
+            vec![(100, 30, 80), (31, 30, 70), (32, 30, 40), (33, 30, 25)],
+        );
+        let mut country = build_country(clubs, vec![tier1, tier2, tier3]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        assert_eq!(league_of_team(&country, 100), Some(2));
+        assert_eq!(league_of_team(&country, 23), Some(3));
+        let size = |league_id: u32| {
+            country
+                .clubs
+                .iter()
+                .flat_map(|c| c.teams.iter())
+                .filter(|t| t.league_id == Some(league_id))
+                .count()
+        };
+        assert_eq!([1u32, 2, 3].map(size), [3, 3, 4]);
+    }
+
+    /// The first team drops a division; its B team, two divisions below,
+    /// is not dragged after it — only the youth side follows.
+    #[test]
+    fn a_first_teams_relegation_leaves_its_b_team_where_it_plays() {
+        let mut clubs = vec![make_club(
+            10,
+            vec![
+                make_simple_team(10, 10, 1),
+                make_sub_team(100, 10, 3, TeamType::B, Vec::new()),
+                make_sub_team(101, 10, 1 + 110_000, TeamType::U19, Vec::new()),
+            ],
+        )];
+        clubs.extend((11u32..=12).map(|id| make_club(id, vec![make_simple_team(id, id, 1)])));
+        clubs.extend((21u32..=23).map(|id| make_club(id, vec![make_simple_team(id, id, 2)])));
+        clubs.extend((31u32..=33).map(|id| make_club(id, vec![make_simple_team(id, id, 3)])));
+        let tier1 =
+            make_league_with_settings(1, 1, 0, 1, vec![(11, 30, 70), (12, 30, 60), (10, 30, 30)]);
+        let tier2 =
+            make_league_with_settings(2, 2, 1, 0, vec![(21, 30, 70), (22, 30, 60), (23, 30, 30)]);
+        let tier3 = make_league_with_settings(
+            3,
+            3,
+            0,
+            0,
+            vec![(100, 30, 80), (31, 30, 70), (32, 30, 40), (33, 30, 25)],
+        );
+        let mut country = build_country(clubs, vec![tier1, tier2, tier3]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        assert_eq!(league_of_team(&country, 10), Some(2));
+        assert_eq!(
+            league_of_team(&country, 100),
+            Some(3),
+            "the B team plays on in tier 3"
+        );
+        assert_eq!(league_of_team(&country, 101), Some(2 + 110_000));
+    }
+
+    /// A B team champion below its first team stays down; the two sides
+    /// that do go up are the two that celebrate it.
+    #[test]
+    fn promotion_is_celebrated_by_the_sides_that_go_up() {
+        let mut clubs = vec![make_club(
+            10,
+            vec![
+                make_simple_team(10, 10, 1),
+                make_sub_team(100, 10, 2, TeamType::B, vec![make_player(1001)]),
+            ],
+        )];
+        clubs.extend((11u32..=13).map(|id| make_club(id, vec![make_simple_team(id, id, 1)])));
+        clubs.extend(
+            (21u32..=23)
+                .map(|id| make_club(id, vec![make_team(id, id, 2, vec![make_player(id * 100)])])),
+        );
+        let tier1 = make_league_with_settings(
+            1,
+            1,
+            0,
+            2,
+            vec![(10, 30, 70), (11, 30, 60), (12, 30, 30), (13, 30, 20)],
+        );
+        let tier2 = make_league_with_settings(
+            2,
+            2,
+            2,
+            0,
+            vec![(100, 30, 80), (21, 30, 70), (22, 30, 40), (23, 30, 25)],
+        );
+        let mut country = build_country(clubs, vec![tier1, tier2]);
+
+        CountryResult::process_season_awards(&mut country, &[], d(2032, 5, 31));
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        let b_player = &team_by_id(&country, 100).players.players[0];
+        assert_eq!(
+            happiness_event_count(b_player, &HappinessEventType::TrophyWon),
+            1
+        );
+        assert_eq!(celebrations(&country, 100), 0);
+        for id in [21u32, 22] {
+            assert_eq!(league_of_team(&country, id), Some(1));
+            assert_eq!(celebrations(&country, id), 1, "team {id} celebrates");
+            assert!(
+                team_by_id(&country, id).reputation.home > 100,
+                "team {id} carries the promotion achievement"
+            );
+        }
+        assert_eq!(celebrations(&country, 23), 0);
+        assert_eq!(team_by_id(&country, 23).reputation.home, 100);
+    }
+
+    /// Three places over two groups that each declare two: the second
+    /// group's runner-up stays down and has nothing to celebrate.
+    #[test]
+    fn a_group_allotted_fewer_places_celebrates_only_its_movers() {
+        let mut clubs: Vec<Club> = (10u32..=14)
+            .map(|id| make_club(id, vec![make_simple_team(id, id, 1)]))
+            .collect();
+        for (base, league_id) in [(20u32, 2u32), (30, 3)] {
+            clubs.extend((base..base + 4).map(|id| {
+                make_club(
+                    id,
+                    vec![make_team(id, id, league_id, vec![make_player(id * 100)])],
+                )
+            }));
+        }
+        let upper = make_league_with_settings(
+            1,
+            2,
+            0,
+            3,
+            vec![
+                (10, 30, 70),
+                (11, 30, 60),
+                (12, 30, 50),
+                (13, 30, 40),
+                (14, 30, 30),
+            ],
+        );
+        let mut groups = vec![
+            make_league_with_settings(
+                2,
+                3,
+                2,
+                0,
+                vec![(20, 30, 80), (21, 30, 70), (22, 30, 40), (23, 30, 25)],
+            ),
+            make_league_with_settings(
+                3,
+                3,
+                2,
+                0,
+                vec![(30, 30, 80), (31, 30, 70), (32, 30, 40), (33, 30, 25)],
+            ),
+        ];
+        for (group, name) in groups.iter_mut().zip(["Grupo 1", "Grupo 2"]) {
+            group.settings.league_group = Some(crate::league::LeagueGroup {
+                name: name.to_string(),
+                competition: "Primera Federación".to_string(),
+                total_groups: 2,
+                level: 0,
+                playoff: None,
+            });
+        }
+        let mut leagues = vec![upper];
+        leagues.extend(groups);
+        let mut country = build_country(clubs, leagues);
+
+        CountryResult::process_season_awards(&mut country, &[], d(2032, 5, 31));
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        for id in [20u32, 21, 30] {
+            assert_eq!(league_of_team(&country, id), Some(1), "team {id} goes up");
+            assert_eq!(celebrations(&country, id), 1, "team {id} celebrates");
+        }
+        assert_eq!(league_of_team(&country, 31), Some(3));
+        assert_eq!(
+            celebrations(&country, 31),
+            0,
+            "the runner-up who stays down"
+        );
+    }
+
+    /// A B team falling out of the third tier is not the club falling out
+    /// of anything: the first team's revenue is untouched.
+    #[test]
+    fn a_relegated_b_team_grants_its_club_no_parachute() {
+        let mut clubs = vec![make_club(
+            10,
+            vec![
+                make_simple_team(10, 10, 1),
+                make_sub_team(100, 10, 3, TeamType::B, Vec::new()),
+            ],
+        )];
+        clubs.extend((31u32..=33).map(|id| make_club(id, vec![make_simple_team(id, id, 3)])));
+        clubs.extend((41u32..=43).map(|id| make_club(id, vec![make_simple_team(id, id, 4)])));
+        let tier1 = make_league_with_settings(1, 1, 0, 0, vec![(10, 30, 70)]);
+        let tier3 = make_league_with_settings(
+            3,
+            3,
+            0,
+            1,
+            vec![(31, 30, 80), (32, 30, 70), (33, 30, 40), (100, 30, 25)],
+        );
+        let tier4 =
+            make_league_with_settings(4, 4, 1, 0, vec![(41, 30, 70), (42, 30, 60), (43, 30, 30)]);
+        let mut country = build_country(clubs, vec![tier1, tier3, tier4]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        assert_eq!(league_of_team(&country, 100), Some(4));
+        let club = country.clubs.iter().find(|c| c.id == 10).unwrap();
+        assert_eq!(club.finance.parachute, None);
+    }
+
+    /// A first team living on a parachute keeps it when its B team goes
+    /// up two divisions below.
+    #[test]
+    fn a_promoted_b_team_leaves_its_clubs_parachute_running() {
+        let mut parent = make_club(
+            10,
+            vec![
+                make_simple_team(10, 10, 2),
+                make_sub_team(100, 10, 4, TeamType::B, Vec::new()),
+            ],
+        );
+        parent.finance.parachute = Some(ParachuteEntitlement {
+            from_tier: 1,
+            seasons_elapsed: 0,
+        });
+        let mut clubs = vec![parent];
+        clubs.extend((31u32..=33).map(|id| make_club(id, vec![make_simple_team(id, id, 3)])));
+        clubs.extend((41u32..=43).map(|id| make_club(id, vec![make_simple_team(id, id, 4)])));
+        let tier2 = make_league_with_settings(2, 2, 0, 0, vec![(10, 30, 70)]);
+        let tier3 =
+            make_league_with_settings(3, 3, 0, 1, vec![(31, 30, 80), (32, 30, 70), (33, 30, 40)]);
+        let tier4 = make_league_with_settings(
+            4,
+            4,
+            1,
+            0,
+            vec![(100, 30, 80), (41, 30, 70), (42, 30, 60), (43, 30, 30)],
+        );
+        let mut country = build_country(clubs, vec![tier2, tier3, tier4]);
+
+        CountryResult::process_promotion_relegation(&mut country, d(2032, 6, 1));
+
+        assert_eq!(league_of_team(&country, 100), Some(3));
+        let club = country.clubs.iter().find(|c| c.id == 10).unwrap();
+        assert_eq!(
+            club.finance
+                .parachute
+                .map(|p| (p.from_tier, p.seasons_elapsed)),
+            Some((1, 0))
+        );
     }
 
     #[test]

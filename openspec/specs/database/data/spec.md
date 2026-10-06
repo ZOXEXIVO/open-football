@@ -92,3 +92,14 @@ The shipped national competition configurations SHALL schedule the senior contin
 #### Scenario: Qualifying years for Europe
 - **WHEN** the shipped World Cup and European Championship configurations are asked which years start a qualifying cycle
 - **THEN** no year between 2026 and 2040 starts both, and the European Championship starts in 2026, 2030, 2034 and 2038
+
+### Requirement: League group records may rank a group inside its tier
+A league's optional group record SHALL carry the group name, its parent competition and the competition's group count. It MAY also carry a playoff configuration, and a level ranking the group inside its tier: 0 for a regional group, and N for the division directly below the level N−1 group.
+
+#### Scenario: Russian Division A
+- **WHEN** the data models Division A as Gold and Silver groups of one tier
+- **THEN** Gold carries level 0 and Silver level 1
+
+#### Scenario: Regional groups
+- **WHEN** the data models a tier as parallel regional groups of one competition
+- **THEN** every group either carries level 0 or omits the level

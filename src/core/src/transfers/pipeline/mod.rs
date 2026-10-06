@@ -36,6 +36,34 @@ pub use self::advice::StaffRecommendations;
 pub use self::circulation::MarketCirculation;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 pub use self::trace::TransferTrace;
+use crate::club::player::mind::MindSituation;
+use crate::club::player::transfer::{LevelFloor, StandingReading};
+use crate::transfers::gate::EffectivePlayerReputation;
+
+impl PlayerSummary {
+    /// The floor under the football he will play, as a borrowing country
+    /// can read it: his name as the world sees it, since the summary is
+    /// what crosses a border.
+    pub fn level_floor(&self) -> LevelFloor {
+        let seen = self.appearances >= MindSituation::TRACKED_APPS as u16;
+        LevelFloor::of(&StandingReading {
+            level: self.observable_level,
+            group: self.position_group,
+            effective_rep: EffectivePlayerReputation::compute(
+                self.world_reputation,
+                self.current_reputation,
+                self.home_reputation,
+                false,
+            ),
+            league_rep: self.seller_ctx.league_reputation,
+            starter_share: if seen { self.starter_share } else { 0.0 },
+            caps: self.international_apps,
+            age: self.age,
+            resignation: self.seller_ctx.market_resignation,
+            plan_widening: self.career_plan.renown_widening(),
+        })
+    }
+}
 use chrono::Duration;
 use std::cmp::Ordering;
 

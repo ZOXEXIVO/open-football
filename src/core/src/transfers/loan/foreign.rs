@@ -296,14 +296,8 @@ impl ForeignBorrower<'_> {
             p.estimated_value,
             p.salary,
             p.is_loan_listed,
-            EffectivePlayerReputation::compute(
-                p.world_reputation,
-                p.current_reputation,
-                p.home_reputation,
-                false,
-            ),
-        )
-        .with_plan(p.career_plan);
+            p.level_floor(),
+        );
         let verdict = borrower
             .as_ref()
             .map(|b| guard.assess(b, p.loan_willingness.score, p.parent_subsidy));
@@ -332,8 +326,7 @@ impl ForeignBorrower<'_> {
             // one of the things a borrowing country cannot see.
             club_band_target: None,
             plan: p.career_plan,
-            renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
-            renown_band: guard.renown_band(),
+            below_floor: verdict.map(|v| v.below_floor).unwrap_or(0.0),
             resignation: p.seller_ctx.market_resignation,
             // He is being asked to come back to the country his
             // passport is from — the one thing a cross-border loan can

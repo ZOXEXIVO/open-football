@@ -1,9 +1,10 @@
 //! The player's own side of the transfer market.
 //!
 //! [`availability`] is what the market can see of him, [`free`] is his life
-//! once his contract lapses, [`stage`] is his appetite for a bigger one,
-//! [`settlement`] is what he takes to walk away from a deal, and
-//! [`processing`] is where a desire to leave is detected in the first place.
+//! once his contract lapses, [`stage`] is his appetite for a bigger one and
+//! the smallest one he will play at, [`settlement`] is what he takes to walk
+//! away from a deal, and [`processing`] is where a desire to leave is
+//! detected in the first place.
 
 pub mod availability;
 pub mod free;
@@ -21,4 +22,6 @@ pub use processing::{
     EuropeanAmbitionConfig, TransferDesireContext,
 };
 pub use settlement::{SettlementAppetite, SettlementAsk, SettlementOutlook};
-pub use stage::{BigStagePull, BigStagePullConfig, BigStagePullContext};
+pub use stage::{
+    BigStagePull, BigStagePullConfig, BigStagePullContext, LevelFloor, StandingReading,
+};

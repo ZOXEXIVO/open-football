@@ -24,7 +24,7 @@ Each navigation item SHALL be marked active when the current page path exactly m
 - **THEN** that menu item is marked active
 
 #### Scenario: Sub-page of a league link
-- **WHEN** the current path is a sub-page under a league's URL (e.g. `/en/leagues/premier-league/table` under `/en/leagues/premier-league`)
+- **WHEN** the current path is a sub-page under a league's URL (e.g. `/en/leagues/france/ligue-1/transfers` under `/en/leagues/france/ligue-1`)
 - **THEN** the league's menu item is still marked active
 
 #### Scenario: Unrelated path
@@ -104,3 +104,21 @@ The display name shown for a league SHALL be the league's own name prefixed with
 #### Scenario: League with no resolvable country
 - **WHEN** the system formats a league's display name and no country adjective can be resolved for it
 - **THEN** the displayed name is exactly the league's own name, with no prefix
+
+### Requirement: Header country flag leads to the country's competitions overview
+On league pages (overview, newspaper, transfers, awards), domestic cup pages (bracket, history) and playoff pages (bracket, history), the header subtitle SHALL show the league's country flag. The flag SHALL be drawn by the country code and SHALL link to `/{lang}/countries/{country_slug}/leagues`. Every other page SHALL show no header flag.
+
+#### Scenario: League page flag
+- **WHEN** a user views an Italian league's newspaper page in English
+- **THEN** the header shows the `it` flag linking to `/en/countries/italy/leagues`
+
+#### Scenario: Page without a country context
+- **WHEN** a user views a team, player or continental-competition page
+- **THEN** the header shows no country flag
+
+### Requirement: Menu league entries link under their country
+Every league entry in a left-hand menu, whether a country's league section or a club's league list, SHALL link to the league's country-scoped address `/{lang}/leagues/{country_slug}/{league_slug}`.
+
+#### Scenario: Country league section
+- **WHEN** the system builds the league menu for France in English
+- **THEN** the Ligue 1 entry links to `/en/leagues/france/ligue-1`

@@ -10,7 +10,6 @@ use crate::PlayerFieldPositionGroup;
 use crate::transfers::loan::guard::{LoanAssetGuard, LoanBorrowerProfile};
 use crate::transfers::pipeline::PlayerSummary;
 
-use crate::transfers::gate::EffectivePlayerReputation;
 use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
 
 use crate::transfers::squad::LevelBand;
@@ -234,12 +233,7 @@ impl LegacyLoanGuard {
             target.estimated_value,
             target.salary,
             target.is_loan_listed,
-            EffectivePlayerReputation::compute(
-                target.world_reputation,
-                target.current_reputation,
-                target.home_reputation,
-                false,
-            ),
+            target.level_floor(),
         );
         if TransferTrace::is(target.player_id) {
             let verdict = guard.assess(borrower, 1.0, 0.0);
@@ -447,6 +441,7 @@ impl LoanDestinationLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::player::transfer::{LevelFloor, StandingReading};
     use crate::{ClubLevelAnchor, PlayerFieldPositionGroup};
 
     struct Fx;
@@ -466,7 +461,6 @@ mod tests {
                 anchor: ClubLevelAnchor::for_reputation(0.90),
                 world_rep: 9_000,
                 league_rep: Self::LA_LIGA,
-                reach: 9_000,
             }
         }
 
@@ -484,8 +478,18 @@ mod tests {
                 14_600_000,
                 requested,
                 false,
-                8_500,
                 0.0,
+                LevelFloor::of(&StandingReading {
+                    level: 176,
+                    group: Self::FORWARD,
+                    effective_rep: 8_500,
+                    league_rep: Self::LA_LIGA,
+                    starter_share: 0.9,
+                    caps: 20,
+                    age: 19,
+                    resignation: 0.0,
+                    plan_widening: 0.0,
+                }),
             )
         }
     }
@@ -522,7 +526,6 @@ mod tests {
             anchor: ClubLevelAnchor::for_reputation(0.45),
             world_rep: 3_000,
             league_rep: Fx::SEGUNDA,
-            reach: 3_800,
             ..Fx::peer_borrower()
         };
         assert!(!LegacyLoanGuard::allows(&Fx::yamal(true), &poor));

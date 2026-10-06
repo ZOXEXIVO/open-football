@@ -676,8 +676,7 @@ impl<'a> BorrowerScan<'a> {
             stage: l.stage,
             club_band_target: l.club_band_target,
             plan: l.plan,
-            renown_gap: verdict.map(|v| v.renown_gap).unwrap_or(0.0),
-            renown_band: l.guard.as_ref().map(|g| g.renown_band()).unwrap_or(0.0),
+            below_floor: verdict.map(|v| v.below_floor).unwrap_or(0.0),
             resignation: l
                 .guard
                 .as_ref()

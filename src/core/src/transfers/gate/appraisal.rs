@@ -40,6 +40,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::language::LanguageProfile;
 use crate::club::player::mind::{CareerPlanView, EpochDay, GoalKind, MindSituation, PlayerMind};
+use crate::club::player::transfer::LevelFloor;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::PromisedSquadStatus;
 use crate::transfers::squad::LevelBand;
@@ -84,6 +85,10 @@ pub struct OfferView {
     /// Sporting distance of the move, positive when the buyer is below the
     /// seller — [`crate::transfers::gate::TransferPlausibilityEvaluator::sporting_drop`].
     pub sporting_drop: f32,
+    /// Reputation of the DIVISION he would play in, 0..10000 — what the
+    /// floor under his football is read against. 0 when the caller cannot
+    /// see it, which stands the term down rather than guessing.
+    pub league_level: u16,
     /// How far the destination's region prestige falls short of the
     /// seller's, signed. Positive is a drop.
     pub prestige_drop: f32,
@@ -132,6 +137,7 @@ impl OfferView {
             offered_wage: 0.0,
             promised_status: None,
             sporting_drop: 0.0,
+            league_level: 0,
             prestige_drop: 0.0,
             crosses_continent: false,
             language_affinity: 1.0,
@@ -260,6 +266,11 @@ pub struct PlayerStance {
     pub seller_continent_id: u32,
     pub seller_country_id: u32,
     pub seller_region: ScoutingRegion,
+
+    // ── The football he will not play ───────────────────────────
+    /// The lowest division he will play in — [`LevelFloor`]. No view
+    /// stands the term down.
+    pub level_floor: LevelFloor,
 }
 
 impl PlayerStance {
@@ -304,6 +315,7 @@ impl PlayerStance {
             seller_continent_id: 0,
             seller_country_id: 0,
             seller_region: ScoutingRegion::WesternEurope,
+            level_floor: LevelFloor::none(),
         }
     }
 
@@ -501,6 +513,8 @@ pub struct Appraisal {
     pub memory: f32,
     /// How well the move serves the arc he is living out, −1..1.
     pub plan_fit: f32,
+    /// A division under the floor he will play at, ≤ 0.
+    pub floor: f32,
     /// The wage at which `U + ε == 0`, given everything else. His demand.
     pub reservation_wage: u32,
     /// `ε` — his private disposition on this negotiation, drawn once.
@@ -535,7 +549,7 @@ impl Appraisal {
         let candidates = [
             (self.money.min(0.0).abs(), TermsRefusalCause::WageDemand),
             (
-                self.sport.min(0.0).abs(),
+                self.sport.min(0.0).abs() + self.floor.min(0.0).abs(),
                 TermsRefusalCause::SportingStepDown,
             ),
             (self.role.min(0.0).abs(), TermsRefusalCause::Role),
@@ -560,7 +574,7 @@ impl Appraisal {
     pub fn explain(&self) -> String {
         format!(
             "U={:+.3} (M{:+.3} S{:+.3} R{:+.3} P{:+.3} H{:+.3} D{:+.3} A{:+.3} F{:+.3} \
-             N{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
+             N{:+.3} L{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
             self.utility,
             self.money,
             self.sport,
@@ -571,6 +585,7 @@ impl Appraisal {
             self.attachment,
             self.memory,
             self.plan_fit,
+            self.floor,
             self.disposition,
             self.money_weight,
             self.reservation_wage,
@@ -629,6 +644,11 @@ pub struct AppraisalConfig {
     /// How far unsold months erode the step-down resistance. Same clock the
     /// seller's fee-floor erosion runs on.
     pub sport_resignation_relief: f32,
+    /// What a division a full span under his floor costs, before the
+    /// money weight discounts it. Above the push cap plus a promised
+    /// shirt, so a club listing him cannot buy a division he does not
+    /// play in; a payday late in a career still can.
+    pub level_floor_cost: f32,
     /// A step UP is worth this share to a man with no big-stage pull, and
     /// all of it to one with the full itch.
     pub sport_upside_base: f32,
@@ -722,6 +742,7 @@ impl Default for AppraisalConfig {
             sport_importance_base: 0.60,
             sport_importance_span: 0.40,
             sport_resignation_relief: 0.55,
+            level_floor_cost: 1.6,
             sport_upside_base: 0.35,
             sport_upside_span: 0.65,
 
@@ -979,7 +1000,21 @@ impl PlayerOfferAppraisal {
             - cfg.memory_returning_to_seller * offer.returning_to_seller.clamp(0.0, 1.0)
             + cfg.memory_agent * stance.agent_bias.clamp(-1.0, 1.0);
 
-        let utility = money + sport + role + place + home + push - attachment + memory + plan_fit;
+        // ── L · the floor ───────────────────────────────────────
+        //
+        // The division he will not play under, read against the division
+        // on offer rather than the club's name. What he weighs it against
+        // is what the money is worth to him at this point of his career:
+        // a loan tables none, so the floor stands almost whole; a man
+        // whose deal is running down, or whose career is, sells it. One
+        // term refuses a third-tier loan at twenty-seven and lets a
+        // payday abroad through at thirty-three.
+        let floor = -cfg.level_floor_cost
+            * stance.level_floor.below(offer.league_level as f32)
+            * (1.0 - money_weight);
+
+        let utility =
+            money + sport + role + place + home + push - attachment + memory + plan_fit + floor;
 
         // The wage that makes `U + ε == 0`, given everything else — his
         // demand, and the number the buyer's wage power is compared with.
@@ -998,6 +1033,7 @@ impl PlayerOfferAppraisal {
             attachment,
             memory,
             plan_fit,
+            floor,
             reservation_wage: reservation as u32,
             disposition,
             money_weight,
@@ -1474,6 +1510,115 @@ mod tests {
             strength: 0.6,
         };
         assert!(appraise(&planned, &too_low).plan_fit < 0.0);
+    }
+
+    /// The case the floor was written for: a fifty-cap international at
+    /// a giant, not yet picked, whose standing is a top-flight one.
+    fn international_at_a_giant() -> PlayerStance {
+        PlayerStance {
+            age: 27,
+            career_runway: 7.0 / 12.0,
+            career_spent: 5.0 / 12.0,
+            importance: 0.55,
+            starter_ratio: 0.0,
+            level_floor: LevelFloor {
+                standing: 7_100.0,
+                tolerance: 2_000.0,
+            },
+            ..PlayerStance::neutral()
+        }
+    }
+
+    /// Serie A, Serie B, Serie C.
+    const SECOND_TIER: u16 = 5_500;
+    const THIRD_TIER: u16 = 3_500;
+
+    /// Listed, unhappy, asking out and promised the shirt: the push is at
+    /// its cap, and a division under his floor is still not football he
+    /// plays. One division nearer is.
+    #[test]
+    fn a_loan_a_division_under_his_floor_is_refused_whatever_the_push() {
+        let mut stance = international_at_a_giant();
+        stance.listed_by_club = true;
+        stance.available_soft = true;
+        stance.requested = true;
+        stance.unhappy = true;
+        stance.leave_pressure = 1.0;
+        let third_tier = OfferView {
+            kind: OfferKind::Loan,
+            offered_wage: 1_000_000.0,
+            sporting_drop: 0.38,
+            league_level: THIRD_TIER,
+            promised_status: Some(PromisedSquadStatus::FirstTeamRegular),
+            ..OfferView::neutral()
+        };
+        let a = appraise(&stance, &third_tier);
+        assert!(a.push >= 0.89, "{}", a.explain());
+        assert!(a.floor < -1.0, "{}", a.explain());
+        assert!(a.utility < -0.3, "{}", a.explain());
+        assert_eq!(a.refusal_cause(false), TermsRefusalCause::SportingStepDown);
+
+        let second_tier = OfferView {
+            league_level: SECOND_TIER,
+            ..third_tier
+        };
+        let b = appraise(&stance, &second_tier);
+        assert_eq!(b.floor, 0.0, "{}", b.explain());
+        assert!(b.utility > 0.0, "{}", b.explain());
+    }
+
+    /// What he weighs the floor against is what the money is worth to
+    /// him: a payday on an expiring deal at thirty-three buys the same
+    /// division a twenty-seven-year-old refuses at a modest raise.
+    #[test]
+    fn late_in_a_career_the_floor_is_for_sale_and_in_his_prime_it_is_not() {
+        let veteran = PlayerStance {
+            age: 33,
+            career_runway: 1.0 / 12.0,
+            career_spent: 11.0 / 12.0,
+            contract_pressure: 1.0,
+            ..international_at_a_giant()
+        };
+        let payday = OfferView {
+            offered_wage: 3_000_000.0,
+            sporting_drop: 0.38,
+            league_level: THIRD_TIER,
+            promised_status: Some(PromisedSquadStatus::KeyPlayer),
+            ..OfferView::neutral()
+        };
+        let v = appraise(&veteran, &payday);
+        assert!(v.floor > -0.15, "{}", v.explain());
+        assert!(v.utility > 0.0, "{}", v.explain());
+
+        let prime = appraise(
+            &international_at_a_giant(),
+            &OfferView {
+                offered_wage: 1_500_000.0,
+                ..payday
+            },
+        );
+        assert!(prime.floor < -0.7, "{}", prime.explain());
+        assert!(prime.utility < 0.0, "{}", prime.explain());
+    }
+
+    /// No view of either side is nothing to object to.
+    #[test]
+    fn an_unread_division_or_floor_pays_nothing() {
+        let unread = OfferView {
+            kind: OfferKind::Loan,
+            sporting_drop: 0.38,
+            ..OfferView::neutral()
+        };
+        assert_eq!(appraise(&international_at_a_giant(), &unread).floor, 0.0);
+        let no_floor = PlayerStance {
+            level_floor: LevelFloor::none(),
+            ..international_at_a_giant()
+        };
+        let third_tier = OfferView {
+            league_level: THIRD_TIER,
+            ..unread
+        };
+        assert_eq!(appraise(&no_floor, &third_tier).floor, 0.0);
     }
 
     #[test]

@@ -10,7 +10,7 @@ The system SHALL serve a watchlist page at `/{lang}/watchlist` listing every pla
 
 #### Scenario: Watchlisted player is on a team
 - **WHEN** a watchlisted player currently belongs to a club's team
-- **THEN** the row shows his team name/slug, league name/slug, market value, whether he is unhappy, and whether he is transfer-listed
+- **THEN** the row shows his team name/slug, his league name linking to the league's country-scoped page, market value, whether he is unhappy, and whether he is transfer-listed
 
 #### Scenario: Watchlisted player has retired
 - **WHEN** a watchlisted player has retired

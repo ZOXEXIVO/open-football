@@ -32,10 +32,10 @@ use chrono::NaiveDate;
 
 use crate::club::CareerRunway;
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::mind::{CareerPlanView, MindClock, MindSituation};
+use crate::club::player::mind::{MindClock, MindSituation};
 use crate::club::player::statistics::MatchExperienceBackground;
+use crate::club::player::transfer::LevelFloor;
 use crate::club::staff::perception::AbilityEstimator;
-use crate::transfers::gate::{EffectivePlayerReputation, thresholds};
 use crate::transfers::loan::agreement::{
     LoanMoney, MoneyReading, ParentReading, ParentWillingness,
 };
@@ -67,9 +67,6 @@ pub struct LoanBorrowerProfile {
     /// "no league", which stands the division half of the peer band down
     /// rather than guessing — same rule the destination-level gate uses.
     pub league_rep: u16,
-    /// Reputation reach of the borrower as the player's side reads it —
-    /// world standing blended with its league's.
-    pub reach: i16,
 }
 
 impl LoanBorrowerProfile {
@@ -112,7 +109,6 @@ impl LoanBorrowerProfile {
             .filter_map(|p| p.contract.as_ref().map(|c| c.salary))
             .max()
             .unwrap_or(0);
-        let world_rep = team.reputation.world;
         Some(LoanBorrowerProfile {
             income: club.finance.estimated_annual_income(date),
             wage_bill,
@@ -120,11 +116,8 @@ impl LoanBorrowerProfile {
             wage_headroom: (wage_budget - wage_bill).max(0),
             best_in_group: 0,
             anchor: ClubLevelAnchor::for_reputation(team.reputation.overall_score()),
-            world_rep,
+            world_rep: team.reputation.world,
             league_rep,
-            reach: (0.70 * world_rep as f32 + 0.30 * league_rep as f32)
-                .round()
-                .clamp(0.0, 10_000.0) as i16,
         })
     }
 }
@@ -152,11 +145,9 @@ pub struct LoanAssetGuard {
     salary: u32,
     player_requested: bool,
     seller_advertised: bool,
-    player_effective_rep: i16,
     listing_resignation: f32,
-    /// How firmly he has decided he is dropping a level, 0..1 — the arcs
-    /// whose whole point is playing somewhere smaller.
-    plan_widening: f32,
+    /// The lowest division he will play in, as he stands at his parent.
+    floor: LevelFloor,
 }
 
 impl LoanAssetGuard {
@@ -167,12 +158,6 @@ impl LoanAssetGuard {
     /// "below his club's level", not "young" — the age band is only the
     /// outer bound on it.
     pub const DEVELOPMENT_AGE: u8 = 23;
-    /// Years below [`Self::DEVELOPMENT_AGE`] over which the renown band
-    /// widens to its full extra allowance.
-    const RENOWN_AGE_SPAN: f32 = 7.0;
-    /// Extra share of the base step-down band a boy of sixteen is granted
-    /// on top of it. Renown widens with youth; it never vanishes.
-    const RENOWN_YOUTH_WIDENING: f32 = 0.8;
     /// Assemble the parent side.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -188,8 +173,8 @@ impl LoanAssetGuard {
         salary: u32,
         player_requested: bool,
         seller_advertised: bool,
-        player_effective_rep: i16,
         listing_resignation: f32,
+        floor: LevelFloor,
     ) -> Self {
         LoanAssetGuard {
             level,
@@ -204,9 +189,8 @@ impl LoanAssetGuard {
             salary,
             player_requested,
             seller_advertised,
-            player_effective_rep,
             listing_resignation,
-            plan_widening: 0.0,
+            floor,
         }
     }
 
@@ -258,18 +242,8 @@ impl LoanAssetGuard {
             salary: contract.salary,
             player_requested: player.statuses.has(PlayerStatusType::Req),
             seller_advertised: player.statuses.has(PlayerStatusType::Loa),
-            player_effective_rep: EffectivePlayerReputation::compute(
-                player.player_attributes.world_reputation,
-                player.player_attributes.current_reputation,
-                player.player_attributes.home_reputation,
-                true,
-            ),
             listing_resignation: player.market_resignation(date),
-            plan_widening: player
-                .mind
-                .career
-                .plan_view(MindClock::day(date))
-                .renown_widening(),
+            floor: player.level_floor(date, parent_league_rep),
         })
     }
 
@@ -378,7 +352,7 @@ impl LoanAssetGuard {
         value: f64,
         salary: u32,
         seller_advertised: bool,
-        player_effective_rep: i16,
+        floor: LevelFloor,
     ) -> Self {
         let parent_rank = if parent_best_in_group > 0 && level >= parent_best_in_group {
             0
@@ -403,17 +377,9 @@ impl LoanAssetGuard {
             salary,
             player_requested: false,
             seller_advertised,
-            player_effective_rep,
             listing_resignation: 0.0,
-            plan_widening: 0.0,
+            floor,
         }
-    }
-
-    /// The summary path's own plan reading — a borrowing country cannot
-    /// reach his mind, so the arc travels on the summary instead.
-    pub fn with_plan(mut self, plan: CareerPlanView) -> Self {
-        self.plan_widening = plan.renown_widening();
-        self
     }
 
     /// The shirt he is judged in, the club's own level bands and the
@@ -491,49 +457,16 @@ impl LoanAssetGuard {
         (self.standing() / Self::PEER_STANDING).clamp(0.0, 1.0)
     }
 
-    /// Reputation gap a loan destination may sit below the player's own
-    /// standing before he refuses to go.
-    ///
-    /// Continuous in age and in how long he has been on the market. The
-    /// old rule exempted every player at or below the prime-age bar
-    /// outright, which is exactly how a nineteen-year-old with a
-    /// nine-figure reputation could be offered around the third tier: his
-    /// renown was not weighed at all. It is weighed now — a young player's
-    /// band is simply wider, because a season in men's football is worth
-    /// more to him than his name is.
-    pub fn renown_gap_tolerated(age: u8, listing_resignation: f32) -> f32 {
-        Self::renown_gap_tolerated_with(age, listing_resignation, 0.0)
-    }
-
-    /// The same band, widened by a man's own decision to drop.
-    ///
-    /// The gap the band measures is a statement about his NAME, and a
-    /// player who has decided he is going down a level to play has
-    /// already made his peace with what that says about him. Nothing
-    /// else in the model could express it: resignation is what months on
-    /// the market do TO him, and this is what he has chosen.
-    pub fn renown_gap_tolerated_with(age: u8, listing_resignation: f32, plan_widening: f32) -> f32 {
-        let youth = ((Self::DEVELOPMENT_AGE.saturating_sub(age)) as f32 / Self::RENOWN_AGE_SPAN)
-            .clamp(0.0, 1.0);
-        thresholds::REP_STEP_DOWN_GAP as f32 * (1.0 + Self::RENOWN_YOUTH_WIDENING * youth)
-            + listing_resignation.clamp(0.0, 1.0) * thresholds::LOAN_RENOWN_RESIGNATION_SPAN
-            + plan_widening.clamp(0.0, 1.0) * Self::RENOWN_PLAN_SPAN
-    }
-
-    /// How far a man's own plan to drop a level widens his renown band,
-    /// at full commitment. A division's worth of reputation.
-    const RENOWN_PLAN_SPAN: f32 = 1_500.0;
-
     /// How far he has lowered his own sights, 0..1.
     #[inline]
     pub fn listing_resignation(&self) -> f32 {
         self.listing_resignation
     }
 
-    /// This player's own renown band, at his age, his market resignation
-    /// and the arc he is living out.
-    pub fn renown_band(&self) -> f32 {
-        Self::renown_gap_tolerated_with(self.age, self.listing_resignation, self.plan_widening)
+    /// The lowest division he will play in.
+    #[inline]
+    pub fn level_floor(&self) -> LevelFloor {
+        self.floor
     }
 
     /// Price one destination.
@@ -580,8 +513,7 @@ impl LoanAssetGuard {
             willingness,
             affordability: money.affordability,
             refusal_delta: LoanGuardVerdict::refusal_delta(willingness, money.affordability),
-            renown_band: self.renown_band(),
-            renown_gap: (self.player_effective_rep - borrower.reach) as f32,
+            below_floor: self.floor.below(borrower.league_rep as f32),
         }
     }
 
@@ -619,7 +551,7 @@ impl LoanAssetGuard {
             "willingness={:.2} affordable={:.2} within={} standing={:.2} rank={}/{} ca={} \
              parent_best={} first_choice={} development={} \
              weight={:.2} (value={:.0} income={}) carry={:.2} (salary={} headroom={} \
-             top_earner={} bill={}) renown_gap={:.0}/{:.0} refusal={:+.0}",
+             top_earner={} bill={}) floor={:.0} below={:.2} refusal={:+.0}",
             verdict.willingness,
             verdict.affordability,
             verdict.within_reach(),
@@ -638,8 +570,8 @@ impl LoanAssetGuard {
             borrower.wage_headroom,
             borrower.top_earner,
             borrower.wage_bill,
-            verdict.renown_gap,
-            verdict.renown_band,
+            self.floor.floor(),
+            verdict.below_floor,
             verdict.refusal_delta,
         )
     }
@@ -661,11 +593,10 @@ pub struct LoanGuardVerdict {
     pub affordability: f32,
     /// Added to the seller's engagement chance at the initial approach.
     pub refusal_delta: f32,
-    /// The player's own renown band, and how far this borrower falls
-    /// short of his standing. Carried for the trace and for the
-    /// plausibility gate that reads the same numbers.
-    pub renown_band: f32,
-    pub renown_gap: f32,
+    /// How far the borrower's division sits under the floor he will
+    /// play at, 0..1 — [`LevelFloor::below`]. The player's own term,
+    /// carried to the agreement and the trace.
+    pub below_floor: f32,
 }
 
 impl LoanGuardVerdict {
@@ -715,6 +646,7 @@ impl LoanGuardVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::player::transfer::StandingReading;
 
     /// The case the guard was written for, in the model's own numbers:
     /// Lamine Yamal (CA 176, value $189M, salary $14.6M) at Barcelona,
@@ -746,7 +678,6 @@ mod tests {
                 anchor: ClubLevelAnchor::for_reputation(0.90),
                 world_rep: 9_000,
                 league_rep: Self::LA_LIGA,
-                reach: 9_000,
             }
         }
 
@@ -760,8 +691,22 @@ mod tests {
                 anchor: Self::cordoba(),
                 world_rep: 3_000,
                 league_rep: Self::SEGUNDA,
-                reach: 3_800,
             }
+        }
+
+        /// The floor under a Barcelona forward of this level and age.
+        fn floor(level: u8, age: u8, effective_rep: i16) -> LevelFloor {
+            LevelFloor::of(&StandingReading {
+                level,
+                group: Self::FORWARD,
+                effective_rep,
+                league_rep: Self::LA_LIGA,
+                starter_share: 0.9,
+                caps: 20,
+                age,
+                resignation: 0.0,
+                plan_widening: 0.0,
+            })
         }
 
         fn yamal(requested: bool, advertised: bool) -> LoanAssetGuard {
@@ -778,8 +723,8 @@ mod tests {
                 14_600_000,
                 requested,
                 advertised,
-                8_500,
                 0.0,
+                Self::floor(176, 19, 8_500),
             )
         }
     }
@@ -845,8 +790,8 @@ mod tests {
             3_000_000,
             false,
             true,
-            3_000,
             0.0,
+            Fx::floor(140, 22, 3_000),
         );
         let unpaid = guard.assess(&Fx::cordoba_borrower(), 1.0, 0.0);
         let subsidised = guard.assess(&Fx::cordoba_borrower(), 1.0, 1.0);
@@ -888,8 +833,8 @@ mod tests {
                 400_000,
                 false,
                 true,
-                3_000,
                 0.0,
+                Fx::floor(140, 22, 3_000),
             )
             .assess(&Fx::cordoba_borrower(), 1.0, 0.0)
             .affordability
@@ -899,24 +844,24 @@ mod tests {
         assert!(at(20_000_000.0) > 0.0, "dear, not impossible");
     }
 
+    /// The player's own term rides on the verdict, read against the
+    /// borrower's DIVISION: a boy's band reaches the Segunda, and no
+    /// further, however the third-tier club's own name reads.
     #[test]
-    fn the_renown_band_widens_with_youth_and_never_vanishes() {
-        let at_16 = LoanAssetGuard::renown_gap_tolerated(16, 0.0);
-        let at_19 = LoanAssetGuard::renown_gap_tolerated(19, 0.0);
-        let at_23 = LoanAssetGuard::renown_gap_tolerated(23, 0.0);
-        assert!(at_16 > at_19 && at_19 > at_23, "{at_16} {at_19} {at_23}");
-        assert!(
-            (at_23 - thresholds::REP_STEP_DOWN_GAP as f32).abs() < 1.0,
-            "at the development age the band is the ordinary step-down band"
+    fn the_verdict_carries_how_far_the_division_sits_under_his_floor() {
+        let guard = Fx::yamal(false, false);
+        let peer = guard.assess(&Fx::peer_borrower(), 1.0, 0.0);
+        let segunda = guard.assess(&Fx::cordoba_borrower(), 1.0, 0.0);
+        let third_tier = guard.assess(
+            &LoanBorrowerProfile {
+                league_rep: 3_500,
+                ..Fx::cordoba_borrower()
+            },
+            1.0,
+            0.0,
         );
-        assert!(
-            at_23 > 0.0,
-            "renown widens with youth; it never vanishes at any age"
-        );
-        assert!(
-            LoanAssetGuard::renown_gap_tolerated(19, 1.0)
-                > LoanAssetGuard::renown_gap_tolerated(19, 0.0),
-            "months unsold widen what he will listen to"
-        );
+        assert_eq!(peer.below_floor, 0.0);
+        assert_eq!(segunda.below_floor, 0.0);
+        assert!(third_tier.below_floor > 0.5, "{}", third_tier.below_floor);
     }
 }

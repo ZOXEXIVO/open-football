@@ -24,15 +24,16 @@ one competition, plus world-level summary counts and machine/AI status badges.
 ### Requirement: Country competitions overview page
 The system SHALL provide, for a country identified by slug, a page listing its non-friendly leagues grouped into
 sections: a headed section per grouped competition (e.g. zoned/conference formats) including its playoff links,
-and an unheaded section for consecutive ungrouped divisions, ordered by competition tier.
+and an unheaded section for consecutive ungrouped divisions, ordered by competition tier. Each league entry SHALL link
+to the league's country-scoped address.
 
 #### Scenario: Requesting a country's leagues overview
 - **WHEN** a user requests the country page for a valid country slug
 - **THEN** the system SHALL return the country's leagues grouped and ordered as described, with each grouped
-  section's playoff links attached
+  section's playoff links attached and each league linking to `/{lang}/leagues/{country_slug}/{league_slug}`
 
 #### Scenario: Unknown country slug
-- **WHEN** the country slug does not resolve
+- **WHEN** the country slug is already in URL-safe form and does not resolve
 - **THEN** the system SHALL return a not-found error
 
 ### Requirement: National team squad page
@@ -85,3 +86,25 @@ ability ratings and a plain-language explanation of why they remain unsigned.
 - **WHEN** a user requests the free agents page for a country
 - **THEN** the system SHALL return every free agent whose nationality is that country, with position, age,
   current/potential ability and a market-status explanation, ordered by position then descending current ability
+
+### Requirement: Country pages are addressed by a URL-safe slug
+The system SHALL address every country-scoped page by the country's URL-safe slug, which contains only lowercase ASCII
+letters, digits and single hyphens. This covers `/{lang}/countries/{country_slug}` and its `/u21`, `/leagues`,
+`/schedule`, `/u21/schedule`, `/staff`, `/u21/staff` and `/free-agents` pages.
+
+#### Scenario: Country whose name has a space
+- **WHEN** the site links to South Africa's competitions overview
+- **THEN** the link SHALL be `/en/countries/south-africa/leagues`
+
+### Requirement: Pre-fold country URLs redirect permanently
+When a country-scoped page is requested with a country segment that is not already in URL-safe form, the system SHALL
+respond `301 Moved Permanently`, before looking the country up, to the same path with that segment replaced by its
+URL-safe form. The rest of the path and the query string SHALL be kept.
+
+#### Scenario: Old country link on a U21 tab
+- **WHEN** a user requests `/en/countries/south%20africa/u21/schedule?season=2025`
+- **THEN** the system SHALL respond 301 with `Location: /en/countries/south-africa/u21/schedule?season=2025`
+
+#### Scenario: Capitalised slug
+- **WHEN** a user requests `/en/countries/Spain`
+- **THEN** the system SHALL respond 301 with `Location: /en/countries/spain`

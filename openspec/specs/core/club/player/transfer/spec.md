@@ -41,3 +41,48 @@ The figure SHALL NOT be negative, and it SHALL NOT depend on why he was listed.
 #### Scenario: Wanting to play lowers the price of leaving
 - **WHEN** two players are otherwise identical, but one holds a transfer request and has gone a season without first-team football while the other is content
 - **THEN** the player who wants out names the lower settlement
+
+### Requirement: A player's level floor is the lowest division he will play in
+A player SHALL carry a level floor on the league-reputation scale (0–10000), made of a standing and a tolerance.
+
+The standing SHALL be the strongest of three claims:
+
+- the division his observable ability places him at, on the same curve clubs' starter baselines are measured on
+- his market reputation, carried further by senior international caps (full reach at about thirty caps)
+- the division he plays in now, scaled by how much of a regular he is there, counted only once enough of his matches
+  have been seen
+
+The standing SHALL NOT exceed the reputation of the division he already plays in, when that is known.
+
+The tolerance SHALL be one division's step-down for every player. It SHALL widen continuously with youth (most at
+sixteen, nothing extra from twenty-three), with months unsold on the market, and with his own career plan to step down
+a level. It SHALL never be less than one division's step-down, at any age.
+
+How far a division sits under the floor SHALL read from zero at the floor to one at a full refusal span under it. It
+SHALL read zero when either the division's reputation or the player's standing is unknown.
+
+#### Scenario: An international does not play in the third tier
+- **WHEN** a 27-year-old fifty-cap international whose ability starts a top-flight side has just been signed by a
+  top-flight giant (8750) and not yet picked, and is measured against that country's second (5500) and third (3500)
+  divisions
+- **THEN** the second division sits at or above his floor and the third sits a full refusal span under it
+
+#### Scenario: The strongest claim stands
+- **WHEN** one player's ability reads lower than his name, and another's name reads lower than the top-flight
+  division he starts nearly every match in
+- **THEN** the first player's standing is his name, and the second's is that division
+
+#### Scenario: The floor never sits above the division he already plays in
+- **WHEN** a player whose name reads as top-flight plays in the second division
+- **THEN** his standing is capped at the second division's reputation
+
+#### Scenario: The tolerance widens with youth, months unsold and a plan to step down
+- **WHEN** players aged 16, 19 and 23 with no market resignation and no plan are compared, and a 27-year-old who is
+  fully resigned, or fully committed to stepping down, is compared with one who is neither
+- **THEN** the tolerance falls from 16 to 19 to 23, is exactly one division's step-down from 23 onward, and is wider
+  for the resigned and for the committed 27-year-old
+- **AND** a season unsold lets the international above stop refusing the third division outright
+
+#### Scenario: No view objects to nothing
+- **WHEN** either the division's reputation or the player's standing is unknown
+- **THEN** the division reads as not under his floor at all

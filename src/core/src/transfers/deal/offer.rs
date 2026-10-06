@@ -103,6 +103,24 @@ impl PromisedSquadStatus {
             }
         }
     }
+
+    /// The promise a club makes by keeping a man on the shirt he already
+    /// holds — the inverse of [`Self::as_squad_status`]. `None` for a role
+    /// no club promises anybody.
+    pub fn of_status(status: &PlayerSquadStatus) -> Option<Self> {
+        match status {
+            PlayerSquadStatus::KeyPlayer => Some(PromisedSquadStatus::KeyPlayer),
+            PlayerSquadStatus::FirstTeamRegular => Some(PromisedSquadStatus::FirstTeamRegular),
+            PlayerSquadStatus::FirstTeamSquadRotation => {
+                Some(PromisedSquadStatus::FirstTeamSquadRotation)
+            }
+            PlayerSquadStatus::MainBackupPlayer => Some(PromisedSquadStatus::MainBackupPlayer),
+            PlayerSquadStatus::HotProspectForTheFuture => {
+                Some(PromisedSquadStatus::HotProspectForTheFuture)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
