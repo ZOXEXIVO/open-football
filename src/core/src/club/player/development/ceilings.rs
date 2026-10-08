@@ -85,7 +85,7 @@ impl PositionalSkillCeilings {
     /// Keyed on the skill rather than on its category because the
     /// explosive split lives INSIDE `SkillCategory::Physical`: speed and
     /// leap mature years before strength and stamina do.
-    pub(super) fn maturation_group(idx: usize) -> MaturationGroup {
+    pub(crate) fn maturation_group(idx: usize) -> MaturationGroup {
         match skill_category(idx) {
             SkillCategory::Technical => MaturationGroup::Technical,
             SkillCategory::Mental => MaturationGroup::Mental,

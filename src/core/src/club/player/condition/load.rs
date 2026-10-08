@@ -27,10 +27,27 @@
 //!   decays at the same rate. A heavy match adds 40-80; recovery
 //!   sessions burn it back down.
 
+use crate::PlayerFieldPositionGroup;
+use crate::club::player::player::Player;
+use crate::league::Season;
 use chrono::{Datelike, NaiveDate};
 
 const DECAY_7: f32 = 6.0 / 7.0;
 const DECAY_30: f32 = 29.0 / 30.0;
+/// `exp(−1/365)`: football absorbed fades with a time constant of a season.
+const DECAY_SEASON: f32 = 0.997_264;
+
+/// Friendlies, youth-league and reserve-league games are football, but not
+/// at the level a senior match asks of a player.
+const FRIENDLY_FOOTBALL_WEIGHT: f32 = 0.5;
+
+/// Days a season's fixtures are spread over, and the days from one season's
+/// opening to the next.
+const SEASON_DAYS: i32 = 280;
+const SEASON_CYCLE_DAYS: i32 = 365;
+
+/// Minutes a recorded substitute appearance stands for.
+const SUB_MINUTES: f32 = 20.0;
 
 /// Per-day decay factor for recovery debt — debt half-life ~3 days
 /// (a one-off heavy match is mostly gone by next weekend).
@@ -48,9 +65,11 @@ const FORM_ALPHA: f32 = 0.33;
 /// isn't picked. An active player's form signal is left untouched.
 const FORM_FADE_DAILY: f32 = 0.9517;
 
-/// The least a player starting every week holds in the 30-day window —
-/// it dips to ~336 on the eve of his next match.
-const REGULAR_MINUTES_30: f32 = 330.0;
+/// Football absorbed by a regular at his lowest: 30 league starts spread
+/// over each of two 280-day seasons, read at the end of the 85-day summer
+/// break that follows. `regular_stock_is_what_a_regular_holds_after_the_summer`
+/// recomputes it through the daily fade.
+pub(crate) const REGULAR_STOCK: f32 = 2015.0;
 
 /// Weekly minutes at which selection starts penalising the player (≈5 × 90).
 pub const FATIGUE_LOAD_THRESHOLD: f32 = 450.0;
@@ -82,6 +101,9 @@ pub struct PlayerLoad {
     /// games over the trailing ~30 days. Kept apart from the competitive
     /// window, which rotation and selection read.
     pub friendly_minutes_last_30: f32,
+    /// Minutes of football the player has absorbed, fading over about a
+    /// season: competitive minutes in full, friendly ones at half.
+    pub football_absorbed: f32,
     /// Packed per-day bit array; bit 0 = today. Counts matches in last 14 days.
     pub matches_last_14_bits: u16,
     /// EMA of effective match ratings (1.0–10.0). Zero until the first match.
@@ -113,6 +135,7 @@ impl PlayerLoad {
             minutes_last_7: 0.0,
             minutes_last_30: 0.0,
             friendly_minutes_last_30: 0.0,
+            football_absorbed: 0.0,
             matches_last_14_bits: 0,
             form_rating: 0.0,
             last_decay_day_ordinal: 0,
@@ -161,6 +184,7 @@ impl PlayerLoad {
         self.minutes_last_7 *= d7;
         self.minutes_last_30 *= d30;
         self.friendly_minutes_last_30 *= d30;
+        self.football_absorbed *= DECAY_SEASON.powi(delta_days);
         self.physical_load_7 *= d7;
         self.physical_load_30 *= d30;
         self.high_intensity_load_7 *= d7;
@@ -196,6 +220,9 @@ impl PlayerLoad {
         if self.friendly_minutes_last_30 < 0.1 {
             self.friendly_minutes_last_30 = 0.0;
         }
+        if self.football_absorbed < 0.1 {
+            self.football_absorbed = 0.0;
+        }
         if self.physical_load_7 < 0.1 {
             self.physical_load_7 = 0.0;
         }
@@ -220,10 +247,12 @@ impl PlayerLoad {
         }
         if is_friendly {
             self.friendly_minutes_last_30 += minutes;
+            self.football_absorbed += minutes * FRIENDLY_FOOTBALL_WEIGHT;
             return;
         }
         self.minutes_last_7 += minutes;
         self.minutes_last_30 += minutes;
+        self.football_absorbed += minutes;
         self.matches_last_14_bits |= 1;
     }
 
@@ -285,13 +314,12 @@ impl PlayerLoad {
         }
     }
 
-    /// Share of a regular's football the player has had lately: 1.0 for
-    /// one who starts a match a week, 0.0 for one who has not played.
-    /// Friendlies and youth or reserve league games count half — football,
-    /// but not at the level a senior match asks of him.
+    /// Share of a regular's football the player has absorbed: 1.0 for one
+    /// who starts most league matches, 0.0 for one who has not played.
+    /// Read over a season rather than a month, so a summer break or a few
+    /// weeks on the bench do not undo what his seasons built.
     pub fn match_exposure(&self) -> f32 {
-        let minutes = self.minutes_last_30 + self.friendly_minutes_last_30 * 0.5;
-        (minutes / REGULAR_MINUTES_30).clamp(0.0, 1.0)
+        (self.football_absorbed / REGULAR_STOCK).clamp(0.0, 1.0)
     }
 
     pub fn matches_last_14(&self) -> u8 {
@@ -331,6 +359,77 @@ impl PlayerLoad {
     /// rest, even if his weekly minutes look fine? Used by UI labels.
     pub fn has_heavy_legs(&self) -> bool {
         self.recovery_debt >= RECOVERY_DEBT_HEAVY
+    }
+
+    /// Absorb a season played before the record began: `minutes` spread
+    /// evenly over its fixture days, faded as the daily windows would have
+    /// faded them by `seasons_ago` seasons after it opened.
+    fn absorb_past_season(&mut self, minutes: f32, seasons_ago: u16) {
+        let per_day = minutes / SEASON_DAYS as f32;
+        let last_fixture_ago = seasons_ago as i32 * SEASON_CYCLE_DAYS - (SEASON_DAYS - 1);
+        let spread = (1.0 - DECAY_SEASON.powi(SEASON_DAYS)) / (1.0 - DECAY_SEASON);
+        self.football_absorbed += per_day * DECAY_SEASON.powi(last_fixture_ago) * spread;
+    }
+}
+
+impl Player {
+    /// A world opens on `opening`: seed the football he absorbed in his two
+    /// most recent recorded seasons, every spell of each summed. False when
+    /// nothing of his career is recorded. A season dated in the world's own
+    /// opening year (a calendar-year league) reads as the one just finished.
+    pub fn seed_football_from_career(&mut self, opening: NaiveDate) -> bool {
+        let world_season = Season::from_date(opening).start_year;
+        let items = &self.statistics_history.items;
+        let mut years: Vec<u16> = items.iter().map(|i| i.season.start_year).collect();
+        if years.is_empty() {
+            return false;
+        }
+        years.sort_unstable_by(|a, b| b.cmp(a));
+        years.dedup();
+        for &year in years.iter().take(2) {
+            let minutes: f32 = items
+                .iter()
+                .filter(|i| i.season.start_year == year)
+                .map(|i| {
+                    i.statistics.played as f32 * 90.0
+                        + i.statistics.played_subs as f32 * SUB_MINUTES
+                })
+                .sum();
+            let seasons_ago = world_season.saturating_sub(year).max(1);
+            self.load.absorb_past_season(minutes, seasons_ago);
+        }
+        true
+    }
+
+    /// Seed from his place in the side when nothing of his career is
+    /// recorded. `rank` is his ability rank in `group` (0 is the
+    /// best): inside the group's starting slots he holds a regular's
+    /// football, in the tier behind them a squad player's, beyond it a
+    /// fringe player's. A side whose league is played as friendlies plays
+    /// youth or reserve football, which counts half.
+    pub fn seed_football_from_role(
+        &mut self,
+        group: PlayerFieldPositionGroup,
+        rank: usize,
+        plays_friendlies: bool,
+    ) {
+        const REGULAR: f32 = 1.0;
+        const SQUAD: f32 = 0.4;
+        const FRINGE: f32 = 0.1;
+        let starters = group.typical_starters();
+        let share = if rank < starters {
+            REGULAR
+        } else if rank < starters * 2 {
+            SQUAD
+        } else {
+            FRINGE
+        };
+        let weight = if plays_friendlies {
+            FRIENDLY_FOOTBALL_WEIGHT
+        } else {
+            1.0
+        };
+        self.load.football_absorbed = share * weight * REGULAR_STOCK;
     }
 }
 
@@ -629,5 +728,134 @@ mod tests {
         // branch in is_fatigued).
         l.physical_load_7 = PHYSICAL_LOAD_THRESHOLD + 5.0;
         assert!(l.is_fatigued());
+    }
+
+    /// A calendar of seasons 365 days apart: `starts` 90-minute matches
+    /// spread evenly over each 280-day season, then the summer break.
+    struct Seasons {
+        load: PlayerLoad,
+        day: NaiveDate,
+    }
+
+    impl Seasons {
+        const LENGTH: i64 = SEASON_DAYS as i64;
+        const YEAR: i64 = SEASON_CYCLE_DAYS as i64;
+
+        fn new() -> Self {
+            let mut load = PlayerLoad::new();
+            let day = d(2020, 8, 1);
+            load.daily_decay(day);
+            Seasons { load, day }
+        }
+
+        fn play(&mut self, seasons: i64, starts: i64, friendly: bool) {
+            for _ in 0..seasons {
+                let opening = self.day;
+                for offset in 0..Self::YEAR {
+                    self.load
+                        .daily_decay(opening + chrono::Duration::days(offset));
+                    if offset < Self::LENGTH
+                        && (0..starts).any(|i| i * Self::LENGTH / starts == offset)
+                    {
+                        self.load.record_match_minutes(90.0, friendly);
+                    }
+                }
+                self.day = opening + chrono::Duration::days(Self::YEAR);
+                self.load.daily_decay(self.day);
+            }
+        }
+
+        fn idle(&mut self, days: i64) {
+            self.day += chrono::Duration::days(days);
+            self.load.daily_decay(self.day);
+        }
+    }
+
+    #[test]
+    fn football_absorbed_fades_by_a_season() {
+        let mut l = PlayerLoad::new();
+        l.daily_decay(d(2025, 1, 1));
+        l.record_match_minutes(1000.0, false);
+        for offset in 1..=365 {
+            l.daily_decay(d(2025, 1, 1) + chrono::Duration::days(offset));
+        }
+        let expected = 1000.0 / std::f32::consts::E;
+        assert!(
+            (l.football_absorbed - expected).abs() <= expected * 0.01,
+            "a year on, {} of 1000 minutes remain; expected {expected:.1}",
+            l.football_absorbed
+        );
+    }
+
+    #[test]
+    fn regular_stock_is_what_a_regular_holds_after_the_summer() {
+        let mut s = Seasons::new();
+        s.play(2, 30, false);
+        assert!(
+            (s.load.football_absorbed - REGULAR_STOCK).abs() <= REGULAR_STOCK * 0.005,
+            "a regular holds {:.1} after the summer; REGULAR_STOCK is {REGULAR_STOCK}",
+            s.load.football_absorbed
+        );
+    }
+
+    #[test]
+    fn a_weekly_starter_is_fully_exposed_all_year() {
+        let mut s = Seasons::new();
+        s.play(2, 40, false);
+        let opening = s.day;
+        for offset in 0..Seasons::YEAR {
+            s.load.daily_decay(opening + chrono::Duration::days(offset));
+            if offset < Seasons::LENGTH && offset % 7 == 0 {
+                s.load.record_match_minutes(90.0, false);
+            }
+            assert_eq!(
+                s.load.match_exposure(),
+                1.0,
+                "day {offset} of the third season"
+            );
+        }
+    }
+
+    #[test]
+    fn a_player_who_has_not_played_is_unexposed() {
+        assert_eq!(PlayerLoad::new().match_exposure(), 0.0);
+    }
+
+    #[test]
+    fn a_month_on_the_bench_after_the_summer_keeps_two_seasons() {
+        let mut s = Seasons::new();
+        s.play(2, 40, false);
+        s.idle(30);
+        assert!(
+            s.load.match_exposure() > 0.9,
+            "exposure {} after the summer and a month out",
+            s.load.match_exposure()
+        );
+    }
+
+    #[test]
+    fn ten_starts_after_three_idle_seasons_are_not_a_regulars_football() {
+        let mut s = Seasons::new();
+        s.idle(3 * Seasons::YEAR);
+        for _ in 0..10 {
+            s.idle(7);
+            s.load.record_match_minutes(90.0, false);
+        }
+        assert!(
+            s.load.match_exposure() < 0.5,
+            "exposure {}",
+            s.load.match_exposure()
+        );
+    }
+
+    #[test]
+    fn a_youth_league_regular_absorbs_half_a_regulars_football() {
+        let mut s = Seasons::new();
+        s.play(2, 30, true);
+        assert!(
+            (s.load.match_exposure() - 0.5).abs() <= 0.02,
+            "a youth-league regular reads {} after the summer",
+            s.load.match_exposure()
+        );
     }
 }

@@ -41,6 +41,7 @@
 
 use crate::r#match::MatchField;
 use crate::r#match::engine::teamplay::plans::duties::DutyAssigner;
+use crate::r#match::engine::teamplay::plans::line_step::LineStepCall;
 
 /// Largest set of players we assign duties to — every outfielder.
 ///
@@ -104,6 +105,8 @@ pub struct DefensivePlan {
     pub keeper_call: Option<u32>,
     /// True while this side is the defending side and the plan is live.
     pub active: bool,
+    /// The back line's call to step up and leave a runner offside.
+    pub line_step: Option<LineStepCall>,
 }
 
 impl DefensivePlan {
@@ -114,6 +117,7 @@ impl DefensivePlan {
             carrier: None,
             keeper_call: None,
             active: false,
+            line_step: None,
         }
     }
 
@@ -161,6 +165,38 @@ impl DefensivePlan {
             .iter()
             .filter(|(_, d)| d.is_individual())
             .count()
+    }
+
+    /// Read whether `team_id`'s back line should step up now, from how
+    /// well its men read the game, how used the side is to its shape
+    /// (`familiarity`) and the keeper behind it.
+    pub fn call_line_step(
+        &mut self,
+        field: &MatchField,
+        team_id: u32,
+        familiarity: f32,
+        keeper_voice: f32,
+        tick: u64,
+    ) {
+        if !self.active {
+            self.line_step = None;
+            return;
+        }
+        let (sum, count) = field
+            .players
+            .iter()
+            .filter(|p| {
+                p.team_id == team_id
+                    && !p.off_pitch
+                    && p.tactical_position.current_position.is_defender()
+                    && !p.tactical_position.current_position.is_defensive_midfielder()
+            })
+            .fold((0.0f32, 0u32), |(sum, count), p| {
+                (sum + p.skills.mental.anticipation, count + 1)
+            });
+        let anticipation = if count > 0 { sum / count as f32 } else { 0.0 };
+        let organisation = LineStepCall::organisation(anticipation, familiarity, keeper_voice);
+        self.line_step = LineStepCall::read(field, team_id, organisation, self.line_step, tick);
     }
 
     /// Recompute both sides' plans in place, on the tactical cadence.

@@ -384,7 +384,7 @@ fn the_off_arm_still_places_the_ball_on_the_spot() {
 /// by one of those was never cleared by anything: not that function, not
 /// the half-time reset, not the goal reset.
 ///
-/// It then lay dormant until the next CORNER, because `CornerHold::apply`
+/// It then lay dormant until the next CORNER, because `SetPieceHold::apply`
 /// bails unless the restart origin is `Corner` — a guard exactly the wrong
 /// way round for a stale station. Measured before the fix: the keeper
 /// carried a goal kick in from `(6.0, 199.8)`, kept that station, and on

@@ -148,10 +148,10 @@ impl Club {
                         &mut loan_players,
                     );
                 }
-                LoanSweep::keeper_department(team, ti, &keepers, &mut loan_players);
+                LoanSweep::keeper_department(self, team, ti, &keepers, &mut loan_players);
                 continue;
             }
-            LoanSweep::keeper_department(team, ti, &keepers, &mut loan_players);
+            LoanSweep::keeper_department(self, team, ti, &keepers, &mut loan_players);
 
             // A senior reserve side (B / Second / Reserve) plays real league
             // football, so its regulars are never idle and the minutes-based

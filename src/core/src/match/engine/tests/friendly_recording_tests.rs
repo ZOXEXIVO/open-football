@@ -20,8 +20,9 @@
 use super::goal_celebration_tests::squad;
 use super::recording_globals::RecordingGlobals;
 use crate::MatchRuntime;
-use crate::r#match::Match;
 use crate::r#match::RecordingScope;
+use crate::r#match::{CompetitionKind, FixtureContext, Match};
+use chrono::NaiveDate;
 use crate::r#match::engine::engine::MATCH_TIME_MS;
 
 /// Play one friendly and report whether the recording came out with anything
@@ -33,7 +34,12 @@ fn friendly_recording(id: &str, base: u32) -> (bool, u64) {
         "premier-league-u19",
         squad(1, base),
         squad(2, base + 100),
-        true,
+        FixtureContext::new(
+            id,
+            NaiveDate::from_ymd_opt(2026, 7, 18).unwrap(),
+            CompetitionKind::Friendly,
+            false,
+        ),
     )
     .play();
 

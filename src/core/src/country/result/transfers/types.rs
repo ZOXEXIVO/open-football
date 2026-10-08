@@ -1,7 +1,7 @@
 use crate::club::board::mandate::SigningMandate;
 use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::deal::negotiation::NegotiationPhase;
-use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause};
+use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::gate::appraisal::PlayerStance;
 use crate::transfers::loan::guard::LoanGuardVerdict;
 use crate::transfers::market::TransferListingOrigin;
@@ -184,6 +184,44 @@ pub struct DeferredTransfer {
     /// What the board approved the signing FOR. Stamped on the player's
     /// pathway at execution.
     pub(crate) mandate: Option<SigningMandate>,
+}
+
+impl DeferredTransfer {
+    /// A permanent move nobody negotiated: the fee and the role the
+    /// destination gives him are all there is. The wage is the calculator's,
+    /// and with no hearing behind it the purpose is read from the role when
+    /// the move completes. A pool signing has no seller: `0` for both ids.
+    pub fn unnegotiated(
+        player_id: u32,
+        selling_country_id: u32,
+        selling_club_id: u32,
+        buying_country_id: u32,
+        buying_club_id: u32,
+        fee: f64,
+        buying_league_reputation: u16,
+        promise: Option<PromisedSquadStatus>,
+    ) -> Self {
+        DeferredTransfer {
+            player_id,
+            selling_country_id,
+            selling_club_id,
+            buying_country_id,
+            buying_club_id,
+            fee,
+            is_loan: false,
+            has_option_to_buy: false,
+            agreed_annual_wage: None,
+            buying_league_reputation,
+            sell_on_percentage: None,
+            loan_future_fee: None,
+            personal_terms: Some(PersonalTermsOffer {
+                squad_status_promise: promise,
+                ..PersonalTermsOffer::default()
+            }),
+            offer_clauses: Vec::new(),
+            mandate: None,
+        }
+    }
 }
 
 /// Finding a player inside one country's rosters.

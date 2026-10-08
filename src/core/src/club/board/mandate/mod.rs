@@ -16,10 +16,13 @@ pub mod ledger;
 
 use chrono::{Duration, NaiveDate};
 
+use crate::club::CareerRunway;
 use crate::club::player::contract::PlayerSquadStatus;
+use crate::club::player::contract::contract::ClubLevelAnchor;
+use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::pipeline::{TransferNeedReason, TransferRequest};
 use crate::transfers::squad::plan::{BriefSlot, BriefTier};
-use crate::{PathwayStage, PlayerFieldPositionGroup};
+use crate::{PathwayStage, Person, Player, PlayerFieldPositionGroup};
 
 pub use doctrine::{FeeEnvelope, MandateStretch, Reservation, ReservationVerdict, TargetBelief};
 pub use ledger::{MandateExit, MandateLedger, MandateOutcome};
@@ -105,6 +108,20 @@ impl MandatePurpose {
                 BriefTier::A | BriefTier::B => MandatePurpose::Starter,
                 BriefTier::C => MandatePurpose::Cover,
             },
+        }
+    }
+
+    /// The purpose read back into the vocabulary a request is raised in —
+    /// what a club buying a man it never shopped for would have been
+    /// shopping for.
+    pub fn request_reason(self) -> TransferNeedReason {
+        match self {
+            MandatePurpose::Starter => TransferNeedReason::QualityUpgrade,
+            MandatePurpose::Heir { .. } => TransferNeedReason::SuccessionPlanning,
+            MandatePurpose::Rotation => TransferNeedReason::ExperiencedHead,
+            MandatePurpose::Cover => TransferNeedReason::DepthCover,
+            MandatePurpose::Asset => TransferNeedReason::SquadInvestment,
+            MandatePurpose::Prospect => TransferNeedReason::DevelopmentSigning,
         }
     }
 
@@ -359,6 +376,30 @@ impl SigningMandate {
             issued,
             author,
         }
+    }
+
+    /// What a club that negotiated nothing believes it bought: the role
+    /// his contract gives him, and what it can see when the role says
+    /// nothing. The plan a move nobody heard installs and the hearing of a
+    /// loan option both read it, so the purpose heard is the purpose the
+    /// plan carries.
+    pub fn unnegotiated(player: &Player, club_reputation: u16, date: NaiveDate) -> Self {
+        let group = player.position().position_group();
+        let age = player.age(date);
+        let promise = player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.clone())
+            .unwrap_or(PlayerSquadStatus::NotYetSet);
+        let below_first_team = ClubLevelAnchor::for_reputation(club_reputation as f32 / 10_000.0)
+            .is_below_rotation_band(AbilityEstimator::observable_level(player), group);
+        SigningMandate::new(
+            MandatePurpose::from_promise(&promise, CareerRunway::at(age), below_first_team),
+            group,
+            age,
+            date,
+            MandateAuthor::Board,
+        )
     }
 
     pub fn with_money(mut self, fee: f64, wage: f64) -> Self {

@@ -2,6 +2,7 @@
 //! safety nets, the standing-ball notification dance, and the per-tick
 //! ownership claim that decides who is on the ball.
 
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
@@ -886,6 +887,48 @@ impl Ball {
         ));
     }
 
+    /// **The first involvement after a team-mate played the ball.** A man
+    /// who was offside then and has the ball now is flagged; anybody else
+    /// having it means the ball has been deliberately played and the
+    /// snapshot is over. A ball nobody has yet — in flight, deflected,
+    /// parried, off the post — keeps it.
+    pub(in crate::r#match::engine::ball::ball) fn police_offside(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let (Some(snap), Some(owner)) = (self.offside_snapshot, self.current_owner) else {
+            return;
+        };
+        if snap.flags(owner) {
+            if let Some(offender) = players.iter().find(|p| p.id == owner) {
+                self.award_offside(context, players, offender, events);
+            }
+        } else if owner != snap.passer_id {
+            self.offside_snapshot = None;
+        }
+    }
+
+    /// A man who was offside plays the ball without ever having it — a
+    /// header, a volley, a touch on. Flagged before his strike happens.
+    pub fn flag_offside_striker(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        striker_id: u32,
+        events: &mut EventCollection,
+    ) -> bool {
+        if !self.offside_snapshot.is_some_and(|snap| snap.flags(striker_id)) {
+            return false;
+        }
+        let Some(offender) = players.iter().find(|p| p.id == striker_id) else {
+            return false;
+        };
+        self.award_offside(context, players, offender, events);
+        true
+    }
+
     /// The flag is up: kill the pass and set the indirect free kick up
     /// **without moving anything**.
     ///
@@ -932,7 +975,7 @@ impl Ball {
         // the edge of his area is a free kick he takes himself.
         let taker = players
             .iter()
-            .filter(|p| p.side.is_some() && p.side != receiver.side && !p.is_sent_off)
+            .filter(|p| p.side.is_some() && p.side != receiver.side && !p.off_pitch)
             .min_by(|a, b| {
                 let da = (a.position - spot).norm_squared();
                 let db = (b.position - spot).norm_squared();
@@ -969,7 +1012,7 @@ impl Ball {
         self.contested_claim_count = 0;
         self.clear_pass_history();
         self.clear_open_play_metadata();
-        self.pass_origin_restart = PassOriginRestart::FreeKick;
+        self.pass_origin_restart = PassOriginRestart::IndirectFreeKick;
         // A carry that was still open when the flag went up ends here — the
         // ball update is skipped for the whole wait, so otherwise it stays
         // open and is charged to whoever takes the free kick.
@@ -980,6 +1023,14 @@ impl Ball {
         // the restart is settled above.
         events.add_ball_event(BallEvent::Offside(receiver.id, spot));
 
+        self.pending_restart_stations = RestartShape::plan(
+            PassOriginRestart::IndirectFreeKick,
+            players,
+            taker_id,
+            spot,
+            self.field_width,
+            self.field_height,
+        );
         self.awaiting_restart = Some(AwaitedRestart {
             // ⚠ **The only restart with nothing to fetch.** An offside is
             // an offence committed ON the pitch, so the ball has not left
@@ -991,10 +1042,11 @@ impl Ball {
             carrying: false,
             taker_id,
             spot,
-            origin: PassOriginRestart::FreeKick,
+            origin: PassOriginRestart::IndirectFreeKick,
             awarded_tick: context.current_tick(),
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
             settled_tick: None,
+            hold: None,
         });
         events.add_ball_event(BallEvent::TakeMe(taker_id));
     }
@@ -1248,8 +1300,7 @@ impl Ball {
                 // (exempt origins skip snapshot creation), so there's
                 // no need to re-check the origin here.
                 if let Some(snap) = self.offside_snapshot
-                    && snap.receiver_id == target_id
-                    && snap.is_offside()
+                    && snap.flags(target_id)
                 {
                     self.award_offside(context, players, target_player, events);
                     return;
@@ -2161,6 +2212,13 @@ impl Ball {
                 // Ownership change approved - reset duration and set cooldown
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
+                if let Some(loser) = self.previous_owner
+                    && players
+                        .iter()
+                        .any(|p| p.id == loser && p.team_id != player.team_id)
+                {
+                    events.add_player_event(PlayerEvent::Dispossessed(loser));
+                }
                 #[cfg(feature = "match-logs")]
                 StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
                 self.pass_target_player_id = None;

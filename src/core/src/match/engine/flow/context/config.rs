@@ -3,6 +3,7 @@
 
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::referee::RefereeProfile;
+use crate::r#match::{CompetitionKind, FixtureContext};
 use chrono::{NaiveDate, Utc};
 
 /// Full match-construction inputs. Replaces the loose
@@ -20,7 +21,7 @@ pub struct MatchEngineConfig {
     pub today: NaiveDate,
     pub environment: MatchEnvironment,
     pub referee: RefereeProfile,
-    pub is_friendly: bool,
+    pub competition: CompetitionKind,
     pub is_knockout: bool,
     pub match_recordings: bool,
 }
@@ -32,7 +33,7 @@ impl Default for MatchEngineConfig {
             today: Utc::now().naive_utc().date(),
             environment: MatchEnvironment::default(),
             referee: RefereeProfile::default(),
-            is_friendly: false,
+            competition: CompetitionKind::League,
             is_knockout: false,
             match_recordings: false,
         }
@@ -40,6 +41,24 @@ impl Default for MatchEngineConfig {
 }
 
 impl MatchEngineConfig {
+    /// The match a fixture is: its date, competition and knockout format,
+    /// and the weather, crowd and referee drawn from it.
+    pub fn for_fixture(fixture: &FixtureContext, match_recordings: bool) -> Self {
+        MatchEngineConfig {
+            seed: None,
+            today: fixture.date,
+            environment: MatchEnvironment::for_fixture(fixture),
+            referee: RefereeProfile::draw(fixture.seed, RefereeProfile::default()),
+            competition: fixture.competition,
+            is_knockout: fixture.knockout,
+            match_recordings,
+        }
+    }
+
+    pub fn is_friendly(&self) -> bool {
+        self.competition == CompetitionKind::Friendly
+    }
+
     /// Convenience: build a seeded config with everything else default.
     pub fn seeded(seed: u64) -> Self {
         MatchEngineConfig {

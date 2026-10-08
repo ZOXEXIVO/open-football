@@ -11,6 +11,9 @@ use super::highlights::ChanceDetail;
 use super::player_stats::{PlayerMatchEndStats, PlayerMatchPhysicalSnapshot};
 use super::score::Score;
 use super::substitution::SubstitutionInfo;
+use super::tally::MatchTally;
+use crate::r#match::engine::environment::{Pitch, Weather};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::league::LeagueMatch;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
@@ -115,6 +118,22 @@ pub struct MatchResultRaw {
     /// shape during the match. Stored as the marker the web view uses
     /// to label a chip with "shifted at min X".
     pub shape_change_minute: Option<u8>,
+    #[serde(default)]
+    pub tally: MatchTally,
+    /// What it was played in.
+    #[serde(default)]
+    pub weather: Weather,
+    #[serde(default)]
+    pub pitch: Pitch,
+    /// The standard of football the match read from both sides at
+    /// kickoff and played the whole match against — what each player
+    /// learns his assurance from afterwards. See `MatchStandard`.
+    #[serde(default)]
+    pub standard_of_football: f32,
+    /// One entry per penalty kept out during play, naming the keeper.
+    /// Shoot-out saves live in `penalty_shootout`.
+    #[serde(default)]
+    pub penalty_saves: Vec<u32>,
 }
 
 impl Clone for MatchResultRaw {
@@ -138,6 +157,11 @@ impl Clone for MatchResultRaw {
             final_home_tactic: self.final_home_tactic,
             final_away_tactic: self.final_away_tactic,
             shape_change_minute: self.shape_change_minute,
+            tally: self.tally.clone(),
+            weather: self.weather,
+            pitch: self.pitch,
+            standard_of_football: self.standard_of_football,
+            penalty_saves: self.penalty_saves.clone(),
         }
     }
 }
@@ -163,6 +187,11 @@ impl MatchResultRaw {
             final_home_tactic: None,
             final_away_tactic: None,
             shape_change_minute: None,
+            tally: MatchTally::default(),
+            weather: Weather::default(),
+            pitch: Pitch::default(),
+            standard_of_football: MatchStandard::CALIBRATION,
+            penalty_saves: Vec::new(),
         }
     }
 
@@ -186,7 +215,23 @@ impl MatchResultRaw {
             final_home_tactic: self.final_home_tactic,
             final_away_tactic: self.final_away_tactic,
             shape_change_minute: self.shape_change_minute,
+            tally: self.tally.clone(),
+            weather: self.weather,
+            pitch: self.pitch,
+            standard_of_football: self.standard_of_football,
+            penalty_saves: self.penalty_saves.clone(),
         }
+    }
+
+    /// Spot-kicks this keeper kept out, in play and in a shoot-out.
+    pub fn penalties_saved_by(&self, keeper_id: u32) -> u8 {
+        let in_play = self.penalty_saves.iter().filter(|&&k| k == keeper_id).count();
+        let shootout = self
+            .penalty_shootout
+            .iter()
+            .filter(|k| !k.scored && k.goalkeeper_id == Some(keeper_id))
+            .count();
+        (in_play + shootout).min(u8::MAX as usize) as u8
     }
 
     pub fn write_team_players(
@@ -331,5 +376,31 @@ impl From<&LeagueMatch> for MatchResult {
 impl PartialEq for MatchResult {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn kick(goalkeeper_id: Option<u32>, scored: bool) -> PenaltyShootoutKick {
+        PenaltyShootoutKick {
+            team_id: 1,
+            taker_id: 9,
+            goalkeeper_id,
+            round: 1,
+            scored,
+            sudden_death: false,
+        }
+    }
+
+    #[test]
+    fn a_keeper_is_credited_with_every_spot_kick_he_kept_out() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.penalty_saves = vec![1, 2, 1];
+        result.penalty_shootout = vec![kick(Some(1), false), kick(Some(1), true), kick(Some(2), false)];
+        assert_eq!(result.penalties_saved_by(1), 3);
+        assert_eq!(result.penalties_saved_by(2), 2);
+        assert_eq!(result.penalties_saved_by(3), 0);
     }
 }

@@ -240,6 +240,11 @@ impl SubScoring {
             s += 0.15;
         }
 
+        // Playing on hurt: he is the one coming off if anybody is.
+        if player.is_hurt() {
+            s += 0.60;
+        }
+
         // Tactical mismatch: chasing → defenders / DMs less needed; defending
         // a lead → luxury forwards less needed.
         s += match (need, pos_group) {

@@ -9,7 +9,7 @@ use crate::r#match::engine::player::strategies::common::{
 };
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext};
@@ -18,11 +18,13 @@ use crate::mid_run_diag::{KeeperActionDiag, KeeperDiveDiag};
 use nalgebra::Vector3;
 
 mod goal_kick;
+mod mind;
 mod punt;
 mod release;
 mod set_piece;
 mod split_step;
 pub use goal_kick::*;
+pub use mind::*;
 pub use punt::*;
 pub use release::*;
 pub use set_piece::*;
@@ -1126,7 +1128,9 @@ impl KeeperBallClaim {
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let voice =
             (1.0 + (prof.communication - Self::POPULATION_VOICE) * Self::VOICE_SPREAD).max(0.2);
-        let edge = (Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial) * voice;
+        let edge = (Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial)
+            * voice
+            * KeeperAppetite::claim_reach(KeeperAppetite::of(ctx));
         let mine = (ball - ctx.player.position).magnitude() - edge;
         let favourite = !ctx
             .players()
@@ -1812,7 +1816,7 @@ impl KeeperSmother {
             ),
             SmotherOutcome::Fouled(severity) => StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Diving,
-                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::KeeperSmother)),
             ),
             SmotherOutcome::Beaten => {
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::Diving)
@@ -2229,7 +2233,9 @@ impl KeeperShotReaction {
         if speed < 1e-3 {
             return f32::MAX;
         }
-        (ball.position - target.struck_from).magnitude() / speed
+        // Seen from where he first sees it: a free kick is behind its wall
+        // for the first of its flight.
+        ((ball.position - target.struck_from).magnitude() - target.screened()).max(0.0) / speed
     }
 
     /// His own reaction time, in engine ticks. Two thirds reflexes, one
@@ -3061,11 +3067,12 @@ impl KeeperShotSave {
         // already physical; this makes the reach test agree with it.
         let ball = &ctx.tick_context.positions.ball;
         let (lateral_error, reach) = SaveModel::contact(
-            target.struck_from,
+            target.seen_from,
             ball.velocity.norm(),
             ctx.player.position,
             Self::base_reach(&prof),
             ball.position.y,
+            ctx.player.dive_aim.is_some(),
         );
         if lateral_error > reach {
             return false;

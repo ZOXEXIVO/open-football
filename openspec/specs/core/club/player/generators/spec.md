@@ -35,3 +35,14 @@ keeper profile. Per-family maturity SHALL be read at the middle of the player's 
 #### Scenario: A keeper's two profiles agree
 - **WHEN** a goalkeeper is generated
 - **THEN** his outfield archetype and his goalkeeping archetype come from the same roll
+
+### Requirement: An academy keeper's goalkeeping attributes follow the goalkeeping maturity curve
+
+A generated academy goalkeeper's goalkeeping attributes SHALL be sized from the goalkeeping family's maturity read at
+the middle of his age year. This is the curve that sizes development ceilings; the generator SHALL NOT use a separate
+age table. The age cap and the fit to his sampled PA SHALL still apply afterwards.
+
+#### Scenario: Two intakes two years apart
+- **WHEN** many academy keepers of the same PA are generated at 17 and at 19
+- **THEN** before the age caps apply, the ratio of their mean goalkeeping attributes matches the goalkeeping
+  maturity ratio between 17.5 and 19.5, within sampling noise

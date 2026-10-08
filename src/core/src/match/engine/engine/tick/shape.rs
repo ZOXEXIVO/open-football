@@ -182,6 +182,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut away_deep_entries = 0u32;
         let mut home_dangerous_turnovers = 0u32;
         let mut away_dangerous_turnovers = 0u32;
+        let on_pitch = |team_id: u32| {
+            field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id && !p.off_pitch)
+                .count() as i8
+        };
+        let home_on_pitch = on_pitch(context.field_home_team_id);
+        let away_on_pitch = on_pitch(context.field_away_team_id);
 
         for p in field.players.iter() {
             let cond = p.player_attributes.condition as f32 / 10000.0;
@@ -265,6 +274,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         context.coach_home.evaluate_with_metrics(
             home_goals - away_goals,
+            away_on_pitch - home_on_pitch,
             match_progress,
             home_avg_condition,
             current_tick,
@@ -272,6 +282,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         );
         context.coach_away.evaluate_with_metrics(
             away_goals - home_goals,
+            home_on_pitch - away_on_pitch,
             match_progress,
             away_avg_condition,
             current_tick,
@@ -365,7 +376,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// players; mutates the `tactical_home` / `tactical_away` fields on
     /// `MatchContext`. `tick_interval` is how many ticks elapsed since
     /// the last refresh — rolling counters scale with it.
-    pub(in crate::r#match::engine::engine) fn refresh_tactical_states(
+    pub(crate) fn refresh_tactical_states(
         field: &MatchField,
         context: &mut MatchContext,
         tick_interval: u32,
@@ -424,7 +435,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let minute_now = sc::minute_from_ms(context.total_match_time);
             let mut home_skills = SkillAccumulator::new();
             let mut away_skills = SkillAccumulator::new();
-            for p in field.players.iter().filter(|p| !p.is_sent_off) {
+            for p in field.players.iter().filter(|p| !p.off_pitch) {
                 let bucket = if p.team_id == context.field_home_team_id {
                     &mut home_skills
                 } else {
@@ -438,8 +449,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             context.skill_aggregates_dirty = false;
             // First pass only — the standard of football in a fixture is
             // a property of the squads that turned up, not of how tired
-            // they are by the 80th minute. See `MatchStandard`.
+            // they are by the 80th minute. See `MatchStandard`. The moment
+            // it is read is the moment each starter's nerves can be.
+            let first_read = context.standard.is_none();
             MatchStandard::latch(context);
+            if first_read {
+                for p in field.players.iter().filter(|p| !p.off_pitch) {
+                    context.seed_psychology(p);
+                }
+            }
         }
         let home_skill_aggregates = context.home_skill_aggregates;
         let away_skill_aggregates = context.away_skill_aggregates;
@@ -497,6 +515,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             } else {
                 context.environment.crowd_intensity * context.environment.home_advantage
             },
+            press_ceiling: 1.0 + context.conditions.high_press_intensity_cap,
             standard_shift: MatchStandard::shift(context),
             standard_gk_shift: MatchStandard::keeper_shift(context),
         };
@@ -549,6 +568,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.defence_home,
             &mut context.defence_away,
             &defence_inputs,
+        );
+        let tick = context.current_tick();
+        context.defence_home.call_line_step(
+            field,
+            context.field_home_team_id,
+            context.tactical_familiarity_home.score,
+            context.home_skill_aggregates.keeper_voice,
+            tick,
+        );
+        context.defence_away.call_line_step(
+            field,
+            context.field_away_team_id,
+            context.tactical_familiarity_away.score,
+            context.away_skill_aggregates.keeper_voice,
+            tick,
         );
 
         // …and the positional layer under all three. The plans above name

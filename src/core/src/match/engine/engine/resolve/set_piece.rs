@@ -13,6 +13,7 @@ use crate::r#match::engine::ball::ball::CornerWalk;
 use crate::r#match::engine::ball::ball::teleport as tc;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::corner_shape::{CornerDeadline, CornerRole};
 use crate::r#match::engine::engine::*;
 use crate::r#match::forwarders::states::ForwardState;
@@ -102,9 +103,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // onto it, all on one tick. The corner now waits for its taker to
         // go and fetch the ball and carry it to the flag — several seconds
         // — so the stoppage exists, and the twenty walk into the shape
-        // under `CornerHold` exactly as they do in the thirty seconds
+        // under `SetPieceHold` exactly as they do in the thirty seconds
         // before a real one. Writing the positions on top of that is the
         // last of the corner's three teleports.
+        for station in std::mem::take(&mut field.ball.pending_restart_stations) {
+            if let Some(idx) = field.player_index(station.player_id) {
+                field.players[idx].set_piece_station = Some(station.position);
+            }
+        }
+
         if !field.ball.pending_corner_teleports.is_empty() {
             #[cfg(feature = "match-logs")]
             if !CornerWalk::armed() {
@@ -154,7 +161,31 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        Self::keep_opponents_off(field);
         Self::clear_expired_corner_stations(field);
+    }
+
+    /// Anyone who walks where the laws do not let him while a free kick or
+    /// a penalty waits is sent back out. See [`RestartShape::restraint`].
+    fn keep_opponents_off(field: &mut MatchField) {
+        let Some((origin, taker_id, spot)) = field.ball.untaken_set_piece() else {
+            return;
+        };
+        let stations = RestartShape::restraint(
+            origin,
+            &field.players,
+            taker_id,
+            spot,
+            field.size.width as f32,
+            field.size.height as f32,
+        );
+        for station in stations {
+            if let Some(idx) = field.player_index(station.player_id) {
+                field.players[idx]
+                    .set_piece_station
+                    .get_or_insert(station.position);
+            }
+        }
     }
 
     /// Box census at the instant the shape goes up — one sample per
@@ -212,7 +243,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         };
         let (mut defenders, mut attackers) = (0u32, 0u32);
         for p in field.players.iter() {
-            if p.is_sent_off
+            if p.off_pitch
                 || p.tactical_position.current_position.is_goalkeeper()
                 || !CornerShape::is_in_penalty_area(p.position, goal_x, field_height)
             {
@@ -291,6 +322,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// over in one or two.
     fn clear_expired_corner_stations(field: &mut MatchField) {
         let Some(shape) = field.ball.corner_shape else {
+            // A free kick, a penalty or a throw-in keeps its shape while it
+            // waits, a throw while the ball is still in the thrower's hands
+            // and a free kick or a penalty until it is kicked.
+            let waiting = field
+                .ball
+                .awaiting_restart
+                .is_some_and(|restart| RestartShape::is_shaped(restart.origin));
+            if waiting
+                || field.ball.throw_in_taker.is_some()
+                || field.ball.set_piece_kicker.is_some()
+            {
+                return;
+            }
             // ⚠ **NO CORNER, SO NOBODY MAY HOLD A STATION — and this used
             // to be a bare `return`.**
             //
@@ -305,7 +349,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // not the goal reset.
             //
             // It then lies dormant until the next CORNER, because
-            // `CornerHold::apply` bails on `pass_origin_restart != Corner`
+            // `SetPieceHold::apply` bails on `pass_origin_restart != Corner`
             // — a guard exactly the wrong way round for this. Measured:
             // the keeper carries a goal kick in from `(6, 199.8)`, keeps
             // that station, and on the next corner `hold_weight` returns

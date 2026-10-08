@@ -260,7 +260,7 @@ fn coach_does_not_go_all_out_when_drawing_but_dominating_xg() {
     // Drawing 0–0 in the 80th minute. Without metrics, evaluate would
     // pick AllOutAttack. With metrics showing xG dominance, we expect
     // PushForward at most.
-    coach.evaluate_with_metrics(0, 0.83, 0.8, 5000, metrics);
+    coach.evaluate_with_metrics(0, 0, 0.83, 0.8, 5000, metrics);
     assert!(matches!(
         coach.instruction,
         CoachInstruction::PushForward | CoachInstruction::Normal
@@ -276,7 +276,7 @@ fn coach_lowers_press_when_press_failing_and_team_tired() {
         ..Default::default()
     };
     // condition < 0.55 + low press success → step down to Normal.
-    coach.evaluate_with_metrics(0, 0.5, 0.45, 5000, metrics);
+    coach.evaluate_with_metrics(0, 0, 0.5, 0.45, 5000, metrics);
     assert_ne!(coach.instruction, CoachInstruction::AllOutAttack);
 }
 

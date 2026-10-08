@@ -7,7 +7,7 @@
 //! quarter of open-play crosses, and only a fraction of those become
 //! attempts.
 
-#[cfg(feature = "match-logs")]
+use crate::r#match::PassOriginRestart;
 use crate::r#match::engine::ball::ball::AerialReach;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
@@ -15,6 +15,9 @@ use crate::r#match::engine::ball::ball::{Ball, DeliveryIntent, PlayerReach};
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::events::EventCollection;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::passing::CrossType;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::CrossDiag;
@@ -73,6 +76,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             None => CrossClearer::Nobody,
         }
     }
+    /// A keeper who has come for a delivery claims it on his handling: the
+    /// floor for the poorest command of area at this standard, floor plus
+    /// span for the best.
+    const KEEPER_CLAIM_FLOOR: f32 = 0.55;
+    const KEEPER_CLAIM_SPAN: f32 = 0.40;
+    /// A keeper who stayed home: the share of his command a ball dropping
+    /// beside him is worth.
+    const KEEPER_HOME_CLAIM: f32 = 0.55;
+
     /// Base attacker win rate of the open-play aerial contest — see the
     /// note at the `att_win` computation for its history.
     /// `OF_CROSS_WIN` overrides for titration.
@@ -112,9 +124,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         })
     }
 
-    /// Discrete OPEN-PLAY cross contest — the sibling of
-    /// [`resolve_corner_contest`](Self::resolve_corner_contest), and for
-    /// the same reason.
+    /// Discrete aerial contest for a lofted delivery, an open-play cross
+    /// or a corner alike.
     ///
     /// A lofted cross is aimed at a patch of the box, not at a pair of
     /// feet, so it cannot be settled the way a pass is. Three engine
@@ -163,14 +174,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // EARLIER in the tick than this does) was pre-empting the duel.
         // It moved contests from 3.9 to 4.7 a match — inside run-to-run
         // noise — and was reverted, because the diagnosis was wrong.
-        //
-        // What actually happens: of ~14 lofted deliveries a match, ~12.6
-        // are CORNER kicks, and `resolve_corner_contest` runs first in
-        // `game_tick_inner` and ends by calling
-        // `clear_pending_pass_metadata`, which disarms this contest —
-        // correctly, since a corner is its business. Only 2-3 open-play
-        // crosses a match exist for this contest to resolve. The gap is
-        // crossing VOLUME, not this window. See `CrossDiag`.
         const CONTEST_CEILING: f32 = 2.9;
         const CONTEST_FLOOR: f32 = 1.5;
         if ball.position.z > CONTEST_CEILING
@@ -214,30 +217,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
 
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::CROSS_CONTEST_FIRED.fetch_add(1, Ordering::Relaxed);
-
+        let corner = field.ball.pass_origin_restart == PassOriginRestart::Corner;
         let minute = (context.total_match_time / 60_000) as u32;
 
-        // Only players who can actually get to the ball contest it. 34u is
-        // ~4.3 m — a stride and a jump, which is the real radius of an
-        // aerial challenge, not the whole penalty area.
-        const CONTEST_RADIUS: f32 = 34.0;
+        // Only players who can actually get their head on it contest it,
+        // and they are measured from where it comes down to head height,
+        // not from where it is now. 24u is 3 m — a stride and a jump.
+        const CONTEST_RADIUS: f32 = 24.0;
+        let (drop, ticks_to_drop) = field
+            .ball
+            .natural_drop(AerialReach::ATTACKED)
+            .unwrap_or((ball_pos, 0));
 
         let mut best_att: Option<(usize, f32)> = None;
         let mut best_def_score = 0.0_f32;
         // WHO the defending header falls to, not just how good it was.
         // The defensive outcomes below turn the ball in mid-air, and a
         // turn with no man attached to it is the reported "it bounces off
-        // an invisible object" — `resolve_corner_contest` has tracked this
-        // for the same reason since its hooked-behind branch existed.
+        // an invisible object".
         let mut best_def: Option<usize> = None;
         let mut defenders_contesting = 0u32;
         let mut gk_command = 0.0_f32;
         let mut gk_idx: Option<usize> = None;
+        let mut gk_coming = false;
 
         for (i, p) in field.players.iter().enumerate() {
-            let gap = (p.position - ball_pos).magnitude();
+            // …and by where his run takes him by then, not where he stands:
+            // a man already running onto it is priced at his arrival.
+            let to_drop = (drop - p.position).xy();
+            let closing = to_drop
+                .try_normalize(1.0e-4)
+                .map_or(0.0, |dir| p.velocity.xy().dot(&dir).max(0.0));
+            let gap = (to_drop.norm() - closing * ticks_to_drop as f32).max(0.0);
             let is_gk = p.tactical_position.current_position.is_goalkeeper();
             // The keeper commands a wider zone than an outfielder — that
             // is the whole point of coming for a cross.
@@ -254,12 +265,35 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     best_att = Some((i, s));
                 }
             } else if is_gk {
-                let raw = (p.skills.goalkeeping.command_of_area * 0.6
-                    + p.skills.goalkeeping.aerial_reach * 0.4)
-                    / 20.0;
-                // Distance decay — a keeper on his line does not command
-                // a ball at the back post.
-                gk_command = raw * (1.0 - gap / 58.0).clamp(0.0, 1.0);
+                let raw = MatchStandard::peer(
+                    (p.skills.goalkeeping.command_of_area * 0.6
+                        + p.skills.goalkeeping.aerial_reach * 0.4)
+                        / 20.0,
+                    MatchStandard::keeper_shift(context),
+                );
+                // A keeper who has come for it read the flight and won the
+                // race to it, or he would not have come
+                // (`KeeperAerialClaim::assess`): it is his on his handling.
+                // Priced as a share of a stay-at-home claim instead, he
+                // lost it six times in seven and was left off his line for
+                // the header. One who stayed
+                // home takes what drops near him — a keeper on his line
+                // does not command a ball at the back post.
+                let coming = matches!(
+                    p.state,
+                    PlayerState::Goalkeeper(
+                        GoalkeeperState::Catching
+                            | GoalkeeperState::Jumping
+                            | GoalkeeperState::ComingOut
+                            | GoalkeeperState::Punching
+                    )
+                );
+                gk_coming = coming;
+                gk_command = if coming {
+                    Self::KEEPER_CLAIM_FLOOR + raw * Self::KEEPER_CLAIM_SPAN
+                } else {
+                    raw * (1.0 - gap / 58.0).clamp(0.0, 1.0) * Self::KEEPER_HOME_CLAIM
+                };
                 gk_idx = Some(i);
             } else {
                 defenders_contesting += 1;
@@ -269,6 +303,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     best_def = Some(i);
                 }
             }
+        }
+
+        // Nobody can get to it yet. A whipped ball drops through head height
+        // well short of where it is going, and settling the contest there
+        // settled it in empty air: the box it was aimed at never got to
+        // attack it. It waits, armed, until somebody can reach it or it has
+        // dropped out of the band.
+        if best_att.is_none() && best_def.is_none() && gk_idx.is_none() {
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::CROSS_CONTEST_FIRED.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        if corner {
+            crate::mid_run_diag::CORNER_CONTEST_FIRED.fetch_add(1, Ordering::Relaxed);
+            Self::note_corner_box(field, att_team, attacked_goal.x);
         }
 
         // Nobody attacking it — the delivery just runs through, which is
@@ -297,8 +347,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let gk_claim_edge = cross_type.map(CrossType::keeper_claim_scale).unwrap_or(1.0);
 
         // Keeper first: he either takes it off everyone or he doesn't come.
-        let gk_claim = (gk_command * 0.55 * gk_claim_edge).clamp(0.0, 0.45);
+        // The delivery's shape is what keeps a keeper at home, so it prices
+        // only a keeper who stayed there: one who came for it already read
+        // its flight in deciding to come.
+        let shape = if gk_coming { 1.0 } else { gk_claim_edge };
+        let gk_claim = (gk_command * shape * (1.0 + context.conditions.goalkeeper_claim_cross))
+            .clamp(0.0, 0.95);
         if gk_idx.is_some() && context.rng.bernoulli(gk_claim) {
+            if corner {
+                Self::note_corner_routine(field, context, att_team, 0.0);
+            }
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::CROSS_CONTEST_GK.fetch_add(1, Ordering::Relaxed);
             // ⚠ **…and only if he can actually get a glove to it.**
@@ -388,10 +446,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // titration.
         let att_win =
             (Self::cross_win_base() + (att_score - def_score) * 0.55 + type_edge).clamp(0.04, 0.55);
+        if corner {
+            Self::note_corner_routine(field, context, att_team, att_win);
+        }
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::CROSS_CONTEST_WON.fetch_add(1, Ordering::Relaxed);
+            #[cfg(feature = "match-logs")]
+            if corner {
+                crate::mid_run_diag::CORNER_CONTEST_WON.fetch_add(1, Ordering::Relaxed);
+            }
             // Drop the ball onto the winner's head, moving goalward, and
             // hold it in the heading band long enough for their state
             // machine to strike it. Same kinematics as the corner contest:
@@ -423,7 +488,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 attacked_goal,
                 crosser,
                 Self::CROSS_DROP_BEHIND,
-                Self::CROSS_APEX,
                 DeliveryIntent::Header,
                 true,
                 2,
@@ -452,17 +516,20 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // **defenders never conceded corners**: before it, the only
             // real supplier was the keeper parrying, at 3.4 a match.
             //
-            // ⚠ THE TARGET IT WAS SIZED AGAINST WAS TWICE THE REAL ONE.
-            // "corners ran at ~10.8 against a real ~21, and the endline
-            // split was 25% corners against ~62% real" — both of those
-            // reference figures came from reading the per-MATCH corner
-            // average (~10.4) as a per-TEAM one. A real match has ~10.4
-            // corners and ~16 goal kicks: ~40% corners, which is what the
-            // engine measures today. So this branch was aimed at roughly
-            // double the corners football actually produces, and its
-            // `BEHIND_AT_LINE` share should be read in that light before
-            // anybody raises it further.
-            if Self::heads_it_behind(ball_pos, attacked_goal, field.size.width as f32, context) {
+            // ⚠ The real target is ~10.4 corners a MATCH and ~16 goal
+            // kicks, ~40% corners at the byline — not the per-team ~21 an
+            // earlier sizing read it as. The engine measured that split
+            // only while the touch bookkeeping was wrong: a header out of
+            // the air, a claim or a shot booked no touch, so balls a
+            // defender put out were given as goal kicks and shots an
+            // attacker put wide as corners. With every touch booked it
+            // reads ~29%, which is what `behind_at_line` was raised
+            // against.
+            // How close to his own line the header is decides how much
+            // choice he has about where it goes, and the header happens
+            // at him: in most of these the ball is still a stride short.
+            let header_at = best_def.map_or(ball_pos, |d| field.players[d].position);
+            if Self::heads_it_behind(header_at, attacked_goal, field.size.width as f32, context) {
                 // ⚠ Hooked behind BY somebody, not off the ball — the
                 // clear branch below is the same rule and carries the
                 // measurement. See `BlockDiag::CHANNELS`.
@@ -493,7 +560,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         attacked_goal,
                         crosser,
                         Self::CROSS_DROP_BEHIND,
-                        Self::CROSS_APEX,
                         DeliveryIntent::HookedBehind,
                         false,
                         4,
@@ -602,7 +668,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     attacked_goal,
                     crosser,
                     Self::CROSS_DROP_BEHIND,
-                    Self::CROSS_APEX,
                     DeliveryIntent::Cleared {
                         range: clear_range,
                         apex: CLEAR_APEX_METRES,
@@ -624,5 +689,45 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field.ball.pass_target_player_id = None;
         field.ball.clear_pending_pass_metadata();
         field.ball.cross_contest_resolved = true;
+    }
+
+    /// A corner's routine goes into the history that stops a side
+    /// repeating one that keeps failing, with the chance it made: a
+    /// header's xG ceiling times the chance of winning it.
+    fn note_corner_routine(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        att_team: u32,
+        att_win: f32,
+    ) {
+        if let Some(routine) = field.ball.pending_corner_routine.take() {
+            let home = att_team == context.field_home_team_id;
+            context
+                .set_piece_history
+                .record_corner(home, routine, att_win * 0.12);
+        }
+    }
+
+    /// Who is in the area as a corner is contested — the box census at the
+    /// delivery.
+    #[cfg(feature = "match-logs")]
+    fn note_corner_box(field: &MatchField, att_team: u32, goal_x: f32) {
+        use crate::r#match::engine::corner_shape::CornerShape;
+        let field_height = field.size.height as f32;
+        let (mut defenders, mut attackers) = (0u32, 0u32);
+        for p in field.players.iter() {
+            if p.off_pitch
+                || p.tactical_position.current_position.is_goalkeeper()
+                || !CornerShape::is_in_penalty_area(p.position, goal_x, field_height)
+            {
+                continue;
+            }
+            if p.team_id == att_team {
+                attackers += 1;
+            } else {
+                defenders += 1;
+            }
+        }
+        crate::mid_run_diag::SetPieceDiag::note_corner_box(defenders, attackers);
     }
 }

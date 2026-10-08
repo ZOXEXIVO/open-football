@@ -17,18 +17,36 @@ use crate::club::staff::goalkeeping::{
     GoalkeepingDepartment, KeeperCoachAuthority, KeeperRoom, KeeperRoomPlan, KeeperSelectionBrief,
     KeeperTier,
 };
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::{Club, Player, TeamType};
 
 impl Club {
     /// Every keeper at the club, read as one group.
     pub fn keeper_room(&self, date: NaiveDate) -> KeeperRoom {
-        KeeperRoom::assemble(
+        let mut room = KeeperRoom::assemble(
             self.teams
                 .teams
                 .iter()
                 .flat_map(|t| t.players.iter().map(move |p| (t.id, t.team_type, p))),
             date,
-        )
+        );
+        if let Some(main) = self.teams.main()
+            && let Some(lead) = main.staffs.goalkeeping_lead()
+        {
+            room.perceive(
+                lead,
+                main.playing_standard,
+                |team_id, player_id| {
+                    let team = self.teams.teams.iter().find(|t| t.id == team_id);
+                    (
+                        team.map_or(MatchStandard::CALIBRATION, |t| t.playing_standard),
+                        team.and_then(|t| t.staffs.head_coach().coach_memory.get(player_id)),
+                    )
+                },
+                date,
+            );
+        }
+        room
     }
 
     /// The goalkeeping department's monthly review.

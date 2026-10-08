@@ -69,12 +69,11 @@ pub const VISIBLE: f32 = 4.0;
 /// Named for the function that runs between the previous checkpoint and
 /// this one, so a row in the census is a place in `tick.rs` and not a
 /// category anybody has to interpret.
-pub const STAGES: [&str; 21] = [
+pub const STAGES: [&str; 20] = [
     // ── full tick ──────────────────────────────────────────────────────
     "ball_update",
     "set_piece_teleport",
     "save_credit",
-    "corner_contest",
     "cross_contest",
     "foul_advantage",
     "play_players",
@@ -106,24 +105,23 @@ pub const STAGES: [&str; 21] = [
 pub const STAGE_BALL_UPDATE: usize = 0;
 pub const STAGE_SET_PIECE: usize = 1;
 pub const STAGE_SAVE_CREDIT: usize = 2;
-pub const STAGE_CORNER_CONTEST: usize = 3;
-pub const STAGE_CROSS_CONTEST: usize = 4;
-pub const STAGE_FOUL_ADVANTAGE: usize = 5;
-pub const STAGE_PLAY_PLAYERS: usize = 6;
-pub const STAGE_DISPATCH: usize = 7;
-pub const STAGE_GOAL_RESET: usize = 8;
-pub const STAGE_SET_PIECE_POST: usize = 9;
-pub const STAGE_L_BALL_UPDATE: usize = 10;
-pub const STAGE_L_SET_PIECE: usize = 11;
-pub const STAGE_L_SAVE_CREDIT: usize = 12;
-pub const STAGE_L_GOALKEEPERS: usize = 13;
-pub const STAGE_L_PLAYER_MOVE: usize = 14;
-pub const STAGE_L_DISPATCH: usize = 15;
-pub const STAGE_L_GOAL_RESET: usize = 16;
-pub const STAGE_L_SET_PIECE2: usize = 17;
-pub const STAGE_BALL_NET: usize = 18;
-pub const STAGE_BALL_RESTART: usize = 19;
-pub const STAGE_BALL_LIVE: usize = 20;
+pub const STAGE_CROSS_CONTEST: usize = 3;
+pub const STAGE_FOUL_ADVANTAGE: usize = 4;
+pub const STAGE_PLAY_PLAYERS: usize = 5;
+pub const STAGE_DISPATCH: usize = 6;
+pub const STAGE_GOAL_RESET: usize = 7;
+pub const STAGE_SET_PIECE_POST: usize = 8;
+pub const STAGE_L_BALL_UPDATE: usize = 9;
+pub const STAGE_L_SET_PIECE: usize = 10;
+pub const STAGE_L_SAVE_CREDIT: usize = 11;
+pub const STAGE_L_GOALKEEPERS: usize = 12;
+pub const STAGE_L_PLAYER_MOVE: usize = 13;
+pub const STAGE_L_DISPATCH: usize = 14;
+pub const STAGE_L_GOAL_RESET: usize = 15;
+pub const STAGE_L_SET_PIECE2: usize = 16;
+pub const STAGE_BALL_NET: usize = 17;
+pub const STAGE_BALL_RESTART: usize = 18;
+pub const STAGE_BALL_LIVE: usize = 19;
 
 /// The rows that break down `ball_update` rather than adding to it.
 /// Summing the table without excluding these double-counts the ball's
@@ -593,11 +591,11 @@ pub const EVENT_LABELS: [&str; EVENTS] = [
     "RequestShot",
     "RequestBallReceive",
     "TakeBall",
-    "?25",
-    "?26",
-    "?27",
-    "?28",
-    "?29",
+    "Caution",
+    "HeldTooLong",
+    "Handball",
+    "Dispossessed",
+    "Howler",
     "?30",
     "?31",
 ];

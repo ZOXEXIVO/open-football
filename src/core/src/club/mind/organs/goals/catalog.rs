@@ -324,6 +324,10 @@ pub struct GoalSpec {
     /// weakens everything in its mask — a man who has decided to stay
     /// is not simultaneously agitating to leave.
     pub competes_with: GoalMask,
+    /// A want that points out of or into the club and still takes no side
+    /// in the contest between leaving and staying. Stated on the row so a
+    /// want is never left out of that contest by omission.
+    pub stands_apart: bool,
 }
 
 impl GoalSpec {
@@ -339,6 +343,7 @@ impl GoalSpec {
             press_at: 0.80,
             abandon_after_months: None,
             competes_with: GoalMask::EMPTY,
+            stands_apart: false,
         }
     }
 
@@ -380,6 +385,13 @@ impl GoalSpec {
         }
     }
 
+    pub const fn stands_apart(self) -> Self {
+        GoalSpec {
+            stands_apart: true,
+            ..self
+        }
+    }
+
     /// What this want is about, when it is not about the club he is at.
     pub const fn about(self, subject: GoalSubject) -> Self {
         GoalSpec { subject, ..self }
@@ -404,6 +416,7 @@ const WANTS_OUT: GoalMask = GoalMask::of(&[
     GoalKind::FindANewChallenge,
     GoalKind::KeepPlayingAtThisLevel,
     GoalKind::LeaveThisClub,
+    GoalKind::BeAllowedToLeave,
     GoalKind::PlayFirstTeamFootball,
     GoalKind::GoHome,
     GoalKind::EscapeThePressure,
@@ -500,10 +513,13 @@ impl GoalKind {
             },
             // The one club-shaped want that is not about the club he is
             // at. Reading it off `direction` marked it achieved the day
-            // he was sold anywhere at all.
+            // he was sold anywhere at all, and for the same reason a
+            // decision about this club neither feeds it nor wears it down.
             GoalKind::PlayForMyBoyhoodClub => GoalSpec {
                 decay_per_month: 0.02,
-                ..S::private(D::Social, Dir::Leave).about(GoalSubject::Himself)
+                ..S::private(D::Social, Dir::Leave)
+                    .about(GoalSubject::Himself)
+                    .stands_apart()
             },
 
             // Playing
@@ -520,7 +536,10 @@ impl GoalKind {
                 S::ordinary(D::Career, Dir::Neutral).about(GoalSubject::OwningClub)
             }
             GoalKind::StayAtThisLoanClub => S::ordinary(D::Career, Dir::Neutral),
-            GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave).about(GoalSubject::Himself),
+            // A loan moves where he plays, not who owns him.
+            GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave)
+                .about(GoalSubject::Himself)
+                .stands_apart(),
             // Defending a shirt is quieter than chasing one. He does not
             // announce it and he never demands anything over it — he
             // just trains harder and plays like a man who can hear
@@ -550,8 +569,10 @@ impl GoalKind {
             GoalKind::WinTheManagersTrust => S::ordinary(D::Professional, Dir::Stay)
                 .competing(WANTS_OUT)
                 .about(GoalSubject::ThisManager),
-            GoalKind::BeCaptain => S::private(D::Professional, Dir::Stay),
-            GoalKind::BeAllowedToLeave => S::ordinary(D::Professional, Dir::Leave),
+            GoalKind::BeCaptain => S::private(D::Professional, Dir::Stay).competing(WANTS_OUT),
+            GoalKind::BeAllowedToLeave => {
+                S::ordinary(D::Professional, Dir::Leave).competing(WANTS_TO_STAY)
+            }
             // The loyalist's anchor. Never fades on its own.
             GoalKind::StayAtThisClub => GoalSpec {
                 decay_per_month: 0.02,
@@ -599,10 +620,12 @@ impl GoalKind {
             GoalKind::SettleMyFamily => {
                 S::ordinary(D::Social, Dir::Neutral).about(GoalSubject::Himself)
             }
-            GoalKind::LearnTheLanguage => {
-                S::fleeting(D::Social, Dir::Stay).about(GoalSubject::Himself)
-            }
-            GoalKind::FindAMentor => S::fleeting(D::Social, Dir::Stay),
+            // Settling in argues for nothing about leaving: learning the
+            // language does not wear down wanting a bigger club.
+            GoalKind::LearnTheLanguage => S::fleeting(D::Social, Dir::Stay)
+                .about(GoalSubject::Himself)
+                .stands_apart(),
+            GoalKind::FindAMentor => S::fleeting(D::Social, Dir::Stay).stands_apart(),
             GoalKind::EscapeThePressure => {
                 S::private(D::Social, Dir::Leave).competing(WANTS_TO_STAY)
             }
@@ -614,7 +637,8 @@ impl GoalKind {
             GoalKind::GetIntoTheNationalSquad => {
                 S::private(D::Competitive, Dir::Neutral).about(GoalSubject::Himself)
             }
-            GoalKind::EndTheDrought => S::fleeting(D::Competitive, Dir::Stay),
+            // Form, not the club.
+            GoalKind::EndTheDrought => S::fleeting(D::Competitive, Dir::Stay).stands_apart(),
             GoalKind::RetireOnMyTerms => {
                 S::private(D::Career, Dir::Neutral).about(GoalSubject::Himself)
             }

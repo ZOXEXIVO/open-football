@@ -83,3 +83,100 @@ For every player who featured in the match, the system SHALL record a stat line 
 #### Scenario: Goalkeeper stat line includes shot-stopping detail
 - **WHEN** a goalkeeper faces one or more shots on target during the match
 - **THEN** the recorded stat line includes saves made, shots faced, and the expected-goals value of the shots faced, distinct from an outfield player's stat line
+
+### Requirement: The winner of a decided aerial contest goes to meet the ball
+When an aerial contest has been decided and its ball is still being delivered, the winner SHALL go to meet it,
+whatever he was doing, short of an action already under way that cannot be abandoned. This SHALL hold for every role,
+whatever the outcome (a header, a clearance or a ball hooked behind), and in open play and at set pieces alike.
+
+- While the ball is in flight, the winner SHALL run to the point the delivery is aimed at. Once the ball is down in
+  the heading band, he SHALL run to the ball.
+- He SHALL NOT run to where the ball would have come down on the grass had nothing held it.
+- He SHALL run at full effort.
+- No positional hold, whether a set-piece station or the team's shape, SHALL keep him from the ball.
+- His run SHALL end when the delivery ends: he gets within heading reach, the ball comes down to boot height, the
+  delivery's deadline passes, or another player touches the ball.
+
+What he does with the ball on arrival SHALL remain his role's decision.
+
+#### Scenario: A defender who won a cross leaves his man for it
+- **WHEN** a defender wins the aerial contest for a cross while marking an attacker away from where the ball is aimed
+- **THEN** he runs to the aim point while the ball is in flight, and to the ball once it is held in the heading band
+
+#### Scenario: The run does not overshoot the hold
+- **WHEN** a won delivery's ball is held at its aim point, short of where its flight would have taken it to the grass
+- **THEN** the winner runs to the held ball, not past it to that landing point
+
+#### Scenario: A centre-back who won the corner is not held on his station
+- **WHEN** a centre-back up for a corner wins the corner's aerial contest while the ball is still on its way from
+  the flag
+- **THEN** he runs to the delivery's aim point instead of being held at his corner station
+
+#### Scenario: The run ends with the delivery
+- **WHEN** the winner's delivery ends, because he plays it, it comes down to boot height, its deadline passes or
+  another player touches it
+- **THEN** his own state decides his movement again
+
+#### Scenario: Only the winner is moved
+- **WHEN** an aerial contest is decided
+- **THEN** no player other than its winner is moved by this rule
+
+### Requirement: A goalkeeper's state of mind shapes his tendencies
+A goalkeeper's confidence and nerves SHALL shift how much he takes on, separately from how well he executes it:
+- **Nervous:** he SHALL claim fewer crosses, come off his line less, parry more of the saves he could hold, and
+  distribute long and safe more often.
+- **Over-confident:** he SHALL claim more, sweep further from goal, hold more, and play out from the back more often.
+- **Settled:** a keeper with neutral confidence and negligible nerves SHALL behave exactly as his attributes dictate.
+
+#### Scenario: A nervous keeper stays at home
+- **WHEN** the same keeper faces the same crosses once nervous and once settled
+- **THEN** he attempts fewer claims when nervous
+
+#### Scenario: A confident keeper comes for more
+- **WHEN** the same keeper faces the same crosses once over-confident and once settled
+- **THEN** he attempts more claims when over-confident
+
+### Requirement: A goalkeeper's state of mind shapes his reliability
+A goalkeeper's confidence and nerves SHALL change how often his actions fail:
+- **Nerves and low confidence** SHALL raise errors of hesitation and handling: saveable shots let through, spilled
+  into danger or fumbled, late or half-hearted claims, and rushed clearances or passes under pressure.
+- **Over-confidence** SHALL carry the risk of ambition: the extra claims, sweeps and passes out of defence he takes
+  on SHALL be priced by the same outcome rolls as any keeper's. It is not required to raise his share of failed
+  claims, because the same confidence steadies his hands.
+
+A failure that leads to an opposition shot or goal within the error window SHALL be recorded as his error leading to
+a shot or goal.
+
+Over a seeded batch representing seasons of matches between sides of equal level:
+- the mean number of errors leading to a goal per keeper-season SHALL be between 0.6 and 1.5, and the 90th
+  percentile between 2 and 5;
+- goals per match and save percentage SHALL stay within their calibration bands.
+
+#### Scenario: An unassured keeper makes more errors at equal attributes
+- **WHEN** two keepers with identical attributes each play the same set of matches at the same standard, one assured
+  at that standard and one well below it
+- **THEN** the unassured keeper is charged with at least one and a half times as many errors leading to a shot
+
+#### Scenario: Nerves cost claims
+- **WHEN** the same keeper faces the same crosses once unassured and once assured
+- **THEN** a larger share of his claims fail when he is unassured
+
+#### Scenario: The keeper population keeps its level
+- **WHEN** the seeded realism batch is run with keeper reliability in force
+- **THEN** goals per match and save percentage stay within their calibration bands, and errors leading to a goal per
+  keeper-season fall within the stated range
+
+### Requirement: A goalkeeper is measured against the standard of football, not against the keepers on the pitch
+The standard a goalkeeper's reach, read of the shot and handling are measured against SHALL be derived from the
+standard of football in the match. It SHALL NOT depend on the attributes of either goalkeeper on the pitch, so that a
+keeper is never measured against himself and never made better or worse by the keeper at the other end.
+
+#### Scenario: The opposing keeper does not change his saves
+- **WHEN** a keeper plays two otherwise identical matches in which only the opposing goalkeeper differs, one far
+  better than the other
+- **THEN** the standard his shot-stopping is measured against is the same in both matches
+
+#### Scenario: A weak keeper keeps his whole gap
+- **WHEN** a keeper whose goalkeeping attributes sit well below his division's typical keeper plays a season in that
+  division
+- **THEN** the standard his shot-stopping is measured against in each match does not move with his own attributes

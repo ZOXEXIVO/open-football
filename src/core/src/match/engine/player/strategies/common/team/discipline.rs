@@ -398,7 +398,7 @@ impl ShapeDiscipline {
         // from further out than that — at which point the recall takes up
         // to 85% of his velocity and points it back at his formation slot,
         // i.e. away from the ball he has been sent for. Same exemption
-        // `CornerHold` already makes for the same man.
+        // `SetPieceHold` already makes for the same man.
         if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
             return true;
         }

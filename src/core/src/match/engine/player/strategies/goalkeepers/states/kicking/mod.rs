@@ -1,7 +1,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperPunt,
+    ActivityIntensity, GoalkeeperCondition, KeeperPunt, KeeperRelease,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
@@ -81,10 +81,8 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             ));
         }
 
-        // No target worth aiming at — hoof it clear rather than hold the
-        // ball. Mirrors the Distributing / Throwing timeout so no release
-        // path can stall with the ball in hand.
-        if ctx.in_state_time > 20 {
+        // No target worth aiming at in the time he had: hoof it clear.
+        if !KeeperRelease::may_keep_looking(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Clearing,
             ));

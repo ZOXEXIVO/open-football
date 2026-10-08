@@ -729,7 +729,7 @@ impl Ball {
             self.previous_owner,
         );
         for p in players {
-            if p.is_sent_off {
+            if p.off_pitch {
                 continue;
             }
             let _ = write!(

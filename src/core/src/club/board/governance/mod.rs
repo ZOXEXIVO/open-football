@@ -80,6 +80,18 @@ pub enum BoardTransferConcern {
     ConflictsWithVision,
 }
 
+impl BoardTransferConcern {
+    /// The i18n key a refusal on the player's record names the concern with.
+    pub fn as_i18n_key(self) -> &'static str {
+        match self {
+            BoardTransferConcern::ExceedsTransferBudget => "board_concern_exceeds_transfer_budget",
+            BoardTransferConcern::FinancialDiscipline => "board_concern_financial_discipline",
+            BoardTransferConcern::WeakSportingCase => "board_concern_weak_sporting_case",
+            BoardTransferConcern::ConflictsWithVision => "board_concern_conflicts_with_vision",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BoardTransferProposal {
     pub fee: f64,

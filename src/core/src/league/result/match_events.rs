@@ -2302,6 +2302,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 match_season_year,
                 date: today_date,
                 club_id: player_club_id,
+                standard_of_football: details.standard_of_football,
+                penalties_saved: details.penalties_saved_by(pid),
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2316,6 +2318,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 is_continental,
                 team_won,
                 played_slot,
+                details.standard_of_football,
                 today_date,
             ));
         }
@@ -2364,6 +2367,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             match_season_year: 0,
             date: today_date,
             club_id: player_club_id,
+            standard_of_football: details.standard_of_football,
+            penalties_saved: 0,
         }
         .big_match_kind();
 
@@ -2540,6 +2545,7 @@ impl CoachObservationBuilder {
         is_continental: bool,
         team_won: bool,
         played_slot: Option<PlayerPositionType>,
+        standard: f32,
         date: NaiveDate,
     ) -> CoachMatchObservation {
         CoachMatchObservation {
@@ -2554,6 +2560,10 @@ impl CoachObservationBuilder {
             goals: stats.goals,
             assists: stats.assists,
             errors_leading_to_goal: stats.errors_leading_to_goal,
+            errors_leading_to_shot: stats.errors_leading_to_shot,
+            keeper_claims: stats.zone_stats.gk_command_actions
+                + stats.zone_stats.gk_failed_claims_to_shot,
+            standard_of_football: standard,
             yellow_cards: stats.yellow_cards as u8,
             red_cards: stats.red_cards as u8,
             team_won,
@@ -2940,6 +2950,11 @@ mod canonical_rating_tests {
                 final_home_tactic: None,
                 final_away_tactic: None,
                 shape_change_minute: None,
+                tally: Default::default(),
+                weather: Default::default(),
+                pitch: Default::default(),
+                standard_of_football: 0.6630,
+                penalty_saves: Vec::new(),
             }
         }
     }

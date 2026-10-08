@@ -452,7 +452,6 @@ impl Ball {
         self.flags.in_flight_state = 20;
         self.claim_cooldown = 0;
         self.pass_target_player_id = None;
-        self.offside_snapshot = None;
         events.add_ball_event(crate::r#match::ball::events::BallEvent::HitFrame(
             hit.part,
             hit.position,

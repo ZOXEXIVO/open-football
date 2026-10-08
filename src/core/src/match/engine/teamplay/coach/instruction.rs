@@ -25,6 +25,36 @@ pub enum CoachInstruction {
 }
 
 impl CoachInstruction {
+    /// How far forward this asks the side to play, on one axis: 0 is
+    /// holding on to what it has, 1 is throwing everything at the goal.
+    pub fn ambition(&self) -> f32 {
+        match self {
+            CoachInstruction::WasteTime => 0.0,
+            CoachInstruction::ParkTheBus => 0.1,
+            CoachInstruction::SlowDown => 0.3,
+            CoachInstruction::Normal => 0.5,
+            CoachInstruction::PushForward => 0.75,
+            CoachInstruction::AllOutAttack => 1.0,
+        }
+    }
+
+    /// This instruction, or the most ambitious one within `cap`.
+    pub fn capped_at(self, cap: f32) -> Self {
+        let cap = cap + 1.0e-3;
+        if self.ambition() <= cap {
+            return self;
+        }
+        [
+            CoachInstruction::PushForward,
+            CoachInstruction::Normal,
+            CoachInstruction::SlowDown,
+            CoachInstruction::ParkTheBus,
+        ]
+        .into_iter()
+        .find(|instruction| instruction.ambition() <= cap)
+        .unwrap_or(CoachInstruction::WasteTime)
+    }
+
     /// How much this instruction discourages shooting (0.0 = no effect, 1.0 = never shoot)
     pub fn shooting_reluctance(&self) -> f32 {
         match self {

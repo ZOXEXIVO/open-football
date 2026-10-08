@@ -272,6 +272,14 @@ fn the_roll_prediction_saturates_at_the_resting_point() {
     );
 }
 
+#[test]
+fn a_ball_sent_to_rest_somewhere_rests_there() {
+    for distance in [0.0f32, 16.0, 36.0, 400.0] {
+        let range = BallRoll::range(BallRoll::speed_to_rest_at(distance));
+        assert!((range - distance).abs() < 1e-2, "{distance} -> {range}");
+    }
+}
+
 /// The meeting point has to LEAD the ball, or
 /// `Intercepting::can_reach_before_opponent` is racing everybody to a
 /// spot the ball will never be at — which is what it did when the lead
@@ -527,6 +535,49 @@ fn the_roll_rest_time_agrees_with_the_roll_range() {
         BallRoll::rest_ticks(BallRoll::STOPPED * 0.5),
         0.0,
         "a ball already under the stopping threshold has no roll left"
+    );
+}
+
+#[test]
+fn the_roll_time_to_a_distance_inverts_the_roll() {
+    for speed in [0.3f32, 0.9, 2.0] {
+        for t in [10.0f32, 120.0, 600.0] {
+            let covered = BallRoll::distance(speed, t);
+            let back = BallRoll::ticks_to(speed, covered);
+            assert!(
+                (back - t).abs() < 1.0,
+                "at {speed} u/tick the ball covers {covered:.1}u in {t} ticks, \
+                 and the inverse read {back:.1}"
+            );
+        }
+        assert_eq!(
+            BallRoll::ticks_to(speed, BallRoll::range(speed) + 50.0),
+            BallRoll::rest_ticks(speed),
+            "past the resting point the ball gets there when it stops"
+        );
+    }
+}
+
+/// A pass rolled straight at a man is met in front of him. Read off a
+/// coarse march over the whole roll, the brief window as it reaches him
+/// was stepped over and the meeting landed fifty metres behind him.
+#[test]
+fn a_ball_rolled_at_him_is_met_in_front_of_him() {
+    let mut player = chaser();
+    player.position = Vector3::new(420.0, 200.0, 0.0);
+    let ball_pos = Vector3::new(480.0, 200.0, 0.0);
+    let ball_vel = Vector3::new(-1.0, 0.0, 0.0);
+    let speed = player.max_speed_with_condition_cached();
+
+    let (m, when) = LooseBallChase::earliest_meeting(player.position, speed, ball_pos, ball_vel);
+    assert!(
+        m.x > player.position.x && m.x < ball_pos.x,
+        "met between the ball and him, got x {:.0}",
+        m.x
+    );
+    assert!(
+        when < 60.0,
+        "before the ball reaches him, got {when:.0} ticks"
     );
 }
 

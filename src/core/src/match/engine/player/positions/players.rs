@@ -45,9 +45,9 @@ pub struct PlayerFieldMetadata {
 }
 
 /// The only inputs of the interception composite that move during a match:
-/// condition, the minute, and a substitute's entry clock. Skills, crowd,
-/// settledness and form are stamped before kick-off.
-type ReadKey = (i16, u32, u64);
+/// condition, the minute, a substitute's entry clock and an injury. Skills,
+/// crowd, settledness and form are stamped before kick-off.
+type ReadKey = (i16, u32, u64, u64);
 
 impl Default for PlayerFieldMetadata {
     #[inline]
@@ -61,7 +61,7 @@ impl Default for PlayerFieldMetadata {
             chase_bias: 1.0,
             max_speed: 0.0,
             read: 0.5,
-            read_key: (i16::MIN, u32::MAX, u64::MAX),
+            read_key: (i16::MIN, u32::MAX, u64::MAX, u64::MAX),
         }
     }
 }
@@ -76,6 +76,7 @@ impl PlayerFieldMetadata {
             player.player_attributes.condition,
             minute,
             player.entry_match_time_ms,
+            player.injury_rank(),
         );
         if key != self.read_key {
             self.read_key = key;

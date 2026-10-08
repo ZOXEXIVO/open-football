@@ -239,9 +239,9 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
         // Apply rate multiplier based on whether it's fatigue or recovery
         let rate_multiplier = if combined_fatigue < 0.0 {
-            RECOVERY_RATE_MULTIPLIER * late_match_recovery_mult
+            RECOVERY_RATE_MULTIPLIER * late_match_recovery_mult * (1.0 + ctx.conditions.recovery_rate)
         } else {
-            FATIGUE_RATE_MULTIPLIER * late_match_fatigue_mult
+            FATIGUE_RATE_MULTIPLIER * late_match_fatigue_mult * (1.0 + ctx.conditions.fatigue_rate)
         };
 
         // Chronic / debt / jadedness multipliers only inflate FATIGUE,

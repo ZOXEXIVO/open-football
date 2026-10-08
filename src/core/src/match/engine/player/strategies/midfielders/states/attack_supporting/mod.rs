@@ -1460,7 +1460,7 @@ impl MidfielderAttackSupportingState {
         }
 
         // Increase urgency late in game
-        if ctx.context.time.is_running_out() {
+        if ctx.context.is_running_out() {
             urgency += 0.2;
         }
 

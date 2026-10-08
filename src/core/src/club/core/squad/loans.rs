@@ -14,7 +14,8 @@ use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::LoanOutReason;
-use crate::{Club, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
+use crate::transfers::squad::LevelBand;
+use crate::{Club, ClubLevelAnchor, Person, PlayerFieldPositionGroup, PlayerStatusType, Team};
 
 use super::decision::SquadDecision;
 use super::depth::{KeeperLoanView, PromotionBar, YouthDevelopmentLoanPolicy, YouthSquadDepth};
@@ -103,6 +104,7 @@ impl LoanSweep {
     /// route in real football and it was the one route the club could not
     /// choose deliberately.
     pub(in crate::club::core) fn keeper_department(
+        club: &Club,
         team: &Team,
         team_idx: usize,
         keepers: &KeeperLoanView,
@@ -121,12 +123,24 @@ impl LoanSweep {
             {
                 continue;
             }
-            out.push(SquadDecision::loan(
-                team_idx,
-                player.id,
-                SquadDecision::YOUNG_DEVELOP,
-                LoanOutReason::NeedsFirstTeamMinutes,
-            ));
+            let band_target = keepers.aim(player.id).zip(club.teams.main()).map(|(standard, main)| {
+                let anchor = ClubLevelAnchor::for_reputation(main.reputation.overall_score());
+                let here = LevelBand::of(
+                    AbilityEstimator::observable_level(player),
+                    PlayerFieldPositionGroup::Goalkeeper,
+                    &anchor,
+                );
+                LevelBand::below_standard(here, main.playing_standard - standard)
+            });
+            out.push(
+                SquadDecision::loan(
+                    team_idx,
+                    player.id,
+                    SquadDecision::YOUNG_DEVELOP,
+                    LoanOutReason::NeedsFirstTeamMinutes,
+                )
+                .aimed_at(band_target),
+            );
         }
     }
 

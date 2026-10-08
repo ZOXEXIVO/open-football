@@ -1040,7 +1040,7 @@ impl PlayerStatisticsHistory {
         self.mark_departed(&from.slug, is_loan, date);
     }
 
-    /// Record a free-agent signing. Unlike `record_departure_transfer`,
+    /// Record a free-agent signing. Unlike `record_transfer`,
     /// there is no source club — only the destination — so we just freeze
     /// any prior-season entries and push one fresh row for the new club.
     /// `last_stats` is the player's pre-signing live `PlayerStatistics`,
@@ -1063,21 +1063,6 @@ impl PlayerStatisticsHistory {
             entry.statistics = last_stats;
         }
         self.push_new_entry(to, PlayerStatistics::default(), false, Some(0.0), date);
-    }
-
-    pub fn record_departure_transfer(
-        &mut self,
-        old_stats: PlayerStatistics,
-        from: &TeamInfo,
-        to: &TeamInfo,
-        fee: Option<f64>,
-        is_loan: bool,
-        date: NaiveDate,
-    ) {
-        self.flush_stale_entries(date);
-        self.upsert_current(from, old_stats, is_loan, None, date);
-        self.mark_departed(&from.slug, is_loan, date);
-        self.push_new_entry(to, PlayerStatistics::default(), false, fee, date);
     }
 
     pub fn record_departure_loan(
@@ -3896,13 +3881,13 @@ mod club_career_apps_tests {
         let b = season_team("spartak-moscow");
         hist.seed_initial_team(&a, d(2026, 8, 1), false);
 
-        // Manual transfer (Edit menu) routes through record_departure_transfer.
-        hist.record_departure_transfer(
+        // A manual transfer (Edit menu) records through the same
+        // `record_transfer` a negotiated one does.
+        hist.record_transfer(
             PlayerStatistics::default(),
             &a,
             &b,
-            Some(1_000_000.0),
-            false,
+            1_000_000.0,
             d(2026, 9, 1),
         );
 
@@ -3958,12 +3943,11 @@ mod club_career_apps_tests {
         let a = season_team("lokomotiv-moscow");
         let b = season_team("spartak-moscow");
         hist.seed_initial_team(&a, d(2026, 8, 1), false);
-        hist.record_departure_transfer(
+        hist.record_transfer(
             PlayerStatistics::default(),
             &a,
             &b,
-            Some(1_000_000.0),
-            false,
+            1_000_000.0,
             d(2026, 9, 1),
         );
 

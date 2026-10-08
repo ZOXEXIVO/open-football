@@ -6,6 +6,8 @@
 //! orchestration (league, cup, continental) sets it according to
 //! competition convention.
 
+use crate::r#match::fixture::CompetitionKind;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchRules {
     /// Maximum substitutions per team across the whole match. Modern
@@ -70,14 +72,15 @@ impl MatchRules {
         Self::modern()
     }
 
-    /// Resolve a default rules set from the two flags the engine
-    /// already plumbs through (`is_friendly` / `is_knockout`). Used by
-    /// `MatchContext::new` when no explicit rules were provided.
-    pub const fn resolve_default(is_friendly: bool, _is_knockout: bool) -> Self {
-        if is_friendly {
-            Self::friendly()
-        } else {
-            Self::modern()
+    /// The rules a competition of this kind plays to, when it has not
+    /// opted into others (`classic()`).
+    pub const fn resolve_default(competition: CompetitionKind) -> Self {
+        match competition {
+            CompetitionKind::Friendly => Self::friendly(),
+            CompetitionKind::International => Self::international(),
+            CompetitionKind::League | CompetitionKind::DomesticCup | CompetitionKind::Continental => {
+                Self::modern()
+            }
         }
     }
 }
@@ -116,13 +119,13 @@ mod tests {
 
     #[test]
     fn resolve_default_routes_friendly_to_unlimited() {
-        let r = MatchRules::resolve_default(true, false);
+        let r = MatchRules::resolve_default(CompetitionKind::Friendly);
         assert_eq!(r.max_substitutions_per_team, usize::MAX);
     }
 
     #[test]
     fn resolve_default_routes_competitive_to_modern() {
-        let r = MatchRules::resolve_default(false, false);
+        let r = MatchRules::resolve_default(CompetitionKind::League);
         assert_eq!(r.max_substitutions_per_team, 5);
         assert!(r.allow_extra_time_extra_sub);
     }

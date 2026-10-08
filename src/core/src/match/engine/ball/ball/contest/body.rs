@@ -630,7 +630,7 @@ impl Ball {
             .filter(|p| {
                 p.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && KeeperBody::within_arm_of(p, from, step)
                     // A ball he has just put into play and which has not
                     // gone anywhere yet: his own punt leaving his boot, his
@@ -736,7 +736,6 @@ impl Ball {
         // race is open to both sides on the same terms — the treatment a
         // ball off the woodwork gets, and for the same reason.
         self.pass_target_player_id = None;
-        self.offside_snapshot = None;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         self.last_rebound_tick = tick;
         // Long enough that the rebound is genuinely away from him before

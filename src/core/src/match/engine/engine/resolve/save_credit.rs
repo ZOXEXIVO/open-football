@@ -8,6 +8,7 @@
 use crate::r#match::engine::engine::*;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::engine::psychology::PositiveEvent;
 use crate::r#match::player::transition::TransitionSource;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
@@ -17,7 +18,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// the save stat for the keeper and the on-target stat for the
     /// shooter — matching the events the GK state machine would have
     /// emitted if the physics save hadn't pre-empted it.
-    pub(in crate::r#match::engine::engine) fn apply_pending_save_credit(field: &mut MatchField) {
+    /// A save of a chance at least this likely to beat an ordinary keeper
+    /// is a big save — one a keeper feels.
+    const BIG_SAVE_XGOT: f32 = 0.35;
+
+    pub(in crate::r#match::engine::engine) fn apply_pending_save_credit(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
         let Some((keeper_id, shooter_id)) = field.ball.pending_save_credit.take() else {
             return;
         };
@@ -135,6 +143,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             gk.statistics.note_shot_faced(shot_xg, true);
         }
         field.players[shooter_idx].memory.credit_shot_on_target();
+        if shot_xg >= Self::BIG_SAVE_XGOT {
+            context
+                .psychology
+                .record_positive(keeper_id, PositiveEvent::BigSave, context.current_tick());
+        }
+        if std::mem::take(&mut field.ball.pending_save_spot_kick) {
+            context.penalty_saves.push(keeper_id);
+        }
         // Shot has resolved (saved). Drop the metadata so any
         // subsequent goal / save event can't double-credit.
         field.ball.clear_shot_metadata();

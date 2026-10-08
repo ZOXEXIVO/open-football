@@ -9,6 +9,7 @@ use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -92,7 +93,7 @@ impl PassEvaluator {
         // heavy rain becomes ~41% rather than the dry-weather value.
         // Floor matches the post-clamp 0.1 floor in
         // `calculate_success_probability`.
-        let env_mod = ctx.context.environment.modifiers();
+        let env_mod = &ctx.context.conditions;
         const LONG_PASS_DISTANCE: f32 = 240.0;
         let env_delta = env_mod.pass_accuracy
             + if pass_distance >= LONG_PASS_DISTANCE {
@@ -1133,7 +1134,7 @@ impl PassEvaluator {
         let Some(direction) = pass_vector.try_normalize(1.0e-4) else {
             return 0.0;
         };
-        let pace = Ball::pass_pace(pass_distance);
+        let pace = Ball::pass_pace(pass_distance, &ctx.context.conditions);
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let delivery = sc::passing_execution(passer, minute);
         let shift = MatchStandard::shift(ctx.context);
@@ -1285,6 +1286,18 @@ impl PassEvaluator {
 
             // MINIMUM DISTANCE FILTER: Skip teammates that are too close unless under pressure
             if pass_distance < min_pass_distance {
+                continue;
+            }
+
+            // A ball from the wide channel into the box is a cross, and
+            // whether to cross is `FlankPlay`'s call. Picked here it would
+            // skip that decision and the contest a cross is delivered into.
+            if CrossModel::is_cross(
+                ctx.player.position,
+                teammate.position,
+                attacking_side,
+                ctx.context,
+            ) {
                 continue;
             }
 

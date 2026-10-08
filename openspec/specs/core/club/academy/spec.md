@@ -1,7 +1,7 @@
 # core/club/academy Specification
 
 ## Purpose
-The academy capability owns the pool of youth prospects a club develops: who is eligible to graduate into the youth-team pathway, how many new players the intake produces each year, and how a short-handed youth side gets an emergency top-up — all bounded by capacity rather than quality cut-offs.
+The academy capability owns the pool of youth prospects a club develops: who is eligible to graduate into the youth-team pathway, how many new players the intake produces each year, how a short-handed youth side gets an emergency top-up — all bounded by capacity rather than quality cut-offs — and how far academy training may take a prospect.
 
 ## Requirements
 
@@ -25,3 +25,18 @@ The academy SHALL generate new youth players once per year, sized by recruitment
 #### Scenario: Intake month arrives with academy near its cap
 - **WHEN** the annual intake window opens and the academy roster is close to `max_academy_players`
 - **THEN** the computed intake count is clamped to the remaining headroom, and if there is no headroom the academy records the year as processed and produces zero players
+
+### Requirement: Academy development ceilings are sized like first-team ceilings
+
+An academy player's attribute ceilings SHALL be the ceilings first-team development would set for him: from his
+potential, his position's development weights, his families' maturity at his fractional age and his match exposure.
+They SHALL replace the flat age cap. An attribute already above its ceiling SHALL keep its value and SHALL NOT gain
+further until the ceiling rises past it.
+
+#### Scenario: An 18-year-old academy keeper cannot outgrow the first team's ceiling
+- **WHEN** a PA 150 keeper of 18 trains in the academy for a season
+- **THEN** none of his goalkeeping attributes rises above the first-team ceiling for his age and his match exposure
+
+#### Scenario: A graduate keeps what he built
+- **WHEN** an academy player whose attribute already sits above his new ceiling is checked against it
+- **THEN** the attribute keeps its value rather than being cut to the ceiling

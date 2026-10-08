@@ -14,29 +14,8 @@ use crate::r#match::{
 
 const INTERCEPTION_DISTANCE: f32 = 250.0; // React to balls from further out
 const CLEARING_DISTANCE: f32 = 50.0;
-/// Ticks of standing still after which a defender with nothing to do
-/// walks instead. 60 ticks is 1.2 s of match time (an AI tick is 20 ms).
-///
-/// ⚠ **It has to stay below [`HOLD_LINE_TIMEOUT`], or the branch is
-/// dead.** `transition` checks the walk gate first but this state leaves
-/// for `HoldingLine` unconditionally at that timeout, so a limit above
-/// it can never be reached. It was **300 against a 100-tick exit**,
-/// which left only the `is_tired` half of
-/// [`DefenderStandingState::should_transition_to_walking`] able to fire
-/// — and `Defender: Walking` measured **zero entries across three
-/// matches** (`dev_match waypoints`), a fully-written state with a
-/// handler, a fatigue tier and a transition set that no match ever
-/// entered.
-const STANDING_TIME_LIMIT: u64 = 60;
-
-/// Ticks of standing before the defender goes back to minding the line,
-/// whatever else is true. The unconditional exit from this state.
-const HOLD_LINE_TIMEOUT: u64 = 100;
-
-const _: () = assert!(
-    STANDING_TIME_LIMIT < HOLD_LINE_TIMEOUT,
-    "the walk gate is unreachable above the unconditional HoldingLine exit"
-);
+/// Last resort for a defender with no reason to move: 6 s, in AI ticks.
+const STALL_GUARD_TICKS: u64 = 300;
 
 /// How close to his slot in the block a defender must be for "nothing is
 /// happening here" to mean he can walk.
@@ -305,8 +284,10 @@ impl StateProcessingHandler for DefenderStandingState {
                 DefenderState::Walking,
             ));
         }
-        // Timeout: if no other transition triggered, reposition to defensive line
-        if ctx.in_state_time > HOLD_LINE_TIMEOUT {
+        // His slot in the block has moved off him: back to the line.
+        if ctx.team().distance_from_anchor() > WALK_DISTANCE_THRESHOLD
+            || ctx.in_state_time > STALL_GUARD_TICKS
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
             ));
@@ -405,7 +386,7 @@ impl DefenderStandingState {
         let ball_ops = ctx.ball();
 
         let is_tired = player_ops.is_tired();
-        let standing_too_long = ctx.in_state_time > STANDING_TIME_LIMIT;
+        let play_is_upfield = !ball_ops.on_own_side();
         let ball_far_away = ball_ops.distance() > INTERCEPTION_DISTANCE * 2.0;
 
         // Fixed: inverted logic - should check if there are NO nearby threats
@@ -419,7 +400,7 @@ impl DefenderStandingState {
         let close_to_optimal_position = ctx.team().distance_from_anchor() < WALK_DISTANCE_THRESHOLD;
         let team_in_control = ctx.team().is_control_ball();
 
-        (is_tired || standing_too_long)
+        (is_tired || play_is_upfield)
             && (ball_far_away || close_to_optimal_position)
             && no_immediate_threat
             && team_in_control

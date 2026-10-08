@@ -3575,6 +3575,7 @@ fn phys(start: i16, end: i16, hi: f32) -> PlayerMatchPhysicalSnapshot {
         starting_condition: start,
         final_match_energy: end,
         high_intensity_load_hint: hi,
+        injury: None,
     }
 }
 

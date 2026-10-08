@@ -4,6 +4,7 @@ use crate::r#match::engine::ball::ball::contest::interception::InterceptionConte
 use crate::r#match::engine::ball::ball::{
     Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, RunUpPhase,
 };
+use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -472,7 +473,27 @@ impl LooseBallChase {
             .and_then(|id| positions.players.get(id))
             .filter(|meta| meta.chase_eligible)
             .map(|meta| {
-                let tick = path.time_to_reach(meta.position, meta.max_speed, CONTROL_DISTANCE);
+                let tick = ball
+                    .pending_pass_aim
+                    .and_then(|aim| {
+                        ChasePath::receiving(
+                            aim,
+                            meta.position,
+                            meta.max_speed,
+                            positions.ball.position,
+                            positions.ball.velocity,
+                            positions
+                                .players
+                                .on_pitch()
+                                .iter()
+                                .filter(|m| m.side != meta.side)
+                                .map(|m| (m.position, m.max_speed)),
+                        )
+                    })
+                    .map_or_else(
+                        || path.time_to_reach(meta.position, meta.max_speed, CONTROL_DISTANCE),
+                        |(_, tick)| tick,
+                    );
                 PathEnd {
                     receiver: meta.player_id,
                     point: path.end_at(tick),
@@ -874,6 +895,10 @@ pub struct BallMetadata {
     /// shot-spacing cooldown during box scrambles. 0 = none yet.
     pub last_rebound_tick: u64,
 
+    /// `(receiver, tick)` of the last completed pass when it was a
+    /// cutback. See `Ball::last_completed_pass_cutback`.
+    pub cutback_to: Option<(u32, u64)>,
+
     /// The last man the ball came off WITHOUT him controlling it — a parry,
     /// a spill, a block, a fumbled claim. `None` after a controlled touch:
     /// a catch, a pass, a first touch that stuck.
@@ -891,6 +916,9 @@ pub struct BallMetadata {
     /// the pass ran through to nobody. Read by the receiving override in
     /// `PlayerFieldPositionGroup::process`.
     pub pass_target: Option<u32>,
+    /// …and where it was played to: his position plus the lead the
+    /// passer gave his run (`Ball::pending_pass_aim`).
+    pub pass_aim: Option<Vector3<f32>>,
 
     /// The player currently barred from re-collecting the ball because he
     /// released it himself and it has not travelled yet, if any.
@@ -922,6 +950,8 @@ pub struct BallMetadata {
     /// take it off — which is why they share the flag; where they differ
     /// is `throw_taker` below.
     pub held_in_hands: bool,
+    /// When it went into them. See `Ball::hands_since_tick`.
+    pub hands_since_tick: u64,
     /// **The man taking a throw-in right now**, from the tick he picks the
     /// ball up on the touchline until somebody else plays it.
     ///
@@ -953,6 +983,9 @@ pub struct BallMetadata {
     /// re-rolling the duel the contest just decided.
     /// See `Ball::aerial_contest_winner`.
     pub aerial_contest_winner: Option<u32>,
+    /// The side whose restart the game is waiting on, until the kick or
+    /// the throw is made (`Ball::restart_in_progress`).
+    pub restarting_team: Option<u32>,
 
     /// The man a dead ball is waiting for, if one is
     /// (`Ball::awaiting_restart`).
@@ -977,11 +1010,19 @@ pub struct BallMetadata {
     ///
     /// He is the one player a dead ball moves with, and every rule that
     /// normally puts a man on a ball reads him as already there: the ball
-    /// is at his feet, so `run_for_ball` stops him and `CornerHold`'s
+    /// is at his feet, so `run_for_ball` stops him and `SetPieceHold`'s
     /// release fades to nothing. His set-piece station is what actually
-    /// walks him to the flag, and this is what tells `CornerHold` to obey
+    /// walks him to the flag, and this is what tells `SetPieceHold` to obey
     /// it instead of standing him down as the chaser.
     pub restart_carrier: Option<u32>,
+
+    /// The man standing over a free kick or a penalty he has not yet
+    /// kicked (`Ball::set_piece_kicker`)…
+    pub set_piece_kicker: Option<u32>,
+    /// …and the tick he was handed it.
+    pub set_piece_handed_tick: u64,
+    /// The routine a corner was set up for (`Ball::pending_corner_routine`).
+    pub corner_routine: Option<CornerRoutine>,
 
     /// Where the goal-kick taker stands to take his run from, while the
     /// restart is holding for him to get there and set himself — `None`
@@ -1032,24 +1073,39 @@ impl BallMetadata {
         self.cached_shot_target = field.ball.cached_shot_target;
         self.pass_origin_restart = field.ball.pass_origin_restart;
         self.last_rebound_tick = field.ball.last_rebound_tick;
+        self.cutback_to = field
+            .ball
+            .last_completed_pass_receiver_id
+            .filter(|_| field.ball.last_completed_pass_cutback)
+            .map(|receiver| (receiver, field.ball.last_completed_pass_tick));
         self.rebounded_off = field
             .ball
             .last_touch_player_id
             .filter(|_| !field.ball.last_touch_was_controlled);
         self.pass_target = field.ball.pass_target_player_id;
+        self.pass_aim = field.ball.pending_pass_aim;
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
         self.delivered_by = field.ball.own_delivery_player();
         self.held_in_hands = field.ball.held_in_hands;
+        self.hands_since_tick = field.ball.hands_since_tick;
         self.throw_taker = field.ball.throw_in_taker;
         self.kickoff_taker = field.ball.kickoff_taker;
         self.kickoff_partner = field.ball.kickoff_partner;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
+        self.restarting_team = field
+            .ball
+            .restart_in_progress()
+            .and_then(|(_, taker)| field.get_player(taker))
+            .map(|taker| taker.team_id);
         self.restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
         self.restart_carrier = field
             .ball
             .awaiting_restart
             .filter(|r| r.carrying)
             .map(|r| r.taker_id);
+        self.set_piece_kicker = field.ball.set_piece_kicker;
+        self.set_piece_handed_tick = field.ball.phase_origin.map_or(0, |phase| phase.opened_tick);
+        self.corner_routine = field.ball.pending_corner_routine;
         let run_up = field.ball.goal_kick_run_up;
         self.restart_mark = run_up
             .filter(|r| r.phase != RunUpPhase::Running)
@@ -1086,19 +1142,26 @@ impl From<&MatchField> for BallMetadata {
             cached_shot_target: None,
             pass_origin_restart: PassOriginRestart::OpenPlay,
             last_rebound_tick: 0,
+            cutback_to: None,
             rebounded_off: None,
             pass_target: None,
+            pass_aim: None,
             recollect_blocked_player: None,
             delivered_by: None,
             held_in_hands: false,
+            hands_since_tick: 0,
             throw_taker: None,
             kickoff_taker: None,
             kickoff_partner: None,
             deliberate_kick_by: None,
             hands_released_by: None,
             aerial_contest_winner: None,
+            restarting_team: None,
             restart_taker: None,
             restart_carrier: None,
+            set_piece_kicker: None,
+            set_piece_handed_tick: 0,
+            corner_routine: None,
             restart_mark: None,
             restart_set: false,
             goal_kick_long: false,

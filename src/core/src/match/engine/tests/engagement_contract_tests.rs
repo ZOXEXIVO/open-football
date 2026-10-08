@@ -19,7 +19,9 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::{EngagementClock, TackleEngagement, TackleOutcome};
+use crate::r#match::common_states::{
+    EngagementClock, TackleDecision, TackleEngagement, TackleOutcome,
+};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::events::FoulSeverity;
@@ -289,4 +291,40 @@ fn losing_the_ball_during_the_wind_up_cancels_the_kick() {
         Some(PlayerState::Defender(DefenderState::Standing)),
         "an aborted clearance hands him back to an off-ball decision"
     );
+}
+
+// ── A booking ─────────────────────────────────────────────────────────
+
+/// A man on a yellow goes in less often, and a clear-headed one holds back
+/// more than a hothead.
+#[test]
+fn a_booked_man_picks_his_moments() {
+    let (mut field, context) = pitch();
+    let id = field.players[3].id;
+    let caution = |field: &MatchField| {
+        let tick_context = GameTickContext::new(field, &context.players);
+        let player = field.players.iter().find(|p| p.id == id).unwrap();
+        let ctx = StateProcessingContext {
+            in_state_time: 0,
+            player,
+            context: &context,
+            tick_context: &tick_context,
+        };
+        TackleDecision::booked_caution(&ctx)
+    };
+
+    assert_eq!(caution(&field), 1.0);
+
+    let booked = field.players.iter_mut().find(|p| p.id == id).unwrap();
+    booked.yellow_cards = 1;
+    booked.skills.mental.decisions = 18.0;
+    booked.skills.mental.aggression = 6.0;
+    let cool = caution(&field);
+
+    let booked = field.players.iter_mut().find(|p| p.id == id).unwrap();
+    booked.skills.mental.decisions = 6.0;
+    booked.skills.mental.aggression = 18.0;
+    let hothead = caution(&field);
+
+    assert!(cool < hothead && hothead < 1.0, "cool {cool}, hothead {hothead}");
 }

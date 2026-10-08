@@ -87,6 +87,17 @@ const BRAKE_BASE: f32 = 1.8;
 const BRAKE_AGILITY_SPAN: f32 = 0.8;
 
 impl MovementEffort {
+    /// The ceiling on a man's speed while a restart is being set, as a
+    /// fraction of his conditioned max speed: a jog. Nobody sprints while
+    /// the ball is dead, and walking into the shape is most of why a real
+    /// restart takes ten to thirty seconds — sprinting into every station
+    /// took them in three to eight. The side the clock is against (`hurry`,
+    /// 0..1) takes its restarts quickly, and everybody hurries with it.
+    pub fn dead_ball_ceiling(hurry: f32, condition_pct: u32) -> f32 {
+        let jog = Self::speed_fraction(ActivityIntensity::Moderate, condition_pct);
+        jog + (1.0 - jog) * hurry
+    }
+
     /// Target speed as a fraction of conditioned max speed for the given
     /// exertion level and current `condition_pct` (0..100). See the type
     /// docs for the band-alignment rationale.
@@ -336,6 +347,7 @@ impl MovementEffort {
         desired: Vector3<f32>,
         effort_ceiling: f32,
         athletic_ceiling: f32,
+        grip: f32,
     ) -> Vector3<f32> {
         let desired = Self::cap(desired, effort_ceiling);
         let current = player.velocity;
@@ -346,7 +358,10 @@ impl MovementEffort {
         }
 
         let speeding_up = desired.norm_squared() > current.norm_squared();
-        let budget = Self::accel_budget(player, minute, speeding_up);
+        // Mud and snow take the bite out of a start; braking is the
+        // man's, not the surface's.
+        let budget = Self::accel_budget(player, minute, speeding_up)
+            * if speeding_up { grip } else { 1.0 };
 
         let ramped = if delta_sq > budget * budget {
             current + delta * (budget / delta_sq.sqrt())

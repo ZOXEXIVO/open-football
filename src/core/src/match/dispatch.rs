@@ -1,8 +1,8 @@
-use crate::r#match::{Match, MatchResult, MatchResultRaw, MatchSquad};
+use crate::r#match::{FixtureContext, Match, MatchResult, MatchResultRaw, MatchSquad};
 use std::sync::OnceLock;
 
-/// `(index, home, away, is_knockout)` — one raw squad-vs-squad fixture.
-pub type SquadFixture = (usize, MatchSquad, MatchSquad, bool);
+/// `(index, home, away, fixture)` — one raw squad-vs-squad fixture.
+pub type SquadFixture = (usize, MatchSquad, MatchSquad, FixtureContext);
 
 /// Pluggable executor for match work. When installed via
 /// [`MatchDispatcherRegistry::set`], `MatchPlayEnginePool` consults the

@@ -1602,6 +1602,9 @@ struct MatchOutcome {
     /// engine turns player QUALITY into a better stat line — the
     /// RATING vs SKILL CORRELATION block.
     per_player_skill: Vec<(u32, f32)>,
+    /// The result itself, without the replay: the calibration bands and
+    /// the match-report census are read off it after the parallel phase.
+    result: core::r#match::MatchResultRaw,
 }
 
 /// Per-position per-match sums of the rating-relevant volume counters.
@@ -1756,6 +1759,17 @@ fn per_player_rows(result: &core::r#match::MatchResultRaw) -> Vec<PlayerRow> {
         ));
     }
     rows
+}
+
+/// Goals by `GoalOrigin::index`, read off the score's goal details.
+fn goal_origins(score: &core::r#match::Score) -> [u32; core::r#match::GoalOrigin::COUNT] {
+    let mut out = [0u32; core::r#match::GoalOrigin::COUNT];
+    for g in score.detail() {
+        if g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal {
+            out[g.origin.index()] += 1;
+        }
+    }
+    out
 }
 
 fn team_stats(result: &core::r#match::MatchResultRaw, team_id: u32) -> TeamStats {
@@ -1966,6 +1980,7 @@ struct GkRow {
     xg_prevented: f32,
     xg_faced: f32,
     errors_to_goal: u16,
+    errors_to_shot: u16,
     rating: f32,
     minutes: u16,
 }
@@ -1990,7 +2005,10 @@ fn keeper_rows(
             command: s.zone_stats.gk_command_actions,
             xg_prevented: s.xg_prevented,
             xg_faced: s.xg_faced,
-            errors_to_goal: s.errors_leading_to_goal,
+            // A flapped cross that is punished is a keeper's error as much
+            // as a spilled shot is — both lanes count.
+            errors_to_goal: s.errors_leading_to_goal + s.zone_stats.gk_failed_claims_to_goal,
+            errors_to_shot: s.errors_leading_to_shot + s.zone_stats.gk_failed_claims_to_shot,
             rating: s.match_rating,
             minutes: s.minutes_played,
         });
@@ -2325,6 +2343,7 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
         xg_prevented: f32,
         xg_faced: f32,
         errors: u32,
+        errors_to_shot: u32,
         rating_points: f32,
         rating_weight: f32,
         best: f32,
@@ -2352,6 +2371,7 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
             e.xg_prevented += r.xg_prevented;
             e.xg_faced += r.xg_faced;
             e.errors += r.errors_to_goal as u32;
+            e.errors_to_shot += r.errors_to_shot as u32;
             let w = (r.minutes as f32 / 90.0).max(0.65);
             e.rating_points += r.rating * w;
             e.rating_weight += w;
@@ -2448,6 +2468,23 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
                 let p = |q: f32| v[(((v.len() - 1) as f32) * q).round() as usize];
                 p(0.9) - p(0.1)
             }
+        );
+    }
+    if !rows.is_empty() {
+        // Per keeper-SEASON, the unit the real reference is quoted in.
+        let mut errs: Vec<f32> = rows.iter().map(|(_, s)| s.errors as f32).collect();
+        errs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let q = |f: f32| errs[(((errs.len() - 1) as f32) * f).round() as usize];
+        let mean = errs.iter().sum::<f32>() / errs.len() as f32;
+        let apps: u32 = rows.iter().map(|(_, s)| s.apps).sum();
+        let to_shot: u32 = rows.iter().map(|(_, s)| s.errors_to_shot).sum();
+        println!(
+            "  errors leading to a goal per keeper-season: mean {:.2}  median {:.0}  p90 {:.0}   \
+             (real: ~1 typical, 3-6 shaky)   errors leading to a shot per match {:.3}",
+            mean,
+            q(0.5),
+            q(0.9),
+            to_shot as f32 / apps.max(1) as f32
         );
     }
 }
@@ -3086,6 +3123,203 @@ impl MixedQualityHarness {
     }
 }
 
+// ── assurance: the keeper's state of mind, A/B ────────────────────────
+//
+// Two IDENTICAL level-`level` elevens, keepers included, and one thing
+// between them: the state of mind Team 2's keeper brings to kickoff.
+// Default arm: Team 1's keeper is assured at the standard of the match,
+// Team 2's sits a full step below it. `confident` arm: Team 1 settled,
+// Team 2 over-confident. Home and away alternate so the crowd cancels.
+// Everyone else kicks off neutral.
+struct AssuranceHarness;
+
+impl AssuranceHarness {
+    /// A full step: the most a step up can unsettle him.
+    const STEP: f32 = 0.15;
+    const DRAWS: usize = 24;
+
+    fn run(n_matches: usize, level: u8, confident: bool) {
+        use core::club::player::mind::KickoffMind;
+        use core::r#match::engine::teamplay::standard::MatchStandard;
+        use core::r#match::engine::teamplay::tactical::TeamSkillAggregates;
+
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+        let per_draw = (n_matches / Self::DRAWS).max(2);
+        let (label_a, label_b) = if confident {
+            ("settled", "cocky")
+        } else {
+            ("assured", "unsure")
+        };
+        println!(
+            "Keeper state of mind A/B: {} matches ({} draws x {}), both XIs level {}, \
+             Team 1 keeper {} vs Team 2 keeper {}",
+            per_draw * Self::DRAWS,
+            Self::DRAWS,
+            per_draw,
+            level,
+            label_a,
+            label_b
+        );
+
+        let mut a_gk = SpotlightAgg::default();
+        let mut b_gk = SpotlightAgg::default();
+        let mut drawn = Vec::with_capacity(Self::DRAWS);
+        for _ in 0..Self::DRAWS {
+            let mut team_a: Vec<MatchPlayer> = POSITIONS_442
+                .iter()
+                .enumerate()
+                .map(|(i, &pos)| {
+                    let player = generate_player(100 + i as u32, pos, level);
+                    MatchPlayer::from_player(1, &player, pos, false, None)
+                })
+                .collect();
+            // The same eleven, keeper and all, re-numbered for Team 2.
+            let mut team_b: Vec<MatchPlayer> = team_a
+                .iter()
+                .map(|p| {
+                    let mut q = p.clone();
+                    q.id = p.id + 100;
+                    q.team_id = 2;
+                    q
+                })
+                .collect();
+            let standard = MatchStandard::of(
+                &TeamSkillAggregates::at_kickoff(&team_a),
+                &TeamSkillAggregates::at_kickoff(&team_b),
+            );
+            let (mind_a, mind_b) = if confident {
+                (
+                    KickoffMind {
+                        assurance: Some(standard),
+                        ..KickoffMind::neutral()
+                    },
+                    KickoffMind {
+                        assurance: Some(standard),
+                        self_belief: 0.95,
+                        morale: 95.0,
+                        big_match_record: 5,
+                    },
+                )
+            } else {
+                (
+                    KickoffMind {
+                        assurance: Some(standard),
+                        ..KickoffMind::neutral()
+                    },
+                    KickoffMind {
+                        assurance: Some(standard - Self::STEP),
+                        ..KickoffMind::neutral()
+                    },
+                )
+            };
+            team_a[0].kickoff_mind = mind_a;
+            team_b[0].kickoff_mind = mind_b;
+            drawn.push((team_a.clone(), team_b.clone(), mind_a, mind_b));
+
+            let rows: Vec<(SpotlightAgg, SpotlightAgg)> = (0..per_draw)
+                .into_par_iter()
+                .map(|i| {
+                    let a = MixedQualityHarness::squad(&team_a, 1);
+                    let b = MixedQualityHarness::squad(&team_b, 2);
+                    let a_home = i % 2 == 0;
+                    let (home, away) = if a_home { (a, b) } else { (b, a) };
+                    let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+                    let score = result.score.as_ref().unwrap();
+                    let (hg, ag) = (score.home_team.get() as u32, score.away_team.get() as u32);
+                    let (a_conceded, b_conceded) = if a_home { (ag, hg) } else { (hg, ag) };
+                    let mut ra = SpotlightAgg::default();
+                    let mut rb = SpotlightAgg::default();
+                    if let Some(s) = result.player_stats.get(&100) {
+                        ra.add(s, a_conceded);
+                    }
+                    if let Some(s) = result.player_stats.get(&200) {
+                        rb.add(s, b_conceded);
+                    }
+                    (ra, rb)
+                })
+                .collect();
+            for (ra, rb) in rows {
+                a_gk.merge(ra);
+                b_gk.merge(rb);
+            }
+        }
+
+        println!();
+        println!(
+            "  {:<8} {:>7} {:>7} {:>8} {:>8} {:>9} {:>9} {:>8} {:>9}",
+            "keeper", "rating", "save%", "conc/m", "faced/m", "err>shot", "err>goal", "cmd/m", "flap>shot"
+        );
+        for (label, g) in [(label_a, &a_gk), (label_b, &b_gk)] {
+            let apps = g.apps();
+            println!(
+                "  {:<8} {:>7.2} {:>6.1}% {:>8.2} {:>8.2} {:>9.3} {:>9.3} {:>8.2} {:>9.3}",
+                label,
+                g.rating_dist().0,
+                g.save_pct(),
+                g.conceded as f32 / apps,
+                g.shots_faced as f32 / apps,
+                (g.errors_to_shot + g.failed_claims_shot) as f32 / apps,
+                (g.errors_to_goal + g.failed_claims_goal) as f32 / apps,
+                g.command_actions as f32 / apps,
+                g.failed_claims_shot as f32 / apps,
+            );
+        }
+        let share = |g: &SpotlightAgg| {
+            let tries = g.command_actions + g.failed_claims_shot;
+            if tries == 0 {
+                0.0
+            } else {
+                g.failed_claims_shot as f32 / tries as f32 * 100.0
+            }
+        };
+        let err = |g: &SpotlightAgg| (g.errors_to_shot + g.failed_claims_shot) as f32 / g.apps();
+        println!(
+            "  errors leading to a shot, {} / {}: {:.2}x   failed-claim share {:.1}% / {:.1}%",
+            label_b,
+            label_a,
+            err(&b_gk) / err(&a_gk).max(1e-6),
+            share(&b_gk),
+            share(&a_gk),
+        );
+
+        // The ledger above sees only a flap a shot followed — a handful an
+        // arm. The claim census sees every flap but not whose it was, so
+        // each arm is played again with both keepers in its state of mind.
+        let census_per_draw = (per_draw / 2).max(2);
+        let census: Vec<(u64, u64)> = [false, true]
+            .into_iter()
+            .map(|second| {
+                core::gk_claim_diag::reset();
+                for (a, b, mind_a, mind_b) in &drawn {
+                    let mind = if second { *mind_b } else { *mind_a };
+                    let (mut a, mut b) = (a.clone(), b.clone());
+                    a[0].kickoff_mind = mind;
+                    b[0].kickoff_mind = mind;
+                    (0..census_per_draw).into_par_iter().for_each(|i| {
+                        let home = MixedQualityHarness::squad(&a, 1);
+                        let away = MixedQualityHarness::squad(&b, 2);
+                        let (home, away) = if i % 2 == 0 { (home, away) } else { (away, home) };
+                        FootballEngine::<840, 545>::play(home, away, false, false, false);
+                    });
+                }
+                let (_, moments, flaps) = core::gk_claim_diag::snapshot();
+                (moments, flaps)
+            })
+            .collect();
+        let flapped = |(moments, flaps): (u64, u64)| flaps as f32 / moments.max(1) as f32 * 100.0;
+        println!(
+            "  claim census ({} matches an arm, both keepers alike): {} {:.1}% / {} {:.1}% of command moments flapped ({} / {} flaps)",
+            census_per_draw * Self::DRAWS,
+            label_b,
+            flapped(census[1]),
+            label_a,
+            flapped(census[0]),
+            census[1].1,
+            census[0].1,
+        );
+    }
+}
+
 fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  dev_match                       open browser viewer (random squad levels)");
@@ -3639,6 +3873,14 @@ fn main() {
             let level_b: Option<u8> = args.get(4).and_then(|s| s.parse().ok());
             run_stats(n_matches, level_a, level_b);
         }
+        // Realism acceptance batch - see `RealismBatch`.
+        "realism" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
+            let write_baseline = args.iter().any(|a| a == "--baseline");
+            if !RealismBatch::run(n, write_baseline) {
+                std::process::exit(1);
+            }
+        }
         // Divisional-flatness sweep - see `LevelSweep`.
         "levels" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
@@ -3815,6 +4057,12 @@ fn main() {
         // youth-quality one. The only harness mode that can see whether
         // player QUALITY reaches the stat line (and therefore the
         // rating) — `stats` only ever plays equal-quality squads.
+        "assurance" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            let confident = args.get(4).is_some_and(|s| s == "confident");
+            AssuranceHarness::run(n, level, confident);
+        }
         "gap" | "stats-gap" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
@@ -4424,6 +4672,138 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
         "  reference for {} (gap {}): fav {}%, draw {}%, upset {}%",
         ref_label, gap, ref_fav, ref_draw, ref_up,
     );
+}
+
+/// **The realism acceptance batch.** Plays `n` seeded matches between two
+/// level-14 sides with benches, records every result into the engine's calibration
+/// report, and fails naming each line outside its real-football band.
+///
+/// ```text
+///   dev_match realism [N]              report, diff against the stored baseline, exit 1 on a miss
+///   dev_match realism [N] --baseline   …and store this run as the new baseline
+/// ```
+///
+/// The engine is seeded per match, so a regression in an engine change
+/// shows as a diff against the baseline rather than as a memory of what
+/// the numbers used to be. The squads come from the same generator as
+/// `stats`, which draws its own attributes, so two runs still differ by
+/// squad noise; read a drift against the ±0.2 goals the `stats` notes give.
+struct RealismBatch;
+
+impl RealismBatch {
+    const LEVEL: u8 = 14;
+    const SEED_BASE: u64 = 0x5EA5_0000;
+
+    /// A matchday squad: the level-14 eleven and a seven-man bench three
+    /// levels below it, the same bench `reel` gives its sides. Changes and
+    /// injuries both need somebody to come on.
+    fn squad(team_id: u32) -> MatchSquad {
+        const BENCH: [PlayerPositionType; 7] = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderCenterLeft,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::MidfielderCenterLeft,
+            PlayerPositionType::MidfielderCenterRight,
+            PlayerPositionType::ForwardLeft,
+            PlayerPositionType::ForwardRight,
+        ];
+        let mut squad = make_squad_simple(team_id, Self::LEVEL);
+        let bench_level = Self::LEVEL - 3;
+        squad.substitutes = BENCH
+            .iter()
+            .enumerate()
+            .map(|(i, &pos)| {
+                let player = generate_player(team_id * 100 + 11 + i as u32, pos, bench_level);
+                MatchPlayer::from_player(team_id, &player, pos, true, None)
+            })
+            .collect();
+        squad
+    }
+
+    fn baseline_path(n: usize) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("baselines")
+            .join(format!("realism-{n}.json"))
+    }
+
+    fn run(n: usize, write_baseline: bool) -> bool {
+        use core::r#match::calibration::MatchCalibrationStats;
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+
+        println!(
+            "Realism batch: {n} seeded matches, level {} vs level {}",
+            Self::LEVEL,
+            Self::LEVEL
+        );
+        let results: Vec<core::r#match::MatchResultRaw> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                FootballEngine::<840, 545>::play_seeded(
+                    Self::squad(1),
+                    Self::squad(2),
+                    false,
+                    false,
+                    false,
+                    Some(Self::SEED_BASE + i as u64),
+                )
+            })
+            .collect();
+
+        let mut calibration = MatchCalibrationStats::new();
+        for result in &results {
+            calibration.record(result);
+        }
+        calibration.print_report();
+
+        let path = Self::baseline_path(n);
+        let lines = calibration.report_lines();
+        match std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text).ok())
+        {
+            Some(baseline) => {
+                println!();
+                println!("Against the baseline at {}:", path.display());
+                for line in &lines {
+                    if let Some(before) = baseline.get(line.name).and_then(|v| v.as_f64()) {
+                        println!(
+                            "  {:<32} {:>8.3}   baseline {:>8.3}   Δ {:+.3}",
+                            line.name,
+                            line.value,
+                            before,
+                            line.value - before
+                        );
+                    } else {
+                        println!("  {:<32} {:>8.3}   (new line)", line.name, line.value);
+                    }
+                }
+            }
+            None => println!("
+No baseline at {} yet.", path.display()),
+        }
+
+        if write_baseline {
+            let map: serde_json::Map<String, serde_json::Value> = lines
+                .iter()
+                .map(|l| (l.name.to_string(), serde_json::json!(l.value)))
+                .collect();
+            std::fs::create_dir_all(path.parent().expect("baseline dir")).expect("create baselines dir");
+            std::fs::write(&path, serde_json::to_string_pretty(&map).expect("baseline json"))
+                .expect("write baseline");
+            println!("Baseline written to {}", path.display());
+        }
+
+        let misses = calibration.out_of_range();
+        println!();
+        for line in &misses {
+            println!(
+                "OUT OF BAND: {} = {:.3}, band {:.3} .. {:.3}",
+                line.name, line.value, line.accept_min, line.accept_max
+            );
+        }
+        println!("{} of {} lines in band", lines.len() - misses.len(), lines.len());
+        misses.is_empty()
+    }
 }
 
 // ── levels: the divisional-flatness instrument ─────────────────────────
@@ -5121,6 +5501,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 assist_details,
                 pos_volumes: rating_volume_profile(&result),
                 per_player_skill,
+                result: result.copy_without_data_positions(),
             }
         })
         .collect();
@@ -7904,6 +8285,24 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                                 pct(*into_box)
                             );
                         }
+                        let completed = core::flight_diag::FlightDiag::pass_completed_snapshot();
+                        let line: Vec<String> = bands
+                            .iter()
+                            .zip(completed.iter())
+                            .enumerate()
+                            .map(|(i, (b, done))| {
+                                let n: u64 = b.0.iter().sum();
+                                format!(
+                                    "{} {:.0}%",
+                                    core::flight_diag::PASS_BAND_LABELS[i],
+                                    *done as f64 / n.max(1) as f64 * 100.0
+                                )
+                            })
+                            .collect();
+                        println!(
+                            "    completed by band: {}   (real: short ~90%, medium ~80-85%, long balls ~50-60%)",
+                            line.join("  ")
+                        );
                     }
                     // Everything from 30 m up is beyond any football ever
                     // kicked, so it is a unit bug by construction.
@@ -8648,11 +9047,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
 
     // ── SET PIECES ─────────────────────────────────────────────────────
     //
-    // The two means printed here are what `CORNER_DELIVERY_REFERENCE` and
-    // `PENALTY_EXECUTION_REFERENCE` must be set to. Both constants centre
-    // a skill term on the population of *selected* takers, so if the
-    // constant and the measured mean disagree the term stops being
-    // redistributive and starts shifting league-wide conversion.
+    // The penalty mean printed here is what `PENALTY_EXECUTION_REFERENCE`
+    // must be set to: it centres a skill term on the population of
+    // *selected* takers, so if the constant and the measured mean disagree
+    // the term stops being redistributive and starts shifting league-wide
+    // conversion.
     {
         use core::mid_run_diag::SetPieceDiag;
         let sp = SetPieceDiag::snapshot();
@@ -8680,8 +9079,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             pct(sp[4]),
         );
         println!(
-            "  corner taker delivery mean {:.3} over {} corners   \
-             ← set CORNER_DELIVERY_REFERENCE to this",
+            "  corner taker delivery mean {:.3} over {} corners",
             sp[5] as f64 / 1000.0,
             sp[6],
         );
@@ -10346,6 +10744,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 t[6] as f64 / t[2].max(1) as f64 / 100.0
             );
             println!(
+                "  of the team-mate receptions: a stationed SHORT OPTION {:.1}%",
+                pc(t[12], t[4])
+            );
+            println!(
                 "  scan: {:.1} thrower-ticks/match past the look-up, {:.0}% of them with a \
                  team-mate to throw to",
                 per(t[7]),
@@ -10701,6 +11103,142 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(c[4])
             );
         }
+    }
+
+    // ── MATCH REPORT CENSUS ────────────────────────────────────────────
+    // The lines a match report carries that the aggregate block cannot
+    // split: where goals came from, which offence each card was for, what
+    // restarts were actually taken, how much of the match was football,
+    // and who got hurt and how. Summed from each match's own tally.
+    {
+        use core::r#match::player::events::FoulSource;
+        use core::r#match::player::injury::{InjuryCause, InjuryGrade};
+        use core::r#match::calibration::MatchCalibrationStats;
+        use core::r#match::{DeadTime, GoalOrigin, PassOriginRestart, PeriodKind};
+        let mut calibration = MatchCalibrationStats::new();
+        let mut goals = [0u32; GoalOrigin::COUNT];
+        for o in &outcomes {
+            calibration.record(&o.result);
+            if let Some(score) = o.result.score.as_ref() {
+                for (total, n) in goals.iter_mut().zip(goal_origins(score).iter()) {
+                    *total += n;
+                }
+            }
+        }
+        let tally = &calibration.tally;
+        let per = |v: f64| v / n_matches as f64;
+
+        let total: u32 = goals.iter().sum();
+        if total > 0 {
+            let share = |v: u32| v as f64 * 100.0 / total as f64;
+            let set_piece: u32 = [
+                GoalOrigin::Corner,
+                GoalOrigin::FreeKick,
+                GoalOrigin::ThrowIn,
+                GoalOrigin::Penalty,
+            ]
+            .iter()
+            .map(|o| goals[o.index()])
+            .sum();
+            println!();
+            println!(
+                "--- GOAL ORIGIN --- {:.2} goals/match   set pieces {:.0}%   (real ~30%, penalties included)",
+                per(total as f64),
+                share(set_piece)
+            );
+            for (i, name) in GoalOrigin::NAMES.iter().enumerate() {
+                println!("  {name:<10} {:.2}/match  {:>4.0}%", per(goals[i] as f64), share(goals[i]));
+            }
+            println!("  real: penalty goals ~0.22/match, own goals ~0.10/match, corners ~0.25/match");
+        }
+
+        println!();
+        println!(
+            "--- OFFENCES --- whistled / yellows / reds per match   (real ~22 fouls, ~3.8 yellows, ~0.17 reds)"
+        );
+        for (i, name) in FoulSource::NAMES.iter().enumerate() {
+            let row = tally.offences[i];
+            println!(
+                "  {name:<13} {:>6.2} {:>6.2} {:>6.3}",
+                per(row.whistled as f64),
+                per(row.yellows as f64),
+                per(row.reds as f64)
+            );
+        }
+
+        println!();
+        println!(
+            "--- RESTARTS TAKEN --- per match   (real: throw-ins ~42, goal kicks ~16, corners ~10.4,              free kicks ~22 of which indirect ~4, penalties ~0.28)"
+        );
+        for (i, name) in PassOriginRestart::NAMES.iter().enumerate() {
+            if i == PassOriginRestart::OpenPlay.index() {
+                continue;
+            }
+            println!("  {name:<18} {:>6.2}", per(tally.restarts[i] as f64));
+        }
+        println!(
+            "  offside traps: {:.2} sprung, {:.2} beaten (the ball played to the runner the line stepped past)",
+            per(tally.offside_traps[0] as f64),
+            per(tally.offside_traps[1] as f64)
+        );
+
+        let minutes = |ms: u64| per(ms as f64 / 60_000.0);
+        let played = tally.ball_in_play_ms + tally.dead_total_ms();
+        if played > 0 {
+            println!();
+            println!(
+                "--- PLAYING TIME --- {:.1} min played/match: ball in play {:.1} min ({:.0}%)                    (real ~55-60 min of ~98)",
+                minutes(played),
+                minutes(tally.ball_in_play_ms),
+                tally.ball_in_play_ms as f64 * 100.0 / played as f64
+            );
+            let dead: Vec<String> = DeadTime::NAMES
+                .iter()
+                .zip(tally.dead_ms.iter())
+                .map(|(name, &ms)| format!("{name} {:.1}", minutes(ms)))
+                .collect();
+            println!("  dead minutes by reason: {}", dead.join(", "));
+            let waits: Vec<String> = PassOriginRestart::NAMES
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| tally.restarts[*i] > 0)
+                .map(|(i, name)| {
+                    format!(
+                        "{name} {:.1} s",
+                        tally.restart_dead_ms[i] as f64 / 1000.0 / tally.restarts[i] as f64
+                    )
+                })
+                .collect();
+            println!(
+                "  mean wait from dead ball to restart played: {}   (real ~throw-in 10, goal kick 22, corner 29, free kick 27 s)",
+                waits.join(", ")
+            );
+            println!(
+                "  added time played: first half {:.1} min, second half {:.1} min, extra time {:.1} min                    (real ~2-3 and ~5-7)",
+                minutes(tally.added_time_ms[PeriodKind::FirstHalf.index()]),
+                minutes(tally.added_time_ms[PeriodKind::SecondHalf.index()]),
+                minutes(tally.added_time_ms[PeriodKind::ExtraTime.index()])
+            );
+        }
+
+        println!();
+        println!(
+            "--- INJURIES --- {:.2}/match   (real: an injury-forced change every 2-3 matches)",
+            per(tally.injury_count() as f64)
+        );
+        for cause in [InjuryCause::Contact, InjuryCause::Load] {
+            let row = tally.injuries[cause.index()];
+            println!(
+                "  {:<8} knock {:.2}  hurt {:.2}  serious {:.2}",
+                InjuryCause::NAMES[cause.index()],
+                per(row[InjuryGrade::Knock.index()] as f64),
+                per(row[InjuryGrade::Hurt.index()] as f64),
+                per(row[InjuryGrade::Serious.index()] as f64)
+            );
+        }
+
+        println!();
+        calibration.print_report();
     }
 
     // ── SPACING CENSUS ─────────────────────────────────────────────────
@@ -14413,6 +14951,7 @@ impl HeatCensusRun {
         );
         println!("  furniture: '|' the two box edges and the halfway line");
         Self::render(&report.ball, "THE BALL");
+        Self::ball_width(report, matches);
         let mut team: Vec<u64> = vec![0; heat::CELLS];
         for slot in &outfield {
             for (t, v) in team
@@ -14440,6 +14979,64 @@ impl HeatCensusRun {
     }
 
     /// One map, 84 columns by 14 printed lines.
+    /// Where the ball in play is across the pitch: the attacking third
+    /// of the side on it in three equal lanes, and how long it spends
+    /// within 10 m of a touchline — a ball that never gets there cannot
+    /// go out over one.
+    fn ball_width(report: &core::heatmap_diag::HeatReport, matches: usize) {
+        let lanes = report.attack_lanes;
+        let third: u64 = lanes.iter().sum();
+        let pct = |n: u64, d: u64| n as f64 / d.max(1) as f64 * 100.0;
+        println!(
+            "  ball in play, attacking third by lane: left {:.0}%  middle {:.0}%  right {:.0}%   (real attack sides ~35 / 27 / 38)",
+            pct(lanes[0], third),
+            pct(lanes[1], third),
+            pct(lanes[2], third)
+        );
+        println!(
+            "  ball in play within 10 m of a touchline: {:.1}%",
+            pct(report.live_near_touchline, report.live)
+        );
+        let held: u64 = report.attack_held.iter().flatten().sum();
+        for (group, lanes) in ["GK", "DEF", "MID", "FWD"].iter().zip(report.attack_held.iter()) {
+            let n: u64 = lanes.iter().sum();
+            if n == 0 {
+                continue;
+            }
+            println!(
+                "    held there by {group:<3} {:>4.0}% of the time on the ball — left {:.0}%  middle {:.0}%  right {:.0}%",
+                pct(n, held),
+                pct(lanes[0], n),
+                pct(lanes[1], n),
+                pct(lanes[2], n)
+            );
+        }
+        for (method, lanes) in ["carried", "played"].iter().zip(report.attack_entries.iter()) {
+            let n: u64 = lanes.iter().sum();
+            println!(
+                "    entries {method:<7} {:>5} — left {:.0}%  middle {:.0}%  right {:.0}%",
+                n,
+                pct(lanes[0], n),
+                pct(lanes[1], n),
+                pct(lanes[2], n)
+            );
+        }
+        let spells: u64 = report.box_spells.iter().sum();
+        let seconds = |i: usize| {
+            report.box_spell_ticks[i] as f64 / report.box_spells[i].max(1) as f64 / 100.0
+        };
+        println!(
+            "  spells on the ball in the box: {:.1} a team a match, ending in a shot {:.0}% ({:.1} s), lost {:.0}% ({:.1} s), back out of the box {:.0}% ({:.1} s)",
+            spells as f64 / matches.max(1) as f64 / 2.0,
+            pct(report.box_spells[0], spells),
+            seconds(0),
+            pct(report.box_spells[1], spells),
+            seconds(1),
+            pct(report.box_spells[2], spells),
+            seconds(2)
+        );
+    }
+
     fn render(grid: &[u64], title: &str) {
         let cols = heat::COLS;
         let rows = heat::ROWS / Self::ROW_MERGE;

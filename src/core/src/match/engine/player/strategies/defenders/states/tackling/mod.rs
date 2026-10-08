@@ -2,11 +2,11 @@ use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
-use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::states::{
-    RecoveryChallenge, TackleDecision, TackleOutcome,
+    RecoveryChallenge, TackleDecision, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -48,6 +48,17 @@ impl StateProcessingHandler for DefenderTacklingState {
             if distance_to_opponent > TackleEngagement::DISENGAGE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
+                ));
+            }
+
+            if TacticalFoul::commits_now(ctx, opponent.position) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::CommitFoul(
+                        ctx.player.id,
+                        FoulSeverity::Normal,
+                        FoulSource::ProfessionalFoul,
+                    )),
                 ));
             }
 
@@ -303,7 +314,7 @@ impl DefenderTacklingState {
             }
             TackleOutcome::Foul(severity) => StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
-                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
             // He missed and the man is gone. Pressing is where a beaten
             // defender goes to get back into the picture.
@@ -343,7 +354,9 @@ impl DefenderTacklingState {
         // movement and the discipline — it is a selection model, not a
         // contest one.
         let raw_diff = sc::defensive_duel(ctx.player, minute) - attacker_score;
-        let success_chance = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.06, 0.55);
+        let success_chance = (1.0 / (1.0 + (-raw_diff * 2.4).exp())
+            + ctx.context.conditions.sliding_tackle_success)
+            .clamp(0.06, 0.55);
 
         let tackle_success = rng.random::<f32>() < success_chance;
 

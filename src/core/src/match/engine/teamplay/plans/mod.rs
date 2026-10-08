@@ -27,6 +27,7 @@ pub mod attack;
 pub mod block;
 pub mod defence;
 pub mod duties;
+pub mod line_step;
 pub mod matcher;
 pub mod shape;
 pub mod wide;

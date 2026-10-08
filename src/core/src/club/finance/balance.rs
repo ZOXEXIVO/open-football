@@ -315,7 +315,10 @@ impl ClubFinances {
     /// internal budget planning, so the purchase always books — cash flows
     /// out and the amortization schedule starts — and the transfer budget
     /// floors at zero instead of vetoing. Without this the obligation path
-    /// credited the seller while a budget-short buyer paid nothing.
+    /// credited the seller while a budget-short buyer paid nothing. The
+    /// transfer executor books every completed purchase here for the same
+    /// reason: by then the move has happened, and whether the club could
+    /// afford it was settled (or deliberately skipped) before it did.
     pub fn register_obligated_purchase(&mut self, amount: f64, contract_years: u8) {
         let amount = amount.max(0.0);
         if amount <= 0.0 {

@@ -1,10 +1,12 @@
 use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
+use crate::r#match::engine::flow::arena::formation_variant::{
+    FormationLine, FormationVariant, VacatedSlot,
+};
 use crate::r#match::engine::flow::touchline::{Bench, SubstitutionBreak, TouchlineStand};
 use crate::r#match::{
-    FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, POSITION_POSITIONING, PlayerSide,
-    PositionType, TransitionSource,
+    FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, TransitionSource,
 };
 use nalgebra::Vector3;
 
@@ -87,6 +89,9 @@ pub struct MatchField {
     /// has no state to process. See
     /// [`touchline`](super::super::touchline) for what he is for.
     pub departed: Vec<MatchPlayer>,
+    /// The roles a side is playing without since a man left the pitch
+    /// unreplaced. See [`FormationVariant`].
+    pub vacated: Vec<VacatedSlot>,
 
     pub home_team_id: u32,
     pub away_team_id: u32,
@@ -146,6 +151,7 @@ impl MatchField {
             players: players_on_field,
             substitutes,
             departed: Vec::new(),
+            vacated: Vec::new(),
             home_team_id,
             away_team_id,
             left_side_players: Some(left_squad),
@@ -190,14 +196,14 @@ impl MatchField {
             // He is stashed at the off-pitch sentinel (-500, -500) so that
             // no distance-based roster scan can ever see him — the same
             // reason the bench is parked there. This loop had no
-            // `is_sent_off` filter, so the next restart wrote him back
+            // `off_pitch` filter, so the next restart wrote him back
             // onto his formation spot, where he stood as a phantom: no AI
             // (every mover filters him out) but a body on the pitch for
             // every "who is nearest" test and for the replay. The census
             // caught it as the worst single entry in the
             // `restart_reset` row — 1210 u, **151 m**, which is exactly
             // the sentinel-to-formation distance.
-            if p.is_sent_off || Some(p.id) == keep {
+            if p.off_pitch || Some(p.id) == keep {
                 return;
             }
             #[cfg(feature = "match-logs")]
@@ -217,47 +223,53 @@ impl MatchField {
         });
     }
 
-    /// Compact the remaining players of `team_id` after a red card.
-    /// Squeezes each player's `start_position` ~15% toward the team's
-    /// own-goal line and narrows them laterally by ~10%. This is a
-    /// cheap proxy for dropping from 4-4-2 to 4-4-1 / 4-3-2: players
-    /// hold a lower, tighter shape. New positions apply from the
-    /// next reset/kickoff and feed the state machines' "return to
-    /// starting line" heuristics.
-    pub fn compact_after_dismissal(&mut self, team_id: u32) {
-        let field_width = self.size.width as f32;
-        let field_height = self.size.height as f32;
-        let mid_y = field_height * 0.5;
-
-        // Decide which goal line this team defends by averaging
-        // non-sent-off teammates' X. The closer to 0, the left goal.
-        let (sum_x, count) = self.players.iter().fold((0.0f32, 0u32), |acc, p| {
-            if p.team_id == team_id && !p.is_sent_off {
-                (acc.0 + p.start_position.x, acc.1 + 1)
-            } else {
-                acc
-            }
-        });
-        if count == 0 {
-            return;
+    /// **He is gone for the rest of the match** — sent off, or carried off
+    /// injured with no change left to replace him. Out of every on-pitch
+    /// scan from here, parked beyond the touchline, and his side re-formed
+    /// to play a man short, giving up a man from the line its coach can
+    /// `spare`.
+    pub fn take_off(&mut self, player_id: u32, spare: FormationLine) {
+        if self.ball.current_owner == Some(player_id) {
+            self.ball.previous_owner = self.ball.current_owner;
+            self.ball.current_owner = None;
+            self.ball.pass_target_player_id = None;
         }
-        let avg_x = sum_x / count as f32;
-        let own_goal_x = if avg_x < field_width * 0.5 {
-            0.0
-        } else {
-            field_width
+        let Some(player) = self.get_player_mut(player_id) else {
+            return;
         };
+        player.off_pitch = true;
+        player.velocity = Vector3::zeros();
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::teleport as tc;
+            tc::PlayerTeleportCensus::note_firing(tc::PSITE_SENT_OFF);
+            tc::PlayerTeleportCensus::note(
+                tc::PSITE_SENT_OFF,
+                player.position,
+                Vector3::new(-500.0, -500.0, 0.0),
+            );
+        }
+        player.position = Vector3::new(-500.0, -500.0, 0.0);
+        let team_id = player.team_id;
+        let role = player.tactical_position.current_position;
+        let empty = FormationVariant::reshape(self, team_id, role, spare);
+        self.vacated.push(VacatedSlot {
+            team_id,
+            position: empty,
+        });
+        FormationVariant::respace(self);
+    }
 
-        for p in self.players.iter_mut() {
-            if p.team_id != team_id || p.is_sent_off {
-                continue;
-            }
-            // Move start_position 15% of the way toward own goal X,
-            // and 10% toward the vertical center.
-            let new_x = p.start_position.x + (own_goal_x - p.start_position.x) * 0.15;
-            let new_y = p.start_position.y + (mid_y - p.start_position.y) * 0.10;
-            p.start_position.x = new_x;
-            p.start_position.y = new_y;
+    /// The end a team is attacking from in the current period.
+    pub fn side_of(&self, team_id: u32) -> PlayerSide {
+        if self
+            .left_side_players
+            .as_ref()
+            .is_some_and(|squad| squad.team_id == team_id)
+        {
+            PlayerSide::Left
+        } else {
+            PlayerSide::Right
         }
     }
 
@@ -275,7 +287,9 @@ impl MatchField {
                 p.tactical_position.regenerate_waypoints(Some(new_side));
                 p.rebuild_waypoint_cache();
 
-                if let Some(new_pos) = get_player_position(p, new_side) {
+                if let Some(new_pos) =
+                    FormationVariant::slot(p.tactical_position.current_position, new_side)
+                {
                     p.start_position = new_pos;
                 }
             }
@@ -300,9 +314,10 @@ impl MatchField {
                 p.rebuild_waypoint_cache();
             }
         });
+        FormationVariant::respace(self);
     }
 
-    pub fn get_player(&mut self, id: u32) -> Option<&MatchPlayer> {
+    pub fn get_player(&self, id: u32) -> Option<&MatchPlayer> {
         self.players.iter().find(|p| p.id == id)
     }
 
@@ -556,7 +571,9 @@ fn setup_player_on_field(
             player.side = Some(side);
             player.tactical_position.regenerate_waypoints(Some(side));
             player.rebuild_waypoint_cache();
-            if let Some(position) = get_player_position(&player, side) {
+            if let Some(position) =
+                FormationVariant::slot(player.tactical_position.current_position, side)
+            {
                 player.position = position;
                 player.start_position = position;
                 players.push(player);
@@ -607,27 +624,4 @@ fn setup_player_on_field(
     substitutes.extend(right_subs);
 
     (players, substitutes)
-}
-
-fn get_player_position(player: &MatchPlayer, side: PlayerSide) -> Option<Vector3<f32>> {
-    POSITION_POSITIONING
-        .iter()
-        .find(|(pos, _, _)| *pos == player.tactical_position.current_position)
-        .and_then(|(_, home, away)| match side {
-            PlayerSide::Left => {
-                if let PositionType::Home(x, y) = home {
-                    Some((*x as f32, *y as f32))
-                } else {
-                    None
-                }
-            }
-            PlayerSide::Right => {
-                if let PositionType::Away(x, y) = away {
-                    Some((*x as f32, *y as f32))
-                } else {
-                    None
-                }
-            }
-        })
-        .map(|(x, y)| Vector3::new(x, y, 0.0))
 }

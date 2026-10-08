@@ -13,6 +13,7 @@ use crate::PlayerStatusType;
 use crate::club::PlayerFieldPositionGroup;
 use crate::club::player::condition::{ConditionRecoveryModel, InjuryRiskInputs};
 use crate::club::player::injury::InjuryType;
+use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
 
@@ -39,6 +40,8 @@ pub struct MatchExertionInputs {
     /// player's position group share. Falls back to a neutral 0.20
     /// for the legacy minute-only path.
     pub high_intensity_load_hint: f32,
+    /// The worst injury he picked up in the match, if the engine saw one.
+    pub injury: Option<InjuryGrade>,
 }
 
 impl MatchExertionInputs {
@@ -72,6 +75,7 @@ impl MatchExertionInputs {
             starting_condition,
             final_match_energy,
             high_intensity_load_hint: PositionLoad::high_intensity_share(group),
+            injury: None,
         }
     }
 }
@@ -326,10 +330,34 @@ impl Player {
 
         self.player_attributes.days_since_last_match = 0;
 
-        if !self.player_attributes.is_injured {
-            let in_recovery = self.player_attributes.is_in_recovery();
-            self.roll_for_match_injury(minutes, match_load, now, in_recovery, age, is_friendly);
+        if self.player_attributes.is_injured {
+            return;
         }
+        match inputs.injury {
+            Some(severity) => self.on_match_injury(severity, minutes, now, age),
+            None => {
+                let in_recovery = self.player_attributes.is_in_recovery();
+                self.roll_for_match_injury(minutes, match_load, now, in_recovery, age, is_friendly);
+            }
+        }
+    }
+
+    /// He was hurt in the match: the injury he carries out of it is that
+    /// one, sized by how bad it was on the pitch. A knock he got up from
+    /// leaves nothing behind.
+    pub fn on_match_injury(&mut self, severity: InjuryGrade, minutes: f32, now: NaiveDate, age: u8) {
+        let Some(injury) = InjuryType::from_match_severity(
+            severity,
+            minutes,
+            age,
+            self.player_attributes.condition_percentage(),
+            self.skills.physical.natural_fitness,
+            self.player_attributes.injury_proneness,
+        ) else {
+            return;
+        };
+        self.player_attributes.set_injury(injury, age);
+        self.statuses.add(now, PlayerStatusType::Inj);
     }
 
     /// Back-compat shim for callers that only know the minute count
@@ -456,9 +484,13 @@ impl Player {
         let condition_pct = self.player_attributes.condition_percentage();
         let injury_proneness = self.player_attributes.injury_proneness;
 
-        // Base rate: 0.5% scaled by minutes; the unified helper applies
-        // the multiplicative modifiers (proneness, age, NF, jadedness,
-        // workload spike, last body part, congestion, in-recovery). For
+        // Base rate: 0.125% scaled by minutes — a quarter of the 0.5% this
+        // roll carried while it was the only way a match injured anybody;
+        // what is decided on the pitch now arrives through
+        // `on_match_injury`, and this is what surfaces after it. The
+        // unified helper applies the multiplicative modifiers (proneness,
+        // age, NF, jadedness, workload spike, last body part, congestion,
+        // in-recovery). For
         // adolescent players in senior competitive matches we add a
         // maturity-driven base bump on top — adult-intensity football on
         // not-yet-adult ligaments / growth plates. Friendlies run at
@@ -466,7 +498,7 @@ impl Player {
         // this is the whole diet of youth sides, whose league is the
         // friendly league.
         let friendly_factor = if is_friendly { 0.6 } else { 1.0 };
-        let base_rate = (0.005 + YouthMatchExertion::injury_bonus(age, is_friendly))
+        let base_rate = (0.00125 + YouthMatchExertion::injury_bonus(age, is_friendly))
             * friendly_factor
             * (minutes / 90.0).max(0.05);
 

@@ -83,7 +83,8 @@ impl GroupDivisors {
 
     /// Engine ~3.4 tackles vs real ~1.6; ~2.0 ints vs ~1.3 — the back
     /// line is the LEAST inflated group (it holds shape while mids and
-    /// forwards chase). Box service is under-emitted → identity.
+    /// forwards chase). Box service is under-emitted and progressive
+    /// passes and carries are real-scale → identity.
     ///
     /// All three tables lean toward the LOW end of the measured
     /// engine-mean range rather than its midpoint. Two reasons: the
@@ -97,10 +98,10 @@ impl GroupDivisors {
         tackles: 1.8,
         interceptions: 1.6,
         box_service: 1.0,
-        prog_passes: 4.3,
-        prog_carries: 9.0,
-        dribbles: 3.0,
-        crosses: 6.0,
+        prog_passes: 1.0,
+        prog_carries: 1.0,
+        dribbles: 2.1,
+        crosses: 3.5,
         zone_box_def: 1.5,
         zone_field: 1.0,
         gk_volume: 1.0,
@@ -108,16 +109,17 @@ impl GroupDivisors {
 
     /// The pedestal group: ~5.7 tackles vs ~1.8, ~10 ints vs ~1.0
     /// (interceptions swing 6→14 from level 6 to 14 — the divisor leans
-    /// low so the youth end doesn't go dead), ~97 progressive carries
-    /// vs ~2, ~10 passes into the box vs ~1.5, ~13 dribbles vs ~1.
+    /// low so the youth end doesn't go dead), ~10 progressive passes vs
+    /// ~5, ~7 progressive carries vs ~2, ~10 passes into the box vs
+    /// ~1.5, ~8 take-ons vs ~1.
     const MIDFIELDER: GroupDivisors = GroupDivisors {
         tackles: 3.2,
         interceptions: 6.5,
         box_service: 6.0,
-        prog_passes: 5.3,
-        prog_carries: 40.0,
-        dribbles: 10.0,
-        crosses: 1.5,
+        prog_passes: 1.8,
+        prog_carries: 3.0,
+        dribbles: 7.5,
+        crosses: 3.6,
         zone_box_def: 3.3,
         zone_field: 5.0,
         gk_volume: 1.0,
@@ -125,15 +127,16 @@ impl GroupDivisors {
 
     /// Engine forwards lead every loose-ball chase: ~10 tackles vs
     /// ~0.8 real, ~16 interceptions vs ~0.6, ~20 final-third pressure
-    /// events vs ~1. Their crosses are under-emitted → identity.
+    /// events vs ~1, ~9 progressive passes and ~10 progressive carries
+    /// vs ~2.5 each, ~8.5 take-ons vs ~1.2.
     const FORWARD: GroupDivisors = GroupDivisors {
         tackles: 10.0,
         interceptions: 22.0,
         box_service: 4.5,
-        prog_passes: 3.7,
-        prog_carries: 16.0,
-        dribbles: 1.7,
-        crosses: 1.0,
+        prog_passes: 3.1,
+        prog_carries: 3.5,
+        dribbles: 6.3,
+        crosses: 1.5,
         zone_box_def: 1.0,
         zone_field: 16.0,
         gk_volume: 1.0,
@@ -303,18 +306,17 @@ mod tests {
         }
     }
 
-    /// The measured August-2026 engine midfielder line must convert to
-    /// roughly the real per-90 profile the saturation scales were
-    /// calibrated for.
+    /// The measured engine midfielder line must convert to roughly the
+    /// real per-90 profile the saturation scales were calibrated for.
     #[test]
     fn engine_midfielder_line_converts_to_real_scale() {
         let mut s = stats_with(PlayerFieldPositionGroup::Midfielder);
         s.tackles = 6;
         s.interceptions = 10;
         s.passes_into_box = 10;
-        s.progressive_passes = 26;
-        s.progressive_carries = 97;
-        s.successful_dribbles = 13;
+        s.progressive_passes = 9;
+        s.progressive_carries = 6;
+        s.successful_dribbles = 8;
         let n = EngineVolumeCalibration::normalize(&s);
         assert_eq!(n.tackles, 2);
         assert_eq!(n.interceptions, 2);
@@ -382,10 +384,10 @@ mod tests {
         s.tackles = 6;
         s.interceptions = 10;
         s.passes_into_box = 10;
-        s.progressive_passes = 26;
-        s.progressive_carries = 97;
-        s.successful_dribbles = 13;
-        s.attempted_dribbles = 18;
+        s.progressive_passes = 10;
+        s.progressive_carries = 7;
+        s.successful_dribbles = 8;
+        s.attempted_dribbles = 17;
         s.passes_attempted = 45;
         s.passes_completed = 33;
         s.successful_pressures = 2;

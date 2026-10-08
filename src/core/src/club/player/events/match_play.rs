@@ -12,6 +12,7 @@ use super::types::{MatchOutcome, MatchParticipation};
 use crate::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::mind::{CompetitiveMatchRead, CompetitiveMind};
 use crate::club::player::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventEvidence, HappinessEventFollowUp,
@@ -64,6 +65,7 @@ impl Player {
         if o.is_cup {
             self.recompute_cup_statistics();
         }
+        self.absorb_match_into_mind(o);
         self.record_match_events(o);
         self.record_match_reputation(o);
         // After the routine post-match bookkeeping, see if this fixture
@@ -71,6 +73,29 @@ impl Player {
         // final / continental knockout starters get the dedicated
         // `TrustedInBigMatch` row on top of the regular debrief.
         self.maybe_emit_big_match_trust(o);
+    }
+
+    /// Goals prevented beyond an average keeper's, in a match his side did
+    /// not lose, that make a display he remembers as having kept them in it.
+    const MATCH_SAVING_XG: f32 = 1.0;
+
+    /// Hand the match to the competitive mind before its episodes are
+    /// filed, so the step he took up to play it is staged for them.
+    fn absorb_match_into_mind(&mut self, o: &MatchOutcome<'_>) {
+        let started = matches!(o.participation, MatchParticipation::Starter);
+        let read = CompetitiveMatchRead {
+            standard: o.standard_of_football,
+            minutes: o.stats.minutes_played as f32,
+            competitive: !o.is_friendly,
+            kept_clean_sheet: self.position().is_goalkeeper()
+                && started
+                && o.team_goals_against == 0,
+        };
+        let pace = CompetitiveMind::settling_pace(
+            self.skills.mental.composure,
+            self.attributes.adaptability,
+        );
+        self.mind.competitive.on_match_played(&read, pace);
     }
 
     /// Named to a squad but never got off the bench. Synthesises a
@@ -358,6 +383,22 @@ impl Player {
             self.remember_match(EpisodeKind::SentOff, ActorRef::NONE, o);
         }
 
+        // What the match itself says about him. A costly error is an error
+        // that cost a goal — a flapped cross included — never a low rating
+        // with the defence to blame.
+        if o.stats.errors_leading_to_goal > 0 || o.stats.zone_stats.gk_failed_claims_to_goal > 0 {
+            self.remember_match(EpisodeKind::CostlyError, ActorRef::NONE, o);
+        }
+        if o.penalties_saved > 0 {
+            self.remember_match(EpisodeKind::PenaltySaved, ActorRef::NONE, o);
+        }
+        if self.position().is_goalkeeper()
+            && !o.team_lost
+            && o.stats.xg_prevented >= Self::MATCH_SAVING_XG
+        {
+            self.remember_match(EpisodeKind::MatchSavingDisplay, ActorRef::NONE, o);
+        }
+
         // First competitive goal for this club. Read against everything
         // he has done for the club across every spell there — frozen
         // seasons, this season's closed spells and the live buckets — so
@@ -515,7 +556,6 @@ impl Player {
                     None,
                     happiness_ctx,
                 );
-                self.remember_match(EpisodeKind::CostlyError, ActorRef::NONE, o);
             } else if o.effective_rating < 6.3 {
                 let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
                 let recent_mgr_criticism = self.happiness.recent_events.iter().any(|e| {

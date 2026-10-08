@@ -3,7 +3,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, LineStep,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::team::WideChannel;
@@ -267,11 +267,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             }));
         }
 
-        // Offside-trap detection used to transition into a dedicated
-        // DefenderState::OffsideTrap that was a pass-through — it just
-        // bounced back to HoldingLine. Staying in HoldingLine with the
-        // same zonal-line logic is the simpler model; if we want trap
-        // pressing later, reintroduce as a team-level flag (Phase 2).
         None
     }
 
@@ -480,7 +475,12 @@ impl DefenderHoldingLineState {
         // doing — reads ONE reference for its depth and its width. The
         // role stagger above still shapes the diagonal; `hold_shape` only
         // bounds how far the result may sit from the line.
-        DefensiveLine::hold_shape(ctx, Vector3::new(staggered_x, target_y, 0.0))
+        let shaped = DefensiveLine::hold_shape(ctx, Vector3::new(staggered_x, target_y, 0.0));
+        // The one time the line goes past its own reference on purpose.
+        match LineStep::depth(ctx, shaped.x) {
+            Some(x) => Vector3::new(x, shaped.y, 0.0),
+            None => shaped,
+        }
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

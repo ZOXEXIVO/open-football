@@ -485,6 +485,8 @@ impl TeamTacticalState {
             away.risk_appetite = (away.risk_appetite - 0.06 * home_edge).clamp(0.0, 1.0);
             away.press_intensity = (away.press_intensity - 0.05 * home_edge).clamp(0.0, 1.0);
         }
+        home.press_intensity = home.press_intensity.min(inputs.press_ceiling);
+        away.press_intensity = away.press_intensity.min(inputs.press_ceiling);
 
         // Attacking-quality bias: a side with elite finishers chasing
         // a goal late should bias slightly more direct (higher tempo
@@ -551,7 +553,7 @@ impl TeamTacticalState {
         let mut a_center = 0u16;
         let mut a_right = 0u16;
         let third_h = field_height / 3.0;
-        for p in field.players.iter().filter(|p| !p.is_sent_off) {
+        for p in field.players.iter().filter(|p| !p.off_pitch) {
             let zone = if p.position.y < third_h {
                 0
             } else if p.position.y > field_height - third_h {

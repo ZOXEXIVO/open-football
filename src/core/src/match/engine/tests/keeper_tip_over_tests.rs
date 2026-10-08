@@ -273,6 +273,7 @@ fn a_high_shot_the_keeper_cannot_hold_is_tipped_over_the_bar() {
             deflected: false,
             shooter_threat: 0.5,
             struck_from: Vector3::new(700.0, goal_y, 0.0),
+            seen_from: Vector3::new(700.0, goal_y, 0.0),
         });
 
         let players = field.players.clone();

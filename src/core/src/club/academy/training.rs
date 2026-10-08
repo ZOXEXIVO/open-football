@@ -1,7 +1,9 @@
 use super::{AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyTier, ClubAcademy};
 use crate::Staff;
+use crate::club::player::development::{PositionalSkillCeilings, SkillKey};
 use crate::context::GlobalContext;
-use crate::{Person, Player, PlayerFieldPositionGroup, PlayerSkills};
+use crate::utils::DateUtils;
+use crate::{Person, Player, PlayerFieldPositionGroup};
 use chrono::{Datelike, NaiveDate};
 
 /// Deterministic per-(player, date, salt) roll in `[0.0, 1.0)`, mirroring
@@ -261,7 +263,7 @@ impl ClubAcademy {
     ///   * uniform `[0.88, 1.12]` weekly variance.
     ///
     /// Per-phase per-category caps then bound the total positive change,
-    /// and a PA-derived `skill_ceiling` bounds each individual skill.
+    /// and the first team's per-skill ceilings bound each individual skill.
     /// PA is never raised by training.
     pub(super) fn train_academy_players(&mut self, ctx: &GlobalContext<'_>) {
         if !ctx.simulation.is_week_beginning() {
@@ -347,13 +349,12 @@ impl ClubAcademy {
             // multipliers blew past the cap.
             before.cap_positive_delta(player, caps);
 
-            // PA-derived per-skill ceilings — PA is the biological cap;
-            // it's never raised by training. Position-weighted so a GK
-            // doesn't develop full-scale finishing and a striker doesn't
-            // peg max marking. The pre-training snapshot rides along so
+            // The first team's own per-skill ceilings, so an academy
+            // can never grow a boy past what his age and football allow
+            // a senior player. The pre-training snapshot rides along so
             // a value that already sits above its ceiling (growth spurt,
             // reassessed PA, imported record) is frozen, not cut.
-            SkillCeilings { age, caps }.enforce(player, group, &before);
+            SkillCeilings::enforce(player, date, &before);
 
             let pos = player.position();
             let recomputed_ca = player.skills.calculate_ability_for_position(pos);
@@ -669,357 +670,217 @@ impl GrowthSpurt {
     }
 }
 
-/// Age-based + PA-based skill ceilings. PA is *never* raised here —
-/// the struct only clamps skills downward when they exceed the
-/// position-weighted PA-derived ceiling. `caps` is kept on the struct
-/// so a future extension can use the per-phase caps to feed a graded
-/// clamp.
-pub struct SkillCeilings {
-    pub age: u8,
-    #[allow(dead_code)]
-    pub caps: PhaseGrowthCaps,
-}
+/// An academy player's per-skill ceilings are the ones first-team
+/// development would set him: from his potential, his position's
+/// development weights, his families' maturity at his fractional age and
+/// his match exposure. PA is *never* raised here.
+pub struct SkillCeilings;
 
 impl SkillCeilings {
-    /// Apply both the age cap and a position-weighted PA-derived cap
-    /// per skill. The position weight is clamped to 0.65..1.25 so the
-    /// floor is never punishing (a GK still needs to be able to
-    /// develop a baseline pass) and the ceiling never overshoots.
-    ///
     /// Ceilings gate *growth* — a value already above its ceiling before
     /// this week's session (growth spurt, PA edge case, imported record)
     /// is frozen at its pre-training level, never cut down. `before` is
     /// the same snapshot `cap_positive_delta` uses.
-    pub fn enforce(
-        &self,
-        player: &mut Player,
-        group: PlayerFieldPositionGroup,
-        before: &SkillSnapshot,
-    ) {
-        let age_cap = match self.age {
-            0..=8 => 3.0_f32,
-            9 => 3.5,
-            10 => 4.5,
-            11 => 5.5,
-            12 => 7.0,
-            13 => 8.5,
-            14 => 10.0,
-            15 => 12.0,
-            16 => 13.0,
-            17 => 14.0,
-            _ => 15.0,
-        };
-
-        let base = PlayerSkills::ability_skill_level(player.player_attributes.potential_ability);
-        let w = AcademyCeilingWeights::for_group(group);
-
-        // Each skill gets `min(age_cap, (base * weight).clamp(1.0, 20.0))`,
-        // lifted to the pre-training value when that already sat higher.
-        let cap_for = |weight: f32| -> f32 {
-            let w = weight.clamp(0.65, 1.25);
-            age_cap.min((base * w).clamp(1.0, 20.0))
-        };
-        let clamp = |v: f32, weight: f32, pre: f32| -> f32 {
-            v.clamp(1.0, cap_for(weight).max(pre.min(20.0)))
-        };
+    pub fn enforce(player: &mut Player, date: NaiveDate, before: &SkillSnapshot) {
+        let age = DateUtils::age_in_years(player.birth_date, date);
+        let ceilings = PositionalSkillCeilings::for_player(player, age);
+        let clamp =
+            |v: f32, key: SkillKey, pre: f32| v.clamp(1.0, ceilings.get(key).max(pre.min(20.0)));
 
         let b = &before.technical;
         let t = &mut player.skills.technical;
-        t.corners = clamp(t.corners, w.tech_corners, b[0]);
-        t.crossing = clamp(t.crossing, w.tech_crossing, b[1]);
-        t.dribbling = clamp(t.dribbling, w.tech_dribbling, b[2]);
-        t.finishing = clamp(t.finishing, w.tech_finishing, b[3]);
-        t.first_touch = clamp(t.first_touch, w.tech_first_touch, b[4]);
-        t.free_kicks = clamp(t.free_kicks, w.tech_free_kicks, b[5]);
-        t.heading = clamp(t.heading, w.tech_heading, b[6]);
-        t.long_shots = clamp(t.long_shots, w.tech_long_shots, b[7]);
-        t.long_throws = clamp(t.long_throws, w.tech_long_throws, b[8]);
-        t.marking = clamp(t.marking, w.tech_marking, b[9]);
-        t.passing = clamp(t.passing, w.tech_passing, b[10]);
-        t.penalty_taking = clamp(t.penalty_taking, w.tech_penalty, b[11]);
-        t.tackling = clamp(t.tackling, w.tech_tackling, b[12]);
-        t.technique = clamp(t.technique, w.tech_technique, b[13]);
+        t.corners = clamp(t.corners, SkillKey::Corners, b[0]);
+        t.crossing = clamp(t.crossing, SkillKey::Crossing, b[1]);
+        t.dribbling = clamp(t.dribbling, SkillKey::Dribbling, b[2]);
+        t.finishing = clamp(t.finishing, SkillKey::Finishing, b[3]);
+        t.first_touch = clamp(t.first_touch, SkillKey::FirstTouch, b[4]);
+        t.free_kicks = clamp(t.free_kicks, SkillKey::FreeKicks, b[5]);
+        t.heading = clamp(t.heading, SkillKey::Heading, b[6]);
+        t.long_shots = clamp(t.long_shots, SkillKey::LongShots, b[7]);
+        t.long_throws = clamp(t.long_throws, SkillKey::LongThrows, b[8]);
+        t.marking = clamp(t.marking, SkillKey::Marking, b[9]);
+        t.passing = clamp(t.passing, SkillKey::Passing, b[10]);
+        t.penalty_taking = clamp(t.penalty_taking, SkillKey::PenaltyTaking, b[11]);
+        t.tackling = clamp(t.tackling, SkillKey::Tackling, b[12]);
+        t.technique = clamp(t.technique, SkillKey::Technique, b[13]);
 
         let b = &before.mental;
         let m = &mut player.skills.mental;
-        m.aggression = clamp(m.aggression, w.mental_aggression, b[0]);
-        m.anticipation = clamp(m.anticipation, w.mental_anticipation, b[1]);
-        m.bravery = clamp(m.bravery, w.mental_bravery, b[2]);
-        m.composure = clamp(m.composure, w.mental_composure, b[3]);
-        m.concentration = clamp(m.concentration, w.mental_concentration, b[4]);
-        m.decisions = clamp(m.decisions, w.mental_decisions, b[5]);
-        m.determination = clamp(m.determination, w.mental_determination, b[6]);
-        m.flair = clamp(m.flair, w.mental_flair, b[7]);
-        m.leadership = clamp(m.leadership, w.mental_leadership, b[8]);
-        m.off_the_ball = clamp(m.off_the_ball, w.mental_off_the_ball, b[9]);
-        m.positioning = clamp(m.positioning, w.mental_positioning, b[10]);
-        m.teamwork = clamp(m.teamwork, w.mental_teamwork, b[11]);
-        m.vision = clamp(m.vision, w.mental_vision, b[12]);
-        m.work_rate = clamp(m.work_rate, w.mental_work_rate, b[13]);
+        m.aggression = clamp(m.aggression, SkillKey::Aggression, b[0]);
+        m.anticipation = clamp(m.anticipation, SkillKey::Anticipation, b[1]);
+        m.bravery = clamp(m.bravery, SkillKey::Bravery, b[2]);
+        m.composure = clamp(m.composure, SkillKey::Composure, b[3]);
+        m.concentration = clamp(m.concentration, SkillKey::Concentration, b[4]);
+        m.decisions = clamp(m.decisions, SkillKey::Decisions, b[5]);
+        m.determination = clamp(m.determination, SkillKey::Determination, b[6]);
+        m.flair = clamp(m.flair, SkillKey::Flair, b[7]);
+        m.leadership = clamp(m.leadership, SkillKey::Leadership, b[8]);
+        m.off_the_ball = clamp(m.off_the_ball, SkillKey::OffTheBall, b[9]);
+        m.positioning = clamp(m.positioning, SkillKey::Positioning, b[10]);
+        m.teamwork = clamp(m.teamwork, SkillKey::Teamwork, b[11]);
+        m.vision = clamp(m.vision, SkillKey::Vision, b[12]);
+        m.work_rate = clamp(m.work_rate, SkillKey::WorkRate, b[13]);
 
         let b = &before.physical;
         let p = &mut player.skills.physical;
-        p.acceleration = clamp(p.acceleration, w.phys_acceleration, b[0]);
-        p.agility = clamp(p.agility, w.phys_agility, b[1]);
-        p.balance = clamp(p.balance, w.phys_balance, b[2]);
-        p.jumping = clamp(p.jumping, w.phys_jumping, b[3]);
-        p.natural_fitness = clamp(p.natural_fitness, w.phys_fitness, b[4]);
-        p.pace = clamp(p.pace, w.phys_pace, b[5]);
-        p.stamina = clamp(p.stamina, w.phys_stamina, b[6]);
-        p.strength = clamp(p.strength, w.phys_strength, b[7]);
+        p.acceleration = clamp(p.acceleration, SkillKey::Acceleration, b[0]);
+        p.agility = clamp(p.agility, SkillKey::Agility, b[1]);
+        p.balance = clamp(p.balance, SkillKey::Balance, b[2]);
+        p.jumping = clamp(p.jumping, SkillKey::Jumping, b[3]);
+        p.natural_fitness = clamp(p.natural_fitness, SkillKey::NaturalFitness, b[4]);
+        p.pace = clamp(p.pace, SkillKey::Pace, b[5]);
+        p.stamina = clamp(p.stamina, SkillKey::Stamina, b[6]);
+        p.strength = clamp(p.strength, SkillKey::Strength, b[7]);
 
         let b = &before.goalkeeping;
         let g = &mut player.skills.goalkeeping;
-        g.aerial_reach = clamp(g.aerial_reach, w.gk_aerial, b[0]);
-        g.command_of_area = clamp(g.command_of_area, w.gk_command, b[1]);
-        g.communication = clamp(g.communication, w.gk_communication, b[2]);
-        g.eccentricity = clamp(g.eccentricity, w.gk_eccentricity, b[3]);
-        g.first_touch = clamp(g.first_touch, w.gk_first_touch, b[4]);
-        g.handling = clamp(g.handling, w.gk_handling, b[5]);
-        g.kicking = clamp(g.kicking, w.gk_kicking, b[6]);
-        g.one_on_ones = clamp(g.one_on_ones, w.gk_one_on_ones, b[7]);
-        g.passing = clamp(g.passing, w.gk_passing, b[8]);
-        g.punching = clamp(g.punching, w.gk_punching, b[9]);
-        g.reflexes = clamp(g.reflexes, w.gk_reflexes, b[10]);
-        g.rushing_out = clamp(g.rushing_out, w.gk_rushing, b[11]);
-        g.throwing = clamp(g.throwing, w.gk_throwing, b[12]);
-    }
-}
-
-/// Per-skill position weights used by `SkillCeilings`. Kept academy-
-/// local on purpose: the development module has its own (private)
-/// weight table tuned for daily growth rates, and that one has GK-only
-/// skills zeroed out for outfielders — which would *strand* an existing
-/// GK skill at value 1.0 forever. The academy ceiling table instead
-/// uses a small, non-zero baseline (≥ 0.65 after clamping) for
-/// out-of-position skills so prospects can still develop fundamentals
-/// across the squad.
-#[derive(Copy, Clone)]
-struct AcademyCeilingWeights {
-    tech_corners: f32,
-    tech_crossing: f32,
-    tech_dribbling: f32,
-    tech_finishing: f32,
-    tech_first_touch: f32,
-    tech_free_kicks: f32,
-    tech_heading: f32,
-    tech_long_shots: f32,
-    tech_long_throws: f32,
-    tech_marking: f32,
-    tech_passing: f32,
-    tech_penalty: f32,
-    tech_tackling: f32,
-    tech_technique: f32,
-    mental_aggression: f32,
-    mental_anticipation: f32,
-    mental_bravery: f32,
-    mental_composure: f32,
-    mental_concentration: f32,
-    mental_decisions: f32,
-    mental_determination: f32,
-    mental_flair: f32,
-    mental_leadership: f32,
-    mental_off_the_ball: f32,
-    mental_positioning: f32,
-    mental_teamwork: f32,
-    mental_vision: f32,
-    mental_work_rate: f32,
-    phys_acceleration: f32,
-    phys_agility: f32,
-    phys_balance: f32,
-    phys_jumping: f32,
-    phys_fitness: f32,
-    phys_pace: f32,
-    phys_stamina: f32,
-    phys_strength: f32,
-    gk_aerial: f32,
-    gk_command: f32,
-    gk_communication: f32,
-    gk_eccentricity: f32,
-    gk_first_touch: f32,
-    gk_handling: f32,
-    gk_kicking: f32,
-    gk_one_on_ones: f32,
-    gk_passing: f32,
-    gk_punching: f32,
-    gk_reflexes: f32,
-    gk_rushing: f32,
-    gk_throwing: f32,
-}
-
-impl AcademyCeilingWeights {
-    fn for_group(group: PlayerFieldPositionGroup) -> Self {
-        // Default = 1.0; will be clamped to 0.65..1.25 on use anyway.
-        let mut w = AcademyCeilingWeights {
-            tech_corners: 1.0,
-            tech_crossing: 1.0,
-            tech_dribbling: 1.0,
-            tech_finishing: 1.0,
-            tech_first_touch: 1.0,
-            tech_free_kicks: 1.0,
-            tech_heading: 1.0,
-            tech_long_shots: 1.0,
-            tech_long_throws: 1.0,
-            tech_marking: 1.0,
-            tech_passing: 1.0,
-            tech_penalty: 1.0,
-            tech_tackling: 1.0,
-            tech_technique: 1.0,
-            mental_aggression: 1.0,
-            mental_anticipation: 1.0,
-            mental_bravery: 1.0,
-            mental_composure: 1.0,
-            mental_concentration: 1.0,
-            mental_decisions: 1.0,
-            mental_determination: 1.0,
-            mental_flair: 1.0,
-            mental_leadership: 1.0,
-            mental_off_the_ball: 1.0,
-            mental_positioning: 1.0,
-            mental_teamwork: 1.0,
-            mental_vision: 1.0,
-            mental_work_rate: 1.0,
-            phys_acceleration: 1.0,
-            phys_agility: 1.0,
-            phys_balance: 1.0,
-            phys_jumping: 1.0,
-            phys_fitness: 1.0,
-            phys_pace: 1.0,
-            phys_stamina: 1.0,
-            phys_strength: 1.0,
-            // For outfielders we keep GK skills at the floor so they don't
-            // collect bonus academy gains there. Clamped to 0.65 on use.
-            gk_aerial: 0.5,
-            gk_command: 0.5,
-            gk_communication: 0.5,
-            gk_eccentricity: 0.5,
-            gk_first_touch: 0.6,
-            gk_handling: 0.5,
-            gk_kicking: 0.5,
-            gk_one_on_ones: 0.5,
-            gk_passing: 0.6,
-            gk_punching: 0.5,
-            gk_reflexes: 0.5,
-            gk_rushing: 0.5,
-            gk_throwing: 0.5,
-        };
-
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => {
-                // GK-specific outfield weights — keep technical/physical
-                // low so a goalkeeper doesn't develop full-scale finishing.
-                w.tech_corners = 0.5;
-                w.tech_crossing = 0.5;
-                w.tech_dribbling = 0.5;
-                w.tech_finishing = 0.5;
-                w.tech_free_kicks = 0.55;
-                w.tech_heading = 0.55;
-                w.tech_long_shots = 0.5;
-                w.tech_long_throws = 0.6;
-                w.tech_marking = 0.55;
-                w.tech_penalty = 0.5;
-                w.tech_tackling = 0.55;
-                // Still useful for sweeper-keepers.
-                w.tech_first_touch = 1.05;
-                w.tech_passing = 1.05;
-                w.tech_technique = 1.0;
-
-                w.mental_positioning = 1.20;
-                w.mental_concentration = 1.20;
-                w.mental_composure = 1.15;
-                w.mental_decisions = 1.15;
-                w.mental_anticipation = 1.15;
-                w.mental_bravery = 1.10;
-                w.mental_flair = 0.7;
-                w.mental_off_the_ball = 0.7;
-
-                w.phys_agility = 1.20;
-                w.phys_jumping = 1.20;
-                w.phys_balance = 1.10;
-                w.phys_pace = 0.8;
-                w.phys_stamina = 0.8;
-                w.phys_acceleration = 0.9;
-
-                // GK-specific are the core for goalkeepers.
-                w.gk_handling = 1.25;
-                w.gk_reflexes = 1.25;
-                w.gk_one_on_ones = 1.20;
-                w.gk_aerial = 1.20;
-                w.gk_command = 1.20;
-                w.gk_communication = 1.15;
-                w.gk_rushing = 1.15;
-                w.gk_punching = 1.10;
-                w.gk_kicking = 1.10;
-                w.gk_throwing = 1.05;
-                w.gk_first_touch = 1.05;
-                w.gk_passing = 1.05;
-                w.gk_eccentricity = 0.8;
-            }
-            PlayerFieldPositionGroup::Defender => {
-                w.tech_tackling = 1.20;
-                w.tech_marking = 1.20;
-                w.tech_heading = 1.15;
-                w.tech_passing = 1.05;
-                w.tech_finishing = 0.6;
-                w.tech_dribbling = 0.7;
-                w.tech_long_shots = 0.65;
-                w.tech_corners = 0.7;
-                w.tech_free_kicks = 0.7;
-
-                w.mental_positioning = 1.20;
-                w.mental_concentration = 1.15;
-                w.mental_anticipation = 1.15;
-                w.mental_bravery = 1.15;
-                w.mental_flair = 0.7;
-
-                w.phys_strength = 1.15;
-                w.phys_jumping = 1.15;
-                w.phys_pace = 1.05;
-                w.phys_stamina = 1.05;
-            }
-            PlayerFieldPositionGroup::Midfielder => {
-                w.tech_passing = 1.20;
-                w.tech_technique = 1.15;
-                w.tech_first_touch = 1.15;
-                w.tech_dribbling = 1.05;
-                w.tech_heading = 0.75;
-
-                w.mental_vision = 1.20;
-                w.mental_decisions = 1.15;
-                w.mental_teamwork = 1.15;
-                w.mental_work_rate = 1.15;
-
-                w.phys_stamina = 1.15;
-                w.phys_pace = 1.05;
-                w.phys_agility = 1.05;
-            }
-            PlayerFieldPositionGroup::Forward => {
-                w.tech_finishing = 1.25;
-                w.tech_dribbling = 1.20;
-                w.tech_first_touch = 1.15;
-                w.tech_long_shots = 1.05;
-                w.tech_tackling = 0.6;
-                w.tech_marking = 0.6;
-
-                w.mental_off_the_ball = 1.20;
-                w.mental_composure = 1.15;
-                w.mental_anticipation = 1.15;
-                w.mental_positioning = 0.8;
-
-                w.phys_pace = 1.20;
-                w.phys_acceleration = 1.20;
-                w.phys_strength = 1.05;
-            }
-        }
-        w
+        g.aerial_reach = clamp(g.aerial_reach, SkillKey::GkAerialReach, b[0]);
+        g.command_of_area = clamp(g.command_of_area, SkillKey::GkCommandOfArea, b[1]);
+        g.communication = clamp(g.communication, SkillKey::GkCommunication, b[2]);
+        g.eccentricity = clamp(g.eccentricity, SkillKey::GkEccentricity, b[3]);
+        g.first_touch = clamp(g.first_touch, SkillKey::GkFirstTouch, b[4]);
+        g.handling = clamp(g.handling, SkillKey::GkHandling, b[5]);
+        g.kicking = clamp(g.kicking, SkillKey::GkKicking, b[6]);
+        g.one_on_ones = clamp(g.one_on_ones, SkillKey::GkOneOnOnes, b[7]);
+        g.passing = clamp(g.passing, SkillKey::GkPassing, b[8]);
+        g.punching = clamp(g.punching, SkillKey::GkPunching, b[9]);
+        g.reflexes = clamp(g.reflexes, SkillKey::GkReflexes, b[10]);
+        g.rushing_out = clamp(g.rushing_out, SkillKey::GkRushingOut, b[11]);
+        g.throwing = clamp(g.throwing, SkillKey::GkThrowing, b[12]);
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PhaseGrowthCaps, SkillSnapshot};
+    use super::{PhaseGrowthCaps, SkillCeilings, SkillSnapshot};
     use crate::club::academy::AcademyPlayerPhase;
+    use crate::club::academy::ClubAcademy;
     use crate::club::academy::tuning::AcademyTier;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::development::{PositionalSkillCeilings, SkillKey};
+    use crate::context::{GlobalContext, SimulationContext};
+    use crate::shared::fullname::FullName;
+    use crate::utils::DateUtils;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+    use chrono::{Datelike, Duration, NaiveDate, Weekday};
+
+    const GOALKEEPING: [SkillKey; 13] = [
+        SkillKey::GkAerialReach,
+        SkillKey::GkCommandOfArea,
+        SkillKey::GkCommunication,
+        SkillKey::GkEccentricity,
+        SkillKey::GkFirstTouch,
+        SkillKey::GkHandling,
+        SkillKey::GkKicking,
+        SkillKey::GkOneOnOnes,
+        SkillKey::GkPassing,
+        SkillKey::GkPunching,
+        SkillKey::GkReflexes,
+        SkillKey::GkRushingOut,
+        SkillKey::GkThrowing,
+    ];
+
+    fn goalkeeping(p: &mut Player) -> [&mut f32; 13] {
+        let g = &mut p.skills.goalkeeping;
+        [
+            &mut g.aerial_reach,
+            &mut g.command_of_area,
+            &mut g.communication,
+            &mut g.eccentricity,
+            &mut g.first_touch,
+            &mut g.handling,
+            &mut g.kicking,
+            &mut g.one_on_ones,
+            &mut g.passing,
+            &mut g.punching,
+            &mut g.reflexes,
+            &mut g.rushing_out,
+            &mut g.throwing,
+        ]
+    }
+
+    /// A PA 150 keeper of 18 whose goalkeeping sits just under the
+    /// first-team ceilings for his age on `today`.
+    fn eighteen_year_old_keeper(today: NaiveDate) -> Player {
+        let mut keeper = PlayerBuilder::new()
+            .id(7)
+            .full_name(FullName::new("Academy".to_string(), "Keeper".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(today.year() - 18, 3, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes {
+                professionalism: 16.0,
+                ambition: 16.0,
+                ..PersonAttributes::default()
+            })
+            .skills(PlayerSkills::flat_for_ability(70))
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 20,
+                }],
+            })
+            .player_attributes(PlayerAttributes {
+                potential_ability: 150,
+                current_ability: 70,
+                condition: 9500,
+                ..PlayerAttributes::default()
+            })
+            .build()
+            .unwrap();
+        let age = DateUtils::age_in_years(keeper.birth_date, today);
+        let ceilings = PositionalSkillCeilings::for_player(&keeper, age);
+        for (value, key) in goalkeeping(&mut keeper).into_iter().zip(GOALKEEPING) {
+            *value = (ceilings.get(key) - 0.3).max(1.0);
+        }
+        keeper
+    }
+
+    /// A season of academy work never takes a keeper past what the first
+    /// team's ceilings allow for his age and his football.
+    #[test]
+    fn an_academy_keeper_cannot_outgrow_the_first_teams_ceiling() {
+        let start = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let mut academy = ClubAcademy::new(20);
+        academy.players.add(eighteen_year_old_keeper(start));
+        let mut bound = false;
+        for day in 0..365 {
+            let date = start + Duration::days(day);
+            let ctx =
+                GlobalContext::new(SimulationContext::new(date.and_hms_opt(0, 0, 0).unwrap()));
+            academy.train_academy_players(&ctx);
+            if date.weekday() != Weekday::Mon {
+                continue;
+            }
+            let keeper = &mut academy.players.players[0];
+            let age = DateUtils::age_in_years(keeper.birth_date, date);
+            let ceilings = PositionalSkillCeilings::for_player(keeper, age);
+            for (value, key) in goalkeeping(keeper).into_iter().zip(GOALKEEPING) {
+                let ceiling = ceilings.get(key);
+                assert!(
+                    *value <= ceiling + 1e-4,
+                    "{key:?} reached {value:.3} on {date}, past the first-team ceiling {ceiling:.3}"
+                );
+                bound |= *value >= ceiling - 0.01;
+            }
+        }
+        assert!(bound, "no goalkeeping attribute ever reached its ceiling");
+    }
+
+    /// An attribute already above its ceiling keeps its value: the ceiling
+    /// stops its growth and never cuts it.
+    #[test]
+    fn an_attribute_above_its_ceiling_keeps_its_value() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let mut keeper = eighteen_year_old_keeper(today);
+        keeper.skills.goalkeeping.handling = 18.0;
+        let before = SkillSnapshot::snapshot(&keeper);
+        keeper.skills.goalkeeping.handling += 0.05;
+        SkillCeilings::enforce(&mut keeper, today, &before);
+        assert_eq!(keeper.skills.goalkeeping.handling, 18.0);
+    }
 
     #[test]
     fn base_coaching_stays_under_one_at_level_20() {

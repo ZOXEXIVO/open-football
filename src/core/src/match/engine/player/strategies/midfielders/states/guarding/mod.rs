@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{
     ContactFoul, MarkEngagement, TackleEngagement,
@@ -67,6 +67,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
                     Event::PlayerEvent(PlayerEvent::CommitFoul(
                         ctx.player.id,
                         ContactFoul::severity(ctx, losing_him),
+                        FoulSource::Holding,
                     )),
                 ));
             }

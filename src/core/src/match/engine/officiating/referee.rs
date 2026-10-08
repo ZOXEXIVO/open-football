@@ -5,8 +5,10 @@
 /// supplied per-call so the referee profile itself stays stable across the match.
 use crate::r#match::MatchContext;
 use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::flow::context::rng::MatchRng;
+use crate::r#match::engine::result::DeadTime;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RefereeProfile {
     /// 0..1 — how strict on contact in general.
     pub strictness: f32,
@@ -59,9 +61,60 @@ pub struct FoulCallContext {
     /// True if the fouled team is the home team (for bias direction).
     pub fouled_team_is_home: bool,
     pub location: ContactLocation,
+    /// A man brought down on purpose to stop a break: in plain sight, and
+    /// almost never missed.
+    pub deliberate: bool,
 }
 
 impl RefereeProfile {
+    /// How long a booking holds the restart: the whistle, the name, the
+    /// card, and for a red the walk off.
+    pub const BOOKING_PAUSE_MS: u64 = 20_000;
+    pub const SENDING_OFF_PAUSE_MS: u64 = 40_000;
+
+    /// The share of a dead second this referee adds back as stoppage time.
+    ///
+    /// Law 7 lists what is allowed for — substitutions, injuries, time
+    /// wasting, disciplinary sanctions, celebrations — and the ordinary
+    /// wait for a throw-in or a goal kick is not on it. How fully the list
+    /// is honoured is the referee's own strictness.
+    pub fn add_back(&self, why: DeadTime) -> f32 {
+        match why {
+            DeadTime::Restart => 0.0,
+            DeadTime::Celebration
+            | DeadTime::Substitution
+            | DeadTime::Treatment
+            | DeadTime::Booking
+            | DeadTime::Delay => 0.8 + 0.2 * self.strictness,
+        }
+    }
+
+    /// How far one referee's temperament sits from the baseline, either
+    /// way, on each of the 0..1 traits.
+    const SPREAD: f32 = 0.12;
+    /// …and how far his lean toward the home side does.
+    const BIAS_SPREAD: f32 = 0.02;
+    /// Keeps the referee's draw apart from the weather's on the same seed.
+    const STREAM: u64 = 0x5EF_E4EE;
+
+    /// The referee appointed to a fixture: `baseline`'s temperament with
+    /// his own lean on each trait, drawn from `seed` so the same fixture
+    /// always gets the same man.
+    pub fn draw(seed: u64, baseline: RefereeProfile) -> Self {
+        let rng = MatchRng::from_seed(seed ^ Self::STREAM);
+        let mut referee = RefereeProfile {
+            strictness: rng.jitter(baseline.strictness, Self::SPREAD),
+            leniency: rng.jitter(baseline.leniency, Self::SPREAD),
+            card_happiness: rng.jitter(baseline.card_happiness, Self::SPREAD),
+            foul_detection: rng.jitter(baseline.foul_detection, Self::SPREAD),
+            advantage_patience: rng.jitter(baseline.advantage_patience, Self::SPREAD),
+            penalty_strictness: rng.jitter(baseline.penalty_strictness, Self::SPREAD),
+            home_bias: rng.jitter(baseline.home_bias, Self::BIAS_SPREAD),
+        };
+        referee.clamp_inputs();
+        referee
+    }
+
     pub fn clamp_inputs(&mut self) {
         self.strictness = self.strictness.clamp(0.0, 1.0);
         self.leniency = self.leniency.clamp(0.0, 1.0);
@@ -115,6 +168,9 @@ impl RefereeProfile {
             + ctx.match_temperature * 0.06
             + pen_strict_bonus;
 
+        if ctx.deliberate {
+            return (raw + 0.35).clamp(0.88, 0.99);
+        }
         match ctx.location {
             // Normal-contact band lifted [0.10, 0.55] → [0.25, 0.75]
             // alongside the raw-base lift above.
@@ -175,6 +231,7 @@ mod tests {
             match_temperature: 0.2,
             fouled_team_is_home: false,
             location,
+            deliberate: false,
         }
     }
 
@@ -300,6 +357,7 @@ mod tests {
                 match_temperature: 0.0,
                 fouled_team_is_home: true,
                 location: ContactLocation::Normal,
+                deliberate: false,
             },
         );
         let away_fouled = r.foul_call_prob(
@@ -309,6 +367,7 @@ mod tests {
                 match_temperature: 0.0,
                 fouled_team_is_home: false,
                 location: ContactLocation::Normal,
+                deliberate: false,
             },
         );
         assert!(home_fouled > away_fouled);

@@ -12,9 +12,9 @@ use crate::r#match::engine::ball::ball::diagnostics::block_diag::{
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 use crate::r#match::engine::ball::ball::{
-    AerialReach, Ball, BlockContact, CONTROL_DISTANCE, PlayerReach,
+    AerialReach, Ball, BlockContact, CONTROL_DISTANCE, GRAVITY_PER_TICK, PlayerReach,
 };
-use crate::r#match::engine::goal::GOAL_WIDTH;
+use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
@@ -240,7 +240,20 @@ impl Ball {
                 IN_WINDOW.fetch_add(1, Ordering::Relaxed);
                 PERP_SUM_X100.fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
             }
-            if perp_dist > BLOCK_CORRIDOR {
+            // How wide he covers depends on how high the ball is when it
+            // reaches him. A slide or a stretched leg takes a ball at his
+            // feet from two metres across; at his chest or his head only
+            // the body is in the way. One corridor at every height let any
+            // of the seven defenders a corner packs into the box lunge
+            // across a header, and three in ten were blocked.
+            let reach_ticks = projection / ball_velocity_2d;
+            let height_there = (self.position.z + self.velocity.z * reach_ticks
+                - 0.5 * GRAVITY_PER_TICK * reach_ticks * reach_ticks)
+                .max(0.0);
+            let corridor = BLOCK_CORRIDOR
+                * (1.0 - Self::AIRBORNE_NARROWING * height_there / Self::MAX_BLOCK_HEIGHT)
+                    .clamp(1.0 - Self::AIRBORNE_NARROWING, 1.0);
+            if perp_dist > corridor {
                 #[cfg(feature = "match-logs")]
                 OUTSIDE_CORRIDOR.fetch_add(1, Ordering::Relaxed);
                 continue;
@@ -279,17 +292,19 @@ impl Ball {
             // than before (0.5 from center → basically full chance;
             // 1.0 from edge → 60% chance) so wings-of-corridor still
             // produce blocks at meaningful rates.
-            let perp_factor = 1.0 - (perp_dist / BLOCK_CORRIDOR) * 0.5;
+            let perp_factor = 1.0 - (perp_dist / corridor) * 0.5;
             // Fast shots are harder to get in front of — but reaction
             // reflexes matter too. Elite defender reads the shape and
             // steps a tick earlier.
             let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.10);
 
-            // Base multiplier 0.55 (was 0.35) — elite defenders
-            // (skill_factor ≈ 0.85) at a good angle now block at
-            // 30-40% chance, matching the real "closed-down striker
-            // gets the ball blocked" rate.
-            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.95;
+            // At 0.95 the four factors above compounded to ~27% for an
+            // ordinary defender standing in the way, and the engine
+            // blocked 12% of shots against a real 18-22%. 2.0 measures
+            // ~18% (300 matches at L14) now that the corridor narrows for
+            // a ball in the air; without that narrowing the same rate
+            // blocked three set-piece headers in ten.
+            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 2.0;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -353,6 +368,11 @@ impl Ball {
         }
     }
 
+    /// How much of the blocking corridor a ball at standing height loses
+    /// against one along the deck: 16u (2 m) for a slide at his feet, 5u
+    /// (0.6 m, the width of a body) for one at his head.
+    const AIRBORNE_NARROWING: f32 = 0.7;
+
     /// How close the blocker has to be for the contact to be his. 16u is
     /// 2 m — the same [`BLOCK_CORRIDOR`](Self::BLOCK_REACH) the candidate
     /// search calls "a committed lunge or a slide rather than a standing
@@ -381,6 +401,18 @@ impl Ball {
     ///
     /// `outcome_roll` was drawn when the block was won — see
     /// [`ShotTarget::blocked_by`] for why it is carried rather than redrawn.
+    /// Heights at which a blocked shot meets an arm, in metres.
+    const ARM_LOW: f32 = 0.9;
+    const ARM_HIGH: f32 = 1.9;
+
+    /// Chance a block at `height` is made with an arm, for a blocker with
+    /// this `decisions` (1..20).
+    pub(crate) fn handball_chance(height: f32, decisions: f32) -> f32 {
+        let decisions = (decisions / 20.0).clamp(0.0, 1.0);
+        let at_arm_height = (Self::ARM_LOW..=Self::ARM_HIGH).contains(&height);
+        (if at_arm_height { 0.06 } else { 0.01 }) * (1.4 - 0.8 * decisions)
+    }
+
     fn resolve_block(
         &mut self,
         blocker_id: u32,
@@ -416,6 +448,18 @@ impl Ball {
         let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
         let technique = (blocker.skills.technical.technique / 20.0).clamp(0.0, 1.0);
         let ball_speed_low_bonus = if ball_velocity_2d < 2.0 { 0.06 } else { 0.0 };
+
+        // The ball meets him at arm height with an arm out — handball,
+        // whatever happens to the ball. A man who reads the moment keeps
+        // his arms in.
+        let arm_out = Self::handball_chance(self.position.z, blocker.skills.mental.decisions);
+        if context.rng.unit_f32() < arm_out {
+            let goal_bound = self.cached_shot_target.is_some_and(|target| {
+                (target.goal_line_y - self.field_height * 0.5).abs() < GOAL_WIDTH
+                    && target.goal_line_z < GOAL_HEIGHT
+            });
+            events.add_ball_event(BallEvent::Handball(blocker_id, goal_bound));
+        }
         // Taking the ball cleanly off a block means having it at your
         // feet, so it is only available to a defender the ball actually
         // reached — see the position note below. Blocking at a stretch
@@ -526,7 +570,6 @@ impl Ball {
         self.pass_target_player_id = None;
         self.cached_shot_target = None;
         self.record_touch(blocker_id, blocker_team, tick, false);
-        self.offside_snapshot = None;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         // Dedicated Blocked event so the block credit can't leak into a
         // separate Intercepted that happens to share the same tick — the

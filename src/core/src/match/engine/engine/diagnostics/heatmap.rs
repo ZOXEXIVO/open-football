@@ -51,6 +51,7 @@
 
 use crate::PlayerPositionType;
 use crate::r#match::engine::engine::*;
+use crate::r#match::engine::result::PlayingTime;
 use nalgebra::Vector3;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -108,6 +109,33 @@ const MAX_PER_SIDE: usize = 11;
 static GRIDS: [AtomicU64; POSITIONS * PHASES * CELLS] =
     [const { AtomicU64::new(0) }; POSITIONS * PHASES * CELLS];
 static BALL: [AtomicU64; CELLS] = [const { AtomicU64::new(0) }; CELLS];
+/// The ball in play only, which the map above is not: instants, those
+/// within [`TOUCHLINE_M`] of a touchline, and the attacking third of the
+/// side on the ball split into three equal lanes — the frame "attack
+/// sides" figures are quoted in.
+static LIVE: AtomicU64 = AtomicU64::new(0);
+static LIVE_NEAR_TOUCHLINE: AtomicU64 = AtomicU64::new(0);
+static ATTACK_LANES: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+/// …who has it there, by position group (goalkeeper, defender,
+/// midfielder, forward) and lane…
+static ATTACK_HELD: [[AtomicU64; 3]; 4] = [const { [const { AtomicU64::new(0) }; 3] }; 4];
+/// …and how it got there: the lane it crossed into the attacking third
+/// in, carried (the same man had it either side of the line) or played.
+static ATTACK_ENTRIES: [[AtomicU64; 3]; 2] = [const { [const { AtomicU64::new(0) }; 3] }; 2];
+/// Spells on the ball in the opponents' box by how they ended — a shot,
+/// the ball lost, the ball taken or played back out — and the ticks they
+/// lasted.
+static BOX_SPELLS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+static BOX_SPELL_TICKS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+thread_local! {
+    /// The previous live sample of this match: the side on the ball, its
+    /// depth in that side's frame, and who had it.
+    static PREVIOUS: std::cell::Cell<Option<(PlayerSide, f32, Option<u32>)>> =
+        const { std::cell::Cell::new(None) };
+    /// The box spell running in this match: whose, and from which tick.
+    static BOX_SPELL: std::cell::Cell<Option<(PlayerSide, u64)>> =
+        const { std::cell::Cell::new(None) };
+}
 
 /// The window index of the last sample taken, compared with `swap` so a
 /// new match — whose clock restarts at zero — always takes its first
@@ -297,6 +325,16 @@ pub struct HeatReport {
     pub shape: [ShapeHeat; PHASES],
     /// Side-instants spent in each [`GamePhase`], by `as usize` order.
     pub game_phase: [u64; GAME_PHASES],
+    pub live: u64,
+    pub live_near_touchline: u64,
+    pub attack_lanes: [u64; 3],
+    pub attack_held: [[u64; 3]; 4],
+    /// Carried, then played.
+    pub attack_entries: [[u64; 3]; 2],
+    /// Box spells ended by a shot, a loss and the ball leaving the area,
+    /// and the ticks each kind lasted.
+    pub box_spells: [u64; 3],
+    pub box_spell_ticks: [u64; 3],
 }
 
 pub struct HeatMapCensus;
@@ -347,7 +385,17 @@ impl HeatMapCensus {
         for slot in GRIDS.iter() {
             slot.store(0, Ordering::Relaxed);
         }
-        for slot in BALL.iter() {
+        for slot in BALL
+            .iter()
+            .chain(ATTACK_LANES.iter())
+            .chain(BOX_SPELLS.iter())
+            .chain(BOX_SPELL_TICKS.iter())
+        {
+            slot.store(0, Ordering::Relaxed);
+        }
+        LIVE.store(0, Ordering::Relaxed);
+        LIVE_NEAR_TOUCHLINE.store(0, Ordering::Relaxed);
+        for slot in ATTACK_HELD.iter().chain(ATTACK_ENTRIES.iter()).flatten() {
             slot.store(0, Ordering::Relaxed);
         }
         for acc in POS.iter() {
@@ -424,6 +472,17 @@ impl HeatMapCensus {
             ball: BALL.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
             shape,
             game_phase: std::array::from_fn(|i| PHASE_TICKS[i].load(Ordering::Relaxed)),
+            live: LIVE.load(Ordering::Relaxed),
+            live_near_touchline: LIVE_NEAR_TOUCHLINE.load(Ordering::Relaxed),
+            attack_lanes: std::array::from_fn(|i| ATTACK_LANES[i].load(Ordering::Relaxed)),
+            attack_held: std::array::from_fn(|g| {
+                std::array::from_fn(|l| ATTACK_HELD[g][l].load(Ordering::Relaxed))
+            }),
+            attack_entries: std::array::from_fn(|m| {
+                std::array::from_fn(|l| ATTACK_ENTRIES[m][l].load(Ordering::Relaxed))
+            }),
+            box_spells: std::array::from_fn(|i| BOX_SPELLS[i].load(Ordering::Relaxed)),
+            box_spell_ticks: std::array::from_fn(|i| BOX_SPELL_TICKS[i].load(Ordering::Relaxed)),
         }
     }
 }
@@ -461,6 +520,76 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let (bx, by) = HeatMapCensus::fold(ball, side, w, h);
             BALL[HeatMapCensus::cell(bx, by)].fetch_add(1, Ordering::Relaxed);
         }
+        if field.ball.playing_time(context.current_tick()) == PlayingTime::Live {
+            LIVE.fetch_add(1, Ordering::Relaxed);
+            let (_, y) = HeatMapCensus::fold(ball, PlayerSide::Left, w, h);
+            if y < TOUCHLINE_M || y > PITCH_WIDTH_M - TOUCHLINE_M {
+                LIVE_NEAR_TOUCHLINE.fetch_add(1, Ordering::Relaxed);
+            }
+            let attacking = field
+                .ball
+                .current_owner
+                .or(field.ball.previous_owner)
+                .and_then(|id| field.get_player(id))
+                .and_then(|p| p.side);
+            let owner = field.ball.current_owner;
+            if let Some(side) = attacking {
+                let (x, y) = HeatMapCensus::fold(ball, side, w, h);
+                let final_third = PITCH_LENGTH_M * 2.0 / 3.0;
+                let lane = ((y / (PITCH_WIDTH_M / 3.0)) as usize).min(2);
+                if x >= final_third {
+                    ATTACK_LANES[lane].fetch_add(1, Ordering::Relaxed);
+                    if let Some(holder) = owner.and_then(|id| field.get_player(id)) {
+                        let group =
+                            holder.tactical_position.current_position.position_group() as usize;
+                        ATTACK_HELD[group.min(3)][lane].fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                if let Some((was_side, was_x, was_owner)) = PREVIOUS.with(|c| c.get())
+                    && was_side == side
+                    && was_x < final_third
+                    && x >= final_third
+                {
+                    let carried = owner.is_some() && owner == was_owner;
+                    ATTACK_ENTRIES[if carried { 0 } else { 1 }][lane]
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                PREVIOUS.with(|c| c.set(Some((side, x, owner))));
+                // A spell on the ball in the box, from the first instant one
+                // of the side's men has it there to the shot, the loss or
+                // the ball leaving the area: what the attacks that get
+                // there come to.
+                let in_box = x >= PITCH_LENGTH_M - BOX_DEPTH_M
+                    && (y - PITCH_WIDTH_M * 0.5).abs() <= BOX_HALF_WIDTH_M;
+                let holder_side = owner
+                    .and_then(|id| field.get_player(id))
+                    .and_then(|p| p.side);
+                let shot = field.ball.cached_shot_target.is_some();
+                let tick = context.current_tick();
+                BOX_SPELL.with(|spell| {
+                    if let Some((spell_side, start)) = spell.get() {
+                        let end = if shot && spell_side == side {
+                            Some(0)
+                        } else if holder_side.is_some_and(|h| h != spell_side) {
+                            Some(1)
+                        } else if spell_side == side && !in_box && holder_side == Some(side) {
+                            Some(2)
+                        } else {
+                            None
+                        };
+                        if let Some(end) = end {
+                            BOX_SPELLS[end].fetch_add(1, Ordering::Relaxed);
+                            BOX_SPELL_TICKS[end]
+                                .fetch_add(tick.saturating_sub(start), Ordering::Relaxed);
+                            spell.set(None);
+                        }
+                    }
+                    if spell.get().is_none() && in_box && holder_side == Some(side) && !shot {
+                        spell.set(Some((side, tick)));
+                    }
+                });
+            }
+        }
 
         // Per-side shape, gathered on the same walk so the outfielders are
         // only read once. Frame 0 is the side attacking right this half.
@@ -474,7 +603,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut team_of_frame = [None::<u32>; 2];
 
         for p in field.players.iter() {
-            if p.is_sent_off {
+            if p.off_pitch {
                 continue;
             }
             let Some(side) = p.side else { continue };

@@ -117,8 +117,9 @@ impl StateProcessingHandler for MidfielderWalkingState {
             ));
         }
 
-        // Midfielders shouldn't walk for long — get back into the action
-        if ctx.in_state_time > 20 {
+        // Too far from his slot to walk back to it in time: run.
+        const SLOT_DRIFT: f32 = 40.0;
+        if ctx.team().distance_from_anchor() > SLOT_DRIFT || ctx.in_state_time > 60 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

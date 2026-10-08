@@ -26,6 +26,8 @@ pub(in crate::club::core) struct SquadDecision {
     /// all read it. Meaningless on a transfer decision, where the i18n
     /// `reason` is the whole story.
     pub purpose: LoanOutReason,
+    /// The band the loan is meant to put him at, when the route has a view.
+    pub band_target: Option<f32>,
 }
 
 impl SquadDecision {
@@ -53,6 +55,7 @@ impl SquadDecision {
             player_id,
             reason,
             purpose: LoanOutReason::Surplus,
+            band_target: None,
         }
     }
 
@@ -68,7 +71,13 @@ impl SquadDecision {
             player_id,
             reason,
             purpose,
+            band_target: None,
         }
+    }
+
+    pub(in crate::club::core) fn aimed_at(mut self, band_target: Option<f32>) -> Self {
+        self.band_target = band_target;
+        self
     }
 }
 
@@ -137,7 +146,10 @@ impl Club {
             // The pathway owns the candidate. Every loan route dispatches
             // here with its real purpose, so nothing downstream has to
             // guess why the club is lending him out.
-            self.on_pathway_loan_staged(player_id, decision.purpose, date);
+            match decision.band_target {
+                Some(band) => self.on_pathway_loan_staged_at(player_id, decision.purpose, band, date),
+                None => self.on_pathway_loan_staged(player_id, decision.purpose, date),
+            }
             if let Some(candidate) = self
                 .transfer_plan
                 .loan_out_candidates

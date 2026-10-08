@@ -40,13 +40,10 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
             ));
         }
 
-        // Nobody in throwing range. A keeper doesn't stand holding the
-        // ball indefinitely (and the referee wouldn't let them) — switch
-        // to booting it clear. Mirrors the Distributing timeout so no
-        // release path can stall with the ball in hand.
-        if ctx.in_state_time > 20 {
+        // Nobody has come free in throwing range in the time he had: kick it.
+        if !KeeperRelease::may_keep_looking(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Clearing,
+                GoalkeeperState::Kicking,
             ));
         }
 

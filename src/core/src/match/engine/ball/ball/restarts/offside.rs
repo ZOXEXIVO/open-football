@@ -1,32 +1,67 @@
 use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::PassOriginRestart;
 
-/// Snapshot of the offside-relevant geometry at the moment a pass is
-/// kicked. Stored on the ball for the duration of an in-flight pass so
-/// the offside check can fire on receiver involvement (touch / claim /
-/// active challenge) instead of at pass start.
+/// **Who was in an offside position when a team-mate last played the
+/// ball.**
+///
+/// Taken at every pass and shot and kept until somebody deliberately plays
+/// the ball again — a deflection, a save or the woodwork does not end it —
+/// so whichever of them is first involved is flagged, whether the ball was
+/// meant for him or not.
 #[derive(Debug, Clone, Copy)]
 pub struct OffsideSnapshot {
     pub origin: PassOriginRestart,
     pub passer_id: u32,
     pub passer_side: PlayerSide,
-    pub receiver_id: u32,
-    pub ball_x_at_kick: f32,
-    pub second_last_defender_x: f32,
-    pub receiver_x_at_kick: f32,
-    pub receiver_y_at_kick: f32,
+    offside: [u32; Self::MAX_ATTACKERS],
+    count: u8,
     pub set_tick: u64,
 }
 
 impl OffsideSnapshot {
-    /// Decide whether the snapshot represents an offside position.
-    pub fn is_offside(&self) -> bool {
-        OffsideLine::is_beyond(
-            self.passer_side,
-            self.receiver_x_at_kick,
-            self.ball_x_at_kick,
-            self.second_last_defender_x,
-        )
+    const MAX_ATTACKERS: usize = 10;
+
+    /// The snapshot at a kick from `ball_x` by a side attacking from
+    /// `passer_side`, against the defending line `line_x`, with the
+    /// attackers given as `(id, x)`. `None` when nobody is offside.
+    pub fn at_kick(
+        origin: PassOriginRestart,
+        passer_id: u32,
+        passer_side: PlayerSide,
+        ball_x: f32,
+        line_x: f32,
+        halfway_x: f32,
+        attackers: impl Iterator<Item = (u32, f32)>,
+        tick: u64,
+    ) -> Option<Self> {
+        let mut snap = Self {
+            origin,
+            passer_id,
+            passer_side,
+            offside: [0; Self::MAX_ATTACKERS],
+            count: 0,
+            set_tick: tick,
+        };
+        for (id, x) in attackers {
+            let in_opponent_half = match passer_side {
+                PlayerSide::Left => x > halfway_x,
+                PlayerSide::Right => x < halfway_x,
+            };
+            if id != passer_id
+                && in_opponent_half
+                && OffsideLine::is_beyond(passer_side, x, ball_x, line_x)
+                && (snap.count as usize) < Self::MAX_ATTACKERS
+            {
+                snap.offside[snap.count as usize] = id;
+                snap.count += 1;
+            }
+        }
+        (snap.count > 0).then_some(snap)
+    }
+
+    /// Was `player_id` offside when the ball was played?
+    pub fn flags(&self, player_id: u32) -> bool {
+        self.offside[..self.count as usize].contains(&player_id)
     }
 }
 
@@ -91,43 +126,57 @@ impl OffsideLine {
     }
 }
 
-#[allow(dead_code, unused_imports)]
+#[cfg(test)]
 mod offside_snapshot_tests {
     use super::*;
 
-    fn snap_left(receiver_x: f32, ball_x: f32, second_last: f32) -> OffsideSnapshot {
-        OffsideSnapshot {
-            origin: PassOriginRestart::OpenPlay,
-            passer_id: 1,
-            passer_side: PlayerSide::Left,
-            receiver_id: 2,
-            ball_x_at_kick: ball_x,
-            second_last_defender_x: second_last,
-            receiver_x_at_kick: receiver_x,
-            receiver_y_at_kick: 200.0,
-            set_tick: 0,
-        }
+    const HALFWAY: f32 = 420.0;
+
+    fn kick_left(ball_x: f32, line_x: f32, attackers: &[(u32, f32)]) -> Option<OffsideSnapshot> {
+        OffsideSnapshot::at_kick(
+            PassOriginRestart::OpenPlay,
+            1,
+            PlayerSide::Left,
+            ball_x,
+            line_x,
+            HALFWAY,
+            attackers.iter().copied(),
+            0,
+        )
     }
 
     #[test]
     fn left_attacker_beyond_second_last_is_offside() {
-        // Receiver ahead of ball AND past the second-last defender.
-        let snap = snap_left(700.0, 600.0, 680.0);
-        assert!(snap.is_offside());
+        let snap = kick_left(600.0, 680.0, &[(2, 700.0)]).expect("one man offside");
+        assert!(snap.flags(2));
     }
 
     #[test]
     fn left_attacker_behind_ball_not_offside() {
-        // Receiver is behind the ball — offside cannot occur.
-        let snap = snap_left(500.0, 600.0, 680.0);
-        assert!(!snap.is_offside());
+        assert!(kick_left(600.0, 680.0, &[(2, 500.0)]).is_none());
     }
 
     #[test]
     fn left_attacker_level_with_defender_not_offside() {
-        // Within tolerance — onside.
-        let snap = snap_left(681.0, 600.0, 680.0);
-        assert!(!snap.is_offside());
+        assert!(kick_left(600.0, 680.0, &[(2, 681.0)]).is_none());
+    }
+
+    #[test]
+    fn every_attacker_beyond_the_line_is_recorded() {
+        let snap = kick_left(600.0, 680.0, &[(2, 700.0), (3, 650.0), (4, 720.0)]).unwrap();
+        assert!(snap.flags(2));
+        assert!(!snap.flags(3));
+        assert!(snap.flags(4));
+    }
+
+    #[test]
+    fn nobody_in_his_own_half_is_offside() {
+        assert!(kick_left(200.0, 300.0, &[(2, 400.0)]).is_none());
+    }
+
+    #[test]
+    fn the_passer_is_never_his_own_offside_man() {
+        assert!(kick_left(600.0, 680.0, &[(1, 700.0)]).is_none());
     }
 
     #[test]
@@ -136,6 +185,6 @@ mod offside_snapshot_tests {
         assert!(PassOriginRestart::Corner.is_offside_exempt());
         assert!(PassOriginRestart::ThrowIn.is_offside_exempt());
         assert!(!PassOriginRestart::OpenPlay.is_offside_exempt());
-        assert!(!PassOriginRestart::FreeKick.is_offside_exempt());
+        assert!(!PassOriginRestart::IndirectFreeKick.is_offside_exempt());
     }
 }

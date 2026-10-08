@@ -32,8 +32,8 @@ pub mod tick;
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
 pub use contest::{
-    BlockContact, ContactInPlace, PassChainEntry, PlayerReach, PossessionSource, block, contact,
-    interception, ownership, possession, reach, save,
+    BlockContact, ContactInPlace, PassChainEntry, PassReach, PlayerReach, PossessionSource, block,
+    contact, interception, ownership, possession, reach, save,
 };
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics
@@ -45,8 +45,9 @@ pub use flight::{
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub use restarts::{
-    AwaitedRestart, CornerWalk, DeadBall, FoulWalk, GoalKickRunUp, OffsideLine, OffsideSnapshot,
-    PassOriginRestart, RunUpPhase, ThrowIn, awaited, offside, stall,
+    AwaitedRestart, CornerWalk, DeadBall, FoulWalk, GoalKickRunUp, GoalOrigin, OffsideLine,
+    OffsideSnapshot, PassOriginRestart, PhaseOrigin, RestartHold, RunUpPhase, ThrowIn, awaited,
+    offside, stall,
 };
 // The woodwork's own per-tick ball trace, and the whole-tick relocation
 // census. `flight_diag` below only sees `Ball::update`; `teleport` sees
@@ -58,9 +59,11 @@ pub use diagnostics::{
 };
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
+use crate::r#match::engine::officiating::restart_shape::RestartStation;
 use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::player::strategies::passing::CrossType;
+use crate::r#match::engine::result::{DeadTime, PlayingTime};
 use crate::r#match::{MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
@@ -189,6 +192,7 @@ pub struct Ball {
     pub pending_pass_passer: Option<u32>,
     pub pending_pass_set_tick: u64,
     pub recent_passers: VecDeque<PassChainEntry>,
+    pub pass_reach: PassReach,
     /// How `current_owner` came by the ball. See [`PossessionSource`].
     pub possession_source: PossessionSource,
     /// Who `possession_source` describes, so a repeat event for the
@@ -226,6 +230,9 @@ pub struct Ball {
     /// read happens where the defender sees the pass, the contact has to
     /// happen where his body is.
     pub pass_blocked_by: Option<(u32, f32)>,
+    /// The lofted delivery in flight has had its aerial duel — see
+    /// [`contest::aerial_duel`]. Reset when the ball is next struck.
+    pub aerial_duel_resolved: bool,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -269,7 +276,7 @@ pub struct Ball {
     /// Same reason as [`Self::pending_set_piece_teleport`]: the ball can
     /// only mutate itself, and a station lives on the player. Drained into
     /// `MatchPlayer::set_piece_station` by the engine, which is what
-    /// `CornerHold` steers off — see [`AwaitedRestart::carrying`] for why
+    /// `SetPieceHold` steers off — see [`AwaitedRestart::carrying`] for why
     /// nothing else can move him.
     pub pending_restart_station: Option<(u32, Vector3<f32>)>,
     /// The corner set-up: where all twenty other players stand while the
@@ -288,9 +295,12 @@ pub struct Ball {
     /// waiting for its taker to fetch the ball.** That wait — a fetch and
     /// a carry, several seconds of it — is the stoppage this comment says
     /// the sim does not have, so both sides now WALK into the shape under
-    /// `CornerHold` and the positions are no longer written. See
+    /// `SetPieceHold` and the positions are no longer written. See
     /// `TickEngine::apply_pending_set_piece_teleport`.
     pub pending_corner_teleports: Vec<CornerStation>,
+    /// Stations for the free kick, penalty or throw-in just awarded — see
+    /// `RestartShape` — applied to the players with the corner's.
+    pub pending_restart_stations: Vec<RestartStation>,
     /// The corner shape currently pinned on the players, if any — when it
     /// went up and who is taking the kick. `None` on every tick that is
     /// not a corner, which is nearly all of them, so the per-tick expiry
@@ -305,28 +315,12 @@ pub struct Ball {
     /// corner** before the deadline landed, against a corner that is over
     /// in one or two.
     pub corner_shape: Option<CornerShapeHold>,
-    /// Fire-once guard for the discrete corner aerial contest. A played-out
-    /// lofted corner can't thread the congested box to a specific runner, so
-    /// once the cross is struck the engine resolves a single skill-weighted
-    /// aerial contest (attacking headers vs the defending line + GK command)
-    /// and, if an attacker wins, drops the ball on their head to be headed
-    /// on goal. False = armed (a corner has been awarded, not yet resolved);
-    /// true = nothing to resolve.
-    pub corner_contest_resolved: bool,
-    /// Corner routine picked by `pick_corner_routine` at corner setup.
-    /// Lets the corner aerial-contest in `resolve_corner_contest` and
-    /// downstream xG accounting know whether the delivery is targeting
-    /// the near post, far post, penalty spot, or short. Cleared after
-    /// the corner resolves. `None` whenever a corner isn't pending.
+    /// Corner routine picked by `pick_corner_routine` at corner setup: the
+    /// delivery the taker plays (near post, penalty spot, far post, short
+    /// or a cutback), and what the aerial contest records against it.
     pub pending_corner_routine: Option<CornerRoutine>,
-    /// The corner taker's `set_piece_delivery` composite (0..1), stamped
-    /// when the corner is awarded. `resolve_corner_contest` weighs the
-    /// aerial contest by it, so a specialist's whipped ball genuinely
-    /// finds a head more often than a full-back's hopeful clip. 0.5 —
-    /// an ordinary delivery — whenever no corner is pending.
-    pub pending_corner_delivery: f32,
-    /// Fire-once guard for the OPEN-PLAY cross aerial contest, the
-    /// sibling of `corner_contest_resolved`. A lofted cross is aimed at a
+    /// Fire-once guard for the aerial contest. A lofted cross or corner is
+    /// aimed at a
     /// patch of the box, not at a pair of feet, so it cannot be settled by
     /// whichever player's state machine happens to run first — the engine
     /// resolves one skill-weighted contest (best attacking header vs the
@@ -411,6 +405,9 @@ pub struct Ball {
     /// standing man. Measured: ~86 saves a match, of which only 8.4 put
     /// him in `Diving` and `Goalkeeper: Diving` sat below 0.25% of ticks.
     pub pending_save_reach: f32,
+    /// The staged save kept out the spot-kick itself, untouched since the
+    /// taker struck it.
+    pub pending_save_spot_kick: bool,
 
     /// Which KIND of save it was, as a `save_accounting_stats` site index
     /// (0 = parry, 1 = catch). Consumed alongside `pending_save_credit`.
@@ -446,6 +443,10 @@ pub struct Ball {
     /// Read by the delayed-offside resolver. Resets to OpenPlay on any
     /// non-restart pass or once the pass-window expires.
     pub pass_origin_restart: PassOriginRestart,
+    /// The set-piece phase play is still inside, if any — see
+    /// [`PhaseOrigin`]. Opened when a restart is taken, closed by
+    /// [`Ball::record_touch`] once the defence has the ball.
+    pub phase_origin: Option<PhaseOrigin>,
     /// **The man who took the throw-in that is in progress**, from the
     /// moment the restart is taken until anybody else plays the ball.
     ///
@@ -477,6 +478,14 @@ pub struct Ball {
     pub kickoff_taker: Option<u32>,
     /// …and that team-mate, who is who the kick-off is played to.
     pub kickoff_partner: Option<u32>,
+    /// **The man standing over a free kick or a penalty**, from the moment
+    /// he is handed it until it leaves his feet. Like the kick-off taker he
+    /// was an ordinary carrier under his ordinary state machine, and a free
+    /// kick he was not going to shoot was walked away from the mark rather
+    /// than played. See [`SetPieceKick`].
+    ///
+    /// [`SetPieceKick`]: crate::r#match::common_states::SetPieceKick
+    pub set_piece_kicker: Option<u32>,
     /// Where and when the throw-in in progress was taken from, so the
     /// census can say how far it travelled and how long he held it.
     #[cfg(feature = "match-logs")]
@@ -487,6 +496,9 @@ pub struct Ball {
     /// team-mate from one an opponent read.
     #[cfg(feature = "match-logs")]
     pub throw_in_team: Option<u32>,
+    /// The team-mates stationed to show short for it.
+    #[cfg(feature = "match-logs")]
+    pub throw_in_options: Vec<u32>,
     /// Set at pass-kick. Lives for the pass window (~220 ticks) and the
     /// offside resolver fires the call only when the receiver becomes
     /// active (touches the ball or claims). Cleared on resolution,
@@ -537,6 +549,8 @@ pub struct Ball {
     pub last_completed_pass_passer_id: Option<u32>,
     pub last_completed_pass_receiver_id: Option<u32>,
     pub last_completed_pass_tick: u64,
+    /// That pass was pulled back from the byline.
+    pub last_completed_pass_cutback: bool,
 
     /// Opponents that were within the pressing radius of the passer at
     /// pass-emit time. Read by the interception handler to credit a
@@ -677,6 +691,9 @@ pub struct Ball {
     /// `check_ball_ownership` just hands the ball to the best tackler
     /// within 5u whoever they are.
     pub held_in_hands: bool,
+    /// The tick the ball last went into somebody's hands — the start of
+    /// the referee's count.
+    pub hands_since_tick: u64,
 
     /// The last touch was a team-mate deliberately playing the ball with
     /// their feet (a pass or a throw-in), which is what arms the back-pass
@@ -795,6 +812,17 @@ pub struct ShotTarget {
     /// covers, and how long he had to get there, are both properties of
     /// the line from HERE to the goal. See `SaveModel::wedge`.
     pub struck_from: Vector3<f32>,
+    /// Where the keeper first sees it: the strike, unless a free-kick wall
+    /// hides the first of the flight. His reaction, his read and how set
+    /// he is all run from here.
+    pub seen_from: Vector3<f32>,
+}
+
+impl ShotTarget {
+    /// How much of the flight the keeper did not see, in units.
+    pub fn screened(&self) -> f32 {
+        (self.seen_from - self.struck_from).xy().norm()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -899,10 +927,12 @@ impl Ball {
             pending_pass_passer: None,
             pending_pass_set_tick: 0,
             recent_passers: VecDeque::with_capacity(5),
+            pass_reach: PassReach::default(),
             possession_source: PossessionSource::Unknown,
             possession_source_for: None,
             intercept_rolled: 0,
             pass_block_rolled: 0,
+            aerial_duel_resolved: false,
             pass_blocked_by: None,
             contested_claim_count: 0,
             unowned_ticks: 0,
@@ -917,10 +947,9 @@ impl Ball {
             goal_kick_long: false,
             pending_restart_station: None,
             pending_corner_teleports: Vec::new(),
+            pending_restart_stations: Vec::new(),
             corner_shape: None,
-            corner_contest_resolved: true,
             pending_corner_routine: None,
-            pending_corner_delivery: 0.5,
             cross_contest_resolved: true,
             pending_cross_type: None,
             aerial_contest_winner: None,
@@ -935,6 +964,7 @@ impl Ball {
             cached_shot_target: None,
             pending_save_credit: None,
             pending_save_reach: 0.0,
+            pending_save_spot_kick: false,
             pending_save_site: 1,
             last_touch_player_id: None,
             #[cfg(feature = "match-logs")]
@@ -944,15 +974,19 @@ impl Ball {
             last_touch_was_controlled: false,
             current_tick_cached: 0,
             pass_origin_restart: PassOriginRestart::OpenPlay,
+            phase_origin: None,
             throw_in_taker: None,
             kickoff_taker: None,
             kickoff_partner: None,
+            set_piece_kicker: None,
             #[cfg(feature = "match-logs")]
             throw_in_spot: Vector3::new(x, y, 0.0),
             #[cfg(feature = "match-logs")]
             throw_in_tick: 0,
             #[cfg(feature = "match-logs")]
             throw_in_team: None,
+            #[cfg(feature = "match-logs")]
+            throw_in_options: Vec::new(),
             offside_snapshot: None,
             pending_pass_origin: None,
             pending_pass_target: None,
@@ -962,6 +996,7 @@ impl Ball {
             last_completed_pass_passer_id: None,
             last_completed_pass_receiver_id: None,
             last_completed_pass_tick: 0,
+            last_completed_pass_cutback: false,
             pressers_at_pass: [0; 4],
             pressers_at_pass_count: 0,
             last_shot_xgot: 0.0,
@@ -991,6 +1026,7 @@ impl Ball {
             last_release_tick: 0,
             last_release_from_hands: false,
             held_in_hands: false,
+            hands_since_tick: 0,
             last_touch_was_deliberate_kick: false,
         }
     }
@@ -1014,6 +1050,7 @@ impl Ball {
         self.intercept_rolled = 0;
         self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
+        self.aerial_duel_resolved = false;
         // …and the kick-off is over the instant the taker lets go of it:
         // the restart IS that one touch.
         if self.kickoff_taker == Some(player_id) {
@@ -1117,6 +1154,7 @@ impl Ball {
         ownership::reception_diag::GATHERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.record_touch(keeper_id, team_id, tick, true);
         self.held_in_hands = true;
+        self.hands_since_tick = tick;
         self.last_release_from_hands = false;
     }
 
@@ -1322,6 +1360,7 @@ impl Ball {
                 released,
                 player_id == thrower,
                 team_id.is_some() && team_id == self.throw_in_team,
+                self.throw_in_options.contains(&player_id),
                 (self.position - self.throw_in_spot).magnitude(),
                 tick.saturating_sub(self.throw_in_tick),
                 self.held_in_hands,
@@ -1334,6 +1373,79 @@ impl Ball {
         if player_id != thrower {
             self.throw_in_taker = None;
         }
+    }
+
+    /// A penalty has been given and is not finished: still to be taken, or
+    /// struck and not yet touched by anybody else, gone out or gone in.
+    /// The laws extend a period for exactly this long. Bounded by the
+    /// set-piece phase's own ceiling, so a ball nobody ever touches again
+    /// cannot hold a period open.
+    pub fn penalty_in_progress(&self, tick: u64) -> bool {
+        match self.awaiting_restart {
+            Some(restart) => restart.origin == PassOriginRestart::Penalty,
+            None => self.phase_origin.is_some_and(|phase| {
+                phase.restart == PassOriginRestart::Penalty
+                    && phase.only_taker
+                    && tick.saturating_sub(phase.opened_tick) <= PhaseOrigin::MAX_TICKS
+            }),
+        }
+    }
+
+    /// A set piece awarded and not yet kicked: what it is, who takes it and
+    /// where it will be taken from, which for a corner is the arc rather
+    /// than wherever the ball ran out to. The ball is dead to everybody but
+    /// him until it leaves his foot, so the opponents stay off it through
+    /// his look up as well as the wait for him.
+    pub fn untaken_set_piece(&self) -> Option<(PassOriginRestart, u32, Vector3<f32>)> {
+        match self.awaiting_restart {
+            Some(restart) => restart.origin.keeps_opponents_off().then_some((
+                restart.origin,
+                restart.taker_id,
+                restart.take_from.unwrap_or(restart.spot),
+            )),
+            None => self
+                .set_piece_kicker
+                .map(|taker| (self.pass_origin_restart, taker, self.position)),
+        }
+    }
+
+    /// The restart the game is waiting on, if any. It is played when the
+    /// kick or the throw is made, not when the taker has it: the man
+    /// standing over a free kick and the thrower with the ball in his hands
+    /// are still restarting the game.
+    pub fn restart_in_progress(&self) -> Option<(PassOriginRestart, u32)> {
+        match self.awaiting_restart {
+            Some(restart) => Some((restart.origin, restart.taker_id)),
+            None => self
+                .set_piece_kicker
+                .map(|kicker| (self.pass_origin_restart, kicker))
+                .or_else(|| {
+                    self.throw_in_taker
+                        .filter(|thrower| self.current_owner == Some(*thrower))
+                        .map(|thrower| (PassOriginRestart::ThrowIn, thrower))
+                }),
+        }
+    }
+
+    /// Whether this tick is football, and if not, why the ball is dead.
+    pub fn playing_time(&self, tick: u64) -> PlayingTime {
+        match (self.awaiting_restart, self.restart_in_progress()) {
+            (Some(restart), _) => PlayingTime::Dead(restart.dead_time(tick)),
+            (None, Some(_)) => PlayingTime::Dead(DeadTime::Restart),
+            (None, None) => PlayingTime::Live,
+        }
+    }
+
+    /// Where a goal scored now is filed. An own goal is its own line
+    /// whatever phase it fell in; otherwise the open set-piece phase
+    /// decides, and no phase means open play.
+    pub fn goal_origin(&self, is_auto_goal: bool) -> GoalOrigin {
+        if is_auto_goal {
+            return GoalOrigin::OwnGoal;
+        }
+        self.phase_origin
+            .map(|phase| phase.goal_origin())
+            .unwrap_or_default()
     }
 
     /// Record a meaningful touch. Drives restart resolution. `controlled`
@@ -1381,6 +1493,13 @@ impl Ball {
         // touch this classifies — so asked afterwards, every delivered
         // throw reads as one its thrower never let go of.
         self.settle_throw_in(player_id, Some(team_id), tick);
+        if self
+            .phase_origin
+            .as_mut()
+            .is_some_and(|phase| !phase.note_touch(player_id, team_id, tick, controlled))
+        {
+            self.phase_origin = None;
+        }
         // …and the kick-off, on the same condition Law 8 states it: the
         // restart is over once the ball has been played, by him or by
         // anybody else. Without the second half of that the marker
@@ -1481,6 +1600,7 @@ impl Ball {
         self.throw_in_taker = None;
         self.kickoff_taker = None;
         self.kickoff_partner = None;
+        self.set_piece_kicker = None;
         self.last_touch_was_deliberate_kick = false;
         // …and the goal-kick ceremony, whichever leg it was on. A new dead
         // ball starts it from scratch.
@@ -1597,32 +1717,16 @@ impl Ball {
 }
 
 impl Ball {
-    /// Calculate where an aerial ball will land (when z reaches 0).
-    /// Uses projectile motion: z(t) = h + vz·t − ½g·t² = 0, solving for
-    /// the positive root. Ignores air drag — close enough for chase
-    /// positioning, and erring long is better than erring short.
-    ///
-    /// Units are ticks, not seconds: position integration is
-    /// `position += velocity` per tick (no dt scaling), while gravity
-    /// applies `velocity.z += -GRAVITY * 0.016` per tick. So the
-    /// effective per-tick² gravity is `9.81 * 0.016 ≈ 0.157`, and the
-    /// resulting `time_to_ground` comes out in ticks — which matches
-    /// the horizontal integration `x += vx` per tick.
+    /// Where an aerial ball will first come down within a man's reach —
+    /// see [`Ball::ballistic_landing`] — or where it is, for a ball on the
+    /// deck or at somebody's feet.
     pub fn calculate_landing_position(&self) -> Vector3<f32> {
         if self.position.z <= 0.1 || self.current_owner.is_some() {
             return self.position;
         }
 
-        const G_PER_TICK: f32 = GRAVITY_PER_TICK;
-        let vz = self.velocity.z;
-        let h = self.position.z;
-
-        // Positive root of ½g·t² − vz·t − h = 0
-        let discriminant = vz * vz + 2.0 * G_PER_TICK * h;
-        let time_to_ground = (vz + discriminant.sqrt()) / G_PER_TICK;
-
-        let landing_x = self.position.x + self.velocity.x * time_to_ground;
-        let landing_y = self.position.y + self.velocity.y * time_to_ground;
+        let landing = Self::ballistic_landing(self.position, self.velocity, self.spin);
+        let (landing_x, landing_y) = (landing.x, landing.y);
 
         // Clamped to the RUN-OFF, not to the pitch. Every chaser steers at
         // this point (it is copied into each player's tick view and read by
@@ -1710,6 +1814,7 @@ impl Ball {
         self.intercept_rolled = 0;
         self.pass_block_rolled = 0;
         self.pass_blocked_by = None;
+        self.aerial_duel_resolved = false;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         #[cfg(feature = "match-logs")]
@@ -1719,7 +1824,9 @@ impl Ball {
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;
         self.awaiting_restart = None;
+        self.phase_origin = None;
         self.pending_corner_teleports.clear();
+        self.pending_restart_stations.clear();
         self.owned_stuck_ticks = 0;
         self.owned_stuck_logged = false;
         self.stall_anchor_pos = self.position;
@@ -1760,10 +1867,12 @@ impl Ball {
         self.throw_in_taker = None;
         self.kickoff_taker = None;
         self.kickoff_partner = None;
+        self.set_piece_kicker = None;
         self.offside_snapshot = None;
         self.last_completed_pass_passer_id = None;
         self.last_completed_pass_receiver_id = None;
         self.last_completed_pass_tick = 0;
+        self.last_completed_pass_cutback = false;
         self.last_shot_struck_tick = 0;
         #[cfg(feature = "match-logs")]
         {

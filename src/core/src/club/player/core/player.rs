@@ -37,8 +37,8 @@ use crate::utils::DateUtils;
 use crate::{
     CompetitionStatistics, IndividualTrainingPlan, InternationalStatistics, NationalTeamLevel,
     Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
-    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerStatusType,
-    PlayerTrainingHistory, PlayerValueCalculator, Relations,
+    PlayerPositions, PlayerStatCompetitionKind, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatus, PlayerStatusType, PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
@@ -1697,6 +1697,39 @@ impl Player {
 
     pub fn is_on_loan(&self) -> bool {
         self.contract_loan.is_some()
+    }
+
+    /// Live appearances below which the season-end snapshot has already
+    /// frozen and reset the loan season, and the frozen row is the record.
+    const LIVE_LOAN_SEASON_APPS: u16 = 5;
+    /// Days his own ask to make a loan permanent still counts as recent.
+    const LOAN_PERMANENT_WISH_DAYS: u16 = 120;
+
+    /// Appearances in the loan season the borrower watched: the live season
+    /// while it runs, or the loan's league row once the season-end snapshot
+    /// has frozen it.
+    pub fn loan_season_appearances(&self) -> u16 {
+        let live = self.statistics.played + self.statistics.played_subs;
+        if live >= Self::LIVE_LOAN_SEASON_APPS {
+            return live;
+        }
+        self.statistics_history
+            .season_ledger
+            .iter()
+            .filter(|e| {
+                e.is_loan && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
+            })
+            .max_by_key(|e| (e.season_start_year, e.seq_id))
+            .map(|e| e.statistics.played + e.statistics.played_subs)
+            .unwrap_or(live)
+    }
+
+    /// He has asked, recently, to make his loan permanent.
+    pub fn wants_loan_made_permanent(&self) -> bool {
+        self.happiness.has_recent_event(
+            &HappinessEventType::WantsLoanMadePermanent,
+            Self::LOAN_PERMANENT_WISH_DAYS,
+        )
     }
 
     /// The club has decided he goes: transfer-listed (the contract flag or

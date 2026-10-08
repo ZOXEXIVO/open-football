@@ -1,9 +1,10 @@
 //! Time-wasting by a leading team late in the match: how long a restart
 //! gets dragged out, and the booking risk that accumulates.
 //!
-//! Pure helpers; no engine state mutation. Returned values are
-//! millisecond deltas / probabilities the caller folds into the existing
-//! stoppage-time and referee logic.
+//! The delay and booking odds are pure helpers; the ledger is the
+//! match's own record of what each side has wasted this period.
+
+use crate::r#match::engine::ball::ball::PassOriginRestart;
 
 /// The kind of restart being dragged out.
 #[derive(Debug, Clone, Copy)]
@@ -12,6 +13,60 @@ pub enum TimeWastingRestart {
     GoalKick,
     Substitution,
     FreeKick,
+    /// A keeper sitting on a ball he has in his hands.
+    KeeperHold,
+}
+
+impl TimeWastingRestart {
+    /// The restarts a side can drag out. A corner, a penalty and a drop
+    /// ball are not slowed down by the side taking them.
+    pub fn for_origin(origin: PassOriginRestart) -> Option<Self> {
+        match origin {
+            PassOriginRestart::ThrowIn => Some(TimeWastingRestart::ThrowIn),
+            PassOriginRestart::GoalKick => Some(TimeWastingRestart::GoalKick),
+            PassOriginRestart::DirectFreeKick | PassOriginRestart::IndirectFreeKick => {
+                Some(TimeWastingRestart::FreeKick)
+            }
+            PassOriginRestart::OpenPlay
+            | PassOriginRestart::Corner
+            | PassOriginRestart::Penalty
+            | PassOriginRestart::DropBall => None,
+        }
+    }
+}
+
+/// **What each side has wasted this period, and how often it has been
+/// booked for it.** The delay starts again each period; the bookings are
+/// the match's.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TimeWastingLedger {
+    delay_ms: [u64; 2],
+    offences: [u32; 2],
+}
+
+impl TimeWastingLedger {
+    fn slot(is_home: bool) -> usize {
+        if is_home { 0 } else { 1 }
+    }
+
+    /// Add a delay; the side's total this period.
+    pub fn note_delay(&mut self, is_home: bool, ms: u64) -> u64 {
+        let slot = Self::slot(is_home);
+        self.delay_ms[slot] += ms;
+        self.delay_ms[slot]
+    }
+
+    pub fn offences(&self, is_home: bool) -> u32 {
+        self.offences[Self::slot(is_home)]
+    }
+
+    pub fn note_offence(&mut self, is_home: bool) {
+        self.offences[Self::slot(is_home)] += 1;
+    }
+
+    pub fn reset_period(&mut self) {
+        self.delay_ms = [0; 2];
+    }
 }
 
 /// Time-wasting decisions, grouped as associated functions.
@@ -37,6 +92,7 @@ impl TimeWasting {
             TimeWastingRestart::GoalKick => 14_000.0, // 8–24s
             TimeWastingRestart::Substitution => 28_000.0, // 20–35s
             TimeWastingRestart::FreeKick => 6_000.0,
+            TimeWastingRestart::KeeperHold => 3_500.0,
         };
         (base_ms * scale) as u64
     }

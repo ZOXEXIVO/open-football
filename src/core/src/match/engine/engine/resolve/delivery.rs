@@ -1,20 +1,17 @@
-//! **Delivering a decided aerial contest** — the shared arm both the
-//! corner and the cross contest finish through, and the trajectory
-//! constants that price it.
+//! **Delivering a decided aerial contest** — the arm the aerial contest
+//! finishes through, for a cross and a corner alike.
 //!
-//! Both used to end with a straight write of `b.position`, which is the
-//! "ball teleports on corners" report. The duel still happens where it
-//! did; what changed is that its result now flies to the winner on a
-//! solved arc and is applied on arrival. The two contests pass different
-//! apex and drop-short values, and the difference is load-bearing — a
-//! midfielder's heading reach is 2.0u, which the corner's own 2.0u drop
-//! sat exactly on the boundary of.
+//! It used to end with a straight write of `b.position`, which is the
+//! "ball teleports on corners" report. The result now reaches the winner
+//! on the ball's own flight, or turned the last stride onto him, and is
+//! applied on arrival.
 
 use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
 use crate::r#match::engine::ball::ball::{
     AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection,
+    KICKABLE_DISTANCE,
 };
 use crate::r#match::engine::engine::*;
 use nalgebra::Vector3;
@@ -22,24 +19,10 @@ use nalgebra::Vector3;
 use std::sync::atomic::Ordering;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
-    /// Apex of a corner delivery, in metres. A normal in-swinger: 5 m up
-    /// puts about 1.7 s between the strike and the header, which is what
-    /// a real one takes and comfortably inside
-    /// [`CornerDeadline`](crate::r#match::engine::corner_shape::CornerDeadline) so the
-    /// set-piece shape holds for the whole flight.
-    pub(in crate::r#match::engine::engine) const CORNER_APEX: f32 = 5.0;
 
-    /// Apex of an open-play cross, in metres. Shorter than a corner
-    /// because it is played from further forward and has to beat a moving
-    /// line rather than a set one.
-    pub(in crate::r#match::engine::engine) const CROSS_APEX: f32 = 4.0;
-
-    /// How far short of the winner a corner is aimed, in units.
-    pub(in crate::r#match::engine::engine) const CORNER_DROP_BEHIND: f32 = 2.0;
-
-    /// The same for an open-play cross. 1.2u (15 cm) sits inside every
-    /// role's heading reach, including the midfielder's 2.0u, which the
-    /// corner's own 2.0u sits exactly on the boundary of.
+    /// How far short of the winner a cross is aimed, in units. 1.2u
+    /// (15 cm) sits inside every role's heading reach, including the
+    /// midfielder's 2.0u.
     pub(in crate::r#match::engine::engine) const CROSS_DROP_BEHIND: f32 = 1.2;
 
     /// Does this defensive header go BEHIND for a corner rather than
@@ -88,7 +71,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         attacked_goal: Vector3<f32>,
         previous_owner: Option<u32>,
         behind: f32,
-        apex: f32,
         intent: DeliveryIntent,
         force_heading: bool,
         source: usize,
@@ -96,9 +78,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Read only by the arming census.
         #[cfg(not(feature = "match-logs"))]
         let _ = source;
-        /// Head height, in metres. One tick above the intercept window,
-        /// which is what the corner path's own comment sized it at.
-        const HEADING_HEIGHT: f32 = 2.5;
         /// Ticks of slack past the solved flight before the delivery is
         /// abandoned. Half a second: the winner is running while the ball
         /// is in the air, so the arrival test has to tolerate him being a
@@ -113,10 +92,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         } else {
             Vector3::new(1.0, 0.0, 0.0)
         };
+        // He heads it where it reaches him: at head height, or lower if it
+        // is already coming in under that.
+        let head_height = (field.ball.position.z - 0.3).clamp(1.2, AerialReach::ATTACKED);
         let target = Vector3::new(
             winner_pos.x - dir.x * behind,
             winner_pos.y - dir.y * behind,
-            HEADING_HEIGHT,
+            head_height,
         );
         // The calibrated hang, unchanged: −0.02 m/tick walks the ball down
         // through the [1.4, 2.5] heading band over ~40 ticks, and 0.12
@@ -162,16 +144,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // ⚠ **A ball already in the heading band is not launched again.**
         //
-        // `ballistic_launch_arriving_at` solves the arc from where the ball
-        // is NOW, and its apex is measured over the BALL rather than over
-        // the ground. That is right for a contest resolved AT THE STRIKE —
-        // a corner, armed a tick after the taker hit it, climbing through
-        // 2 m with the winner twenty-seven metres away, where the solved
-        // arc IS the corner and turns the ball 6°. It is wrong for one
-        // resolved MID-FLIGHT. `resolve_cross_contest` fires on a ball
-        // already descending through [1.5, 2.9] m with the winner inside
-        // 4.3 m, and there the same call is a second launch on a ball
-        // nobody touched.
+        // The contest fires on a ball descending through [1.5, 2.9] m with
+        // the winner a stride and a jump from where it comes down, and a
+        // second launch there is a ball nobody touched taking off again.
         //
         // Measured over 200 matches before this existed, per arming:
         //
@@ -197,10 +172,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         } else {
             // Descending, and no higher than a man can head it: this
             // contest was resolved in mid-flight, not at a strike.
-            b.natural_drop(HEADING_HEIGHT)
+            b.natural_drop(AerialReach::ATTACKED)
                 .filter(|_| b.velocity.z <= 0.0 && b.position.z <= AerialReach::HIGHEST)
+                // …and only if it comes down on him. A man a stride off its
+                // line who has won it meets it; left on its own flight it
+                // dropped beside him and nobody headed it.
+                .filter(|(drop, _)| (drop - winner_pos).xy().norm() <= KICKABLE_DISTANCE)
         };
-        let launch = Ball::ballistic_launch_arriving_at(b.position, target, apex);
+        // Not lifted again: it carries on at about its own pace and drops
+        // the last of the way onto him, which is his stride to meet it.
+        let launch = Ball::ballistic_launch_arriving_at(b.position, target, 0.0);
 
         #[cfg(feature = "match-logs")]
         {
@@ -226,7 +207,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let peak = if kept.is_some() {
                 b.position.z
             } else {
-                b.position.z + apex
+                b.position.z
             };
             tc::TeleportCensus::note_delivery_arming(
                 source,
@@ -235,7 +216,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 b.position.z,
                 peak,
                 (target.x - b.position.x).hypot(target.y - b.position.y) * M_PER_U,
-                b.natural_drop(HEADING_HEIGHT).map(|(drop, _)| {
+                b.natural_drop(AerialReach::ATTACKED).map(|(drop, _)| {
                     (drop.x - winner_pos.x).hypot(drop.y - winner_pos.y) * M_PER_U
                 }),
                 kept.is_some(),
@@ -261,7 +242,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     winner_id,
                     target: aim,
                     outcome,
-                    arrival_height: HEADING_HEIGHT,
+                    arrival_height: head_height,
                     deadline_tick: b.current_tick_cached + ticks as u64 + GRACE_TICKS,
                     force_heading,
                 });
@@ -348,7 +329,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     }
 
     pub(in crate::r#match::engine::engine) fn heads_it_behind(
-        ball_pos: Vector3<f32>,
+        header_at: Vector3<f32>,
         attacked_goal: Vector3<f32>,
         field_width: f32,
         context: &mut MatchContext,
@@ -367,11 +348,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // The defender who wins that header is facing his own goal
         // with the ball whipped across him — heading it behind is the
         // NORMAL outcome under pressure at that depth, not a goal-line
-        // desperation. The gentler exponent puts ~14% at 12 m and ~6%
-        // at 16 m, which at the post-ordering-fix ~25-30 headed clears
-        // a match prices the hooked family at its real share.
+        // desperation. On the line he has no choice left, so the share
+        // there is all of them: ~29% at 12 m and ~10% at 16 m, which put
+        // 15% of the engine's ~18 headed clears a match behind (2.7 a
+        // match, 300 matches at L14) against the real ~3.5-4 above. At
+        // 0.50 it was 7%, half the share this curve was written for.
         // `OF_BEHIND_LINE` overrides the at-line share for titration.
-        let depth = (ball_pos.x - attacked_goal.x).abs();
+        let depth = (header_at.x - attacked_goal.x).abs();
         if depth > BEHIND_DEPTH || field_width <= 0.0 {
             return false;
         }
@@ -391,7 +374,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             std::env::var("OF_BEHIND_LINE")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0.50)
+                .unwrap_or(1.0)
         })
     }
 }

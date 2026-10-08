@@ -86,7 +86,7 @@ impl GoalPosition {
 pub fn can_take_kickoff(field: &MatchField, side: PlayerSide, id: u32) -> bool {
     field.players.iter().any(|p| {
         p.id == id
-            && !p.is_sent_off
+            && !p.off_pitch
             && p.side == Some(side)
             && p.tactical_position.current_position.position_group()
                 != PlayerFieldPositionGroup::Goalkeeper
@@ -112,7 +112,7 @@ pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide, preferred: Optio
             field
                 .players
                 .iter()
-                .filter(|p| p.side == Some(side) && !p.is_sent_off)
+                .filter(|p| p.side == Some(side) && !p.off_pitch)
                 .filter(|p| {
                     p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper

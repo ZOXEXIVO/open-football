@@ -7,6 +7,8 @@
 //! histories, id sequences), and [`PassportOffice`] stamps the
 //! nationality fields every market gate reads.
 
+mod assurance;
+mod football;
 mod identity;
 mod passports;
 mod seeder;

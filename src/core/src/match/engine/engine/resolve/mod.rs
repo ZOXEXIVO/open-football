@@ -8,18 +8,17 @@
 //!
 //! * [`set_piece`] — the pending restart teleport, and the corner shape's
 //!   station lifecycle from arming to sweep.
-//! * [`corner`] — the discrete corner aerial contest.
-//! * [`cross`] — the same for an open-play cross.
-//! * [`delivery`] — the arm both contests finish through: flying the ball
-//!   to the man who won it, or hooking it behind, plus the apex / drop
-//!   constants that separate a corner's trajectory from a cross's.
+//! * [`cross`] — the aerial contest for every lofted delivery, a corner's
+//!   included.
+//! * [`delivery`] — the arm the contest finishes through: flying the ball
+//!   to the man who won it, or hooking it behind, plus its apex / drop
+//!   constants.
 //! * [`save_credit`] — the keeper / shooter stat pair the physics save
 //!   left behind.
 //!
-//! Every number in here is calibration-critical: the corner win rate, the
-//! cross completion rate and the save credit are all tracked run to run.
+//! Every number in here is calibration-critical: the aerial win rate and
+//! the save credit are both tracked run to run.
 
-pub mod corner;
 pub mod cross;
 pub mod delivery;
 pub mod save_credit;

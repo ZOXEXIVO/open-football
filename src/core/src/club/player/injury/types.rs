@@ -1,3 +1,4 @@
+use crate::r#match::engine::player::injury::InjuryGrade;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -286,8 +287,62 @@ impl InjuryType {
         natural_fitness: f32,
         injury_proneness: u8,
     ) -> InjuryType {
-        let roll: f32 = rand::random::<f32>();
+        Self::match_injury_from_roll(
+            rand::random::<f32>(),
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        )
+    }
 
+    /// The injury a player carries out of a match in which the engine saw
+    /// him hurt: a hurt is a minor injury, a serious one is drawn from the
+    /// moderate band upward on the same curve as any other match injury,
+    /// and a knock he got up from is nothing at all.
+    pub fn from_match_severity(
+        severity: InjuryGrade,
+        minutes_played: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> Option<InjuryType> {
+        let roll: f32 = rand::random::<f32>();
+        let band = match severity {
+            InjuryGrade::Knock => return None,
+            InjuryGrade::Hurt => roll * Self::MINOR_BAND,
+            InjuryGrade::Serious => Self::MINOR_BAND + roll * (1.0 - Self::MINOR_BAND),
+        };
+        let injury = Self::match_injury_from_roll(
+            band,
+            minutes_played,
+            age,
+            condition_pct,
+            natural_fitness,
+            injury_proneness,
+        );
+        // The shift moves the bands, and a serious injury is never a
+        // bruise however young and fresh the man.
+        Some(if severity == InjuryGrade::Serious && injury.severity() == InjurySeverity::Minor {
+            InjuryType::HamstringStrain
+        } else {
+            injury
+        })
+    }
+
+    /// Upper bound of the minor band on the match-injury roll.
+    const MINOR_BAND: f32 = 0.45;
+
+    fn match_injury_from_roll(
+        roll: f32,
+        minutes_played: f32,
+        age: u8,
+        condition_pct: u32,
+        natural_fitness: f32,
+        injury_proneness: u8,
+    ) -> InjuryType {
         // Zero-centered continuous shift: veterans / gassed / low-NF /
         // glass-boned players skew severe, adolescents skew minor.
         let severity_modifier = InjurySeverityShift::for_match(
@@ -300,7 +355,7 @@ impl InjuryType {
 
         let adjusted_roll = roll + severity_modifier;
 
-        if adjusted_roll < 0.45 {
+        if adjusted_roll < Self::MINOR_BAND {
             // 45% minor
             match rand::random::<u8>() % 5 {
                 0 => InjuryType::Cramp,

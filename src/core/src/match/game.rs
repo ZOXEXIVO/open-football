@@ -1,6 +1,7 @@
 use super::engine::FootballEngine;
 use crate::MatchRuntime;
-use crate::r#match::{MatchResult, MatchSquad};
+use crate::r#match::engine::context::MatchEngineConfig;
+use crate::r#match::{FixtureContext, MatchResult, MatchSquad};
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -10,10 +11,9 @@ pub struct Match {
     league_slug: String,
     pub home_squad: MatchSquad,
     pub away_squad: MatchSquad,
-    pub is_friendly: bool,
-    /// Knockout-format match — if level after 90 min, play extra time;
-    /// if still level, resolve on penalties.
-    pub is_knockout: bool,
+    /// When, where and in what competition — and so its format, weather,
+    /// crowd and referee.
+    pub fixture: FixtureContext,
 }
 
 impl Match {
@@ -23,7 +23,7 @@ impl Match {
         league_slug: &str,
         home_squad: MatchSquad,
         away_squad: MatchSquad,
-        is_friendly: bool,
+        fixture: FixtureContext,
     ) -> Self {
         Match {
             id,
@@ -31,27 +31,17 @@ impl Match {
             league_slug: String::from(league_slug),
             home_squad,
             away_squad,
-            is_friendly,
-            is_knockout: false,
+            fixture,
         }
     }
 
-    pub fn make_knockout(
-        id: String,
-        league_id: u32,
-        league_slug: &str,
-        home_squad: MatchSquad,
-        away_squad: MatchSquad,
-    ) -> Self {
-        Match {
-            id,
-            league_id,
-            league_slug: String::from(league_slug),
-            home_squad,
-            away_squad,
-            is_friendly: false,
-            is_knockout: true,
-        }
+    pub fn is_friendly(&self) -> bool {
+        self.fixture.is_friendly()
+    }
+
+    /// Level after 90 minutes, it goes to extra time and penalties.
+    pub fn is_knockout(&self) -> bool {
+        self.fixture.knockout
     }
 
     /// Accessors for the private identity fields (used by the
@@ -88,14 +78,10 @@ impl Match {
         // well to a reserve derby: there is no longer a cost worth carrying a
         // special case for. A goal in an U19 game is a goal somebody wants to
         // watch.
-        let match_recordings = MatchRuntime::recordings_mode();
-        let match_result = FootballEngine::<840, 545>::play(
-            self.home_squad,
-            self.away_squad,
-            match_recordings,
-            self.is_friendly,
-            self.is_knockout,
-        );
+        let config =
+            MatchEngineConfig::for_fixture(&self.fixture, MatchRuntime::recordings_mode());
+        let match_result =
+            FootballEngine::<840, 545>::play_with_config(self.home_squad, self.away_squad, config);
 
         let score = match_result.score.as_ref().expect("no score");
 
@@ -127,7 +113,7 @@ impl Match {
             away_team_id,
             score: score.clone(),
             details: Some(match_result),
-            friendly: self.is_friendly,
+            friendly: self.fixture.is_friendly(),
         }
     }
 }

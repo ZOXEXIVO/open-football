@@ -381,6 +381,7 @@ impl DatabaseGenerator {
                                 role,
                                 min_age,
                                 max_age,
+                                data.role_ages(),
                             );
                         }
                     }
@@ -397,6 +398,7 @@ impl DatabaseGenerator {
                 role,
                 min_age,
                 max_age,
+                data.role_ages(),
             )
         };
 

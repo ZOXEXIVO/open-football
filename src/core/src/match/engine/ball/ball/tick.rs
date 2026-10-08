@@ -100,6 +100,14 @@ impl Ball {
         });
     }
 
+    /// A set piece is over the moment the ball is off its taker, by a shot,
+    /// a pass or anybody else on it.
+    fn settle_set_piece_kicker(&mut self) {
+        if self.set_piece_kicker.is_some() && self.current_owner != self.set_piece_kicker {
+            self.set_piece_kicker = None;
+        }
+    }
+
     pub fn update(
         &mut self,
         context: &mut MatchContext,
@@ -110,6 +118,7 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
+        self.settle_set_piece_kicker();
         #[cfg(feature = "match-logs")]
         let owner_at_entry = self.current_owner;
         #[cfg(feature = "match-logs")]
@@ -219,6 +228,7 @@ impl Ball {
         self.tick_aerial_delivery(players, events);
 
         self.try_intercept(context, players, events);
+        self.try_aerial_duel(context, players, events);
         #[cfg(feature = "match-logs")]
         probe.note(
             crate::r#match::engine::ball::ball::flight_diag::STAGE_INTERCEPT,
@@ -360,7 +370,7 @@ impl Ball {
             self.velocity,
             0.0,
         );
-        self.expire_offside_snapshot(context);
+        self.police_offside(context, players, events);
         self.update_landing_cache();
 
         #[cfg(feature = "match-logs")]
@@ -396,7 +406,7 @@ impl Ball {
                 let mut nearest = f32::MAX;
                 let mut engagers = 0u64;
                 for opp in players.iter() {
-                    if opp.team_id == owner.team_id || opp.is_sent_off {
+                    if opp.team_id == owner.team_id || opp.off_pitch {
                         continue;
                     }
                     let d = (opp.position - owner.position).magnitude();
@@ -444,7 +454,7 @@ impl Ball {
                     // `CHASE_SAMPLES` — the ceilings, not the positions.
                     if let Some(chaser) = players
                         .iter()
-                        .filter(|p| p.team_id != owner.team_id && !p.is_sent_off)
+                        .filter(|p| p.team_id != owner.team_id && !p.off_pitch)
                         .filter(|p| {
                             p.tactical_position.current_position.position_group()
                                 != crate::PlayerFieldPositionGroup::Goalkeeper
@@ -742,6 +752,7 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
+        self.settle_set_piece_kicker();
         // See `Ball::update`. `update_light` carries no `StageProbe` at
         // all, so before this the light tick — about half of them — was
         // outside every relocation census there was.
@@ -796,6 +807,7 @@ impl Ball {
         self.update_velocity();
         self.tick_aerial_delivery(players, events);
         self.try_intercept(context, players, events);
+        self.try_aerial_duel(context, players, events);
         self.try_block_shot(context, players, events);
         self.try_block_pass(context, players, events);
         self.try_save_shot(context, players, events);
@@ -813,7 +825,7 @@ impl Ball {
         self.check_wide_of_goal(context, players, events);
         self.check_throw_in(context, players, events);
         self.check_boundary_collision(context);
-        self.expire_offside_snapshot(context);
+        self.police_offside(context, players, events);
         self.update_landing_cache();
 
         #[cfg(feature = "match-logs")]

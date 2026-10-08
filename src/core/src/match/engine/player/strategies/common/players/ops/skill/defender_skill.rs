@@ -243,6 +243,7 @@ impl DefenderSkillProfile {
             // window could be served after it — which the debug oracle
             // would (correctly) call a memo mismatch.
             | ((inputs.standard_shift != 0.0) as u64) << 56
+            | player.injury_rank() << 57
     }
 
     /// Cross-tick memoized `from_player`. Condition / jadedness / minute /

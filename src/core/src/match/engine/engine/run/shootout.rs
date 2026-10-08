@@ -28,7 +28,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let mut candidates: Vec<(u32, f32)> = field
                 .players
                 .iter()
-                .filter(|p| p.team_id == team_id && !p.is_sent_off)
+                .filter(|p| p.team_id == team_id && !p.off_pitch)
                 .filter(|p| {
                     p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper
@@ -61,7 +61,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // First: an actual goalkeeper still on the field.
             let gk = field.players.iter().find(|p| {
                 p.team_id == team_id
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         == PlayerFieldPositionGroup::Goalkeeper
             });
@@ -75,7 +75,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             field
                 .players
                 .iter()
-                .filter(|p| p.team_id == team_id && !p.is_sent_off)
+                .filter(|p| p.team_id == team_id && !p.off_pitch)
                 .max_by(|a, b| {
                     let sa = a.skills.goalkeeping.reflexes * 0.4
                         + a.skills.goalkeeping.handling * 0.3

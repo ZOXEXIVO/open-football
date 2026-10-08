@@ -44,7 +44,7 @@ impl GlobalCompetitionSimulator {
             date,
         );
 
-        let engine_results = MatchRuntime::engine_pool().play_squads_with_knockout(prepared);
+        let engine_results = MatchRuntime::engine_pool().play_squads(prepared);
 
         for (fixture_idx, raw_result) in engine_results {
             let fixture = &todays_matches[fixture_idx];

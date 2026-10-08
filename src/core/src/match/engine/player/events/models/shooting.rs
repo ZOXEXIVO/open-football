@@ -100,8 +100,71 @@ impl ShootingEventBuilder {
             // today (0.55), so this is calibration-neutral — it makes the
             // shot taxonomy honest about where chances come from.
             Some(ShotType::Header) if from_dead_ball => ShotType::SetPieceHeader,
+            // Only the man standing over the dead ball takes the set piece:
+            // the origin outlives the kick, so a rebound off a saved penalty
+            // or a shot after a short free kick would read as one too.
+            Some(ShotType::FootOpenPlay) | None => {
+                let kicker = ctx.tick_context.ball.set_piece_kicker == Some(ctx.player.id);
+                kicker
+                    .then(|| ShotType::from_restart(restart))
+                    .flatten()
+                    .unwrap_or_else(|| Self::open_play_kind(ctx))
+            }
             Some(explicit) => explicit,
-            None => ShotType::from_restart(restart).unwrap_or(ShotType::FootOpenPlay),
         }
+    }
+
+    /// What kind of open-play foot shot this is, read off the ball and the
+    /// picture at the strike: off a save or a block, off the ground, from
+    /// distance, from a cutback, or through with only the keeper to beat.
+    fn open_play_kind(ctx: &StateProcessingContext) -> ShotType {
+        /// Two seconds: a strike this soon after a save or a block is the
+        /// follow-up.
+        const REBOUND_WINDOW: u64 = 200;
+        /// Struck with the ball above shin height.
+        const VOLLEY_HEIGHT: f32 = 0.4;
+        /// 18 m: from outside the area.
+        const LONG_SHOT: f32 = 144.0;
+        /// Three seconds from the pull-back to the strike.
+        const CUTBACK_WINDOW: u64 = 300;
+        /// 5 m: nobody this close is a man through on his own.
+        const CLEAR_OF_DEFENDERS: f32 = 40.0;
+
+        let ball = &ctx.tick_context.ball;
+        let now = ctx.current_tick();
+        if ball.last_rebound_tick > 0 && now.saturating_sub(ball.last_rebound_tick) <= REBOUND_WINDOW
+        {
+            return ShotType::Rebound;
+        }
+        if ctx.tick_context.positions.ball.position.z > VOLLEY_HEIGHT {
+            return ShotType::Volley;
+        }
+        let goal = ctx.player().opponent_goal_position();
+        let to_goal = goal - ctx.player.position;
+        let distance = to_goal.norm();
+        if distance > LONG_SHOT {
+            return ShotType::LongShot;
+        }
+        if ball.cutback_to.is_some_and(|(receiver, tick)| {
+            receiver == ctx.player.id && now.saturating_sub(tick) <= CUTBACK_WINDOW
+        }) {
+            return ShotType::Cutback;
+        }
+        let keeper = ctx.players().opponents().goalkeeper().next().map(|gk| gk.id);
+        let pressed = ctx
+            .players()
+            .opponents()
+            .nearby(CLEAR_OF_DEFENDERS)
+            .any(|o| Some(o.id) != keeper);
+        let lane = ctx.tick_context.space.cast_ray(
+            ctx.player.position,
+            to_goal / distance.max(1.0e-3),
+            distance,
+            &[ctx.player.id],
+        );
+        if !pressed && lane.is_none_or(|hit| Some(hit.collider.player_id) == keeper) {
+            return ShotType::OneVOne;
+        }
+        ShotType::FootOpenPlay
     }
 }

@@ -129,6 +129,8 @@ pub struct TacticalRefreshInputs<'a> {
     /// the play-quality half of home advantage (the referee
     /// marginal-call half lives in `RefereeProfile::home_bias`).
     pub home_edge: f32,
+    /// The hardest any side can press today: a hot afternoon caps it.
+    pub press_ceiling: f32,
     /// How far the standard of football in this fixture sits from the
     /// division the skill gates below were fitted in — see
     /// `MatchStandard`. Subtracted from every team-quality read in

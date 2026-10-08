@@ -217,7 +217,8 @@ impl GoalkeeperSkillProfile {
             | (minute as u64 & 0xFF) << 32
             // …and whether the standard of football has been read yet —
             // see `DefenderSkillProfile::memo_key`.
-            | ((inputs.standard_shift != 0.0) as u64) << 40;
+            | ((inputs.standard_shift != 0.0) as u64) << 40
+            | player.injury_rank() << 41;
         let cached = ctx
             .tick_context
             .profile_memos

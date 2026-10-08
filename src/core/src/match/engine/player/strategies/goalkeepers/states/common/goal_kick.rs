@@ -125,7 +125,7 @@ impl KeeperGoalKick {
         let kick_skill = (gk.kicking / 20.0).clamp(0.0, 1.0);
         let short_skill = ((gk.passing + gk.first_touch) / 40.0).clamp(0.0, 1.0);
         let composure = (taker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-        let on_pitch = |p: &&MatchPlayer| p.side.is_some() && !p.is_sent_off && p.id != taker.id;
+        let on_pitch = |p: &&MatchPlayer| p.side.is_some() && !p.off_pitch && p.id != taker.id;
         let flat =
             |a: Vector3<f32>, b: Vector3<f32>| Vector3::new(a.x - b.x, a.y - b.y, 0.0).norm();
         let squeezing = players

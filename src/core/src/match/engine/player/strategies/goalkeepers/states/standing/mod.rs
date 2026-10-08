@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperAppetite, KeeperBallClaim,
     KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperGoalKick,
     KeeperOneOnOne, KeeperRestPosition, KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
 };
@@ -477,7 +477,8 @@ impl GoalkeeperStandingState {
         // join and how far from goal he'll sweep; it does NOT make him
         // faster or better once committed. Centered at 10/20 so an
         // ordinary keeper keeps the pre-existing gate.
-        let risk_appetite = prof.eccentricity.clamp(0.0, 1.0) - 0.5;
+        let risk_appetite = prof.eccentricity.clamp(0.0, 1.0) - 0.5
+            + KeeperAppetite::rush_risk(KeeperAppetite::of(ctx));
 
         // A man dribbling at the goal has to be MET. This is the constraint
         // that was missing entirely: the race conditions below only ever

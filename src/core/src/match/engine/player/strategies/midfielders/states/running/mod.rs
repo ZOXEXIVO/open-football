@@ -4,8 +4,8 @@ use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::onball_diag::{self, Exit};
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, LaneAhead, MidfieldPlay, MidfieldRole, MidfielderCondition, Opportunity,
-    ShapeStation, TakeOn, U_PER_M,
+    ActivityIntensity, CarryHeading, LaneAhead, MidfieldPlay, MidfieldRole, MidfielderCondition,
+    Opportunity, ShapeStation, TakeOn, U_PER_M,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay, ThroughBall};
@@ -445,15 +445,6 @@ impl StateProcessingHandler for MidfielderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
-            // Corner taker: set the corner up via Crossing (which holds the
-            // delivery until centre-backs have pushed up to attack it).
-            if ctx.ball().is_team_attacking_corner() {
-                onball_diag::record(Exit::Corner);
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Crossing,
-                ));
-            }
-
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
             let can_shoot = ctx.team().can_shoot();
@@ -1380,7 +1371,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             //
             // **Whether a better ball is on.** `better_placed_gain` is
             // already the continuous "somebody ahead of me is freer and
-            // closer to goal" read that `should_pass` uses; here it is
+            // further up the pitch" read that `should_pass` uses; here it is
             // simply subtracted, weighted by how well this player sees
             // it. A carrier with nobody ahead of him keeps running. One
             // with a team-mate in space beyond him gives it, which is
@@ -1434,7 +1425,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             let outlet = if MidfieldPlay::legacy() {
                 0.0
             } else {
-                self.better_placed_gain(ctx, goal_dist)
+                self.better_placed_gain(ctx)
             };
             let (carry_urge, bar) = if MidfieldPlay::legacy() {
                 (lane.openness, 0.55)
@@ -1873,14 +1864,21 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
         }
 
-        // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-        // POSSESSION RETENTION: Allow longer holding when team is comfortable
-        let anti_oscillation_threshold = if self.should_retain_possession(ctx) {
-            250
+        // A carrier closed down has to let it go before he is robbed, and
+        // how long he can shield it first is his composure: 0.4 s for a
+        // nervous one, 1.2 s for a composed one. Left alone he keeps it,
+        // up to the stall guard (longer when the side is keeping the ball).
+        const PRESSED_RADIUS: f32 = 24.0;
+        let pressed = ctx.players().opponents().nearby(PRESSED_RADIUS).next().is_some();
+        let composure = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+        let can_shield = 20 + (40.0 * composure) as u64;
+        let stall_guard = if self.should_retain_possession(ctx) {
+            750
         } else {
-            150
+            450
         };
-        if ctx.player.has_ball(ctx) && ctx.in_state_time > anti_oscillation_threshold {
+        let forced = (pressed && ctx.in_state_time > can_shield) || ctx.in_state_time > stall_guard;
+        if ctx.player.has_ball(ctx) && forced {
             onball_diag::record(Exit::AntiOscillation);
             // Prefer passing first
             if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
@@ -2210,15 +2208,11 @@ impl MidfielderRunningState {
         // all of the movement goes across him.
         let lane = LaneAhead::read(ctx);
 
-        // …and WHERE he is driving. Every carry in this engine aims at
-        // the goal, which from a touchline is a diagonal into the two
-        // centre-backs — the carrier cuts infield into the crowd, gets
-        // shut down, and the flank is never used. A wide carrier being
-        // shown outside drives the byline instead; `FlankPlay` owns the
-        // condition and returns `None` for everybody else, so this is
-        // the only line that changes for a central carrier.
-        let goal_pos = FlankPlay::carry_aim(ctx, lane.openness)
-            .unwrap_or_else(|| ctx.player().opponent_goal_position());
+        // …and WHERE he is driving. A wide carrier being shown outside
+        // drives the byline; `FlankPlay` owns that condition and returns
+        // `None` for everybody else, who takes the open grass ahead.
+        let goal_pos =
+            FlankPlay::carry_aim(ctx, lane.openness).unwrap_or_else(|| CarryHeading::aim(ctx));
         let to_goal = (goal_pos - player_pos).normalize();
 
         // Smooth sinusoidal lateral sway instead of binary flip
@@ -2298,7 +2292,6 @@ impl MidfielderRunningState {
         lane: &LaneAhead,
     ) -> bool {
         let pressure = self.carry_pressure(ctx);
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         // ── Reasons to let it go ──────────────────────────────────────
         // Being closed down is the big one, and it is worth more to a
@@ -2309,7 +2302,7 @@ impl MidfielderRunningState {
 
         // A team-mate in a better position is a reason in proportion to
         // how much better he is and how well this player sees it.
-        let outlet = self.better_placed_gain(ctx, distance_to_goal);
+        let outlet = self.better_placed_gain(ctx);
         let vision = profile.progressive_selection;
 
         // Standing on it stops being a carry and starts being a dwell.
@@ -2412,12 +2405,16 @@ impl MidfielderRunningState {
 
     /// How much better placed the best outlet is, 0..1 — the continuous
     /// form of `has_better_positioned_teammate`'s yes/no.
-    fn better_placed_gain(&self, ctx: &StateProcessingContext, current_distance: f32) -> f32 {
-        let goal = ctx.player().opponent_goal_position();
+    fn better_placed_gain(&self, ctx: &StateProcessingContext) -> f32 {
+        // Measured in depth, not distance to the goal mouth: a team-mate
+        // twenty metres further up the touchline is better placed, even
+        // though the straight line from him to goal is no shorter.
+        let goal_line = ctx.player().opponent_goal_position().x;
+        let current_depth = (goal_line - ctx.player.position.x).abs();
         let mut best = 0.0f32;
         for teammate in ctx.players().teammates().nearby(300.0) {
-            let their_distance = (teammate.position - goal).magnitude();
-            if their_distance >= current_distance {
+            let their_depth = (goal_line - teammate.position.x).abs();
+            if their_depth >= current_depth {
                 continue;
             }
             if !ctx.player().has_clear_pass(teammate.id) {
@@ -2431,7 +2428,7 @@ impl MidfielderRunningState {
                 .opponents(teammate.id, 4.0 * U_PER_M)
                 .count() as f32;
             let freedom = 1.0 / (1.0 + crowding);
-            let gain = ((current_distance - their_distance) / current_distance.max(1.0)).min(1.0);
+            let gain = ((current_depth - their_depth) / current_depth.max(1.0)).min(1.0);
             best = best.max(gain * freedom);
         }
         best

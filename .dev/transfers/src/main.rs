@@ -4952,6 +4952,10 @@ struct SimHarness {
     /// Squad shape and minutes grievance; running only to fold the
     /// monthly-reset pool counters.
     squad_shape: SquadShapeCensus,
+    /// Loan options by hearing outcome, loans of protected signings and
+    /// fresh plans by arrival path. Running: each is an event read the day
+    /// after it happened.
+    arrivals: ArrivalCensus,
 }
 
 impl SimHarness {
@@ -4978,6 +4982,7 @@ impl SimHarness {
             mandates: MandateCensus::default(),
             stranded: StrandedCensus::default(),
             squad_shape: SquadShapeCensus::default(),
+            arrivals: ArrivalCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
@@ -4985,6 +4990,7 @@ impl SimHarness {
         harness.loan_assets.observe(&harness.data, 0);
         harness.mandates.observe(&harness.data, 0);
         harness.stranded.observe(&harness.data, 0);
+        harness.arrivals.observe(&harness.data, 0);
         harness
     }
 
@@ -5015,6 +5021,7 @@ impl SimHarness {
             self.mandates.observe(&self.data, day);
             self.stranded.observe(&self.data, day);
             self.squad_shape.observe(&self.data);
+            self.arrivals.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -5035,6 +5042,7 @@ impl SimHarness {
                 PlayerSidePrinter::print(&self.player_side);
                 LoanAssetPrinter::print(&self.loan_assets);
                 MandatePrinter::print(&self.mandates);
+                ArrivalPrinter::print(&self.arrivals);
                 StrandedPrinter::print(&self.stranded, &self.data);
                 self.squad_shape.print(&self.data);
             }
@@ -5047,6 +5055,7 @@ impl SimHarness {
         PlayerSidePrinter::print(&self.player_side);
         LoanAssetPrinter::print(&self.loan_assets);
         MandatePrinter::print(&self.mandates);
+        ArrivalPrinter::print(&self.arrivals);
         StrandedPrinter::print(&self.stranded, &self.data);
         self.squad_shape.print(&self.data);
         eprintln!(
@@ -5492,6 +5501,261 @@ impl MandatePrinter {
                 continue;
             }
             println!("    ×{:.1}  {:>6}", 1.0 + decile as f32 / 10.0, n);
+        }
+    }
+}
+
+/// Purchases nobody negotiated, followed from the decision to the plan.
+///
+/// Three questions. What a borrower's board does with an option to buy,
+/// now that an option is a purchase it hears. Whether a club ever stages a
+/// loan for a man it signed and is still inside its own plan window with.
+/// And whether every arrival walks in on a plan dated the day he arrived —
+/// a move that carries the seller's plan, or one backfilled years back,
+/// leaves him unprotected from his first day.
+///
+/// Running, because each answer is an event: a row on a player's decision
+/// record or a stage change on his plan, read the day after it happened.
+#[derive(Debug, Default)]
+struct ArrivalCensus {
+    /// Players on a loan that carries a future fee, and whether it binds —
+    /// the only record of which kind of buyout a `dec_loan_buyout` row
+    /// closed, once the loan contract is gone.
+    future_fees: HashMap<u32, bool>,
+    options_signed: u32,
+    options_refused_by_player: u32,
+    /// Concern key → options the board turned down for it.
+    options_vetoed: BTreeMap<String, u32>,
+    obligations: u32,
+    /// Players on a loan carrying a future fee at the last read.
+    live_future_fees: HashSet<u32>,
+    /// Future-fee loans that ended with no buyout, refusal or turn-down on
+    /// the player's record: (options, obligations). Where an option that
+    /// lapsed without a hearing shows up.
+    ended_unrecorded: (u32, u32),
+    /// Loan purpose → (staged inside the plan window, staged), for men
+    /// signed during the run and still on the plan they arrived on.
+    staged: BTreeMap<String, (u32, u32)>,
+    /// Arrival path → (plan started on the arrival day, arrivals).
+    arrivals: BTreeMap<&'static str, (u32, u32)>,
+    /// The day each man signed during the run.
+    arrived: HashMap<u32, NaiveDate>,
+    /// Each man's pathway stage when last read, so a loan is counted when
+    /// he is staged for one rather than every time a sweep restates it.
+    last_stage: HashMap<u32, PathwayStage>,
+    seen_rows: HashSet<(u32, NaiveDate, &'static str)>,
+}
+
+impl ArrivalCensus {
+    /// Days back a decision row is still read as news: the tick stamps a
+    /// row with the day it ran, which the world's clock has left by the
+    /// time this pass reads it.
+    const ROW_LOOKBACK_DAYS: i64 = 2;
+    /// The one loan purpose allowed past a fresh signing's protection.
+    const PATHWAY_PURPOSE: &'static str = "DevelopmentPathway";
+
+    fn arrival_path(decision: &str) -> Option<&'static str> {
+        match decision {
+            "dec_transfer_completed" => Some("negotiated"),
+            "dec_free_transfer_completed" | "dec_free_agent_signed" => Some("free"),
+            "dec_loan_buyout" => Some("buyout"),
+            _ => None,
+        }
+    }
+
+    /// Day 0 marks what the generated world already carries as seen
+    /// without counting it.
+    fn observe(&mut self, data: &SimulatorData, day: u32) {
+        let date = data.date.date();
+        let since = date - Duration::days(Self::ROW_LOOKBACK_DAYS);
+        let counting = day > 0;
+        let mut live = HashSet::new();
+        let mut decided = HashSet::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        for player in team.players.players.iter() {
+                            if let Some(loan) = player.contract_loan.as_ref()
+                                && loan.loan_future_fee.is_some()
+                            {
+                                live.insert(player.id);
+                                self.future_fees
+                                    .insert(player.id, loan.loan_future_fee_obligation);
+                            }
+                            if self.read_decisions(player, since, counting) {
+                                decided.insert(player.id);
+                            }
+                            self.read_staging(player, date, counting);
+                        }
+                    }
+                }
+            }
+        }
+        if counting {
+            for id in self.live_future_fees.difference(&live) {
+                if decided.contains(id) {
+                    continue;
+                }
+                if self.future_fees.get(id).copied().unwrap_or(false) {
+                    self.ended_unrecorded.1 += 1;
+                } else {
+                    self.ended_unrecorded.0 += 1;
+                }
+            }
+        }
+        self.live_future_fees = live;
+    }
+
+    /// Reads the recent rows of his record. True when one of them closed
+    /// a future-fee loan: a buyout, his refusal, or the board's turn-down.
+    fn read_decisions(&mut self, player: &Player, since: NaiveDate, counting: bool) -> bool {
+        let mut decided = false;
+        for row in player.decision_history.items.iter().rev() {
+            if row.date < since {
+                break;
+            }
+            if let Some(path) = Self::arrival_path(&row.decision)
+                && self.seen_rows.insert((player.id, row.date, path))
+                && counting
+            {
+                let fresh = player
+                    .plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.started == row.date);
+                self.arrived.insert(player.id, row.date);
+                let cell = self.arrivals.entry(path).or_default();
+                cell.0 += fresh as u32;
+                cell.1 += 1;
+                if path == "buyout" {
+                    decided = true;
+                    if self.future_fees.get(&player.id).copied().unwrap_or(false) {
+                        self.obligations += 1;
+                    } else {
+                        self.options_signed += 1;
+                    }
+                }
+            }
+            if row.movement == "dec_loan_buyout_declined"
+                && self.seen_rows.insert((player.id, row.date, "declined"))
+            {
+                decided = true;
+                if counting {
+                    self.options_refused_by_player += 1;
+                }
+            }
+            if row.movement == "dec_loan_option_turned_down"
+                && self.seen_rows.insert((player.id, row.date, "turned_down"))
+            {
+                decided = true;
+                if counting {
+                    *self.options_vetoed.entry(row.decision.clone()).or_default() += 1;
+                }
+            }
+        }
+        decided
+    }
+
+    fn read_staging(&mut self, player: &Player, date: NaiveDate, counting: bool) {
+        let Some(plan) = player.plan.as_ref() else {
+            return;
+        };
+        let previous = self.last_stage.insert(player.id, plan.stage);
+        if plan.stage != PathwayStage::LoanOut
+            || previous == Some(PathwayStage::LoanOut)
+            || !counting
+            || self.arrived.get(&player.id) != Some(&plan.started)
+        {
+            return;
+        }
+        let purpose = plan
+            .loan_purpose
+            .map(|p| format!("{p:?}"))
+            .unwrap_or_else(|| "unstated".to_string());
+        let cell = self.staged.entry(purpose).or_default();
+        cell.0 += player.signing_protection_active(date) as u32;
+        cell.1 += 1;
+    }
+}
+
+/// Prints the three rows.
+struct ArrivalPrinter;
+
+impl ArrivalPrinter {
+    fn print(census: &ArrivalCensus) {
+        println!("\n---- UNNEGOTIATED SIGNINGS ----");
+        Self::print_options(census);
+        Self::print_staged(census);
+        Self::print_arrivals(census);
+    }
+
+    /// Every loan option, by what the borrower's board made of it.
+    fn print_options(census: &ArrivalCensus) {
+        let vetoed: u32 = census.options_vetoed.values().sum();
+        let heard = census.options_signed + census.options_refused_by_player + vetoed;
+        println!("  loan options heard by the borrower's board: {heard}");
+        println!("    approved, signed          {:>6}", census.options_signed);
+        println!(
+            "    approved, he refused      {:>6}",
+            census.options_refused_by_player
+        );
+        for (concern, n) in &census.options_vetoed {
+            println!(
+                "    vetoed: {:<17} {:>6}",
+                concern.trim_start_matches("board_concern_"),
+                n
+            );
+        }
+        println!(
+            "  obligations executed, never heard: {}",
+            census.obligations
+        );
+        println!(
+            "  future-fee loans ended with no decision on record: options {}, obligations {}",
+            census.ended_unrecorded.0, census.ended_unrecorded.1
+        );
+    }
+
+    /// Loans staged for men their club signed during the run, against the
+    /// ones it is still inside its plan window with. Only the development
+    /// pathway is meant to reach those.
+    fn print_staged(census: &ArrivalCensus) {
+        println!("\n  loans staged for signings, by purpose (inside the plan window / all)");
+        if census.staged.is_empty() {
+            println!("    none staged yet");
+            return;
+        }
+        for (purpose, (inside, all)) in &census.staged {
+            println!("    {:<24} {:>6} / {:<6}", purpose, inside, all);
+        }
+        let outside_pathway: u32 = census
+            .staged
+            .iter()
+            .filter(|(purpose, _)| purpose.as_str() != ArrivalCensus::PATHWAY_PURPOSE)
+            .map(|(_, (inside, _))| inside)
+            .sum();
+        println!(
+            "    protected signings loaned outside the development pathway \
+             (target 0): {outside_pathway}"
+        );
+    }
+
+    /// Arrivals by path, and the share that walked in on a plan of their
+    /// own. Editor moves never happen here; the web test pins that path.
+    fn print_arrivals(census: &ArrivalCensus) {
+        println!("\n  arrivals by path (plan dated the arrival day, target 100%)");
+        if census.arrivals.is_empty() {
+            println!("    no arrivals yet");
+            return;
+        }
+        for (path, (fresh, all)) in &census.arrivals {
+            println!(
+                "    {:<11} {:>6} / {:<6} {:>6.1}%",
+                path,
+                fresh,
+                all,
+                *fresh as f64 / (*all).max(1) as f64 * 100.0
+            );
         }
     }
 }

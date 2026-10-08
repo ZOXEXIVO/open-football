@@ -7,6 +7,7 @@
 //! one is live state, keyed to the match clock.
 
 use super::match_context::MatchContext;
+use crate::r#match::MatchPlayer;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 
 pub struct SubstitutionRecord {
@@ -47,12 +48,24 @@ pub struct SubstitutionWindows {
     home: u8,
     away: u8,
     interval: bool,
+    /// Extra stoppages granted for extra time.
+    extra: u8,
 }
 
 impl SubstitutionWindows {
     /// Stoppages a side may interrupt for a change over normal time.
     /// Half-time is free and does not spend one.
     pub const PER_TEAM: u8 = 3;
+
+    /// Stoppages a side may interrupt for a change in this match so far.
+    pub fn allowance(&self) -> u8 {
+        Self::PER_TEAM + self.extra
+    }
+
+    /// Extra time brings one more stoppage to make a change in.
+    pub fn grant_extra_time(&mut self) {
+        self.extra += 1;
+    }
 
     /// Windows this side has already spent.
     pub fn spent(&self, is_home: bool) -> u8 {
@@ -97,6 +110,29 @@ impl SubstitutionWindows {
 }
 
 impl MatchContext {
+    /// He has left the pitch for good: his stat line and his physical state
+    /// are taken now, at the minute he went, and stand over whatever the
+    /// final whistle would have recorded for him.
+    pub fn record_departure(&mut self, player: &MatchPlayer) {
+        let minutes = player.minutes_played_at(self.total_match_time);
+        self.substituted_out_stats
+            .push((player.id, player.to_match_end_stats(minutes)));
+        self.substituted_out_physical_snapshots
+            .push(player.to_physical_snapshot(self.total_match_time));
+    }
+
+    /// Extra time brings one more change and one more stoppage to make it
+    /// in, where the competition's rules allow it.
+    pub fn grant_extra_time_allowance(&mut self) {
+        if !self.allow_extra_time_extra_sub {
+            return;
+        }
+        if self.max_substitutions_per_team < usize::MAX {
+            self.max_substitutions_per_team += 1;
+        }
+        self.substitution_windows.grant_extra_time();
+    }
+
     pub fn subs_used_by_team(&self, team_id: u32) -> usize {
         self.substitutions
             .iter()

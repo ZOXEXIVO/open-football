@@ -1,6 +1,7 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
 use crate::r#match::engine::ball::ball::frame::FramePart;
-use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
+use crate::r#match::engine::player::events::players::{FoulSource, PlayerEventDispatcher};
+use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::{
@@ -91,6 +92,11 @@ pub enum BallEvent {
     /// replay and the match report read, and the woodwork count is a real
     /// line in a match summary.
     HitFrame(FramePart, Vector3<f32>),
+    /// The referee books a man for something that is not a foul — slowing
+    /// a restart down.
+    Caution(u32, FoulSource),
+    /// A shot struck the blocker's arm; true when it was going in.
+    Handball(u32, bool),
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
@@ -330,6 +336,14 @@ impl BallEventDispatcher {
                 }
             }
             BallEvent::HeadedClear(clearer_id, position) => {
+                // His touch is the ball's last: headed behind, it is his
+                // side that concedes the corner. Left on the crosser, every
+                // cross a defender put over his own line was a goal kick.
+                if let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id) {
+                    field
+                        .ball
+                        .record_touch(clearer_id, team_id, context.current_tick(), false);
+                }
                 // The same credit `handle_clear_ball_event` gives a man who
                 // clears a ball he owns, for the same action taken in the
                 // air. No `blocks` credit beside it: a block is a body put
@@ -351,6 +365,12 @@ impl BallEventDispatcher {
             }
             BallEvent::TakeMe(player_id) => {
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::TakeBall(player_id)));
+            }
+            BallEvent::Handball(player_id, goal_bound) => {
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Handball(player_id, goal_bound)));
+            }
+            BallEvent::Caution(player_id, source) => {
+                remaining_events.add(Event::PlayerEvent(PlayerEvent::Caution(player_id, source)));
             }
             BallEvent::Offside(receiver_id, position) => {
                 field.ball.clear_pending_pass_metadata();
@@ -446,12 +466,13 @@ impl BallEventDispatcher {
         }
         let end_in_final_third = side.attacking_progress_x(end.x, field_w) >= 2.0 / 3.0;
         let start_in_final_third = side.attacking_progress_x(start.x, field_w) >= 2.0 / 3.0;
-        // Progressive carry threshold: ≥25u outside final third, ≥12u inside.
-        let progressive_threshold = if start_in_final_third { 12.0 } else { 25.0 };
-        let is_progressive = forward_progress >= progressive_threshold;
-
         let is_home = side == PlayerSide::Left;
         let opp_box = context.penalty_area(!is_home);
+        // Only a carry that ends in the opponents' half: running the ball
+        // out of defence is not progression.
+        let reach = field.ball.pass_reach.furthest(carrier_team_id);
+        let is_progressive = side.attacking_progress_x(end.x, field_w) >= 0.5
+            && Progression::is_progressive(side, start, end, reach, field_w, &opp_box);
         let started_outside_box = !opp_box.contains(&start);
         let ended_in_box = opp_box.contains(&end);
 
@@ -475,10 +496,13 @@ impl BallEventDispatcher {
             Self::beaten_ids_on_carry_path(
                 start,
                 end,
+                // Only a man who was challenging him: a carry past somebody
+                // standing off is a run, and counting it made every forward
+                // spell a take-on — 260 a match against a real 20-45.
                 field
                     .players
                     .iter()
-                    .filter(|p| p.team_id != carrier_team_id)
+                    .filter(|p| p.team_id != carrier_team_id && p.state.is_challenging())
                     .map(|p| (p.id, p.position)),
             )
         } else {
@@ -532,6 +556,8 @@ impl BallEventDispatcher {
                     second_defender_cover,
                     crowded_central: beaten_ids.len() >= 2 && !isolated_wide,
                     minute,
+                    pitch_success: context.conditions.dribble_success,
+                    pitch_control: context.conditions.dribble_control,
                 };
                 let seed = carry_seed.wrapping_mul(0x9E3779B97F4A7C15)
                     ^ (carrier_id as u64).wrapping_mul(0xBF58476D1CE4E5B9)

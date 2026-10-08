@@ -71,6 +71,8 @@ pub enum EpisodeKind {
     CostlyError,
     SentOff,
     MissedDecisivePenalty,
+    PenaltySaved,
+    MatchSavingDisplay,
     HeavyDefeat,
     DerbyWin,
     DerbyDefeat,
@@ -300,6 +302,8 @@ impl EpisodeKind {
             EpisodeKind::CostlyError => S::ordinary(0.70, -0.75, D::Competitive),
             EpisodeKind::SentOff => S::ordinary(0.65, -0.70, D::Competitive),
             EpisodeKind::MissedDecisivePenalty => S::defining(0.85, -0.85, D::Competitive),
+            EpisodeKind::PenaltySaved => S::ordinary(0.60, 0.65, D::Competitive),
+            EpisodeKind::MatchSavingDisplay => S::ordinary(0.55, 0.60, D::Competitive),
             EpisodeKind::HeavyDefeat => S::ordinary(0.45, -0.50, D::Competitive),
             EpisodeKind::DerbyWin => S::ordinary(0.65, 0.75, D::Competitive),
             EpisodeKind::DerbyDefeat => S::ordinary(0.60, -0.65, D::Competitive),
@@ -448,6 +452,8 @@ impl EpisodeKind {
             EpisodeKind::CostlyError => "mind_episode_costly_error",
             EpisodeKind::SentOff => "mind_episode_sent_off",
             EpisodeKind::MissedDecisivePenalty => "mind_episode_missed_penalty",
+            EpisodeKind::PenaltySaved => "mind_episode_penalty_saved",
+            EpisodeKind::MatchSavingDisplay => "mind_episode_match_saving_display",
             EpisodeKind::HeavyDefeat => "mind_episode_heavy_defeat",
             EpisodeKind::DerbyWin => "mind_episode_derby_win",
             EpisodeKind::DerbyDefeat => "mind_episode_derby_defeat",
@@ -549,6 +555,8 @@ impl EpisodeKind {
         EpisodeKind::CostlyError,
         EpisodeKind::SentOff,
         EpisodeKind::MissedDecisivePenalty,
+        EpisodeKind::PenaltySaved,
+        EpisodeKind::MatchSavingDisplay,
         EpisodeKind::HeavyDefeat,
         EpisodeKind::DerbyWin,
         EpisodeKind::DerbyDefeat,
@@ -842,7 +850,7 @@ mod tests {
         // both together when adding a kind.
         assert_eq!(
             EpisodeKind::ALL.len(),
-            95,
+            97,
             "EpisodeKind::ALL is out of sync with the enum"
         );
     }

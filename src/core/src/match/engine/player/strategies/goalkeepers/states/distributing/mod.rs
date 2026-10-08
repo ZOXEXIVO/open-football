@@ -2,7 +2,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::PlayerSide;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperRelease,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
@@ -66,16 +66,13 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             ));
         }
 
-        // Timeout after a short time if no pass is made
-        // Clear the ball rather than running with it (GK should never wander with ball)
-        if ctx.in_state_time > 20 {
+        // Nobody has come free in the time he had: go long.
+        if !KeeperRelease::may_keep_looking(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Clearing,
+                GoalkeeperState::Kicking,
             ));
         }
 
-        // If we have the ball but no good passing option yet, wait
-        // The goalkeeper should not be trying to catch the ball since they already have it
         None
     }
 

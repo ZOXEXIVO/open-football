@@ -26,7 +26,12 @@ use serde::{Deserialize, Serialize};
 /// v5: the payload codec is wincode rather than bincode 2. The message shapes
 /// are unchanged, but the bytes are not, so a peer still on bincode cannot
 /// read even the handshake.
-pub const PROTOCOL_VERSION: u32 = 5;
+/// v6: every match carries its `FixtureContext` (date, competition,
+/// ground, rivalry, seed) in place of the friendly / knockout flags.
+/// v7: every player carries his kickoff state of mind, and every result
+/// the standard of football it was played at, its in-play penalty saves and
+/// its tally of time spent waiting on each kind of restart.
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// What the coordinator wants recorded, sent once per connection.
 ///
@@ -128,7 +133,7 @@ pub enum Response {
 /// Per-item envelope inside `Request::PlayBatch`. Two variants cover the
 /// two `MatchPlayEnginePool` entry points used by the rest of the
 /// engine: league/cup fixtures (`Match`) and raw squad-vs-squad
-/// (`play_squads_with_knockout`).
+/// (`play_squads`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MatchEnvelope {
     League(LeagueMatchWire),

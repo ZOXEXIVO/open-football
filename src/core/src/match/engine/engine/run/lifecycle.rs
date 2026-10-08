@@ -2,9 +2,11 @@
 //! they build, plus `play_inner`, the per-state loop that runs the ticks
 //! for one `MatchState` and hands back its stoppage time.
 
+use crate::r#match::CompetitionKind;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::phase_prof::PhaseProf;
 use crate::r#match::engine::engine::*;
+use crate::r#match::engine::result::{DeadTime, PeriodKind, PlayingTime};
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -21,7 +23,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) -> MatchResultRaw {
         let config = MatchEngineConfig {
             match_recordings,
-            is_friendly,
+            competition: Self::competition_of(is_friendly),
             is_knockout,
             ..Default::default()
         };
@@ -45,11 +47,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let config = MatchEngineConfig {
             seed,
             match_recordings,
-            is_friendly,
+            competition: Self::competition_of(is_friendly),
             is_knockout,
             ..Default::default()
         };
         Self::play_with_config(left_squad, right_squad, config)
+    }
+
+    /// The competition the flag-only entry points stand for: a friendly,
+    /// or an ordinary league match.
+    fn competition_of(is_friendly: bool) -> CompetitionKind {
+        if is_friendly {
+            CompetitionKind::Friendly
+        } else {
+            CompetitionKind::League
+        }
     }
 
     /// Full-config entry point. Lets the caller inject seed, fixture
@@ -72,8 +84,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // IDs) for the surrounding pipeline to run.
         #[cfg(feature = "match-stub")]
         {
-            let _ = &config;
-            return Self::play_stub(left_squad, right_squad);
+            return Self::play_stub(left_squad, right_squad, &config);
         }
 
         PhaseProf::init_from_env();
@@ -190,6 +201,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // mechanism at all: the excess home wins were eating the AWAY
         // wins, and away is the column that was 15pp short.
         //
+        // Re-read 2026-10-08 after the dead-ball ledger and the split extra
+        // time, 400 seeded fixtures an arm (home goal edge): flat −0.07 ·
+        // 0.050 +0.34 · 0.070 +0.26 · 0.095 +0.43. Left at 0.050; the draw
+        // surplus that remains (36%) tracks the engine's 2.3 goals a match,
+        // not the home edge.
+        //
         // The lesson the three re-titrations share: this constant is not
         // a property of home advantage, it is a property of how strongly
         // THIS engine converts skill into goals, so it has to be re-read
@@ -220,24 +237,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut state_manager = StateManager::new();
 
-        // Match kickoff — home team (playing Left in the first half)
-        // starts the game with possession on the centre spot. Without
-        // this the ball sits at centre until the emergency chaser
-        // override fires, producing a ~14-second dead patch.
-        assign_kickoff(&mut field, PlayerSide::Left, None);
+        // Match kickoff — the home side starts the game with possession on
+        // the centre spot. Without this the ball sits at centre until the
+        // emergency chaser override fires, producing a ~14-second dead
+        // patch.
+        StateManager::kick_off_period(&mut context, &mut field);
 
         while let Some(state) = state_manager.next(&context.score, context.is_knockout) {
             context.state.set(state);
 
-            let play_state_result = match state {
-                MatchState::PenaltyShootout => {
-                    Self::run_penalty_shootout(&mut field, &mut context);
-                    PlayMatchStateResult::default()
-                }
+            match state {
+                MatchState::PenaltyShootout => Self::run_penalty_shootout(&mut field, &mut context),
                 _ => Self::play_inner(&mut field, &mut context, &mut match_position_data),
-            };
+            }
 
-            StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
+            StateManager::handle_state_finish(&mut context, &mut field);
         }
 
         // Whatever the twenty-two were doing when the whistle went. The
@@ -263,13 +277,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(in crate::r#match::engine::engine) fn play_stub(
         left_squad: MatchSquad,
         right_squad: MatchSquad,
+        config: &MatchEngineConfig,
     ) -> MatchResultRaw {
-        use crate::r#match::engine::result::FieldSquad;
+        Self::stub_result(left_squad, right_squad, config, StubMinutes::armed())
+    }
+
+    /// With `records_minutes`, every starter is credited a full match at a
+    /// neutral rating and the named substitutes stay unused, so a stubbed
+    /// world still builds appearances, minutes and careers.
+    #[cfg(feature = "match-stub")]
+    pub(in crate::r#match::engine) fn stub_result(
+        left_squad: MatchSquad,
+        right_squad: MatchSquad,
+        config: &MatchEngineConfig,
+        records_minutes: bool,
+    ) -> MatchResultRaw {
+        use crate::r#match::engine::result::{FieldSquad, PlayerMatchEndStats};
 
         let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
         result.score = Some(Score::new(left_squad.team_id, right_squad.team_id));
         result.left_team_players = FieldSquad::from_team(&left_squad);
         result.right_team_players = FieldSquad::from_team(&right_squad);
+        result.weather = config.environment.weather;
+        result.pitch = config.environment.pitch;
+        if records_minutes {
+            for player in left_squad.main_squad.iter().chain(&right_squad.main_squad) {
+                let group = player.tactical_position.current_position.position_group();
+                result.player_stats.insert(
+                    player.id,
+                    PlayerMatchEndStats::neutral(group, 90, StubMinutes::RATING),
+                );
+            }
+        }
         result
     }
 
@@ -281,8 +320,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
-    ) -> PlayMatchStateResult {
-        let result = PlayMatchStateResult::default();
+    ) {
         let prof_on = PhaseProf::enabled();
 
         let mut next_sub_time_ms: u64 = 0;
@@ -297,7 +335,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // costs. Read once, here, rather than at each of the four sites that
         // branch on it.
         let walk_on = !MatchContext::sub_walk_off();
-        let mut et_bonus_granted = false;
         // Medical (forced-injury) pass scheduling — independent of the
         // discretionary sub timer, re-armed at the start of each period.
         let mut next_medical_time_ms: u64 = 0;
@@ -357,12 +394,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // so the whistle only opens the interval and the look below spends it
         // at the first stoppage of the second half, walked on and clipped like
         // any other change — see [`SubstitutionWindows::open_interval`].
-        if context.state.match_state == MatchState::HalfTime {
+        if context.state.match_state.is_interval() {
             context.substitution_windows.open_interval();
-            return result;
+            return;
         }
 
-        while context.increment_time() {
+        // The clock running out does not end a period while a penalty is
+        // still to be taken or still travelling — the laws extend it.
+        while context.increment_time() || field.ball.penalty_in_progress(context.current_tick()) {
             // Post-goal dead time. No ball physics, no AI, no events, no
             // coach evals — see `MatchContext::dead_ball_until_ms` for why
             // the pause is load-bearing (it consumed the post-goal hot
@@ -383,6 +422,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // pass that stages one sits below this `continue`) and a goal
                 // cannot be scored inside a substitution (there is no ball
                 // physics in either). See `SubstitutionBreak`.
+                context.note_tick(PlayingTime::Dead(if context.goal_celebration.is_some() {
+                    DeadTime::Celebration
+                } else {
+                    DeadTime::Substitution
+                }));
                 let playing_out = advance_goal_celebration(field, context)
                     | advance_substitution_break(field, context);
                 if playing_out
@@ -438,7 +482,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     use std::sync::atomic::Ordering;
                     let band =
                         time_band_diag::band_for_minute((context.total_match_time / 60_000) as u32);
-                    for p in field.players.iter().filter(|p| !p.is_sent_off) {
+                    for p in field.players.iter().filter(|p| !p.off_pitch) {
                         let group = match p.tactical_position.current_position.position_group() {
                             crate::PlayerFieldPositionGroup::Goalkeeper => 0,
                             crate::PlayerFieldPositionGroup::Defender => 1,
@@ -542,6 +586,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 last_away_zone = context.tactical_away.ball_zone;
             }
 
+            context.note_tick(field.ball.playing_time(context.current_tick()));
+            if let Some((origin, _)) = field.ball.restart_in_progress() {
+                context.note_restart_wait(origin);
+            }
+
             // Full tick: ball + player AI + events
             // Light tick: ball + player movement only (no AI re-evaluation)
             if tick_parity & 1 == 0 {
@@ -564,10 +613,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // happens, first half included. The pass owns the in-match
             // injury roll; first check lands 3-8 minutes into each
             // period, then every 6-14 minutes.
-            let medical_enabled = matches!(
-                context.state.match_state,
-                MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
-            );
+            let medical_enabled = context.state.match_state.is_timed();
             if medical_enabled {
                 if medical_period != Some(context.state.match_state) {
                     medical_period = Some(context.state.match_state);
@@ -610,34 +656,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // clock is deliberately confined to those periods: it is the only
             // substitution site that draws from `MatchContext::rng`, and a
             // benchless fixture must keep consuming exactly the stream it
-            // consumed before the pressure model existed. ET gets one bonus
-            // sub on entry (FIFA rule).
+            // consumed before the pressure model existed. The extra change
+            // extra time brings is granted at the period boundary — see
+            // `MatchContext::grant_extra_time_allowance`.
             //
             // What runs in the FIRST half is the off-plan look below, which
             // draws nothing. A first-half change is a reaction — to an
             // injury, a booking, a game that has fallen apart — and a
             // reaction does not wait for a review that is not due.
-            let subs_enabled = matches!(
-                context.state.match_state,
-                MatchState::SecondHalf | MatchState::ExtraTime
-            );
+            let subs_enabled = context.state.match_state.is_timed()
+                && context.state.match_state != MatchState::FirstHalf;
 
             if subs_enabled {
-                // Grant the ET bonus once — bumps the cap by 1 for both
-                // sides — but only when the active rule set allows it.
-                // Friendlies (cap = usize::MAX) skip the increment.
-                if context.state.match_state == MatchState::ExtraTime
-                    && !et_bonus_granted
-                    && context.allow_extra_time_extra_sub
-                {
-                    if context.max_substitutions_per_team < usize::MAX {
-                        context.max_substitutions_per_team += 1;
-                    }
-                    et_bonus_granted = true;
-                    // Reset the next-sub timer for the new period.
-                    sub_times_initialized = false;
-                }
-
                 if !sub_times_initialized {
                     next_sub_time_ms = context.rng.range_u64(10, 20) * 60 * 1000;
                     sub_times_initialized = true;
@@ -691,10 +721,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // clock so a spell of throw-ins does not re-walk both rosters on
             // every tick: nothing the read depends on moves faster than a
             // player's condition does.
-            let look_enabled = matches!(
-                context.state.match_state,
-                MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
-            );
+            let look_enabled = context.state.match_state.is_timed();
             let urgent_look = look_enabled && context.time.time >= next_sub_look_ms;
             if (sub_due || urgent_look) && (!walk_on || Substitutions::play_is_stopped(field)) {
                 sub_due = false;
@@ -717,13 +744,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        let (period, length) = match context.state.match_state {
+            MatchState::FirstHalf => (PeriodKind::FirstHalf, MATCH_HALF_TIME_MS),
+            MatchState::SecondHalf => (PeriodKind::SecondHalf, MATCH_HALF_TIME_MS),
+            _ => (PeriodKind::ExtraTime, MATCH_EXTRA_TIME_MS),
+        };
+        context
+            .tally
+            .note_added_time(period, context.time.time.saturating_sub(length));
+
         // The whistle can go while the ball is still in the net, or while two
         // men are still walking across the touchline. Settle both before the
         // period boundary runs its own resets, so nothing downstream sees a
         // half-processed goal or a substitute standing in the run-off.
         finish_goal_celebration(field, context);
         finish_substitution_break(field, context);
+    }
+}
 
-        result
+/// `OF_STUB_MINUTES=1` makes the `match-stub` result credit every starter
+/// a full match. Read once per process. A world census of careers needs to
+/// know who played; the bare stub that profiling runs use records nobody.
+#[cfg(feature = "match-stub")]
+struct StubMinutes;
+
+#[cfg(feature = "match-stub")]
+impl StubMinutes {
+    /// The rating staff perception reads as no evidence either way.
+    const RATING: f32 = 6.6;
+
+    fn armed() -> bool {
+        use std::sync::OnceLock;
+        static ARMED: OnceLock<bool> = OnceLock::new();
+        *ARMED.get_or_init(|| std::env::var("OF_STUB_MINUTES").is_ok_and(|v| v == "1"))
     }
 }

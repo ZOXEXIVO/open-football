@@ -20,7 +20,7 @@ use crate::r#match::PlayerSide;
 use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::engine::goal::{
-    advance_goal_celebration, assign_kickoff, finish_goal_celebration, handle_goal_reset,
+    advance_goal_celebration, finish_goal_celebration, handle_goal_reset,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
@@ -69,6 +69,19 @@ use std::time::Instant;
 ///   * Midfielder   — attacking 0.50, build-up 1.00, press 1.00, defensive 0.80
 ///   * Defender     — attacking 0.00, build-up 0.70, press 0.70, defensive 1.00
 ///   * Goalkeeper   — gk 1.00 only
+impl TeamSkillAggregates {
+    /// What a side reads as at kickoff, through the same accumulator the
+    /// match keeps — for anyone outside a match who needs the standard a
+    /// team plays at.
+    pub fn at_kickoff<'a>(players: impl IntoIterator<Item = &'a MatchPlayer>) -> Self {
+        let mut acc = SkillAccumulator::new();
+        for p in players {
+            acc.add(p, 0);
+        }
+        acc.finalize()
+    }
+}
+
 struct SkillAccumulator {
     build_up_sum: f32,
     build_up_weight: f32,
@@ -326,8 +339,8 @@ pub use diagnostics::spacing;
 // engine root carries onward are visible here — and so that no group
 // module name leaks into that root namespace alongside them.
 pub use types::{
-    BallSide, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchEvent, MatchFieldSize,
-    MatchPlayerCollection, MatchTime, PlayMatchStateResult, PlayerEntry, TeamsTactics,
+    BallSide, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchFieldSize,
+    MatchPlayerCollection, MatchTime, PlayerEntry, TeamsTactics,
 };
 
 use crate::r#match::TeamSkillAggregates;

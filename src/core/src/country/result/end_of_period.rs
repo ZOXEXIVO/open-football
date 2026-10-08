@@ -4,6 +4,8 @@ use crate::ContractBonusType;
 use crate::PlayerContractProposal;
 use crate::club::CareerRunway;
 use crate::club::SquadDepartures;
+use crate::club::board::mandate::SigningMandate;
+use crate::club::board::{BoardTransferConcern, BoardTransferDecision};
 use crate::club::finance::ParachuteEntitlement;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::TransferCompletion;
@@ -32,8 +34,8 @@ use crate::{
     HappinessEventContext, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
     LoanEventContext, LoanEventKind, LoanSpellRecord, Person, Player, PlayerClubContract,
     PlayerFieldPositionGroup, PlayerHappiness, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
-    PlayerStatCompetitionKind, RetirementReason, SeasonOutcomeContext, SeasonOutcomeKind,
-    StaffPosition, Team, TeamInfo, TeamType, TrophyEventContext, TrophyKind,
+    RetirementReason, SeasonOutcomeContext, SeasonOutcomeKind, StaffPosition, Team, TeamInfo,
+    TeamType, TrophyEventContext, TrophyKind,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
@@ -46,13 +48,36 @@ struct LoanReturnEvent {
     borrowing_club_id: u32,
     parent_club_id: u32,
     borrowing_info: TeamInfo,
-    /// `Some((fee, is_obligation))` when the borrower exercises its
-    /// negotiated option / obligation to buy as the loan expires — the
-    /// player stays put and ownership transfers instead of returning.
-    buyout: Option<(u32, bool)>,
+    /// The borrower buys him as the loan expires, through its negotiated
+    /// option or obligation — the player stays put and ownership transfers
+    /// instead of returning.
+    buyout: Option<LoanBuyout>,
+    /// The borrower's board would not buy him: the concern it named, for
+    /// his record. He goes home like any other returning loanee.
+    turned_down: Option<BoardTransferConcern>,
     /// The borrower wanted him and he would not sign: why, for his
     /// record. He goes home like any other returning loanee.
     declined_buyout: Option<TermsRefusalCause>,
+}
+
+/// A purchase at the end of a loan.
+#[derive(Debug, Clone, Copy)]
+struct LoanBuyout {
+    fee: u32,
+    /// Agreed with the loan, so nobody is asked again at its end.
+    obligation: bool,
+    /// What the borrower is buying him for: the purpose its board heard
+    /// for an option, and the same reading of the role he held there for
+    /// an obligation. The plan he signs onto carries it.
+    mandate: SigningMandate,
+}
+
+/// The borrower's answer to a stored option or obligation to buy.
+#[derive(Debug, Clone, Copy)]
+enum LoanBuyoutDecision {
+    Buy(LoanBuyout),
+    /// The board heard the option and would not buy him.
+    TurnedDown(BoardTransferConcern),
 }
 
 /// Per-team view of which loaned-in players a borrower is warehousing.
@@ -995,9 +1020,7 @@ impl CountryResult {
         // moves the player home (country-agnostic, by club ID).
         for event in events {
             match event.buyout {
-                Some((fee, obligation)) => {
-                    Self::execute_loan_buyout(data, event, fee, obligation, date)
-                }
+                Some(buyout) => Self::execute_loan_buyout(data, event, buyout, date),
                 None => Self::execute_loan_return(data, event, date, true),
             }
         }
@@ -1088,30 +1111,7 @@ impl CountryResult {
                     if !(expiring || warehoused.is_surplus(player, date)) {
                         continue;
                     }
-                    // Option / obligation-to-buy — only a naturally
-                    // expiring loan can carry one (the warehouse drain
-                    // never touches option loans). An obligation binds
-                    // the clubs; an option still has to be signed by him.
-                    let (buyout, declined_buyout) = if expiring {
-                        match Self::decide_loan_buyout(player, loan_contract) {
-                            Some((fee, false)) => match Self::buyout_refusal(
-                                data,
-                                country,
-                                club,
-                                player,
-                                parent_club_id,
-                                fee,
-                                date,
-                            ) {
-                                Some(cause) => (None, Some(cause)),
-                                None => (Some((fee, false)), None),
-                            },
-                            other => (other, None),
-                        }
-                    } else {
-                        (None, None)
-                    };
-                    events.push(LoanReturnEvent {
+                    let mut event = LoanReturnEvent {
                         player_id: player.id,
                         borrowing_club_id: club.id,
                         parent_club_id,
@@ -1122,9 +1122,42 @@ impl CountryResult {
                             league_name: main_league_name.clone(),
                             league_slug: main_league_slug.clone(),
                         },
-                        buyout,
-                        declined_buyout,
-                    });
+                        buyout: None,
+                        turned_down: None,
+                        declined_buyout: None,
+                    };
+                    // Option / obligation-to-buy — only a naturally
+                    // expiring loan can carry one (the warehouse drain
+                    // never touches option loans). An obligation binds
+                    // the clubs; an option the board approves still has
+                    // to be signed by him.
+                    let decision = if expiring {
+                        Self::decide_loan_buyout(club, player, loan_contract, date)
+                    } else {
+                        None
+                    };
+                    match decision {
+                        Some(LoanBuyoutDecision::TurnedDown(concern)) => {
+                            event.turned_down = Some(concern);
+                        }
+                        Some(LoanBuyoutDecision::Buy(buyout)) if buyout.obligation => {
+                            event.buyout = Some(buyout);
+                        }
+                        Some(LoanBuyoutDecision::Buy(buyout)) => match Self::buyout_refusal(
+                            data,
+                            country,
+                            club,
+                            player,
+                            parent_club_id,
+                            buyout.fee,
+                            date,
+                        ) {
+                            Some(cause) => event.declined_buyout = Some(cause),
+                            None => event.buyout = Some(buyout),
+                        },
+                        None => {}
+                    }
+                    events.push(event);
                 }
             }
         }
@@ -1132,50 +1165,42 @@ impl CountryResult {
         events
     }
 
-    /// Borrower's decision on a stored option / obligation to buy as
-    /// the loan expires. Obligations are binding. An option is
-    /// exercised when the loan actually worked — a real body of
-    /// appearances at a decent level, read from the live season stats
-    /// or from the just-frozen loan ledger row when the season-end
-    /// snapshot has already reset them. The player's own wish to stay
-    /// (`WantsLoanMadePermanent`) nudges the bar down: signing a keen,
-    /// integrated player is the easy call.
-    fn decide_loan_buyout(player: &Player, loan: &PlayerClubContract) -> Option<(u32, bool)> {
+    /// The borrower's answer to a stored option / obligation to buy as the
+    /// loan expires. An obligation is binding. An option is a purchase, and
+    /// the borrower's board hears it as one — the season he played there is
+    /// its evidence, not its gate ([`Club::hear_option_to_buy`]). Either way
+    /// the purpose is read from the role he held there, so the plan he signs
+    /// onto is what the club believed it bought.
+    fn decide_loan_buyout(
+        club: &Club,
+        player: &Player,
+        loan: &PlayerClubContract,
+        date: NaiveDate,
+    ) -> Option<LoanBuyoutDecision> {
         let fee = loan.loan_future_fee?;
         if loan.loan_future_fee_obligation {
-            return Some((fee, true));
+            let club_reputation = club.teams.main().map(|t| t.reputation.world).unwrap_or(0);
+            return Some(LoanBuyoutDecision::Buy(LoanBuyout {
+                fee,
+                obligation: true,
+                mandate: SigningMandate::unnegotiated(player, club_reputation, date),
+            }));
         }
-        let live_apps = player.statistics.played + player.statistics.played_subs;
-        let (apps, rating) = if live_apps >= 5 {
-            (live_apps, player.statistics.average_rating_raw())
-        } else {
-            player
-                .statistics_history
-                .season_ledger
-                .iter()
-                .filter(|e| {
-                    e.is_loan && matches!(e.competition_kind, PlayerStatCompetitionKind::League)
-                })
-                .max_by_key(|e| (e.season_start_year, e.seq_id))
-                .map(|e| {
-                    (
-                        e.statistics.played + e.statistics.played_subs,
-                        e.statistics.average_rating,
-                    )
-                })
-                .unwrap_or((0, 0.0))
-        };
-        let wants_to_stay = player
-            .happiness
-            .has_recent_event(&HappinessEventType::WantsLoanMadePermanent, 120);
-        let rating_bar = if wants_to_stay { 6.45 } else { 6.6 };
-        (apps >= 10 && rating >= rating_bar).then_some((fee, false))
+        let (proposal, decision) = club.hear_option_to_buy(player, fee as f64, date);
+        Some(match decision {
+            BoardTransferDecision::Vetoed(concern) => LoanBuyoutDecision::TurnedDown(concern),
+            _ => LoanBuyoutDecision::Buy(LoanBuyout {
+                fee,
+                obligation: false,
+                mandate: proposal.mandate,
+            }),
+        })
     }
 
-    /// The player's side of an option to buy. The borrower has decided
-    /// the loan worked; whether he turns a season there into a permanent
-    /// deal is the appraisal every personal-terms round runs, weighed
-    /// against the club that owns him. `None` when he signs.
+    /// The player's side of an option to buy. The borrower's board has
+    /// approved the purchase; whether he turns a season there into a
+    /// permanent deal is the appraisal every personal-terms round runs,
+    /// weighed against the club that owns him. `None` when he signs.
     #[allow(clippy::too_many_arguments)]
     fn buyout_refusal(
         data: &SimulatorData,
@@ -1272,10 +1297,14 @@ impl CountryResult {
     fn execute_loan_buyout(
         data: &mut SimulatorData,
         event: LoanReturnEvent,
-        fee: u32,
-        obligation: bool,
+        buyout: LoanBuyout,
         date: NaiveDate,
     ) {
+        let LoanBuyout {
+            fee,
+            obligation,
+            mandate,
+        } = buyout;
         let Some((bci, bcoi, bcli, bti)) = data.find_club_main_team(event.borrowing_club_id) else {
             Self::execute_loan_return(data, event, date, true);
             return;
@@ -1293,7 +1322,13 @@ impl CountryResult {
                 "Loan option lapsed: club {} cannot afford {} for player {}",
                 event.borrowing_club_id, fee, event.player_id
             );
-            Self::execute_loan_return(data, event, date, true);
+            // The money the board heard was not there by the time it paid:
+            // still the board's refusal, on his record like any other.
+            let turned_down = LoanReturnEvent {
+                turned_down: Some(BoardTransferConcern::ExceedsTransferBudget),
+                ..event
+            };
+            Self::execute_loan_return(data, turned_down, date, true);
             return;
         }
 
@@ -1370,9 +1405,7 @@ impl CountryResult {
                 selling_league_reputation,
                 record_sell_on: None,
                 personal_terms: None,
-                // A buyout is a fresh purchase with no hearing behind it —
-                // the purpose comes from the shirt he is already wearing.
-                mandate: None,
+                mandate: Some(mandate),
                 // Buyout of a player already in this dressing room — no
                 // arrival reception of any kind (pending is cleared below).
                 source_is_rival: false,
@@ -1504,6 +1537,9 @@ impl CountryResult {
             }
             None => return,
         };
+        if let Some(concern) = event.turned_down {
+            player.on_option_turned_down(concern, date);
+        }
         if let Some(cause) = event.declined_buyout {
             player.on_buyout_declined(cause, date);
         }
@@ -1856,6 +1892,7 @@ impl CountryResult {
                         parent_club_id,
                         borrowing_info: Self::loan_team_info(country, club, team),
                         buyout: None,
+                        turned_down: None,
                         declined_buyout: None,
                     });
                 }
@@ -2795,6 +2832,7 @@ impl CountryResult {
 mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
+    use crate::club::board::mandate::MandatePurpose;
     use crate::club::mind::organs::memory::EpisodeKind;
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::mind::CareerArc;
@@ -2806,11 +2844,12 @@ mod tests {
     };
     use crate::r#match::{Score, TeamScore};
     use crate::shared::Location;
+    use crate::shared::{Currency, CurrencyValue};
     use crate::{
-        Club, ClubColors, ClubFinances, ClubStatus, LoanSpellVerdict, PersonAttributes,
-        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
-        TrainingSchedule,
+        Club, ClubColors, ClubFinances, ClubFinancialBalance, ClubStatus, LoanSpellVerdict,
+        PersonAttributes, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -3330,50 +3369,119 @@ mod tests {
         c
     }
 
+    /// A midfielder whose skills read as `level` to anybody watching him.
+    fn skilled_midfielder(id: u32, level: u8) -> Player {
+        let mut p = make_player_with_position(id);
+        p.player_attributes.current_ability = level;
+        p.skills = PlayerSkills::flat_for_ability(level);
+        p.contract = Some(PlayerClubContract::new(30_000, d(2028, 6, 30)));
+        p
+    }
+
+    /// A month of income behind a club, so its board has a revenue to
+    /// price a purchase against.
+    fn with_income(club: &mut Club) {
+        let mut month = ClubFinancialBalance::new(0);
+        month.income = 3_000_000;
+        club.finance.history.add(d(2027, 5, 1), month);
+    }
+
+    /// A borrower whose own midfielders all sit at level 100.
+    fn hearing_borrower() -> Club {
+        let own = (60..63).map(|id| skilled_midfielder(id, 100)).collect();
+        let mut club = make_club(200, vec![make_team(20, 200, 1, own)]);
+        with_income(&mut club);
+        club
+    }
+
+    /// A loanee of `level` who held `role` at the borrower over `apps`
+    /// games at an average of `rating`.
+    fn hearing_loanee(level: u8, role: PlayerSquadStatus, apps: u16, rating: f32) -> Player {
+        let mut p = skilled_midfielder(55, level);
+        if let Some(contract) = p.contract.as_mut() {
+            contract.squad_status = role;
+        }
+        p.statistics.played = apps;
+        p.statistics.rating_points = rating * apps as f32;
+        p.statistics.rating_weight = apps as f32;
+        p
+    }
+
     #[test]
     fn loan_obligation_always_converts() {
         // No appearances at all — an obligation is binding regardless.
-        let mut p = make_player(1);
+        let mut p = make_player_with_position(1);
         p.statistics.played = 0;
-        assert_eq!(
-            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), true)),
-            Some((2_000_000, true))
+        let decision = CountryResult::decide_loan_buyout(
+            &make_club(200, vec![]),
+            &p,
+            &loan_deal(Some(2_000_000), true),
+            d(2026, 6, 30),
+        );
+        assert!(
+            matches!(
+                decision,
+                Some(LoanBuyoutDecision::Buy(LoanBuyout {
+                    fee: 2_000_000,
+                    obligation: true,
+                    ..
+                }))
+            ),
+            "{decision:?}"
         );
     }
 
     #[test]
     fn thriving_loanee_option_is_exercised() {
-        let mut p = make_player(1);
-        p.statistics.played = 22;
-        p.statistics.rating_points = 6.9 * 22.0;
-        p.statistics.rating_weight = 22.0;
-        assert_eq!(
-            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), false)),
-            Some((2_000_000, false)),
-            "a loan that worked gets its option exercised"
+        // A season of starts at a borrower whose own midfield is forty
+        // points short of him: its board buys the starter it cannot
+        // replace.
+        let decision = CountryResult::decide_loan_buyout(
+            &hearing_borrower(),
+            &hearing_loanee(140, PlayerSquadStatus::FirstTeamRegular, 22, 6.9),
+            &loan_deal(Some(2_000_000), false),
+            d(2027, 5, 28),
+        );
+        assert!(
+            matches!(
+                decision,
+                Some(LoanBuyoutDecision::Buy(buyout))
+                    if !buyout.obligation && buyout.mandate.purpose == MandatePurpose::Starter
+            ),
+            "a loan that worked is heard and bought as a starter: {decision:?}"
         );
     }
 
     #[test]
     fn failed_loan_option_lapses() {
-        let mut p = make_player(1);
-        p.statistics.played = 6;
-        p.statistics.rating_points = 6.2 * 6.0;
-        p.statistics.rating_weight = 6.0;
-        assert_eq!(
-            CountryResult::decide_loan_buyout(&p, &loan_deal(Some(2_000_000), false)),
-            None,
-            "a barely-used loanee's option is left to lapse"
+        // A barely-used body for the bench, no better than the men already
+        // there, at a fee no board pays for cover.
+        let decision = CountryResult::decide_loan_buyout(
+            &hearing_borrower(),
+            &hearing_loanee(100, PlayerSquadStatus::MainBackupPlayer, 6, 6.2),
+            &loan_deal(Some(20_000_000), false),
+            d(2027, 5, 28),
+        );
+        assert!(
+            matches!(
+                decision,
+                Some(LoanBuyoutDecision::TurnedDown(
+                    BoardTransferConcern::FinancialDiscipline
+                ))
+            ),
+            "the board turns the option down on price: {decision:?}"
         );
     }
 
     #[test]
     fn plain_loan_has_no_buyout() {
-        let p = make_player(1);
-        assert_eq!(
-            CountryResult::decide_loan_buyout(&p, &loan_deal(None, false)),
-            None
+        let decision = CountryResult::decide_loan_buyout(
+            &hearing_borrower(),
+            &make_player_with_position(1),
+            &loan_deal(None, false),
+            d(2026, 6, 30),
         );
+        assert!(decision.is_none());
     }
 
     /// A season of starts behind an option to buy, at a borrower in the
@@ -3398,23 +3506,31 @@ mod tests {
         let parent_club = make_club(100, vec![parent_team]);
 
         // A fifty-cap international the giant has just bought: a name
-        // worth a top-flight division, whatever his club form says.
-        let mut loanee = make_player_with_position(55);
+        // worth a top-flight division, whatever his club form says. He
+        // started the season at the borrower, which is the role its squad
+        // pass wrote on his contract.
+        let mut loanee = hearing_loanee(140, PlayerSquadStatus::FirstTeamRegular, 22, 6.9);
         loanee.player_attributes.current_reputation = 7_000;
         loanee.player_attributes.home_reputation = 7_000;
         loanee.player_attributes.world_reputation = 7_000;
         loanee.player_attributes.international_apps = 51;
-        loanee.contract = Some(PlayerClubContract::new(30_000, d(2028, 6, 30)));
-        loanee.statistics.played = 22;
-        loanee.statistics.rating_points = 6.9 * 22.0;
-        loanee.statistics.rating_weight = 22.0;
+        // On an international's wage, which is what a third-tier club's
+        // offer is measured against.
+        if let Some(contract) = loanee.contract.as_mut() {
+            contract.salary = 4_000_000;
+        }
         let mut loan = PlayerClubContract::new(30_000, d(2027, 5, 28));
         loan.loan_from_club_id = Some(100);
         loan.started = Some(d(2026, 9, 1));
         loan.loan_future_fee = Some(2_000_000);
         loanee.contract_loan = Some(loan);
-        let borrower_team = team_with_rep(20, 200, borrower_league, borrower_rep, vec![loanee]);
-        let borrower_club = make_club(200, vec![borrower_team]);
+        // The borrower's own midfield is forty points short of him, so its
+        // board hears the option as a starter it cannot replace.
+        let mut borrower_squad = vec![loanee];
+        borrower_squad.extend((60..63).map(|id| skilled_midfielder(id, 100)));
+        let borrower_team = team_with_rep(20, 200, borrower_league, borrower_rep, borrower_squad);
+        let mut borrower_club = make_club(200, vec![borrower_team]);
+        with_income(&mut borrower_club);
 
         let top_flight = make_league_with_table(1, 8_750, vec![]);
         let third_tier = make_league_with_table(2, 3_500, vec![]);
@@ -3470,6 +3586,118 @@ mod tests {
         let bought = holds_player(&data, 200).expect("stays where he played");
         assert!(bought.contract_loan.is_none(), "the loan became a purchase");
         assert!(holds_player(&data, 100).is_none());
+    }
+
+    fn loanee_mut(data: &mut SimulatorData) -> &mut Player {
+        data.country_mut(1)
+            .unwrap()
+            .clubs
+            .iter_mut()
+            .find(|c| c.id == 200)
+            .and_then(|c| {
+                c.teams.teams[0]
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == 55)
+            })
+            .unwrap()
+    }
+
+    /// A season on the bench and an option priced like a starter: the
+    /// borrower's board turns it down, and he goes home with the board's
+    /// refusal on his record.
+    #[test]
+    fn a_board_does_not_buy_a_body_for_its_bench() {
+        let mut data = option_world(1, 7_000);
+        let loanee = loanee_mut(&mut data);
+        if let Some(contract) = loanee.contract.as_mut() {
+            contract.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        }
+        if let Some(loan) = loanee.contract_loan.as_mut() {
+            loan.loan_future_fee = Some(400_000_000);
+        }
+        CountryResult::process_loan_returns(&mut data, 1, d(2027, 5, 28));
+
+        let returned = holds_player(&data, 100).expect("home with the parent");
+        assert!(returned.contract_loan.is_none());
+        assert!(
+            returned.decision_history.items.iter().any(|row| {
+                row.movement == "dec_loan_option_turned_down"
+                    && row.decision == "board_concern_financial_discipline"
+                    && row.decided_by == "dec_decided_board"
+            }),
+            "the refusal is a decision in the board's name"
+        );
+        assert!(holds_player(&data, 200).is_none());
+    }
+
+    /// An option the borrower cannot pay for lapses, and he goes home with
+    /// the board's refusal on his record.
+    #[test]
+    fn an_option_the_borrower_cannot_afford_lapses() {
+        let mut data = option_world(1, 7_000);
+        if let Some(borrower) = data
+            .country_mut(1)
+            .unwrap()
+            .clubs
+            .iter_mut()
+            .find(|c| c.id == 200)
+        {
+            borrower.finance.transfer_budget = Some(CurrencyValue::new(0.0, Currency::Usd));
+        }
+        CountryResult::process_loan_returns(&mut data, 1, d(2027, 5, 28));
+
+        let returned = holds_player(&data, 100).expect("home with the parent");
+        assert!(returned.contract_loan.is_none());
+        assert!(
+            returned.decision_history.items.iter().any(|row| {
+                row.movement == "dec_loan_option_turned_down"
+                    && row.decision == "board_concern_exceeds_transfer_budget"
+            }),
+            "the lapse is the board's, on his record"
+        );
+        assert!(holds_player(&data, 200).is_none());
+    }
+
+    /// He spent the season as the borrower's rotation man: the board hears
+    /// a rotation purchase, and that is the purpose his plan carries once
+    /// he signs.
+    #[test]
+    fn the_hearing_and_the_plan_agree() {
+        let date = d(2027, 5, 28);
+        let mut data = option_world(1, 7_000);
+        if let Some(contract) = loanee_mut(&mut data).contract.as_mut() {
+            contract.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+        }
+        let heard = {
+            let borrower = data
+                .country(1)
+                .unwrap()
+                .clubs
+                .iter()
+                .find(|c| c.id == 200)
+                .unwrap();
+            let loanee = borrower.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == 55)
+                .unwrap();
+            borrower
+                .hear_option_to_buy(loanee, 2_000_000.0, date)
+                .0
+                .mandate
+                .purpose
+        };
+        assert_eq!(heard, MandatePurpose::Rotation);
+
+        CountryResult::process_loan_returns(&mut data, 1, date);
+
+        let bought = holds_player(&data, 200).expect("he signs and stays");
+        let plan = bought.plan.as_ref().expect("the borrower writes his plan");
+        assert_eq!(plan.mandate.purpose, heard);
+        assert_eq!(plan.started, date);
     }
 
     /// An obligation is not asked again at the end: he agreed to it with

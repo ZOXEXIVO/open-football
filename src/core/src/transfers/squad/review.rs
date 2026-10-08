@@ -1291,7 +1291,7 @@ impl<'a> SquadReview<'a> {
         // worst, not wait for a deficit signal that never fires while
         // the surplus itself is dragging the average down.
         let mut force_transfer_list: Vec<u32> = Vec::new();
-        SquadReviewPass::identify_position_glut(squad, players, &mut loan_outs);
+        SquadReviewPass::identify_position_glut(squad, date, players, &mut loan_outs);
 
         // Repeated-loan stagnation sweep: a player already farmed out
         // twice (the loan path refuses a third spell) who still sits

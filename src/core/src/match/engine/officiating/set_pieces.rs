@@ -11,26 +11,27 @@ use std::env::var;
 use std::sync::OnceLock;
 
 /// Distance band of a direct free kick from goal, in field units (where
-/// 1u ≈ 0.125m). 90u ≈ 11m, 130u ≈ 16m.
+/// 1u = 0.125 m). A direct free kick is never inside the area, so the
+/// nearest band starts at its edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreeKickBand {
-    /// 65–90u — close-in direct shot or near-post delivery.
+    /// Up to 160u (20 m) — the edge of the area and the D.
     Close,
-    /// 90–130u — standard shooting/crossing range.
+    /// 160–200u (20–25 m) — the specialist's range.
     Mid,
-    /// 130–180u — long, normally a cross or layoff.
+    /// 200–256u (25–32 m) — a shot for the brave, usually a delivery.
     Long,
-    /// >180u — too far to shoot, recycle or long delivery.
+    /// Beyond 256u — too far to shoot, recycle or long delivery.
     Far,
 }
 
 impl FreeKickBand {
     pub fn from_distance(distance_u: f32) -> Self {
-        if distance_u <= 90.0 {
+        if distance_u <= 160.0 {
             FreeKickBand::Close
-        } else if distance_u <= 130.0 {
+        } else if distance_u <= 200.0 {
             FreeKickBand::Mid
-        } else if distance_u <= 180.0 {
+        } else if distance_u <= 256.0 {
             FreeKickBand::Long
         } else {
             FreeKickBand::Far
@@ -103,25 +104,6 @@ pub fn score_free_kick_taker(
         + n(composure_0_20) * 0.08
         + n(pressure_attr_0_20) * 0.06
 }
-
-/// Population mean of `skill_composites::set_piece_delivery` among the
-/// players actually *selected* as corner takers.
-///
-/// Takers are chosen as their side's best on [`score_corner_taker`], so
-/// this sits well above a squad-wide average — a mid-table side's best
-/// corner taker is a specialist, not an average player. The corner
-/// aerial-contest delivery term is centred on this value so that wiring
-/// the taker's quality into the contest *redistributes* corner threat
-/// between good and bad set-piece sides rather than shifting the
-/// league-wide corner conversion rate the contest base is calibrated to.
-///
-/// Measured at 0.669-0.671 over 3 455-5 393 corners (`dev_match stats`,
-/// the SET PIECES block, which prints this number for exactly this
-/// purpose).
-/// Re-measure after any change to [`score_corner_taker`]'s weights or to
-/// `set_piece_delivery` — a stale value turns the delivery term from
-/// redistributive into a league-wide conversion shift.
-pub const CORNER_DELIVERY_REFERENCE: f32 = 0.670;
 
 /// Population mean of `skill_composites::penalty_execution` among the
 /// players actually *selected* as penalty takers by
@@ -225,36 +207,38 @@ pub fn wall_size_for(band: FreeKickBand, is_wide_angle: bool) -> u8 {
     adj.max(2)
 }
 
+/// An ordinary player's attribute read against the standard of his match:
+/// where the wall's skill terms are centred.
+const ORDINARY: f32 = 0.65;
+
 /// Probability that the wall blocks/deflects a direct free-kick shot.
 ///
-/// `wall_positioning*0.18 + bravery_avg*0.12 + taker_error*0.20
-/// + distance_close_factor*0.16` clamped 0.08–0.34.
+/// A wall and a taker of the match's own standard stop a little over one
+/// direct free kick in five, more from the edge of the area and fewer from
+/// range; the wall's positioning and bravery and the taker's error move it
+/// either side of that. Every skill input is 0..1 and read against the
+/// standard of the match.
 pub fn wall_block_prob(
     wall_positioning_0_1: f32,
-    wall_bravery_avg_0_20: f32,
+    wall_bravery_0_1: f32,
     taker_error_0_1: f32,
     band: FreeKickBand,
 ) -> f32 {
-    let bravery = (wall_bravery_avg_0_20 / 20.0).clamp(0.0, 1.0);
-    let dist_close = match band {
-        FreeKickBand::Close => 1.0,
-        FreeKickBand::Mid => 0.55,
-        FreeKickBand::Long => 0.20,
-        FreeKickBand::Far => 0.05,
+    let base = match band {
+        FreeKickBand::Close => 0.26,
+        FreeKickBand::Mid => 0.22,
+        FreeKickBand::Long => 0.16,
+        FreeKickBand::Far => 0.06,
     };
-    let raw = wall_positioning_0_1.clamp(0.0, 1.0) * 0.18
-        + bravery * 0.12
-        + taker_error_0_1.clamp(0.0, 1.0) * 0.20
-        + dist_close * 0.16;
-    raw.clamp(0.08, 0.34)
+    let edge = (wall_positioning_0_1.clamp(0.0, 1.0) - ORDINARY) * 0.20
+        + (wall_bravery_0_1.clamp(0.0, 1.0) - ORDINARY) * 0.12
+        + (taker_error_0_1.clamp(0.0, 1.0) - (1.0 - ORDINARY)) * 0.24;
+    (base + edge).clamp(0.04, 0.34)
 }
 
 /// Score a free-kick choice for the given context. Returns weighted scores
 /// for each option; caller normalises to a probability distribution and
 /// rolls. Pure function — same inputs → same outputs.
-///
-/// The scores already incorporate the spec's per-band base probabilities
-/// (8–22% direct shot, 35–55% box delivery, 20–35% short, 8–18% recycle).
 #[derive(Debug, Clone, Copy)]
 pub struct FreeKickChoiceScores {
     pub direct_shot: f32,
@@ -281,31 +265,44 @@ impl FreeKickChoiceScores {
     }
 }
 
+/// Goal-mouth angles, in radians, between which a direct shot goes from
+/// never to the first thing the taker thinks of: 12° is 35 m out in line
+/// with the goal, 22° the D.
+const SHOT_ANGLE_NONE: f32 = 0.209;
+const SHOT_ANGLE_FULL: f32 = 0.384;
+/// …and how often he shoots from the D: the rest are worked.
+const SHOT_PEAK: f32 = 0.85;
+
 pub fn score_free_kick_choices(
     band: FreeKickBand,
+    goal_angle: f32,
     is_indirect: bool,
-    taker_free_kicks_0_20: f32,
-    taker_crossing_0_20: f32,
+    taker_free_kicks_0_1: f32,
+    taker_crossing_0_1: f32,
     target_aerial_advantage_0_1: f32,
     chasing_late: bool,
     protecting_lead_late: bool,
     env: &MatchEnvironment,
 ) -> FreeKickChoiceScores {
-    let fk = (taker_free_kicks_0_20 / 20.0).clamp(0.0, 1.0);
-    let crossing = (taker_crossing_0_20 / 20.0).clamp(0.0, 1.0);
+    let fk = taker_free_kicks_0_1.clamp(0.0, 1.0);
+    let crossing = taker_crossing_0_1.clamp(0.0, 1.0);
 
-    // Per-band base probabilities (sum to ~1.0 within each band).
-    let (mut shot, mut delivery, mut short, mut recycle): (f32, f32, f32, f32) = match band {
-        FreeKickBand::Close => (0.22, 0.45, 0.20, 0.13),
-        FreeKickBand::Mid => (0.15, 0.50, 0.25, 0.10),
-        FreeKickBand::Long => (0.04, 0.55, 0.30, 0.11),
-        FreeKickBand::Far => (0.00, 0.40, 0.40, 0.20),
+    // Whether to shoot is how much of the goal he can see, which covers
+    // distance and width with one number; a good free-kick taker shoots
+    // more of them and a poor one fewer.
+    let sight =
+        ((goal_angle - SHOT_ANGLE_NONE) / (SHOT_ANGLE_FULL - SHOT_ANGLE_NONE)).clamp(0.0, 1.0);
+    let mut shot = SHOT_PEAK * sight * sight * (3.0 - 2.0 * sight) * (0.7 + 0.6 * fk);
+    // …and the rest splits by distance between a ball into the box, a
+    // short routine and keeping it.
+    let (delivery, short, recycle) = match band {
+        FreeKickBand::Close => (0.58, 0.26, 0.16),
+        FreeKickBand::Mid => (0.59, 0.29, 0.12),
+        FreeKickBand::Long => (0.57, 0.31, 0.12),
+        FreeKickBand::Far => (0.40, 0.40, 0.20),
     };
-
-    // Strong FK skill biases toward direct shot in close/mid bands.
-    if band == FreeKickBand::Close || band == FreeKickBand::Mid {
-        shot += (fk - 0.5).max(0.0) * 0.20;
-    }
+    let rest = (1.0 - shot).max(0.0);
+    let (mut delivery, mut short, mut recycle) = (delivery * rest, short * rest, recycle * rest);
     // Strong crossing biases toward box delivery.
     delivery += (crossing - 0.5).max(0.0) * 0.10;
 
@@ -449,16 +446,16 @@ impl CornerRoutineMix {
 /// - chasing_late, protecting_lead — match state
 /// - env — for wind effects
 pub fn score_corner_routines(
-    taker_corners_0_20: f32,
-    taker_crossing_0_20: f32,
+    taker_corners_0_1: f32,
+    taker_crossing_0_1: f32,
     target_aerial_advantage_0_1: f32,
     opponent_gk_aerial_score_0_1: f32,
     chasing_late: bool,
     protecting_lead: bool,
     env: &MatchEnvironment,
 ) -> CornerScores {
-    let corners = (taker_corners_0_20 / 20.0).clamp(0.0, 1.0);
-    let crossing = (taker_crossing_0_20 / 20.0).clamp(0.0, 1.0);
+    let corners = taker_corners_0_1.clamp(0.0, 1.0);
+    let crossing = taker_crossing_0_1.clamp(0.0, 1.0);
 
     // Per-spec base probabilities.
     let mut near = 0.22_f32;
@@ -815,10 +812,10 @@ mod tests {
 
     #[test]
     fn fk_band_classification() {
-        assert_eq!(FreeKickBand::from_distance(70.0), FreeKickBand::Close);
-        assert_eq!(FreeKickBand::from_distance(110.0), FreeKickBand::Mid);
-        assert_eq!(FreeKickBand::from_distance(160.0), FreeKickBand::Long);
-        assert_eq!(FreeKickBand::from_distance(220.0), FreeKickBand::Far);
+        assert_eq!(FreeKickBand::from_distance(140.0), FreeKickBand::Close);
+        assert_eq!(FreeKickBand::from_distance(180.0), FreeKickBand::Mid);
+        assert_eq!(FreeKickBand::from_distance(230.0), FreeKickBand::Long);
+        assert_eq!(FreeKickBand::from_distance(300.0), FreeKickBand::Far);
     }
 
     #[test]
@@ -889,9 +886,9 @@ mod tests {
     #[test]
     fn wall_block_prob_clamped() {
         let p_low = wall_block_prob(0.0, 0.0, 0.0, FreeKickBand::Far);
-        let p_high = wall_block_prob(1.0, 20.0, 1.0, FreeKickBand::Close);
-        assert!((0.08..=0.34).contains(&p_low));
-        assert!((0.08..=0.34).contains(&p_high));
+        let p_high = wall_block_prob(1.0, 1.0, 1.0, FreeKickBand::Close);
+        assert!((0.04..=0.34).contains(&p_low));
+        assert!((0.04..=0.34).contains(&p_high));
         assert!(p_high > p_low);
     }
 
@@ -900,9 +897,10 @@ mod tests {
         let env = MatchEnvironment::default();
         let scores = score_free_kick_choices(
             FreeKickBand::Close,
+            0.40,
             true,
-            18.0,
-            10.0,
+            0.9,
+            0.5,
             0.5,
             false,
             false,
@@ -917,9 +915,10 @@ mod tests {
         let env = MatchEnvironment::default();
         let scores = score_free_kick_choices(
             FreeKickBand::Far,
+            0.12,
             false,
-            18.0,
-            14.0,
+            0.9,
+            0.7,
             0.5,
             false,
             false,
@@ -937,9 +936,10 @@ mod tests {
         };
         let calm_scores = score_free_kick_choices(
             FreeKickBand::Long,
+            0.22,
             false,
-            14.0,
-            14.0,
+            0.7,
+            0.7,
             0.55,
             false,
             false,
@@ -947,9 +947,10 @@ mod tests {
         );
         let windy_scores = score_free_kick_choices(
             FreeKickBand::Long,
+            0.22,
             false,
-            14.0,
-            14.0,
+            0.7,
+            0.7,
             0.55,
             false,
             false,
@@ -990,8 +991,8 @@ mod tests {
     #[test]
     fn corner_short_increases_against_strong_gk() {
         let env = MatchEnvironment::default();
-        let weak_gk = score_corner_routines(15.0, 15.0, 0.55, 0.30, false, false, &env);
-        let strong_gk = score_corner_routines(15.0, 15.0, 0.55, 0.85, false, false, &env);
+        let weak_gk = score_corner_routines(0.75, 0.75, 0.55, 0.30, false, false, &env);
+        let strong_gk = score_corner_routines(0.75, 0.75, 0.55, 0.85, false, false, &env);
         assert!(strong_gk.short > weak_gk.short);
         assert!(strong_gk.penalty_spot < weak_gk.penalty_spot);
     }
@@ -999,8 +1000,8 @@ mod tests {
     #[test]
     fn corner_short_increases_with_poor_aerial_targets() {
         let env = MatchEnvironment::default();
-        let aerial = score_corner_routines(15.0, 15.0, 0.85, 0.50, false, false, &env);
-        let no_aerial = score_corner_routines(15.0, 15.0, 0.20, 0.50, false, false, &env);
+        let aerial = score_corner_routines(0.75, 0.75, 0.85, 0.50, false, false, &env);
+        let no_aerial = score_corner_routines(0.75, 0.75, 0.20, 0.50, false, false, &env);
         assert!(no_aerial.short > aerial.short);
     }
 
@@ -1011,8 +1012,8 @@ mod tests {
             weather: crate::r#match::engine::environment::Weather::Wind,
             ..Default::default()
         };
-        let calm_scores = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, false, &calm);
-        let wind_scores = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, false, &windy);
+        let calm_scores = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &calm);
+        let wind_scores = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &windy);
         assert!(wind_scores.short > calm_scores.short);
         assert!(wind_scores.near_post > calm_scores.near_post);
         assert!(wind_scores.far_post < calm_scores.far_post);
@@ -1021,8 +1022,8 @@ mod tests {
     #[test]
     fn corner_protecting_lead_pushes_short_recycle() {
         let env = MatchEnvironment::default();
-        let neutral = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, false, &env);
-        let protecting = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, true, &env);
+        let neutral = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &env);
+        let protecting = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, true, &env);
         assert!(protecting.short > neutral.short);
         assert!(protecting.penalty_spot < neutral.penalty_spot);
     }

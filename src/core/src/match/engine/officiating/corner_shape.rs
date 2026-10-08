@@ -31,7 +31,7 @@
 //! reading of the match clock — the same twenty-two in the same positions
 //! always produce the same plan, which is what keeps replays reproducible.
 //! Holding a player on his station afterwards belongs to
-//! `CornerHold` in the state dispatcher, and attacking the delivery
+//! `SetPieceHold` in the state dispatcher, and attacking the delivery
 //! belongs to the states themselves.
 
 use crate::r#match::engine::teamplay::standard::MatchStandard;
@@ -274,6 +274,15 @@ const CORNER_RETREAT: f32 = 73.0;
 const OUTLET_MAX_DEPTH: f32 = 420.0;
 
 impl CornerShape {
+    /// Where the near-post, penalty-spot and back-post runners stand and
+    /// where the edge runner waits, as (depth from the goal line, offset
+    /// toward the near post) in units. The delivery for each routine is
+    /// aimed at its runner, so the man and the ball meet by construction.
+    pub const NEAR_POST_RUN: (f32, f32) = (30.0, 34.0);
+    pub const PENALTY_SPOT_RUN: (f32, f32) = (86.0, 4.0);
+    pub const BACK_POST_RUN: (f32, f32) = (46.0, -52.0);
+    pub const EDGE_RUN: (f32, f32) = (PENALTY_AREA_DEPTH + 20.0, -6.0);
+
     /// Plan the set-up for a corner about to be taken from `flag`.
     ///
     /// `goal_x` is the *defended* goal line (0.0 or the pitch width) and
@@ -342,7 +351,7 @@ impl CornerShape {
                 .iter()
                 .filter(|p| {
                     p.side == Some(attacking_side)
-                        && !p.is_sent_off
+                        && !p.off_pitch
                         && p.tactical_position.current_position.is_goalkeeper()
                 })
                 .map(|p| (p.position.x - g.goal_x).abs()),
@@ -369,7 +378,7 @@ impl CornerShape {
                 let is_attacking = p.side == Some(attacking_side);
                 is_attacking == want_attacking
                     && p.side.is_some()
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.id != taker_id
                     && !p.tactical_position.current_position.is_goalkeeper()
             })
@@ -522,7 +531,11 @@ impl CornerShape {
         }
 
         // Near-post flick, penalty spot, back post — best heads first.
-        for (depth, y) in [(30.0, 34.0), (86.0, 4.0), (46.0, -52.0)] {
+        for (depth, y) in [
+            Self::NEAR_POST_RUN,
+            Self::PENALTY_SPOT_RUN,
+            Self::BACK_POST_RUN,
+        ] {
             let Some(p) = Self::take_best(pool, Self::aerial_score) else {
                 break;
             };
@@ -538,7 +551,7 @@ impl CornerShape {
         if let Some(p) = Self::take_best(pool, Self::edge_score) {
             out.push(CornerStation {
                 player_id: p.id,
-                position: g.at(PENALTY_AREA_DEPTH + 20.0, -6.0),
+                position: g.at(Self::EDGE_RUN.0, Self::EDGE_RUN.1),
                 role: CornerRole::EdgeRunner,
             });
         }
@@ -727,6 +740,7 @@ mod deadline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::player::mind::KickoffMind;
     use crate::r#match::MatchPlayer;
     use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
     use chrono::NaiveDate;
@@ -782,6 +796,7 @@ mod tests {
                 0.0,
                 1.0,
                 1.0,
+                KickoffMind::neutral(),
                 false,
             )
         }
@@ -939,7 +954,7 @@ mod tests {
         let mut players = CornerFixture::squads();
         // Two sent off.
         for p in players.iter_mut().filter(|p| p.id == 101 || p.id == 105) {
-            p.is_sent_off = true;
+            p.off_pitch = true;
         }
         let stations = CornerFixture::plan(&players, 2.0);
         let defensive = stations.iter().filter(|s| s.role.is_defensive()).count();

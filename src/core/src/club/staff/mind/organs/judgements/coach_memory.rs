@@ -48,6 +48,10 @@ const HIGH_RATING_BAR: f32 = 7.0;
 /// Five matches captures the "form check" window most managers operate on.
 const RECENT_WINDOW: u8 = 5;
 const RECENT_MASK: u8 = (1 << RECENT_WINDOW) - 1;
+/// Share of the gap to a match's standard one full match moves the coach's
+/// read of where a man is used to playing.
+const OBSERVED_STANDARD_ALPHA: f32 = 0.1;
+const CLAIMS_ALPHA: f32 = 0.2;
 
 /// EMA coefficient for the trust signals (tactical / big_match / training).
 /// Slower than form so a single match doesn't reshape the relationship.
@@ -171,9 +175,24 @@ pub struct CoachMemory {
     low_window_mask: u8,
     /// Sliding 5-match bit mask: bit 0 = most recent match was strong.
     high_window_mask: u8,
+    /// The standard of football he has watched him play at, weighted by
+    /// minutes. `None` until he has seen him play.
+    pub observed_standard: Option<f32>,
+    /// Sliding 5-match bit mask: bit 0 = his most recent match had an error
+    /// that led to a shot or a goal.
+    error_window_mask: u8,
+    /// Crosses and loose balls a keeper goes for in a match, as he has seen
+    /// it — his appetite, from the touchline.
+    pub claims_ema: f32,
 }
 
 impl CoachMemory {
+    /// Of his last five matches, how many had an error that cost a shot.
+    #[inline]
+    pub fn recent_errors(&self) -> u8 {
+        self.error_window_mask.count_ones() as u8
+    }
+
     /// Has the coach seen enough matches to have a confident opinion?
     /// Below this the assessment layer falls back to softer adjustments
     /// — first impressions don't override existing scoring signal.
@@ -268,6 +287,9 @@ impl Default for CoachMemory {
             prior_at_seed: 0.0,
             low_window_mask: 0,
             high_window_mask: 0,
+            observed_standard: None,
+            error_window_mask: 0,
+            claims_ema: 0.0,
         }
     }
 }
@@ -470,6 +492,12 @@ pub struct CoachMatchObservation {
     pub goals: u16,
     pub assists: u16,
     pub errors_leading_to_goal: u16,
+    pub errors_leading_to_shot: u16,
+    /// Crosses and loose balls a keeper went for — held, punched or
+    /// flapped. What a coach sees of his appetite.
+    pub keeper_claims: u16,
+    /// The standard of football the match was played at.
+    pub standard_of_football: f32,
     pub yellow_cards: u8,
     pub red_cards: u8,
     pub team_won: bool,
@@ -594,6 +622,19 @@ impl MemoryEngine {
         record.high_window_mask = ((record.high_window_mask << 1) | high_bit) & RECENT_MASK;
         record.recent_low_rating_count = record.low_window_mask.count_ones() as u8;
         record.recent_high_rating_count = record.high_window_mask.count_ones() as u8;
+
+        // What a coach can see of a man's head: where he has been playing,
+        // what has gone wrong, how much he goes for.
+        if obs.minutes_played > 0 {
+            let weight = (obs.minutes_played as f32 / 90.0).clamp(0.0, 1.0) * OBSERVED_STANDARD_ALPHA;
+            record.observed_standard = Some(match record.observed_standard {
+                Some(seen) => seen + (obs.standard_of_football - seen) * weight,
+                None => obs.standard_of_football,
+            });
+            record.claims_ema += (obs.keeper_claims as f32 - record.claims_ema) * CLAIMS_ALPHA;
+        }
+        let error_bit = u8::from(obs.errors_leading_to_shot + obs.errors_leading_to_goal > 0);
+        record.error_window_mask = ((record.error_window_mask << 1) | error_bit) & RECENT_MASK;
 
         // Trust signal updates.
         Self::update_tactical_trust(record, obs, profile);
@@ -780,6 +821,7 @@ impl MemoryEngine {
         // Decay sliding windows by shifting out one bit per step.
         let shift = steps.min(5.0) as u8;
         record.low_window_mask >>= shift;
+        record.error_window_mask >>= shift;
         record.high_window_mask >>= shift;
         record.recent_low_rating_count = record.low_window_mask.count_ones() as u8;
         record.recent_high_rating_count = record.high_window_mask.count_ones() as u8;
@@ -868,6 +910,9 @@ mod tests {
                 goals: 0,
                 assists: 0,
                 errors_leading_to_goal: 0,
+                errors_leading_to_shot: 0,
+                keeper_claims: 0,
+                standard_of_football: 0.66,
                 yellow_cards: 0,
                 red_cards: 0,
                 team_won: true,

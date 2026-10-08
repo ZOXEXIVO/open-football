@@ -1,5 +1,7 @@
-//! The rule that keeps a corner looking like a corner: **stand where you
-//! were put until the ball comes near you.**
+//! The rule that keeps a set piece looking like one: **stand where you
+//! were put until the ball comes near you.** A corner's twenty, a free
+//! kick's wall and retreat, a penalty's emptied area and a throw's two
+//! short options all hold their stations through it.
 //!
 //! # Why this is a cross-state rule and not a state
 //!
@@ -33,13 +35,12 @@
 //! [`DefensiveRecovery::depth_override`]: crate::r#match::defenders::states::common::DefensiveRecovery
 
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
-use crate::r#match::{
-    GameTickContext, MatchPlayer, PassOriginRestart, StateProcessingResult, SteeringBehavior,
-};
+use crate::r#match::{GameTickContext, MatchPlayer, StateProcessingResult, SteeringBehavior};
 use nalgebra::Vector3;
 
 /// Distance from the ball (field units, 1 u = 0.125 m) at which a player
@@ -54,14 +55,13 @@ const RELEASE_NONE: f32 = 96.0;
 /// stop drifting, not to snap to a coordinate.
 const STATION_SLOWING: f32 = 10.0;
 
-/// The corner set-piece position hold.
-pub struct CornerHold;
+/// The set-piece position hold.
+pub struct SetPieceHold;
 
-impl CornerHold {
-    /// Blend the player's own velocity toward his corner station.
+impl SetPieceHold {
+    /// Blend the player's own velocity toward his set-piece station.
     ///
-    /// No-op — one `Option` read — whenever no corner is being taken,
-    /// which is all but a couple of seconds in twenty of a match.
+    /// No-op — one `Option` read — whenever no set piece is being set up.
     pub fn apply(
         player: &MatchPlayer,
         tick_context: &GameTickContext,
@@ -74,7 +74,7 @@ impl CornerHold {
         // stations off at first contact, so this rarely decides anything —
         // but it is a one-byte read and it means the hold cannot outlive a
         // corner even if the clear is ever missed on some path.
-        if tick_context.ball.pass_origin_restart != PassOriginRestart::Corner {
+        if !RestartShape::is_shaped(tick_context.ball.pass_origin_restart) {
             return;
         }
         let weight = Self::hold_weight(player, tick_context);
@@ -146,6 +146,15 @@ impl CornerHold {
             let fetching = tick_context.ball.restart_taker == Some(player.id)
                 && tick_context.ball.restart_carrier != Some(player.id);
             return if fetching { 0.0 } else { 1.0 };
+        }
+        // The taker has a free kick or a penalty at his feet, and nobody
+        // may come off his station until he has kicked it.
+        if tick_context.ball.set_piece_kicker.is_some() {
+            return if tick_context.ball.current_owner == Some(player.id) {
+                0.0
+            } else {
+                1.0
+            };
         }
 
         // On the ball, or committed to something that cannot be aborted

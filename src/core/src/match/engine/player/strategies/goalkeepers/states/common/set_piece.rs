@@ -259,11 +259,12 @@ impl KeeperPenaltyStance {
     /// ±0.10 at the ends of the range: the best readers of a run-up get
     /// two in three, the worst are a coin.
     const READ_SPREAD: f32 = 0.20;
-    /// Where the dive is aimed, as a distance from the centre of the
-    /// goal: 24u = 3 m, the inside of the post. A keeper who has guessed
-    /// goes to the corner, not to some hedge between the corner and the
-    /// middle.
-    const CORNER: f32 = 24.0;
+    /// Where the dive takes his hips, as a distance from the centre of the
+    /// goal: 12u = 1.5 m, as far as a man launched at the strike gets in
+    /// the 0.4 s an eleven-metre kick is in the air. His hands reach a
+    /// metre beyond that, and a ball placed further out beats a right
+    /// guess.
+    const CORNER: f32 = 12.0;
 
     /// Is the shot in flight a penalty kick at his goal?
     pub fn facing(ctx: &StateProcessingContext) -> bool {

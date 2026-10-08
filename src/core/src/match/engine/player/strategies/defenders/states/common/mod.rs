@@ -13,6 +13,9 @@ use crate::r#match::player::strategies::common::team::ShapeDiscipline;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
 
+mod line_step;
+pub use line_step::LineStep;
+
 /// Holding a position that is itself moving.
 ///
 /// # Why this exists
@@ -327,6 +330,8 @@ impl DefensiveRecovery {
                 ctx.player().defensive().defensive_role_for_ball_carrier(),
                 DefensiveRole::Primary
             )
+            // His own side's pass is on its way to him.
+            || ctx.tick_context.ball.pass_target == Some(ctx.player.id)
             || Self::is_going_for_a_loose_ball(ctx)
         {
             return None;
@@ -373,18 +378,14 @@ impl DefensiveRecovery {
     ///
     /// ⚠ AND IT HAS TO BE **THEIR** BALL.
     ///
-    /// Nothing in this rule asks whose possession it is — it fires
-    /// whenever the ball is goal-side of a defender, our own build-up
-    /// included. That is pre-existing, and the whole population is
-    /// calibrated on top of it, so widening the exemption to a pass
-    /// between two of our own defenders changes something this report is
-    /// not about. Measured over 120 fixtures: exempting the receiver of
-    /// our own pass took **pass accuracy 85.5% → 95.8%** and passes
-    /// 920 → 1 195 a team, because a centre-half receiving a square ball
-    /// had been running away from it. That is a real defect and a
-    /// separate piece of work; it is not this one.
-    ///
-    /// The report is about winning a ball BACK, so the exemption is
+    /// Our own pass is a different exemption — the man it is played to,
+    /// read off the pass target in [`Self::depth_override`]. Without it a
+    /// centre-half receiving a square ball was pulled goal-side as it
+    /// arrived and it rolled on past him: measured over 100 fixtures,
+    /// 153 of a match's 188 lost deliveries were a defender backing off
+    /// his own team's pass, and the ball running on into touch was
+    /// **92% of the engine's throw-ins** (103 a match against 8.4 with
+    /// him exempt). This one is about winning a ball BACK, so it is
     /// scoped to a ball whose last touch was not one of ours.
     fn is_going_for_a_loose_ball(ctx: &StateProcessingContext) -> bool {
         if Self::loose_recovery_legacy() {

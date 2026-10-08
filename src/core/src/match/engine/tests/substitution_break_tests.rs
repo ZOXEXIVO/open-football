@@ -121,7 +121,7 @@ fn squad(team_id: u32, base_id: u32) -> MatchSquad {
 }
 
 /// Two sides with a bench each, an hour into the match.
-fn kickoff() -> (MatchField, MatchContext) {
+pub(super) fn kickoff() -> (MatchField, MatchContext) {
     let home = squad(1, 100);
     let away = squad(2, 300);
     let players = MatchPlayerCollection::from_squads(&home, &away);
@@ -693,6 +693,7 @@ fn a_change_waits_for_the_ball_to_be_dead() {
         awarded_tick: 0,
         patience_ticks: 500,
         settled_tick: None,
+        hold: None,
     });
     assert!(
         !Substitutions::play_is_stopped(&field),

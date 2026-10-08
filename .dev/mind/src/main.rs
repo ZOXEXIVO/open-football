@@ -43,7 +43,7 @@
 //! whole run into silence.
 
 use core::club::mind::organs::memory::MindClock;
-use core::club::player::mind::{GoalStatus, MemoryCensus, MindNoteKind};
+use core::club::player::mind::{GoalDirection, GoalKind, GoalStatus, MemoryCensus, MindNoteKind};
 use core::club::staff::StandingRung;
 use core::utils::DateUtils;
 use core::{
@@ -242,6 +242,13 @@ struct MindCensus {
 
     /// Where every live player goal sits on the ladder.
     goal_ladder: HashMap<&'static str, usize>,
+    /// Seniors holding a want to leave and a want to stay that both shape
+    /// decisions — the contradiction the counterweights exist to wear down
+    /// — and how many of them have said one of the two out loud.
+    torn: usize,
+    torn_out_loud: usize,
+    /// Which (leave, stay) pairs those seniors hold.
+    torn_pairs: HashMap<(GoalKind, GoalKind), usize>,
 
     // ── Parallel-run agreement, player side ───────────────────────────
     /// Phase 3b: the legacy `Req` status against `GoalStack::is_pressing`.
@@ -385,6 +392,33 @@ impl MindCensus {
 
         for goal in player.mind.goals().live() {
             *self.goal_ladder.entry(Label::status_label(goal.status)).or_default() += 1;
+        }
+
+        // A want the catalog stands apart from the contest is no
+        // contradiction, however it points.
+        let deciding = |direction: GoalDirection| {
+            player.mind.goals().live().filter(move |g| {
+                g.status.shapes_decisions()
+                    && g.kind.direction() == direction
+                    && !g.kind.spec().stands_apart
+            })
+        };
+        let out_loud =
+            |status: GoalStatus| matches!(status, GoalStatus::Voiced | GoalStatus::Pressing);
+        let mut torn = false;
+        let mut said = false;
+        for leave in deciding(GoalDirection::Leave) {
+            for stay in deciding(GoalDirection::Stay) {
+                torn = true;
+                said |= out_loud(leave.status) || out_loud(stay.status);
+                *self.torn_pairs.entry((leave.kind, stay.kind)).or_default() += 1;
+            }
+        }
+        if torn {
+            self.torn += 1;
+            if said {
+                self.torn_out_loud += 1;
+            }
         }
 
         self.diary.push(player.mind.journal().len() as u32);
@@ -586,6 +620,19 @@ impl ReportPrinter {
 
         println!("\n── the goal ladder, players ──");
         Self::ladder(&census.goal_ladder);
+
+        println!(
+            "  {:<28} {} ({:.1}% of seniors), {} saying one of the two out loud",
+            "torn (leave + stay deciding)",
+            census.torn,
+            Label::pct(census.torn, census.seniors),
+            census.torn_out_loud,
+        );
+        let mut pairs: Vec<(&(GoalKind, GoalKind), &usize)> = census.torn_pairs.iter().collect();
+        pairs.sort_by(|a, b| b.1.cmp(a.1));
+        for ((leave, stay), count) in pairs.into_iter().take(5) {
+            println!("    {:<40} {count}", format!("{leave:?} + {stay:?}"));
+        }
 
         println!("\n── parallel run: player ──");
         println!(

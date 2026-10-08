@@ -1,6 +1,7 @@
 use crate::r#match::StateProcessingContext;
 use crate::r#match::midfielders::states::common::Opportunity;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use nalgebra::Vector3;
 
 /// Engine units per metre. The pitch is 840u × 545u, i.e. 105 m × 68 m,
 /// so 1u = 0.125 m. Everything below is written in metres and converted
@@ -96,7 +97,13 @@ impl LaneAhead {
         if len < f32::EPSILON {
             return Self::open();
         }
-        let to_goal = to_goal / len;
+        Self::read_along(ctx, to_goal / len)
+    }
+
+    /// The same read down any heading: `to_goal` is the unit direction
+    /// of the channel.
+    pub fn read_along(ctx: &StateProcessingContext, to_goal: Vector3<f32>) -> Self {
+        let from = ctx.player.position;
 
         let mut nearest = f32::INFINITY;
         let mut nearest_id = None;
@@ -266,6 +273,55 @@ impl TakeOn {
 
         let spread = Opportunity::draw_vs(ctx, TAKE_ON_SALT, defender_id);
         appetite >= TAKE_ON_BAR_BASE + spread * TAKE_ON_BAR_SPREAD
+    }
+}
+
+/// Which way a carrier drives when nothing sends him elsewhere: the
+/// heading with the most running room that still gains ground, instead of
+/// straight at the goal mouth, which funnels every carry into the middle
+/// where the defence is thickest. Far from goal, ground gained is depth;
+/// over the last thirty metres it turns into ground gained on the goal.
+pub struct CarryHeading;
+
+impl CarryHeading {
+    /// The widest he will turn off straight up the pitch, radians, and
+    /// how many headings he weighs either side of it.
+    const FAN: f32 = 1.2;
+    const FAN_STEPS: i32 = 6;
+    /// A heading that reaches the touchline within this look is not
+    /// open grass, it is the ball going out.
+    const LOOK: f32 = 10.0 * U_PER_M;
+    const TOUCHLINE: f32 = 2.0 * U_PER_M;
+    const TURN_IN: f32 = 30.0 * U_PER_M;
+    const STRIDE: f32 = 5.0 * U_PER_M;
+
+    pub fn aim(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let from = ctx.player.position;
+        let goal = ctx.player().opponent_goal_position();
+        let height = ctx.context.field_size.height as f32;
+        let forward = ctx.player.side.map_or(1.0, |side| side.forward_dir_x());
+        let to_goal = (goal - from)
+            .try_normalize(f32::EPSILON)
+            .unwrap_or(Vector3::new(forward, 0.0, 0.0));
+        let turn_in = (1.0 - (goal - from).norm() / Self::TURN_IN).clamp(0.0, 1.0);
+
+        let mut best = to_goal;
+        let mut best_score = f32::MIN;
+        for step in -Self::FAN_STEPS..=Self::FAN_STEPS {
+            let angle = Self::FAN * step as f32 / Self::FAN_STEPS as f32;
+            let heading = Vector3::new(forward * angle.cos(), angle.sin(), 0.0);
+            let reach = from.y + heading.y * Self::LOOK;
+            if reach < Self::TOUCHLINE || reach > height - Self::TOUCHLINE {
+                continue;
+            }
+            let gain = (1.0 - turn_in) * heading.x * forward + turn_in * heading.dot(&to_goal);
+            let score = gain.max(0.0) * LaneAhead::read_along(ctx, heading).openness;
+            if score > best_score {
+                best_score = score;
+                best = heading;
+            }
+        }
+        from + best * Self::STRIDE
     }
 }
 

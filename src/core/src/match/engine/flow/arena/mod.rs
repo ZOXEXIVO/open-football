@@ -11,6 +11,7 @@
 //! * [`field`] — [`MatchField`](field::MatchField): the twenty-two, the
 //!   bench, the ball, the two dugouts, and the formation reset every
 //!   restart writes ([`ResetReason`](field::ResetReason)).
+//! * [`formation_variant`] — the shape a side short of men re-forms into.
 //! * [`goal`] — the frame at each end. The goal-line test, and the
 //!   kickoff/restart bookkeeping that follows a ball crossing it.
 //!
@@ -24,4 +25,5 @@
 
 pub mod environment;
 pub mod field;
+pub mod formation_variant;
 pub mod goal;

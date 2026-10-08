@@ -66,6 +66,10 @@ pub struct DuelContext {
     pub crowded_central: bool,
     /// Match minute — feeds the fatigue model.
     pub minute: u32,
+    /// What the pitch does to a man running with the ball: mud kills the
+    /// take-on, a wet ball runs away from the touch.
+    pub pitch_success: f32,
+    pub pitch_control: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -222,7 +226,7 @@ impl DribbleDuelResolver {
     ) -> DuelResolution {
         let a_score = Self::attacker_score(attacker, ctx);
         let d_score = Self::defender_score(defender, ctx);
-        let beat_prob = Self::sigmoid((a_score - d_score) * 2.4).clamp(0.12, 0.88);
+        let beat_prob = (Self::sigmoid((a_score - d_score) * 2.4) + ctx.pitch_success).clamp(0.12, 0.88);
 
         // Foul risk bumps from traits.
         let attacker_foul_drawn_bonus: f32 = if attacker.has_trait(PlayerTrait::TriesTricks) {
@@ -251,7 +255,7 @@ impl DribbleDuelResolver {
             // heavy-touch beat, foul drawn, foul committed (rare here).
             let r = roll / beat_prob; // re-normalize into [0, 1)
             let foul_drawn = (0.13 + attacker_foul_drawn_bonus).clamp(0.05, 0.22);
-            let heavy = 0.42;
+            let heavy = (0.42 - ctx.pitch_control).clamp(0.20, 0.70);
             if r < foul_drawn {
                 DribbleOutcome::WinsFoul
             } else if r < foul_drawn + heavy {

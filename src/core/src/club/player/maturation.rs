@@ -4,7 +4,8 @@
 //! early twenties; decisions, composure, positioning and vision keep
 //! improving into the late twenties and hold into the thirties, because
 //! they are built out of games watched, games played and mistakes made.
-//! Goalkeeping craft matures latest of all — keepers peak at 28-33.
+//! Goalkeeping craft matures latest of all — keepers peak in their early
+//! thirties.
 //!
 //! The generator has always believed this: it builds a 17-year-old's
 //! mental attributes at 0.55 of his eventual level and his technique at
@@ -24,6 +25,9 @@
 //! correctly; he should not have had those attributes.
 //!
 //! This table is the single source of truth both halves now read.
+
+use crate::club::player::development::PositionalSkillCeilings;
+use crate::{PlayerPositionType, PlayerSkills};
 
 /// Skill families, grouped by when they mature rather than by what they
 /// do. Deliberately its own enum: the generator and the development tick
@@ -53,6 +57,13 @@ pub enum MaturationGroup {
 
 impl MaturationGroup {
     pub const COUNT: usize = 5;
+    pub const ALL: [MaturationGroup; Self::COUNT] = [
+        MaturationGroup::Technical,
+        MaturationGroup::Mental,
+        MaturationGroup::Physical,
+        MaturationGroup::Explosive,
+        MaturationGroup::Goalkeeping,
+    ];
 }
 
 pub struct SkillMaturation;
@@ -77,6 +88,55 @@ impl SkillMaturation {
         r0 + (r1 - r0) * (age - a0) / (a1 - a0)
     }
 
+    /// Share of his eventual ability a player of `age` holds in `position`:
+    /// each family's maturity, weighted by what that family is worth in the
+    /// position's CA. A keeper's ability is half goalkeeping craft, so his
+    /// share arrives later than any outfielder's and goes later too.
+    pub fn ability_share(age: f32, position: PlayerPositionType) -> f32 {
+        Self::share_of(age, &Self::family_weights(position))
+    }
+
+    /// The same share for the outfield roles taken together — the
+    /// reference an age curve written for outfielders is set on.
+    pub fn outfield_ability_share(age: f32) -> f32 {
+        use PlayerPositionType::*;
+        const ROLES: [PlayerPositionType; 9] = [
+            DefenderCenter,
+            DefenderLeft,
+            WingbackLeft,
+            DefensiveMidfielder,
+            MidfielderCenter,
+            MidfielderLeft,
+            AttackingMidfielderCenter,
+            AttackingMidfielderLeft,
+            Striker,
+        ];
+        let mut weights = [0.0f32; MaturationGroup::COUNT];
+        for role in ROLES {
+            for (total, w) in weights.iter_mut().zip(Self::family_weights(role)) {
+                *total += w / ROLES.len() as f32;
+            }
+        }
+        Self::share_of(age, &weights)
+    }
+
+    /// What each family is worth in a position's CA, as shares of the whole.
+    fn family_weights(position: PlayerPositionType) -> [f32; MaturationGroup::COUNT] {
+        let mut families = [0.0f32; MaturationGroup::COUNT];
+        for (idx, w) in PlayerSkills::ability_weights(position).iter().enumerate() {
+            families[PositionalSkillCeilings::maturation_group(idx) as usize] += w;
+        }
+        let total: f32 = families.iter().sum();
+        families.map(|f| f / total)
+    }
+
+    fn share_of(age: f32, weights: &[f32; MaturationGroup::COUNT]) -> f32 {
+        MaturationGroup::ALL
+            .iter()
+            .map(|&group| weights[group as usize] * Self::ratio(age, group))
+            .sum()
+    }
+
     /// `(age, share)` points of each family's curve. Each share is held
     /// at the middle of the years it applies to and a peak across all of
     /// them, so a ceiling rises with the player's age rather than in
@@ -84,8 +144,12 @@ impl SkillMaturation {
     ///
     /// The technical / mental / physical shares are the generator's own
     /// numbers, moved here so generation and development cannot drift
-    /// apart again. The goalkeeping row follows the later peak both
-    /// modules document for keepers (28-33), between technical and mental.
+    /// apart again. The goalkeeping row is fitted on the career grid
+    /// (`career_table`, 2026-10-09) to the database's keepers: a PA 150
+    /// regular starting keeper of median character at an average club ends
+    /// each season from 22 to 30 between 0.02 and 0.06 above the keeper
+    /// median, as an outfield regular sits above the outfield one, and
+    /// reaches his peak in his early thirties.
     fn knots(group: MaturationGroup) -> &'static [(f32, f32)] {
         match group {
             MaturationGroup::Technical => &[
@@ -130,14 +194,15 @@ impl SkillMaturation {
                 (33.0, 0.80),
             ],
             MaturationGroup::Goalkeeping => &[
-                (17.5, 0.62),
-                (19.0, 0.70),
-                (21.5, 0.80),
-                (25.0, 0.90),
-                (28.5, 0.97),
-                (30.0, 1.00),
-                (34.0, 1.00),
-                (35.0, 0.97),
+                (17.5, 0.55),
+                (19.0, 0.60),
+                (21.5, 0.66),
+                (25.0, 0.79),
+                (28.5, 0.855),
+                (31.5, 0.92),
+                (33.5, 1.00),
+                (35.0, 1.00),
+                (36.0, 0.97),
             ],
         }
     }
@@ -146,10 +211,15 @@ impl SkillMaturation {
     /// drill a pass and a sprint; decisions, composure and a keeper's
     /// command of his area are made in games, so a player short of
     /// football holds only the rest of his age's share.
+    ///
+    /// Goalkeeping's share is fitted on the career grid (2026-10-09,
+    /// `a_keeper_needs_football_more_than_an_outfielder`): developed from 19
+    /// to 23 without a match, a keeper falls 0.11 of his potential behind a
+    /// starting keeper, where a central midfielder falls 0.06 behind his.
     pub fn match_share(group: MaturationGroup) -> f32 {
         match group {
             MaturationGroup::Mental => 0.15,
-            MaturationGroup::Goalkeeping => 0.12,
+            MaturationGroup::Goalkeeping => 0.25,
             MaturationGroup::Technical => 0.08,
             MaturationGroup::Physical => 0.03,
             MaturationGroup::Explosive => 0.0,
@@ -225,15 +295,30 @@ mod tests {
     }
 
     /// Keepers mature latest — a 22-year-old outfielder is technically
-    /// closer to finished than a 22-year-old keeper is.
+    /// closer to finished than a 22-year-old keeper is, and no other family
+    /// reaches its peak as late as goalkeeping does.
     #[test]
     fn keepers_mature_latest() {
         assert!(
             SkillMaturation::ratio(22.5, MaturationGroup::Goalkeeping)
                 < SkillMaturation::ratio(22.5, MaturationGroup::Technical)
         );
+        let peaks_at = |group| {
+            (15 * 4..=40 * 4)
+                .map(|q| q as f32 / 4.0)
+                .find(|&age| SkillMaturation::ratio(age, group) >= 1.0)
+                .unwrap()
+        };
+        let keeper = peaks_at(MaturationGroup::Goalkeeping);
+        for group in FAMILIES {
+            assert!(
+                peaks_at(group) <= keeper,
+                "{group:?} peaks at {} after goalkeeping's {keeper}",
+                peaks_at(group)
+            );
+        }
         assert_eq!(
-            SkillMaturation::ratio(31.5, MaturationGroup::Goalkeeping),
+            SkillMaturation::ratio(33.5, MaturationGroup::Goalkeeping),
             1.0
         );
     }

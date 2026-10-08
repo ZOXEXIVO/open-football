@@ -1,4 +1,5 @@
 use crate::Tactics;
+use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
     AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
@@ -330,7 +331,15 @@ impl<'b> TeamOperationsImpl<'b> {
         let hug = 0.35 + 0.65 * self.team_width_target().clamp(0.0, 1.0);
 
         if let Some(flank) = plan.wide.flank_of(self.ctx.player.id) {
-            return Some(WidePlan::width_anchor(block, flank, field_height, hug));
+            // Where on that flank is his own: on the paint, or a stride
+            // inside it looking to come in.
+            let anchor = WidePlan::width_anchor(block, flank, field_height, hug);
+            let toward_line = movement_bias(self.ctx.player).touchline_offset_units * flank.sign();
+            return Some(Vector3::new(
+                anchor.x,
+                (anchor.y + toward_line).clamp(10.0, field_height - 10.0),
+                0.0,
+            ));
         }
         if plan.wide.is_overlap_runner(self.ctx.player.id) {
             let flank = plan.wide.ball_flank;

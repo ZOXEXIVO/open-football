@@ -2,6 +2,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
 use crate::r#match::goalkeepers::states::common::{
@@ -15,7 +16,7 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::strategies::common::states::{
-    CornerHold, KeeperReleaseSpace, KickoffDelivery, RestartCarry, ThrowInDelivery,
+    KeeperReleaseSpace, KickoffDelivery, RestartCarry, SetPieceHold, SetPieceKick, ThrowInDelivery,
 };
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
@@ -158,6 +159,8 @@ impl PlayerFieldPositionGroup {
                 TransitionSource::LooseBallOverride,
             );
             0
+        } else if player.react_to_dispossession(context, tick_context) {
+            0
         } else {
             in_state_time
         };
@@ -178,8 +181,8 @@ impl PlayerFieldPositionGroup {
         // Universal corner-shape hold, applied at dispatch for the same
         // reason as the loose-ball override above: a corner puts twenty
         // players somewhere their own state did not choose, and not one of
-        // the four state machines knows to stay there. See `CornerHold`.
-        CornerHold::apply(player, tick_context, &mut result);
+        // the four state machines knows to stay there. See `SetPieceHold`.
+        SetPieceHold::apply(player, tick_context, &mut result);
         // …and the man carrying a dead ball back to the spot it is taken
         // from, for every restart rather than only the corner. LAST, and
         // deliberately an outright override: the ball rides on his
@@ -659,6 +662,7 @@ impl<'p> StateProcessor<'p> {
         let condition_ctx = ConditionContext {
             in_state_time: self.in_state_time,
             player: self.player,
+            conditions: &self.context.conditions,
             match_progress,
         };
 
@@ -741,6 +745,17 @@ impl<'p> StateProcessor<'p> {
         if KickoffDelivery::taking(&processing_ctx) {
             result.velocity = Some(Vector3::zeros());
             if let Some(kick) = KickoffDelivery::deliver(&processing_ctx) {
+                result.events.add(kick);
+            }
+            return result;
+        }
+
+        // **He is standing over a free kick or a penalty.** The same again:
+        // he shoots it or plays it, and his state machine would walk it off
+        // the mark. See [`SetPieceKick`].
+        if SetPieceKick::taking(&processing_ctx) {
+            result.velocity = Some(Vector3::zeros());
+            if let Some(kick) = SetPieceKick::deliver(&processing_ctx) {
                 result.events.add(kick);
             }
             return result;
@@ -1064,6 +1079,8 @@ impl<'p> StateProcessor<'p> {
 pub struct ConditionContext<'sp> {
     pub in_state_time: u64,
     pub player: &'sp mut MatchPlayer,
+    /// The weather and the pitch: heat and mud tire legs faster.
+    pub conditions: &'sp EnvModifiers,
     /// Match progress 0.0..1.0 (0 = kickoff, 1.0 = 90'). Feeds the
     /// second-half fatigue-curve: recovery slows and sprint cost rises
     /// as the match progresses, so late-game players genuinely fade.

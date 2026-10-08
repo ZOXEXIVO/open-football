@@ -323,7 +323,7 @@ fn the_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
         let players = field.players.clone();
         field
             .ball
-            .tick_awaited_restart(&context, &players, &mut events);
+            .tick_awaited_restart(&mut context, &players, &mut events);
         let now = field.ball.position;
         let fell = previous.z - now.z;
         if fell > 0.11 {
@@ -369,7 +369,7 @@ fn the_ball_waits_longer_the_further_the_keeper_has_to_come() {
         "a keeper twenty-five metres away must be given longer, got {far} against {near}"
     );
     assert!(
-        AwaitedRestart::patience_for(f32::MAX) <= 1200,
+        AwaitedRestart::patience_for(f32::MAX) <= AwaitedRestart::CEILING,
         "…but not long enough to stall the match"
     );
 }
@@ -532,7 +532,7 @@ fn nobody_may_touch_a_dead_ball_including_its_taker() {
         let players = field.players.clone();
         field
             .ball
-            .tick_awaited_restart(&context, &players, &mut settle_events);
+            .tick_awaited_restart(&mut context, &players, &mut settle_events);
     }
     let restart = field.ball.awaiting_restart.expect("armed");
     assert!(restart.settled, "the run-out has to finish inside 4 s");

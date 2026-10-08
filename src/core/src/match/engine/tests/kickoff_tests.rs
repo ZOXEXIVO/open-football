@@ -26,6 +26,8 @@ use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::goal::assign_kickoff;
 use crate::r#match::engine::kickoff_shape::KickoffShape;
 use crate::r#match::engine::result::Score;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::r#match::engine::teamplay::tactical::TeamSkillAggregates;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::squad::squad::MatchSquad;
@@ -327,4 +329,30 @@ fn a_real_match_kicks_off_with_a_pass() {
         !opening.is_empty(),
         "no pass in the first second of the match — the kick-off was carried"
     );
+}
+
+#[test]
+fn a_match_reports_the_standard_it_was_played_at() {
+    let home = squad(1, 100);
+    let away = squad(2, 200);
+    let read = MatchStandard::of(
+        &TeamSkillAggregates::at_kickoff(&home.main_squad),
+        &TeamSkillAggregates::at_kickoff(&away.main_squad),
+    );
+
+    let result = FootballEngine::<840, 545>::play_with_config(
+        home,
+        away,
+        MatchEngineConfig::seeded(0x0F00_0031),
+    );
+
+    // The latch reads both elevens on the first aggregate pass, after the
+    // crowd has had its say, so it sits beside the bare reading, not on it.
+    assert!(
+        (result.standard_of_football - read).abs() < 0.03,
+        "result {} against a kickoff reading of {}",
+        result.standard_of_football,
+        read
+    );
+    assert_ne!(result.standard_of_football, MatchStandard::CALIBRATION);
 }

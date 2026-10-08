@@ -52,8 +52,8 @@ pub use flow::{celebration, context, environment, field, goal, result, rng, touc
 pub use officiating::corner_shape::{CornerRole, CornerShape, CornerStation};
 pub use officiating::kickoff_shape::{KickoffPlan, KickoffShape, KickoffStation};
 pub use officiating::management::{
-    CounterAttackThreat, HomeAdvantage, HomeAdvantageDeltas, ProfessionalFoul,
-    ProfessionalFoulCard, StoppageEvent, StoppageTime, TimeWasting, TimeWastingRestart,
+    CounterAttackThreat, Dissent, ProfessionalFoul, ProfessionalFoulCard, TimeWasting,
+    TimeWastingRestart,
 };
 pub use officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
 pub use officiating::set_pieces::{

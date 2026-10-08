@@ -91,6 +91,7 @@ fn a_shot_he_has_already_been_beaten_by(
         deflected: false,
         shooter_threat: 0.5,
         struck_from: Vector3::new(700.0, 264.0, 0.0),
+        seen_from: Vector3::new(700.0, 264.0, 0.0),
     });
 }
 

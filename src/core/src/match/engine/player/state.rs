@@ -30,6 +30,17 @@ pub enum PlayerState {
 }
 
 impl PlayerState {
+    /// Closing a man down or going in on him — what makes a carry past him
+    /// a take-on rather than a run past somebody who was standing there.
+    pub fn is_challenging(&self) -> bool {
+        matches!(
+            self,
+            PlayerState::Defender(DefenderState::Pressing | DefenderState::Tackling)
+                | PlayerState::Midfielder(MidfielderState::Pressing | MidfielderState::Tackling)
+                | PlayerState::Forward(ForwardState::Pressing | ForwardState::Tackling)
+        )
+    }
+
     /// Cheap integer ID for fast dedup — avoids `to_string()` allocation.
     /// Each (outer variant, inner variant) pair maps to a unique u16.
     ///
@@ -650,6 +661,17 @@ impl PlayerMatchState {
                     .max(state_change_result.shape_recall_pull)
                     .max(state_change_result.effort_floor);
             }
+            if let Some(team) = tick_context.ball.restarting_team
+                && player_position_group != PlayerFieldPositionGroup::Goalkeeper
+            {
+                max_speed = max_speed.min(
+                    sprint_capability
+                        * MovementEffort::dead_ball_ceiling(
+                            context.restart_hurry(team),
+                            player.player_attributes.condition_percentage(),
+                        ),
+                );
+            }
 
             // NaN/Inf guard: state velocity functions compose many
             // divisions and normalizations, and any zero-magnitude vector
@@ -704,7 +726,8 @@ impl PlayerMatchState {
                 || MovementEffort::ramp_legacy()
             {
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-                let max_accel = sprint_capability * agility_normalized * 0.7;
+                let max_accel =
+                    sprint_capability * agility_normalized * 0.7 * (1.0 + context.conditions.acceleration);
                 let delta = velocity - player.velocity;
                 let delta_sq = delta.norm_squared();
                 let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
@@ -730,6 +753,7 @@ impl PlayerMatchState {
                     velocity,
                     max_speed,
                     sprint_capability,
+                    1.0 + context.conditions.acceleration,
                 );
             }
         }

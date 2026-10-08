@@ -23,7 +23,7 @@ use super::stats::{
 use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
 use crate::r#match::MatchResultRaw;
-use crate::r#match::{MatchResult, MatchSquad};
+use crate::r#match::{MatchResult, SquadFixture};
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, MatchRuntime, NationalTeamEventContext, NationalTeamEventKind,
@@ -74,7 +74,7 @@ impl WorldNationalCompetitions {
         }
 
         let prepared = Self::build_squads(continents, &stamped, date);
-        let engine_results = MatchRuntime::engine_pool().play_squads_with_knockout(prepared);
+        let engine_results = MatchRuntime::engine_pool().play_squads(prepared);
 
         let mut collected: Vec<MatchResult> = Vec::with_capacity(engine_results.len());
         for (stamp_idx, raw) in engine_results {
@@ -234,7 +234,7 @@ impl WorldNationalCompetitions {
         continents: &mut [Continent],
         stamped: &[StampedFixture],
         date: NaiveDate,
-    ) -> Vec<(usize, MatchSquad, MatchSquad, bool)> {
+    ) -> Vec<SquadFixture> {
         let fixtures: Vec<(u32, u32, NationalTeamLevel, bool)> = stamped
             .iter()
             .map(|s| {

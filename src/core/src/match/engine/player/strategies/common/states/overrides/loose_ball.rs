@@ -1,4 +1,4 @@
-use crate::r#match::engine::ball::ball::{BallRoll, RunOff};
+use crate::r#match::engine::ball::ball::{BallRoll, CONTROL_DISTANCE, RunOff};
 use crate::r#match::position_ball::BallFieldData;
 use crate::r#match::{StateProcessingContext, SteeringBehavior};
 use nalgebra::Vector3;
@@ -136,6 +136,55 @@ impl ChasePath {
         self.rest = stop;
         self.rest_ticks = t;
         self.point_at(t)
+    }
+
+    /// Where, and in how many ticks, the man a pass was played to takes
+    /// it: the point of its path nearest the spot it was played to, if he
+    /// can be there no later than the ball and no opponent can. `None`
+    /// otherwise, and he goes to meet it wherever he can, like any other
+    /// ball — a man with a defender on him comes to the ball.
+    ///
+    /// The receiver's steering and the chase table's end of the path both
+    /// read this, so the defending side closes the spot he actually takes
+    /// it at. Taken at the spot regardless, the man with a marker at his
+    /// shoulder stood still and let the ball come to him in shooting range:
+    /// shots doubled to 30 a team a match and long shots tripled.
+    pub fn receiving(
+        aim: Vector3<f32>,
+        receiver: Vector3<f32>,
+        max_speed: f32,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+        opponents: impl Iterator<Item = (Vector3<f32>, f32)>,
+    ) -> Option<(Vector3<f32>, f32)> {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let spot = Self::receiving_spot(aim, ball_pos, ball_vel);
+        let ball_time = BallRoll::ticks_to(flat(ball_vel).norm(), (spot - flat(ball_pos)).norm());
+        let time_to_spot = |from: Vector3<f32>, speed: f32| {
+            ((spot - flat(from)).norm() - CONTROL_DISTANCE).max(0.0) / speed.max(1e-3)
+        };
+        let his = time_to_spot(receiver, max_speed) <= ball_time;
+        let contested = || {
+            opponents
+                .map(|(position, speed)| time_to_spot(position, speed))
+                .any(|theirs| theirs <= ball_time)
+        };
+        (his && !contested()).then_some((spot, ball_time))
+    }
+
+    /// The point of a delivery's path nearest `aim` — the spot itself for
+    /// a true ball, the nearest he can get to it for a sprayed one.
+    fn receiving_spot(
+        aim: Vector3<f32>,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> Vector3<f32> {
+        let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
+        let Some(dir) = flat(ball_vel).try_normalize(1e-4) else {
+            return flat(ball_pos);
+        };
+        let along = (flat(aim) - flat(ball_pos)).dot(&dir).max(0.0);
+        flat(ball_pos) + dir * along
     }
 
     /// Ticks until a runner at `position` with top speed `speed` is
@@ -308,6 +357,40 @@ impl LooseBallChase {
         let player = ctx.player;
         let ball = &ctx.tick_context.positions.ball;
         let (ball_pos, ball_vel, landing) = (ball.position, ball.velocity, ball.landing_position);
+
+        // **A pass played to him is not a loose ball.** He takes it where
+        // it was played, and the spot is a fixed point to arrive at, like a
+        // landing. Raced for, it was met at the first point of its path he
+        // could reach — up the line toward the passer, so a winger found on
+        // the touchline came ten metres infield for every ball: 23% of
+        // passes were aimed within 5-10 m of a touchline and 2.8% were
+        // received there. See [`Self::receiving`].
+        if ctx.tick_context.ball.pass_target == Some(player.id)
+            && let Some((spot, _)) = ctx.tick_context.ball.pass_aim.and_then(|aim| {
+                ChasePath::receiving(
+                    aim,
+                    player.position,
+                    player.max_speed_with_condition_cached(),
+                    ball_pos,
+                    ball_vel,
+                    ctx.tick_context
+                        .positions
+                        .players
+                        .on_pitch()
+                        .iter()
+                        .filter(|m| Some(m.side) != player.side)
+                        .map(|m| (m.position, m.max_speed)),
+                )
+            })
+        {
+            let velocity = SteeringBehavior::Arrive {
+                target: spot,
+                slowing_distance: SLOWING_DISTANCE,
+            }
+            .calculate(player)
+            .velocity;
+            return (spot, velocity);
+        }
 
         let t = ((ball_pos.z - Self::GROUND_H) / (Self::AERIAL_H - Self::GROUND_H)).clamp(0.0, 1.0);
         let aerial = t * t * (3.0 - 2.0 * t);
@@ -557,17 +640,23 @@ impl LooseBallChase {
     /// the gap, is continuous, and is guaranteed to go negative — the
     /// ball stops at [`BallRoll::range`] after [`BallRoll::rest_ticks`],
     /// and a straight run reaches that point in finite time — so the
-    /// first crossing exists; a coarse march brackets it and a bisection
-    /// pins it. No model of the steering, no feedback: positions, one
-    /// speed, and the friction constant the physics itself uses.
+    /// first crossing exists; a bracket and a bisection pin it. No model
+    /// of the steering, no feedback: positions, one speed, and the
+    /// friction constant the physics itself uses.
     ///
-    /// A march this coarse can step OVER a brief early window (a ball
-    /// that dips into reach for a moment while passing close) and settle
-    /// on the later, permanent crossing instead. That costs a few ticks
-    /// of optimality, never correctness — the returned point is always
-    /// one he genuinely arrives at first — and the solve is re-run every
-    /// tick, so a window that widens as the ball slows is picked up the
-    /// moment it is real.
+    /// The bracket is looked for where the roll passes nearest him first.
+    /// Short of that point the ball only ever gets closer while his reach
+    /// only ever grows, so if he can be there in time there is exactly one
+    /// crossing before it. Only when he cannot does a coarse march over the
+    /// whole roll look for the later one.
+    ///
+    /// ⚠ The march alone stepped OVER that window — sixteen samples across
+    /// a horizon of thirty seconds and more, against a ball that is in his
+    /// reach for a fraction of one. A pass played to a man's feet was read,
+    /// a second before it got to him, as meeting him at its resting point
+    /// thirty metres on: he turned and ran there, it rolled past him, and
+    /// **77% of a defender's lost passes went that way** — the largest
+    /// single source of the engine's throw-ins.
     ///
     /// Returns `(point, ticks)` — the when matters as much as the where,
     /// because commitment is priced in TIME: the steering runs hard at a
@@ -607,23 +696,31 @@ impl LooseBallChase {
         let rest = ball_pos + dir * BallRoll::range(ball_speed);
         let horizon = BallRoll::rest_ticks(ball_speed) + (rest - player_pos).norm() / speed;
 
+        const STEPS: usize = 16;
+        const HALVINGS: usize = 12;
+        let nearest = (player_pos - ball_pos).dot(&dir);
+        let mut bracket = (nearest > 0.0)
+            .then(|| BallRoll::ticks_to(ball_speed, nearest))
+            .map(|t| (t, BallRoll::decay(t)))
+            .filter(|&(t, decay)| arrived(t, decay))
+            .map(|nearest_pass| ((0.0, 1.0), nearest_pass));
+
         // The decay is carried alongside the time — multiplied across the
         // march, and the geometric mean of its ends across a halving (kᵗ
         // at the midpoint of two times is exactly that) — so the whole
         // solve costs one `exp` instead of one per probe.
-        const STEPS: usize = 16;
-        const HALVINGS: usize = 12;
-        let step = horizon / STEPS as f32;
-        let step_decay = BallRoll::decay(step);
-        let mut bracket = None;
-        let mut decay = 1.0;
-        for i in 1..=STEPS {
-            let t = step * i as f32;
-            let prev_decay = decay;
-            decay *= step_decay;
-            if arrived(t, decay) {
-                bracket = Some(((t - step, prev_decay), (t, decay)));
-                break;
+        if bracket.is_none() {
+            let step = horizon / STEPS as f32;
+            let step_decay = BallRoll::decay(step);
+            let mut decay = 1.0;
+            for i in 1..=STEPS {
+                let t = step * i as f32;
+                let prev_decay = decay;
+                decay *= step_decay;
+                if arrived(t, decay) {
+                    bracket = Some(((t - step, prev_decay), (t, decay)));
+                    break;
+                }
             }
         }
         // Float dust at the far end of the horizon; out there the ball

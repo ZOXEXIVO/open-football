@@ -171,10 +171,10 @@ impl StateProcessingHandler for MidfielderStandingState {
             ));
         }
 
-        // Midfielders should not stand still for long — get moving quickly.
-        // (The walk-or-run fork lives in the possession branch above; by
-        // the time control has been lost this player has somewhere to be.)
-        if ctx.in_state_time > 8 {
+        // His slot has moved off him: go. The walk-or-run fork lives in
+        // the possession branch above; out of possession he runs.
+        const SLOT_DRIFT: f32 = 40.0;
+        if ctx.team().distance_from_anchor() > SLOT_DRIFT || ctx.in_state_time > 24 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -185,7 +185,6 @@ impl StateProcessingHandler for MidfielderStandingState {
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Standing = completely still. No separation, no drift.
-        // Midfielders transition out of Standing within 8 ticks anyway.
         Some(Vector3::zeros())
     }
 

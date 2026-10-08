@@ -40,6 +40,13 @@ impl BallRoll {
         ((speed - Self::STOPPED) * Self::KEPT / (1.0 - Self::KEPT)).max(0.0)
     }
 
+    /// The speed that leaves a ball at rest `distance` units on: the
+    /// inverse of [`range`](Self::range).
+    #[inline]
+    pub fn speed_to_rest_at(distance: f32) -> f32 {
+        distance.max(0.0) * (1.0 - Self::KEPT) / Self::KEPT + Self::STOPPED
+    }
+
     /// Ticks until a ball rolling at `speed` decays to
     /// [`STOPPED`](Self::STOPPED) and sits.
     ///
@@ -66,6 +73,19 @@ impl BallRoll {
             return 0.0;
         }
         Self::distance_decayed(speed, Self::decay(ticks))
+    }
+
+    /// Ticks the ball takes to cover `distance` of its roll — the inverse
+    /// of [`distance`](Self::distance), and [`rest_ticks`](Self::rest_ticks)
+    /// for anything at or past the resting point.
+    pub fn ticks_to(speed: f32, distance: f32) -> f32 {
+        if distance <= 0.0 || speed <= Self::STOPPED {
+            return 0.0;
+        }
+        if distance >= Self::range(speed) {
+            return Self::rest_ticks(speed);
+        }
+        (1.0 - distance * (1.0 - Self::KEPT) / (speed * Self::KEPT)).ln() / Self::KEPT.ln()
     }
 
     /// `kᵗ` — the share of its speed a roll still has after `ticks`.

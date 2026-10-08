@@ -141,6 +141,7 @@ fn apply_to_player<D: LeagueProcessAccess>(
                 starting_condition: snap.starting_condition,
                 final_match_energy: snap.final_match_energy,
                 high_intensity_load_hint: snap.high_intensity_load_hint,
+                injury: snap.injury,
             },
             None => MatchExertionInputs::from_minutes(player, fallback_minutes),
         };

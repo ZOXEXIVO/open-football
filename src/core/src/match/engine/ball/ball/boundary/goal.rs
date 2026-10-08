@@ -12,6 +12,7 @@ use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
     pick_corner_routine, score_corner_routines, score_corner_taker,
 };
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
@@ -37,7 +38,7 @@ impl Ball {
         let mut att: Vec<f32> = Vec::with_capacity(10);
         let mut def: Vec<f32> = Vec::with_capacity(10);
         for p in players {
-            if p.is_sent_off || p.tactical_position.current_position.is_goalkeeper() {
+            if p.off_pitch || p.tactical_position.current_position.is_goalkeeper() {
                 continue;
             }
             match p.side {
@@ -475,8 +476,32 @@ impl Ball {
             // this is measured against a spot the ball is not on.
             patience_ticks: AwaitedRestart::patience_for(walk),
             settled_tick: None,
+            hold: None,
         });
         events.add_ball_event(BallEvent::TakeMe(gk_id));
+    }
+
+    /// A keeper held the ball past the count: the corner goes to the side
+    /// attacking his goal, taken from the flag on the side the ball is.
+    pub fn concede_corner_for_holding(
+        &mut self,
+        keeper_id: u32,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let Some(keeper_side) = players.iter().find(|p| p.id == keeper_id).and_then(|p| p.side)
+        else {
+            return;
+        };
+        let (side, attacking_side) = match keeper_side {
+            PlayerSide::Left => (GoalSide::Home, PlayerSide::Right),
+            PlayerSide::Right => (GoalSide::Away, PlayerSide::Left),
+        };
+        self.current_owner = None;
+        self.held_in_hands = false;
+        self.velocity = Vector3::zeros();
+        self.award_corner(side, attacking_side, false, context, players, events);
     }
 
     /// Award a corner to `attacking_side` off a ball that has crossed the
@@ -576,7 +601,7 @@ impl Ball {
             .iter()
             .filter(|p| {
                 p.side == Some(attacking_side)
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && !p.tactical_position.current_position.is_goalkeeper()
             })
             .max_by(|a, b| {
@@ -682,16 +707,21 @@ impl Ball {
                         && p.tactical_position.current_position.is_goalkeeper()
                 })
                 .map(|gk| {
-                    ((gk.skills.goalkeeping.command_of_area * 0.55
-                        + gk.skills.goalkeeping.aerial_reach * 0.45)
-                        / 20.0)
-                        .clamp(0.0, 1.0)
+                    MatchStandard::peer(
+                        (gk.skills.goalkeeping.command_of_area * 0.55
+                            + gk.skills.goalkeeping.aerial_reach * 0.45)
+                            / 20.0,
+                        MatchStandard::keeper_shift(context),
+                    )
                 })
                 .unwrap_or(0.5);
 
+            // The taker and the keeper read against the standard of the
+            // match: an "elite" corner taker is one for this level.
+            let shift = MatchStandard::shift(context);
             let scores = score_corner_routines(
-                taker.skills.technical.corners,
-                taker.skills.technical.crossing,
+                MatchStandard::peer(sc::n(taker.skills.technical.corners), shift),
+                MatchStandard::peer(sc::n(taker.skills.technical.crossing), shift),
                 aerial_advantage,
                 gk_aerial,
                 chasing_late,
@@ -714,7 +744,6 @@ impl Ball {
             // contest reads only the two aerial duellists and the keeper —
             // an elite dead-ball specialist and a centre-half hitting the
             // first man produced identical corners.
-            self.pending_corner_delivery = sc::set_piece_delivery(taker, minute);
             #[cfg(feature = "match-logs")]
             {
                 use crate::r#match::engine::set_pieces::CornerRoutine;
@@ -728,7 +757,7 @@ impl Ball {
                     CornerRoutine::Short => 3,
                     CornerRoutine::EdgeCutback => 4,
                 };
-                SetPieceDiag::note_corner(slot, self.pending_corner_delivery);
+                SetPieceDiag::note_corner(slot, sc::set_piece_delivery(taker, minute));
             }
             self.offside_snapshot = None;
             // A carry that was still running ends HERE, at the byline —
@@ -752,7 +781,7 @@ impl Ball {
             //
             // The fetch and the carry are that stoppage, so the plan is
             // now a set of stations both sides WALK to under
-            // `CornerHold`. `CornerShape::plan` still owns the geometry
+            // `SetPieceHold`. `CornerShape::plan` still owns the geometry
             // and the who-stands-where, and the engine still drains it
             // in `apply_pending_set_piece_teleport` — that layer simply
             // stopped writing the positions.
@@ -779,7 +808,6 @@ impl Ball {
             // fires on the first airborne ownerless tick with a live
             // `Corner` origin, and a walked corner spends its whole
             // set-up ownerless.
-            self.corner_contest_resolved = walked;
             self.corner_shape = Some(CornerShapeHold {
                 armed_tick: self.current_tick_cached,
                 live_tick: (!walked).then_some(self.current_tick_cached),
@@ -803,8 +831,9 @@ impl Ball {
                     settled: !runs_out,
                     origin: PassOriginRestart::Corner,
                     awarded_tick: context.current_tick(),
-                    patience_ticks: AwaitedRestart::corner_patience_for(fetch),
+                    patience_ticks: AwaitedRestart::patience_for(fetch),
                     settled_tick: None,
+                    hold: None,
                 });
                 events.add_ball_event(BallEvent::TakeMe(taker_id));
             } else {

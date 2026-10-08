@@ -6,7 +6,7 @@
 //! development-loan pass have to agree on when the first team is short, or the
 //! one loans away the player the other is about to call up.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
 
@@ -248,13 +248,15 @@ impl YouthDevelopmentLoanPolicy {
 /// never reviewed its keeper room gets exactly the audit it always had.
 pub(in crate::club::core) struct KeeperLoanView {
     protected: HashSet<u32>,
-    wanted_out: HashSet<u32>,
+    /// Keeper → the standard of football the department means the loan to
+    /// take him to, when it has said.
+    wanted_out: HashMap<u32, Option<f32>>,
 }
 
 impl KeeperLoanView {
     pub(in crate::club::core) fn of(plan: Option<&KeeperRoomPlan>, today: NaiveDate) -> Self {
         let mut protected: HashSet<u32> = HashSet::new();
-        let mut wanted_out: HashSet<u32> = HashSet::new();
+        let mut wanted_out: HashMap<u32, Option<f32>> = HashMap::new();
         let Some(plan) = plan else {
             return KeeperLoanView {
                 protected,
@@ -275,12 +277,12 @@ impl KeeperLoanView {
                 continue;
             }
             if let Some(id) = advice.player_id {
-                wanted_out.insert(id);
+                wanted_out.insert(id, advice.target_standard);
             }
         }
         // A keeper cannot be both. The department's own review never says
         // both about one man, but a plan read mid-revision could.
-        wanted_out.retain(|id| !protected.contains(id));
+        wanted_out.retain(|id, _| !protected.contains(id));
 
         KeeperLoanView {
             protected,
@@ -293,6 +295,12 @@ impl KeeperLoanView {
     }
 
     pub(in crate::club::core) fn wants_out(&self, player_id: u32) -> bool {
-        self.wanted_out.contains(&player_id)
+        self.wanted_out.contains_key(&player_id)
+    }
+
+    /// The standard of football the department means his loan to take him
+    /// to.
+    pub(in crate::club::core) fn aim(&self, player_id: u32) -> Option<f32> {
+        self.wanted_out.get(&player_id).copied().flatten()
     }
 }

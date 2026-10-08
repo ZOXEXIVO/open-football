@@ -245,10 +245,7 @@ impl UpgradeMath {
     /// the buying club's own coach is judging his own players by what he
     /// sees them do, which is the same currency the scout's assessment of
     /// the target is denominated in.
-    pub(in crate::transfers) fn incumbent_level(
-        club: &Club,
-        group: PlayerFieldPositionGroup,
-    ) -> f32 {
+    pub(crate) fn incumbent_level(club: &Club, group: PlayerFieldPositionGroup) -> f32 {
         club.teams
             .main()
             .or_else(|| club.teams.teams.first())

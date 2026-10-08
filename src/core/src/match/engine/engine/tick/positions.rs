@@ -44,7 +44,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Don't record sent-off players — their state doesn't advance and
         // their position is a dummy off-pitch stash. A recorded sample
         // would show them as a ghost sprite in the replay viewer.
-        field.players.iter().filter(|p| !p.is_sent_off).for_each(|player| {
+        field.players.iter().filter(|p| !p.off_pitch).for_each(|player| {
             // Diagnostic: catch players pinned at ANY field boundary.
             // `check_boundary_collision` clamps to 0..=field_width and
             // 0..=field_height; a steering error that consistently
@@ -144,7 +144,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .players
             .iter_mut()
             .enumerate()
-            .filter(|(_, player)| !player.is_sent_off)
+            .filter(|(_, player)| !player.off_pitch)
             .for_each(|(idx, player)| {
                 // Reduced AI cadence for players far away from an OWNED
                 // ball in passive shape-keeping states. The skipped tick
@@ -224,7 +224,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .players
             .iter_mut()
             .enumerate()
-            .filter(|(_, player)| !player.is_sent_off)
+            .filter(|(_, player)| !player.off_pitch)
             .filter(|(_, player)| {
                 player.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper

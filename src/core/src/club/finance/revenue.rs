@@ -235,16 +235,27 @@ impl RevenueModel {
         base * price_level.max(0.1) as f64
     }
 
+    /// The share of the ground a home match fills: the club's pull, the
+    /// supporters' mood (`form_multiplier`) and the country's appetite for
+    /// going to football.
+    pub fn utilisation(reputation_score: f32, form_multiplier: f32, attendance_factor: f32) -> f32 {
+        (Self::base_utilisation(reputation_score)
+            * form_multiplier
+            * attendance_factor.clamp(0.3, 1.2))
+        .clamp(0.20, 1.0)
+    }
+
     /// Matchday income for the month, plus the gate that produced it.
     pub fn matchday(inputs: &RevenueInputs, facilities_multiplier: f32) -> (i64, u32) {
         if inputs.home_matches == 0 || inputs.stadium_capacity == 0 {
             return (0, 0);
         }
 
-        let utilisation = (Self::base_utilisation(inputs.reputation_score)
-            * facilities_multiplier
-            * inputs.attendance_factor.clamp(0.3, 1.2))
-        .clamp(0.20, 1.0);
+        let utilisation = Self::utilisation(
+            inputs.reputation_score,
+            facilities_multiplier,
+            inputs.attendance_factor,
+        );
 
         let attendance = (inputs.stadium_capacity as f32 * utilisation).round() as u32;
         let per_head = Self::revenue_per_attendee(inputs.reputation_score, inputs.price_level);

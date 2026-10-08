@@ -3,7 +3,7 @@
 //! An international is the one fixture in the game that never becomes a
 //! [`Match`]. The world orchestrator builds two squads out of players scattered
 //! across every continent and hands them straight to
-//! [`MatchPlayEnginePool::play_squads_with_knockout`] — the only engine entry
+//! [`MatchPlayEnginePool::play_squads`] — the only engine entry
 //! point that does not go through [`Match::play`], and therefore the only one
 //! that never read `MatchRuntime::recordings_mode()`. It passed a literal
 //! `false` from the day it was written.
@@ -27,7 +27,8 @@ use super::goal_celebration_tests::squad;
 use super::recording_globals::RecordingGlobals;
 use crate::MatchRuntime;
 use crate::r#match::engine::engine::MATCH_TIME_MS;
-use crate::r#match::{MatchPlayEnginePool, RecordingScope};
+use crate::r#match::{CompetitionKind, FixtureContext, MatchPlayEnginePool, RecordingScope};
+use chrono::NaiveDate;
 
 /// Play one squad-vs-squad fixture down the national-team path and report
 /// whether a track came out of it, and how far into the match it reaches.
@@ -38,7 +39,13 @@ use crate::r#match::{MatchPlayEnginePool, RecordingScope};
 /// an international actually takes.
 fn international_recording(base: u32) -> (bool, u64) {
     let pool = MatchPlayEnginePool::new(1);
-    let mut results = pool.play_squads(vec![(0, squad(791, base), squad(799, base + 100))]);
+    let fixture = FixtureContext::new(
+        "nat_791_799",
+        NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
+        CompetitionKind::International,
+        false,
+    );
+    let mut results = pool.play_squads(vec![(0, squad(791, base), squad(799, base + 100), fixture)]);
     let (_, raw) = results.pop().expect("one fixture in, one result out");
     (
         !raw.position_data.is_empty(),

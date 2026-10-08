@@ -6,7 +6,8 @@ use crate::club::staff::coach::standing::StandingEvidence;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
-    MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadLadder, SquadSocialViewBuilder,
+    MatchResultInfo, MentorshipProcessor, PlayingStandard, PreventiveRestPass, SquadLadder,
+    SquadSocialViewBuilder,
     SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder, TeamCoachingScores,
     TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot, TeamType,
 };
@@ -96,6 +97,11 @@ pub struct Team {
     /// division the club is moving into. This is the hand-off between the
     /// two — set by [`Team::move_to_league`], cleared by the snapshot.
     pub previous_league_id: Option<u32>,
+
+    /// The standard of football this side plays at, on the scale a match
+    /// reads at kickoff. Refreshed by the weekly pass. See
+    /// [`PlayingStandard`].
+    pub playing_standard: f32,
 }
 
 impl Team {
@@ -449,6 +455,11 @@ impl Team {
         // every non-loanee, so it must run after relations / rapport
         // decay (above) too — otherwise it would see stale data.
         self.social_snapshot = TeamSocialSnapshot::build(self, week_date);
+        self.refresh_playing_standard();
+    }
+
+    pub fn refresh_playing_standard(&mut self) {
+        self.playing_standard = PlayingStandard::of(&self.players.players);
     }
 
     /// Headline team chemistry on a 0..100 scale. Refreshed weekly by

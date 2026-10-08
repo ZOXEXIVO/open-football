@@ -4897,6 +4897,9 @@ fn settled_room_brief(nominated: Option<u32>) -> KeeperSelectionBrief {
         third: Some(3),
         nominated,
         authority: 0.85,
+        nominee_assurance: None,
+        fixture_standard: None,
+        rested: None,
     }
 }
 

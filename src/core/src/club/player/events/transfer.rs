@@ -10,20 +10,19 @@ use chrono::{Duration, NaiveDate};
 
 use super::types::{LoanCompletion, TransferCompletion};
 use crate::TeamInfo;
-use crate::club::CareerRunway;
 use crate::club::PlayerClubContract;
-use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+use crate::club::board::BoardTransferConcern;
+use crate::club::board::mandate::SigningMandate;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::player::contract::contract::{
     ContractBonus, ContractClause, ContractClauseType, is_inert_bonus, is_inert_clause,
 };
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::SpellChange;
 use crate::club::player::player::{Player, SellOnObligation};
-use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
+use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::transfers::gate::TermsRefusalCause;
 use crate::{
@@ -87,6 +86,17 @@ impl Player {
         );
     }
 
+    /// The club he spent the season at could have bought him and its board
+    /// would not. The board's decision, so it goes on his record in its name.
+    pub fn on_option_turned_down(&mut self, concern: BoardTransferConcern, date: NaiveDate) {
+        self.decision_history.add(
+            date,
+            "dec_loan_option_turned_down".to_string(),
+            concern.as_i18n_key().to_string(),
+            "dec_decided_board".to_string(),
+        );
+    }
+
     /// His spell turned over — sold, loaned out, home from a loan,
     /// released, signed off the free-agent pool.
     ///
@@ -133,28 +143,8 @@ impl Player {
         club_reputation: u16,
         date: NaiveDate,
     ) {
-        let group = self.position().position_group();
-        let mandate = mandate.unwrap_or_else(|| {
-            let promise = self
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone())
-                .unwrap_or(PlayerSquadStatus::NotYetSet);
-            let below_first_team =
-                ClubLevelAnchor::for_reputation(club_reputation as f32 / 10_000.0)
-                    .is_below_rotation_band(AbilityEstimator::observable_level(self), group);
-            SigningMandate::new(
-                MandatePurpose::from_promise(
-                    &promise,
-                    CareerRunway::at(self.age(date)),
-                    below_first_team,
-                ),
-                group,
-                self.age(date),
-                date,
-                MandateAuthor::Board,
-            )
-        });
+        let mandate =
+            mandate.unwrap_or_else(|| SigningMandate::unnegotiated(self, club_reputation, date));
         let annual_wage = self
             .contract
             .as_ref()
@@ -248,7 +238,7 @@ impl Player {
         date: NaiveDate,
         buying_club_id: u32,
         buying_league_reputation: u16,
-        agreed_wage: Option<u32>,
+        personal_terms: Option<&PersonalTermsOffer>,
     ) {
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
         let desire_carry = self.snapshot_desire_carry();
@@ -272,7 +262,13 @@ impl Player {
         self.on_spell_change(SpellChange::transfer(0, false), buying_club_id, date);
         self.reset_on_club_change();
         self.clear_free_agent_state();
-        self.install_permanent_contract(date, to.reputation, buying_league_reputation, agreed_wage);
+        self.install_permanent_contract_with_terms(
+            date,
+            to.reputation,
+            buying_league_reputation,
+            None,
+            personal_terms,
+        );
         self.install_mandate(None, 0.0, to.reputation, date);
         self.pending_signing = Some(PendingSigning {
             previous_salary,
@@ -501,9 +497,8 @@ impl Player {
 
     /// Install a fresh permanent contract on this player at the buying club.
     ///
-    /// This is the canonical contract-installation policy used by both the
-    /// AI transfer pipeline (via `complete_transfer`) and the manual web
-    /// UI. The single source of truth for two decisions:
+    /// The canonical contract-installation policy every permanent arrival
+    /// runs through. The single source of truth for two decisions:
     ///
     ///  - **Length:** age-banded (5y under 24, 4y under 28, 3y under 32,
     ///    otherwise 2y). Younger players get longer deals.
@@ -516,30 +511,8 @@ impl Player {
     /// raw 0–10000 reputation values for the club's main team and its
     /// league. The wage calculator normalises them internally.
     ///
-    /// Side effects: `self.contract` is set to a fresh
-    /// `PlayerClubContract` with `squad_status = NotYetSet`; callers that
-    /// know the destination roster should update `squad_status`
-    /// afterwards. `self.contract_loan` is cleared to drop any prior
-    /// borrowing-club contract.
-    pub fn install_permanent_contract(
-        &mut self,
-        date: NaiveDate,
-        buying_club_reputation: u16,
-        buying_league_reputation: u16,
-        agreed_wage: Option<u32>,
-    ) {
-        self.install_permanent_contract_with_terms(
-            date,
-            buying_club_reputation,
-            buying_league_reputation,
-            agreed_wage,
-            None,
-        );
-    }
-
-    /// Variant of [`Self::install_permanent_contract`] that honours an
-    /// agreed [`PersonalTermsOffer`]. When `personal_terms` is `Some`,
-    /// each populated field overrides the corresponding compute-from-
+    /// When `personal_terms` is `Some`, each populated field of the agreed
+    /// [`PersonalTermsOffer`] overrides the corresponding compute-from-
     /// context default:
     ///
     ///   - `contract_years` → contract length (replaces age band)
@@ -550,9 +523,10 @@ impl Player {
     ///   - `squad_status_promise` → sets the contract's `squad_status`
     ///     so the role promise sticks (Day 1 squad role)
     ///
-    /// Unset fields fall through to the existing defaults — this
-    /// preserves behaviour for manual UI moves and tests that don't
-    /// stage a structured terms package.
+    /// Unset fields fall through to the defaults, and a contract nobody
+    /// promised a role on starts at `squad_status = NotYetSet`.
+    /// `self.contract_loan` is cleared to drop any prior borrowing-club
+    /// contract.
     pub fn install_permanent_contract_with_terms(
         &mut self,
         date: NaiveDate,
@@ -871,6 +845,13 @@ mod free_agent_source_aware_tests {
             }
         }
 
+        fn wage(annual: u32) -> PersonalTermsOffer {
+            PersonalTermsOffer {
+                annual_wage: Some(annual),
+                ..PersonalTermsOffer::default()
+            }
+        }
+
         fn person(ambition: f32) -> PersonAttributes {
             PersonAttributes {
                 adaptability: 10.0,
@@ -955,7 +936,13 @@ mod free_agent_source_aware_tests {
         let mut p = FreeAgentFixtures::player(22, 15.0, 2000);
         FreeAgentFixtures::attach_released_from(&mut p, 1500);
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(&FreeAgentFixtures::wage(80_000)),
+        );
         p.process_transfer_shock(date, 0.95, 9500, "es", None);
         assert!(
             FreeAgentFixtures::count(&p, HappinessEventType::DreamMove) >= 1,
@@ -976,7 +963,7 @@ mod free_agent_source_aware_tests {
             date,
             42,
             4500,
-            Some(120_000),
+            Some(&FreeAgentFixtures::wage(120_000)),
         );
         p.process_transfer_shock(date, 0.45, 4500, "it", None);
         assert_eq!(
@@ -997,7 +984,13 @@ mod free_agent_source_aware_tests {
         assert!(p.statistics_history.current.is_empty());
         assert!(p.statistics_history.items.is_empty());
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(&FreeAgentFixtures::wage(80_000)),
+        );
         let pending = p.pending_signing.as_ref().expect("pending signing staged");
         assert_eq!(
             pending.source_club_reputation, 0,
@@ -1034,7 +1027,13 @@ mod free_agent_source_aware_tests {
                 seq_id: 7,
             });
         let date = FreeAgentFixtures::d(2026, 6, 1);
-        p.complete_free_agent_signing(&FreeAgentFixtures::dest(9500), date, 42, 9500, Some(80_000));
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(9500),
+            date,
+            42,
+            9500,
+            Some(&FreeAgentFixtures::wage(80_000)),
+        );
         let pending = p.pending_signing.as_ref().expect("pending signing staged");
         assert_eq!(pending.source_club_reputation, 2_000);
     }
@@ -1173,7 +1172,13 @@ mod free_agent_source_aware_tests {
     fn complete_free_agent_signing_records_signed_decision() {
         let mut p = FreeAgentFixtures::player(24, 12.0, 3000);
         let date = FreeAgentFixtures::d(2026, 7, 1);
-        p.complete_free_agent_signing(&FreeAgentFixtures::dest(5000), date, 42, 5000, Some(60_000));
+        p.complete_free_agent_signing(
+            &FreeAgentFixtures::dest(5000),
+            date,
+            42,
+            5000,
+            Some(&FreeAgentFixtures::wage(60_000)),
+        );
 
         assert_eq!(MoveFixtures::dec_count(&p, "dec_free_agent_signed"), 1);
     }

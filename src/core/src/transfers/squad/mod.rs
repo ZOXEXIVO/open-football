@@ -1180,6 +1180,7 @@ impl SquadReviewPass {
     /// the worst 4-5 GKs are tagged for departure within one tick.
     fn identify_position_glut(
         squad: &[SquadPlayerInfo],
+        date: NaiveDate,
         players: &[Player],
         loan_outs: &mut Vec<LoanOutCandidate>,
     ) {
@@ -1253,6 +1254,14 @@ impl SquadReviewPass {
                 // early-season group can mis-rank, and a key player must not
                 // be loaned or listed just because his position is crowded.
                 if surplus.asset_class.is_first_team_protected() {
+                    continue;
+                }
+                // Nor a man still inside the evaluation window his club
+                // signed him with. A crowded shirt is a depth cap, and a
+                // club that just bought somebody does not lend him out
+                // because one says so: the group runs deep until the plan
+                // is served.
+                if player.signing_protection_active(date) {
                     continue;
                 }
                 // Surplus is surplus at any age. Routing the over-30s to
@@ -1758,6 +1767,7 @@ mod stalled_prospect_tests {
     use super::*;
     use crate::Person;
     use crate::club::academy::ClubAcademy;
+    use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::team::squad::SquadAssetClass;
     use crate::context::HomeLeagueTable;
@@ -1770,6 +1780,7 @@ mod stalled_prospect_tests {
         PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistoryItem,
         TeamCollection,
     };
+    use chrono::Duration;
     use std::collections::HashMap;
 
     /// Fixtures for the stalled-prospect pathway sweep. Bundled on a unit
@@ -1915,6 +1926,42 @@ mod stalled_prospect_tests {
 
         fn formation() -> &'static [PlayerPositionType; 11] {
             SquadReviewPass::get_formation_positions(MatchTacticType::T442)
+        }
+
+        /// Eleven central midfielders against the glut ceiling of ten, with
+        /// id 1 (CA 90) the worst of them.
+        fn crowded_midfield(date: NaiveDate) -> (Vec<Player>, Vec<SquadPlayerInfo>) {
+            let mut players = vec![Self::player(
+                1,
+                PlayerPositionType::MidfielderCenter,
+                90,
+                25,
+                3,
+            )];
+            for i in 0..10u32 {
+                players.push(Self::player(
+                    100 + i,
+                    PlayerPositionType::MidfielderCenter,
+                    120,
+                    26,
+                    10,
+                ));
+            }
+            let squad = players
+                .iter()
+                .map(|p| Self::info(p, date, p.player_attributes.current_ability, 0.5, 3))
+                .collect();
+            (players, squad)
+        }
+
+        fn glut(
+            date: NaiveDate,
+            players: &[Player],
+            squad: &[SquadPlayerInfo],
+        ) -> Vec<LoanOutCandidate> {
+            let mut loan_outs = Vec::new();
+            SquadReviewPass::identify_position_glut(squad, date, players, &mut loan_outs);
+            loan_outs
         }
 
         fn group_min(group: PlayerFieldPositionGroup) -> usize {
@@ -2426,6 +2473,46 @@ mod stalled_prospect_tests {
             "a suspended player must not be loan-listed for having no minutes"
         );
         assert!(!force_list.contains(&1));
+    }
+
+    // ──────────── position glut ────────────────────────────────────────
+
+    #[test]
+    fn position_glut_stages_the_worst_of_a_crowded_group() {
+        let date = Fx::date(2026, 9, 5);
+        let (players, squad) = Fx::crowded_midfield(date);
+        assert!(
+            Fx::glut(date, &players, &squad)
+                .iter()
+                .any(|c| c.player_id == 1 && c.reason == LoanOutReason::Surplus),
+            "the worst of eleven midfielders is the glut"
+        );
+    }
+
+    #[test]
+    fn position_glut_leaves_a_signing_inside_his_plan_window_alone() {
+        // The same man, bought three weeks ago.
+        let date = Fx::date(2026, 9, 5);
+        let (mut players, squad) = Fx::crowded_midfield(date);
+        let signed = date - Duration::days(21);
+        players[0].plan = Some(PlayerPlan::from_mandate(
+            SigningMandate::new(
+                MandatePurpose::Cover,
+                PlayerFieldPositionGroup::Midfielder,
+                25,
+                signed,
+                MandateAuthor::Board,
+            )
+            .with_money(1_000_000.0, 0.0),
+            signed,
+        ));
+        assert!(players[0].signing_protection_active(date));
+        assert!(
+            Fx::glut(date, &players, &squad)
+                .iter()
+                .all(|c| c.player_id != 1),
+            "a crowded shirt does not loan out a signing the club has not evaluated"
+        );
     }
 
     // ──────────── core-player loan protection (the Litvinov fix) ───────

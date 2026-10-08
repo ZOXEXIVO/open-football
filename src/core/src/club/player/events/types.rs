@@ -100,6 +100,11 @@ pub struct MatchOutcome<'a> {
     /// walking into that club a decade later, and the club cue is most
     /// of what the memory organ is for.
     pub club_id: u32,
+    /// The standard of football the match was played at — see
+    /// `MatchResultRaw::standard_of_football`.
+    pub standard_of_football: f32,
+    /// Penalties he kept out, in play and in a shoot-out.
+    pub penalties_saved: u8,
 }
 
 impl<'a> MatchOutcome<'a> {
@@ -195,16 +200,16 @@ pub struct TransferCompletion<'a> {
     /// signing bonus, agent fee, release clause, contract years,
     /// promised role. When `Some`, execution installs the exact deal
     /// that was negotiated. When `None`, falls back to compute-from-
-    /// context defaults for legacy callers (manual UI moves, free-
-    /// agent in-country signings, tests). All fields inside are
-    /// individually `Option` so a partial package is honoured field-
-    /// by-field.
+    /// context defaults (a free signing with no staged terms, a buyout,
+    /// tests). All fields inside are individually `Option` so a partial
+    /// package is honoured field-by-field — an editor's move stages only
+    /// the role.
     pub personal_terms: Option<PersonalTermsOffer>,
     /// What the board approved this signing FOR — the purpose and the
     /// minutes it promised him, staged on the negotiation when the club
-    /// opened it. `None` for moves no board heard: a manual move, a loan
-    /// bought out, a fixture. The player then forms one from the role his
-    /// new contract promises him.
+    /// opened it, or heard when a loan is bought out. `None` for moves no
+    /// board heard: an editor's move, a free signing, a fixture. The player
+    /// then forms one from the role his new contract promises him.
     pub mandate: Option<SigningMandate>,
     /// Whether to stamp a "permanent transfer" row on the player's
     /// decision history. True for a genuine club-to-club move; false for

@@ -252,6 +252,7 @@ fn clear_open_play_metadata_makes_invariants_hold_after_set_piece_restart() {
         blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
+        seen_from: Vector3::new(700.0, 270.0, 0.0),
     });
     ball.pass_target_player_id = Some(10);
     ball.pending_pass_passer = Some(9);
@@ -297,6 +298,7 @@ fn shot_without_previous_owner_fails_invariant() {
         blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
+        seen_from: Vector3::new(700.0, 270.0, 0.0),
     });
     // No previous_owner → "who fired this?" can't be answered — debug
     // builds and tests should flag this.
@@ -348,6 +350,7 @@ fn dead_ball_corner_with_leftover_shot_metadata_fails_invariant() {
         blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
+        seen_from: Vector3::new(700.0, 270.0, 0.0),
     });
     assert!(matches!(
         ball.check_invariants(),

@@ -48,10 +48,8 @@ impl ShotType {
     /// disagree.
     ///
     /// `IndirectFreeKick` deliberately does NOT map: it cannot be shot
-    /// into the goal, so a strike from one is not a free-kick chance.
-    /// Nor does the legacy generic `FreeKick`, which the offside
-    /// fallback sets — only the restart a foul actually awards
-    /// (`DirectFreeKick`) is a free kick somebody stands over.
+    /// into the goal, so a strike from one is not a free-kick chance —
+    /// only a `DirectFreeKick` is a free kick somebody stands over.
     pub fn from_restart(restart: PassOriginRestart) -> Option<ShotType> {
         match restart {
             PassOriginRestart::Penalty => Some(ShotType::Penalty),

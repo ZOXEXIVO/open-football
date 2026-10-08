@@ -525,23 +525,6 @@ impl Player {
         self.is_force_match_selection = false;
     }
 
-    /// Record a manual transfer from the web UI.
-    pub fn on_manual_transfer(
-        &mut self,
-        from: &TeamInfo,
-        to: &TeamInfo,
-        fee: Option<f64>,
-        date: NaiveDate,
-    ) {
-        let is_loan = self.is_on_loan();
-        let season_year = self.spell_season_anchor(&from.slug, date);
-        let stats = self.drain_match_stats(from, season_year, None);
-        self.statistics_history
-            .record_departure_transfer(stats, from, to, fee, is_loan, date);
-        self.last_transfer_date = Some(date);
-        self.is_force_match_selection = false;
-    }
-
     /// React to being released into the free-agent pool. Snapshots the
     /// in-flight match stats onto the source club's career entry and
     /// marks it as departed, so games the player accumulated before
@@ -617,6 +600,7 @@ impl Player {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::events::TransferCompletion;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPositions, PlayerSkills, PlayerStatistics,
@@ -647,6 +631,47 @@ mod tests {
             goals,
             ..Default::default()
         }
+    }
+
+    /// `make_player` with a shirt: a permanent move installs a contract
+    /// and a plan, and both read where he plays.
+    fn make_signable_player() -> crate::Player {
+        let mut p = make_player();
+        p.positions = PlayerPositions {
+            positions: vec![crate::PlayerPosition {
+                position: crate::PlayerPositionType::MidfielderCenter,
+                level: 20,
+            }],
+        };
+        p
+    }
+
+    /// A club-to-club move, completed the way every permanent transfer is.
+    fn complete_move(
+        p: &mut crate::Player,
+        from: &TeamInfo,
+        to: &TeamInfo,
+        fee: f64,
+        date: NaiveDate,
+    ) {
+        p.complete_transfer(TransferCompletion {
+            from,
+            history_source: from,
+            to,
+            fee,
+            date,
+            selling_club_id: 10,
+            buying_club_id: 20,
+            loan_buyout: false,
+            agreed_wage: None,
+            buying_league_reputation: 0,
+            selling_league_reputation: 0,
+            source_is_rival: false,
+            record_sell_on: None,
+            personal_terms: None,
+            mandate: None,
+            record_decision: true,
+        });
     }
 
     fn make_team(name: &str, slug: &str) -> TeamInfo {
@@ -1739,12 +1764,12 @@ mod tests {
             "Premier League",
             "maltese-premier-league",
         );
-        let mut p = make_player();
+        let mut p = make_signable_player();
 
         // Game start at River; manual transfer to Floriana 1 Aug 2026, 50K.
         p.statistics_history
             .seed_initial_team(&river, make_date(2026, 8, 1), false);
-        p.on_manual_transfer(&river, &floriana, Some(50_000.0), make_date(2026, 8, 1));
+        complete_move(&mut p, &river, &floriana, 50_000.0, make_date(2026, 8, 1));
 
         // Loan #1 to Naxxar, 10 Sep 2026. One league app + one cup app,
         // early warehoused return 1 Jan 2027.
@@ -1852,13 +1877,13 @@ mod tests {
             "czech-first-league",
         );
         let rubin = team_with_league("Rubin", "rubin", "Premier League", "russian-premier-league");
-        let mut p = make_player();
+        let mut p = make_signable_player();
 
         // One Spartak game, then sold to Wikki Tourists for 100K.
         p.statistics_history
             .seed_initial_team(&spartak, make_date(2026, 8, 1), false);
         p.statistics = make_stats(1, 0);
-        p.on_manual_transfer(&spartak, &wikki, Some(100_000.0), make_date(2026, 8, 2));
+        complete_move(&mut p, &spartak, &wikki, 100_000.0, make_date(2026, 8, 2));
 
         // Loaned straight out to Brno — 18 apps — and recalled in January.
         p.contract_loan = Some(loan_contract_until(2027, 6, 30));
@@ -4631,6 +4656,7 @@ mod drain_invariants_tests {
     use crate::PlayerLiveStatsInput;
     use crate::PlayerStatCompetitionKind;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::events::TransferCompletion;
     use crate::club::player::statistics::projection::PlayerStatisticsProjection;
     use crate::continent::competitions::CHAMPIONS_LEAGUE_SLUG;
     use crate::shared::fullname::FullName;
@@ -4692,8 +4718,16 @@ mod drain_invariants_tests {
     // ── Per-handler drain contract ────────────────────────────────────
 
     #[test]
-    fn on_manual_transfer_freezes_source_friendly_and_cup_under_source_team() {
+    fn complete_transfer_freezes_source_friendly_and_cup_under_source_team() {
         let mut p = player();
+        // A permanent move installs a contract and a plan, and both read
+        // where he plays.
+        p.positions = PlayerPositions {
+            positions: vec![crate::PlayerPosition {
+                position: crate::PlayerPositionType::MidfielderCenter,
+                level: 20,
+            }],
+        };
         let from = team("Juventus", "juventus", "serie-a");
         let to = team("Lazio", "lazio", "serie-a");
 
@@ -4708,7 +4742,24 @@ mod drain_invariants_tests {
             statistics: stats(1, 0),
         });
 
-        p.on_manual_transfer(&from, &to, Some(5_000_000.0), d(2026, 11, 1));
+        p.complete_transfer(TransferCompletion {
+            from: &from,
+            history_source: &from,
+            to: &to,
+            fee: 5_000_000.0,
+            date: d(2026, 11, 1),
+            selling_club_id: 10,
+            buying_club_id: 20,
+            loan_buyout: false,
+            agreed_wage: None,
+            buying_league_reputation: 0,
+            selling_league_reputation: 0,
+            source_is_rival: false,
+            record_sell_on: None,
+            personal_terms: None,
+            mandate: None,
+            record_decision: true,
+        });
 
         // Live buckets cleared.
         assert_eq!(p.statistics.played, 0);

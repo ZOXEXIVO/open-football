@@ -12,6 +12,7 @@ pub use loaders::{
 };
 
 pub use generators::DatabaseGenerator;
+use generators::RoleAgeTable;
 
 /// id → vector-position indexes over the loaded entity lists. Player
 /// hydration resolves clubs/teams/leagues per record (and per history row);
@@ -46,6 +47,10 @@ pub struct DatabaseEntity {
     /// Lazily-built id indexes; safe to share across the parallel
     /// generation passes.
     index: OnceLock<EntityIndex>,
+
+    /// The ages generated players are drawn from, built from the seed
+    /// records' careers on first use.
+    role_ages: OnceLock<RoleAgeTable>,
 }
 
 impl DatabaseEntity {
@@ -99,6 +104,12 @@ impl DatabaseEntity {
             .get(&id)
             .map(|&i| &self.leagues[i])
     }
+
+    fn role_ages(&self) -> &RoleAgeTable {
+        self.role_ages.get_or_init(|| {
+            RoleAgeTable::from_records(self.players_odb.iter().flat_map(PlayersOdb::records))
+        })
+    }
 }
 
 pub struct DatabaseLoader;
@@ -120,6 +131,7 @@ impl DatabaseLoader {
             history_club_names: loaders::history_club_names(),
             players_odb,
             index: OnceLock::new(),
+            role_ages: OnceLock::new(),
         }
     }
 }

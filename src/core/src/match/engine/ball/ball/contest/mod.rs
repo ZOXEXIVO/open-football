@@ -29,7 +29,12 @@
 //!   assist resolver walks, and the giveaway / shot / carry metadata.
 //! * [`reach`] — the one question every one of them asks first: can this
 //!   man get to the ball at all, on all three axes.
+//! * [`tackle`] — how the ball comes off a won challenge: kept, or
+//!   knocked loose.
+//! * [`aerial_duel`] — a lofted pass contested in the air where it drops
+//!   on its man.
 
+pub mod aerial_duel;
 pub mod block;
 pub mod body;
 pub mod contact;
@@ -39,7 +44,8 @@ pub mod pass_block;
 pub mod possession;
 pub mod reach;
 pub mod save;
+pub mod tackle;
 
 pub use contact::ContactInPlace;
-pub use possession::{PassChainEntry, PossessionSource};
+pub use possession::{PassChainEntry, PassReach, PossessionSource};
 pub use reach::{BlockContact, PlayerReach};

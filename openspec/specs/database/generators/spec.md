@@ -161,3 +161,54 @@ unchanged.
 #### Scenario: The same record with a fixed PA and with a PA band
 - **WHEN** one record is hydrated once with a fixed PA and once with a negative PA band
 - **THEN** both hydrations produce identical outfield and goalkeeping attributes and identical professionalism
+
+### Requirement: A generated player's ability by age follows his position's maturation
+
+The age modulation of a procedurally generated player's current ability SHALL follow the share of ability his
+position's maturation families hold at his age, relative to the outfield reference the generator's age curve is set
+on:
+- a generated keeper SHALL therefore reach his peak share later, and hold it longer, than a generated outfielder;
+- a generated outfield player's ability by age SHALL move by no more than 0.03 of his role's full value at any age.
+
+#### Scenario: A 22-year-old keeper trails a 22-year-old striker
+- **WHEN** a keeper and a striker of the same role, team and age 22 are generated many times
+- **THEN** the keepers hold a smaller share of their role's full ability than the strikers
+
+#### Scenario: A 34-year-old keeper outlasts a 34-year-old striker
+- **WHEN** a keeper and a striker of the same role, team and age 34 are generated many times
+- **THEN** the keepers hold a larger share of their role's full ability than the strikers
+
+#### Scenario: Outfield generation barely moves
+- **WHEN** outfield players of every role are generated at every age from 17 to 36, before and after this change
+- **THEN** the mean ability at each age and role differs by no more than 0.03 of the role's full value
+
+### Requirement: A generated player's age follows his squad role
+
+A procedurally generated player's age SHALL be drawn from the shipped database's age distribution of real seasons for
+his position kind and the appearance band his squad role stands for:
+- a Star or Starter: 30 or more appearances;
+- a Rotation player: 10 to 29;
+- a Backup or Fringe player: 1 to 9;
+- a Prospect: the team type's youngest ages.
+
+Every draw SHALL stay within the team type's age range.
+
+#### Scenario: Generated first-choice keepers are mostly in their mid-twenties
+- **WHEN** many Main teams are generated procedurally
+- **THEN** the median age of their Starter-role keepers is between 24 and 28, and no more than 15% of them are 20 or
+  younger
+
+#### Scenario: Backups are younger and wider-spread than starters
+- **WHEN** many Main teams are generated procedurally
+- **THEN** the median age of their Backup-role keepers is below the median age of their Starter-role keepers
+
+### Requirement: A generated keeper's goalkeeping attributes follow the goalkeeping maturity curve
+
+A procedurally generated or seed-hydrated keeper's generated goalkeeping attributes SHALL be shaped by the goalkeeping
+family's maturity at his age, the curve that sizes development ceilings, rather than by a separate age table. The fit
+to his target or recorded ability SHALL still apply afterwards.
+
+#### Scenario: The generator and the ceilings agree on a keeper's age
+- **WHEN** a keeper is generated at 20 with no recorded attributes
+- **THEN** the goalkeeping share used to shape his attributes is the goalkeeping maturity at his age, the same value
+  his development ceilings read

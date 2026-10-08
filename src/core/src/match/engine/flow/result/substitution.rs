@@ -38,9 +38,11 @@ pub struct SubstitutionInfo {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SubstitutionReason {
-    /// Forced injury swap (in-match condition collapse / rolled injury).
-    /// Never a frustration trigger.
+    /// Forced injury swap: he could not go on. Never a frustration trigger.
     CriticalInjury,
+    /// Forced swap for a man out on his feet, uninjured. Never a
+    /// frustration trigger.
+    Exhaustion,
     /// Under-17 condition / jadedness guard. Protective, not punitive.
     YouthProtection,
     /// Discretionary scored-pair swap (tactical / fatigue / development).

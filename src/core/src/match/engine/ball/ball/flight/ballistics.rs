@@ -1,4 +1,5 @@
 use crate::r#match::engine::ball::ball::flight::motion::SpinModel;
+use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::engine::ball::ball::{AerialReach, Ball};
 use nalgebra::Vector3;
 
@@ -80,6 +81,10 @@ pub const AIR_DRAG_PER_TICK: f32 = 0.04 * 0.016 / 0.43;
 /// Below this speed the physics stops applying drag at all — mirrored
 /// here so the solver's flight and the real one agree tick for tick.
 pub(in crate::r#match::engine::ball::ball) const AIR_DRAG_FLOOR: f32 = 0.1;
+
+/// Game units to the metre: the ground plane is in units, height in
+/// metres.
+const U_PER_M: f32 = 8.0;
 
 /// Fraction of vertical speed a ball keeps when it hits the turf.
 ///
@@ -213,14 +218,17 @@ impl Ball {
     /// The pace a pass over `distance` game units leaves the boot at,
     /// before the passer's own power and error — the strike's model, and
     /// the passer's when he prices a lane, so both see the same ball.
-    /// Firm enough to still be travelling on arrival against friction.
+    /// Firm enough to still be travelling on arrival against friction on
+    /// a normal pitch; the surface then takes pace off it (mud) or puts
+    /// pace on it (a wet or a dry, fast one), so a heavy pitch holds
+    /// the ball up short.
     #[inline]
-    pub fn pass_pace(distance: f32) -> f32 {
+    pub fn pass_pace(distance: f32, conditions: &EnvModifiers) -> f32 {
         const BASE_SPEED: f32 = 0.55;
         const SPEED_PER_UNIT: f32 = 0.0028;
         let delivery = (BASE_SPEED + distance * SPEED_PER_UNIT).clamp(0.50, 2.20);
         let arriving = distance * GROUND_FRICTION * 1.25;
-        delivery.max(arriving)
+        delivery.max(arriving) * (1.0 + conditions.ball_roll_speed + conditions.pass_speed)
     }
 
     /// Vertical launch speed (m/tick) that peaks at `apex` metres.
@@ -268,7 +276,7 @@ impl Ball {
         let mut x = 0.0f32;
         let mut z = launch_height.max(0.0);
         for _ in 0..MAX_TICKS {
-            let speed = (vx * vx + vz * vz).sqrt();
+            let speed = Self::flight_speed(Vector3::new(vx, 0.0, vz));
             if speed > AIR_DRAG_FLOOR {
                 let decay = AIR_DRAG_PER_TICK * speed;
                 vx -= decay * vx;
@@ -349,7 +357,7 @@ impl Ball {
         let mut z = launch_height.max(0.0);
         let floor = arrival_height.max(0.0);
         for tick in 0..MAX_TICKS {
-            let speed = (vx * vx + vz * vz).sqrt();
+            let speed = Self::flight_speed(Vector3::new(vx, 0.0, vz));
             if speed > AIR_DRAG_FLOOR {
                 let decay = AIR_DRAG_PER_TICK * speed;
                 vx -= decay * vx;
@@ -441,6 +449,81 @@ impl Ball {
         ))
     }
 
+    /// How fast the ball is travelling, in units a tick, with its climb or
+    /// fall counted in the same units as its run across the ground. Air
+    /// drag grows with this speed and the safety cap bounds it; summed
+    /// raw, a metre of height counted an eighth of a unit and a lofted
+    /// ball flew as if it were barely climbing.
+    #[inline]
+    pub fn flight_speed(velocity: Vector3<f32>) -> f32 {
+        let vertical = velocity.z * U_PER_M;
+        (velocity.x * velocity.x + velocity.y * velocity.y + vertical * vertical).sqrt()
+    }
+
+    /// Where a ball in flight first comes down where a man can play it.
+    ///
+    /// The same flight [`Ball::update_velocity`] runs — drag, gravity and
+    /// spin, in the same order as [`Self::ballistic_crossing`] — to its
+    /// first contact with the turf, the bounce applied there once, and on
+    /// to where it next comes down, or to where it settles onto the deck
+    /// if the bounce left nothing in it. A drag-free parabola lands a long
+    /// ball a quarter of its length too far, and every chaser runs to that
+    /// point.
+    pub fn ballistic_landing(
+        from: Vector3<f32>,
+        velocity: Vector3<f32>,
+        spin: Vector3<f32>,
+    ) -> Vector3<f32> {
+        /// Long enough for the highest ball in football and its bounce.
+        const MAX_TICKS: u32 = 900;
+        let mut v = velocity;
+        let mut p = from;
+        let mut s = spin;
+        let mut bounced = false;
+        for _ in 0..MAX_TICKS {
+            if p.z <= 0.0 && v.z < 0.0 {
+                if bounced {
+                    break;
+                }
+                bounced = true;
+                p.z = 0.0;
+                v.z = -v.z * BOUNCE_COEFFICIENT;
+                let incoming = (v.x * v.x + v.y * v.y).sqrt();
+                let (kick, retained) = SpinModel::bounce_kick(s, v);
+                v.x += kick.x;
+                v.y += kick.y;
+                s *= retained;
+                let after = (v.x * v.x + v.y * v.y).sqrt();
+                if after > incoming && after > 1.0e-6 {
+                    let scale = incoming / after;
+                    v.x *= scale;
+                    v.y *= scale;
+                }
+                v.x *= 0.95;
+                v.y *= 0.95;
+                if v.z.abs() < 0.012 {
+                    v.z = 0.0;
+                }
+            }
+            if p.z <= 0.1 && v.z <= 0.0 {
+                break;
+            }
+            let speed = Self::flight_speed(v);
+            if speed > AIR_DRAG_FLOOR {
+                let decay = AIR_DRAG_PER_TICK * speed;
+                v -= decay * v;
+            }
+            v.z -= GRAVITY_PER_TICK;
+            v += SpinModel::magnus_accel(s, v);
+            s = SpinModel::decayed(s);
+            p += v;
+            if p.z < 0.0 {
+                p.z = 0.0;
+            }
+        }
+        Vector3::new(p.x, p.y, 0.0)
+    }
+
     /// **Where a ball in flight really crosses the plane `x = plane_x`**,
     /// as `(y, z, ticks)`.
     ///
@@ -529,7 +612,7 @@ impl Ball {
                     p.z = 0.0;
                 }
             } else {
-                let speed = v.norm();
+                let speed = Self::flight_speed(v);
                 if speed > AIR_DRAG_FLOOR {
                     let decay = AIR_DRAG_PER_TICK * speed;
                     v -= decay * v;

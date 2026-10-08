@@ -58,6 +58,7 @@
 //! The goalkeeping attributes live on their own scale and get their own
 //! reading — see [`MatchStandard::keeper_shift`].
 
+use crate::club::player::mind::MindSwitch;
 use crate::r#match::MatchContext;
 use crate::r#match::engine::teamplay::tactical::TeamSkillAggregates;
 use std::sync::OnceLock;
@@ -140,6 +141,13 @@ impl MatchStandard {
         (side(home) + side(away)) * 0.125
     }
 
+    /// The standard one side plays at, on the scale of [`Self::of`], which
+    /// is the mean of the two sides' readings.
+    #[inline]
+    pub fn of_side(t: &TeamSkillAggregates) -> f32 {
+        (t.build_up_quality + t.press_quality + t.defensive_quality + t.attacking_quality) * 0.25
+    }
+
     /// The standard of GOALKEEPING in this match, on the goalkeeping
     /// attributes' own scale.
     #[inline]
@@ -199,15 +207,49 @@ impl MatchStandard {
         (norm01 - shift).clamp(0.0, 1.0)
     }
 
-    /// The goalkeeping equivalent of [`Self::shift`].
+    /// Keeper standard per unit of outfield standard, across the levels of
+    /// the generator. Measured, not chosen: `dev_match stats 40 L L` at
+    /// L = 6, 10, 14, 18, 20 printed `STANDARD` 0.462 .. 0.854 against
+    /// `gk_std` 0.397 .. 0.795, a least-squares slope of 1.02.
+    /// `OF_STANDARD_GK_SLOPE` overrides it so a re-fit costs no rebuild.
+    pub const KEEPER_SLOPE: f32 = 1.02;
+
+    /// The goalkeeping equivalent of [`Self::shift`]: the standard of
+    /// goalkeeping the football in this match implies.
+    ///
+    /// Derived from the OUTFIELD standard, not read off the two keepers on
+    /// the pitch. Averaging the two keepers graded each against half of
+    /// himself — a weak keeper dragged the standard down and won back half
+    /// his gap on reach, read and hands — and against the man in the other
+    /// goal, who has nothing to do with the shots he faces. `OF_MIND_OFF`
+    /// restores the two-keeper reading as the A/B control.
     #[inline]
     pub fn keeper_shift(ctx: &MatchContext) -> f32 {
         match ctx.standard {
-            Some(r) if !Self::disabled() => {
-                (r.keeper - Self::keeper_reference()).clamp(-Self::MAX_SHIFT, Self::MAX_SHIFT)
-            }
+            Some(r) if !Self::disabled() => Self::keeper_shift_of(r),
             _ => 0.0,
         }
+    }
+
+    #[inline]
+    pub fn keeper_shift_of(r: StandardReading) -> f32 {
+        let shift = if MindSwitch::armed() {
+            (r.outfield - Self::reference()) * Self::keeper_slope()
+        } else {
+            r.keeper - Self::keeper_reference()
+        };
+        shift.clamp(-Self::MAX_SHIFT, Self::MAX_SHIFT)
+    }
+
+    #[inline]
+    fn keeper_slope() -> f32 {
+        static S: OnceLock<f32> = OnceLock::new();
+        *S.get_or_init(|| {
+            std::env::var("OF_STANDARD_GK_SLOPE")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(Self::KEEPER_SLOPE)
+        })
     }
 
     /// `OF_STANDARD_OFF=1` pins every shift to zero, which restores the
@@ -249,6 +291,27 @@ impl MatchStandard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_keeper_at_the_other_end_does_not_move_the_standard() {
+        let with = |keeper: f32| StandardReading {
+            outfield: 0.70,
+            keeper,
+        };
+        assert_eq!(
+            MatchStandard::keeper_shift_of(with(0.40)),
+            MatchStandard::keeper_shift_of(with(0.80))
+        );
+    }
+
+    #[test]
+    fn the_keeper_shift_is_zero_at_the_calibration_division() {
+        let reading = StandardReading {
+            outfield: MatchStandard::CALIBRATION,
+            keeper: 0.30,
+        };
+        assert_eq!(MatchStandard::keeper_shift_of(reading), 0.0);
+    }
 
     fn aggregates(v: f32) -> TeamSkillAggregates {
         TeamSkillAggregates {

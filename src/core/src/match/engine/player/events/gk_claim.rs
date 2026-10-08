@@ -146,7 +146,7 @@ impl GkClaimContest {
         let mut opponents_near = 0.0f32;
         if let Some(team) = gk_team {
             for p in field.players.iter() {
-                if p.team_id == team || p.is_sent_off {
+                if p.team_id == team || p.off_pitch {
                     continue;
                 }
                 let dx = p.position.x - ball_pos.x;

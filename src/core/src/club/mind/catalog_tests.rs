@@ -162,37 +162,49 @@ fn every_manager_goal_lands_on_a_staff_side_domain() {
 }
 
 #[test]
-fn the_manager_rows_have_a_counterweight() {
-    // The structural guarantee behind manager tenure. Left alone,
-    // ambition churns managers every season; the plan's answer is that
-    // the Stay-goals compete with the Leave-goals directly.
-    let leaving: Vec<GoalKind> = MANAGER_GOALS
+fn every_leave_and_stay_row_has_a_counterweight() {
+    // Left alone, ambition churns a squad and its manager every season;
+    // the answer is that wanting out and wanting to stay wear each other
+    // down. A row the contest does not apply to says so on the row — a
+    // want left out of it by omission is how a player came to demand
+    // permission to leave while every decision he made was about staying.
+    let players: Vec<GoalKind> = GoalKind::ALL
         .iter()
         .copied()
-        .filter(|g| g.direction() == GoalDirection::Leave)
-        .collect();
-    let staying: Vec<GoalKind> = MANAGER_GOALS
-        .iter()
-        .copied()
-        .filter(|g| g.direction() == GoalDirection::Stay)
+        .filter(|g| *g != GoalKind::None && !MANAGER_GOALS.contains(g))
         .collect();
 
-    assert!(!leaving.is_empty() && !staying.is_empty());
-    for leave in &leaving {
-        assert!(
-            staying
-                .iter()
-                .any(|stay| leave.spec().competes_with.contains(*stay)),
-            "{leave:?} points out of the job and nothing pushes back"
-        );
-    }
-    for stay in &staying {
-        assert!(
-            leaving
-                .iter()
-                .any(|leave| stay.spec().competes_with.contains(*leave)),
-            "{stay:?} keeps him in the job and competes with nothing"
-        );
+    for holder in [players.as_slice(), MANAGER_GOALS] {
+        for kind in holder.iter().copied() {
+            let opposite = match kind.direction() {
+                GoalDirection::Leave => GoalDirection::Stay,
+                GoalDirection::Stay => GoalDirection::Leave,
+                GoalDirection::Neutral => continue,
+            };
+            let spec = kind.spec();
+            if spec.stands_apart {
+                assert!(
+                    spec.competes_with.is_empty(),
+                    "{kind:?} stands apart and still competes"
+                );
+                assert!(
+                    !GoalKind::ALL
+                        .iter()
+                        .any(|other| other.spec().competes_with.contains(kind)),
+                    "{kind:?} stands apart and is still competed with"
+                );
+                continue;
+            }
+            let other_way = || holder.iter().filter(|g| g.direction() == opposite);
+            assert!(
+                other_way().any(|other| spec.competes_with.contains(*other)),
+                "{kind:?} pushes back on nothing pointing the other way"
+            );
+            assert!(
+                other_way().any(|other| other.spec().competes_with.contains(kind)),
+                "{kind:?} is pushed back by nothing pointing the other way"
+            );
+        }
     }
 }
 

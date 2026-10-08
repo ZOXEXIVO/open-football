@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -128,6 +129,10 @@ impl MidfielderSwitchingPlayState {
             .filter(|teammate| {
                 (teammate.position.y - player_position.y).abs() > field_height * 0.3
                     && ctx.player().has_clear_pass(teammate.id)
+                    // From the wing a man in the box is a cross, not a switch.
+                    && !ctx.player.side.is_some_and(|side| {
+                        CrossModel::is_cross(player_position, teammate.position, side, ctx.context)
+                    })
             })
             .max_by(|a, b| score(a).total_cmp(&score(b)))
             .map(|teammate| (teammate.id, teammate.position))

@@ -297,7 +297,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut line = [0u8; MAX_OUTFIELD];
         let mut n = 0usize;
         for p in field.players.iter() {
-            if n == MAX_OUTFIELD || p.is_sent_off {
+            if n == MAX_OUTFIELD || p.off_pitch {
                 continue;
             }
             let position = p.tactical_position.current_position;

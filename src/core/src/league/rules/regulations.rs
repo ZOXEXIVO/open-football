@@ -347,6 +347,11 @@ mod tests {
             final_home_tactic: None,
             final_away_tactic: None,
             shape_change_minute: None,
+            tally: Default::default(),
+            weather: Default::default(),
+            pitch: Default::default(),
+            standard_of_football: 0.6630,
+            penalty_saves: Vec::new(),
         };
         MatchResult {
             id: "test".to_string(),

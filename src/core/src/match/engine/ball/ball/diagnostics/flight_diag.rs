@@ -156,6 +156,9 @@ pub static PASS_BACKWARD: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// the opponent's penalty area from outside it.
 pub static PASS_WIDE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 pub static PASS_INTO_BOX: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// Passes per band that reached a team-mate, counted at the one completion
+/// path — the band's completion rate against the shape counts above.
+pub static PASS_COMPLETED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
 /// Accessors. Grouped on a struct so the module exposes no free
 /// functions; the statics stay module-level because Rust has no
@@ -273,6 +276,19 @@ impl FlightDiag {
 
     /// Per band: `(shape counts, traffic-lifted, apex ≥ 1 m, apex ≥ 0.5 m,
     /// backward, wide, into the box)`.
+    /// A pass of `distance_units` reached a team-mate.
+    pub fn note_pass_completed(distance_units: f32) {
+        let band = PASS_BANDS
+            .iter()
+            .position(|&b| distance_units < b)
+            .unwrap_or(PASS_BANDS.len() - 1);
+        PASS_COMPLETED[band].fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn pass_completed_snapshot() -> [u64; 5] {
+        std::array::from_fn(|b| PASS_COMPLETED[b].load(Ordering::Relaxed))
+    }
+
     pub fn pass_snapshot() -> [([u64; 7], u64, u64, u64, u64, u64, u64); 5] {
         std::array::from_fn(|b| {
             (
@@ -354,6 +370,7 @@ impl FlightDiag {
             PASS_BACKWARD[b].store(0, Ordering::Relaxed);
             PASS_WIDE[b].store(0, Ordering::Relaxed);
             PASS_INTO_BOX[b].store(0, Ordering::Relaxed);
+            PASS_COMPLETED[b].store(0, Ordering::Relaxed);
         }
         for i in 0..STAGES.len() {
             JUMPS[i].store(0, Ordering::Relaxed);

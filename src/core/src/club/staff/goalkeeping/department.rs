@@ -137,6 +137,18 @@ impl GoalkeepingDepartment {
     /// Age from which a blocked prospect should be out on loan rather than
     /// carrying the drinks.
     const LOAN_AGE: u8 = 19;
+    /// Perceived confidence at or below which a keeper reads as shaken.
+    const SHAKEN: f32 = -0.4;
+
+    /// Where a loan should take him: halfway from the football he is used
+    /// to towards the first team's, so the spell builds his assurance
+    /// rather than repeating it or overfacing him. `None` until the
+    /// department has read him.
+    fn loan_standard(room: &KeeperRoom, k: &RoomKeeper) -> Option<f32> {
+        let first = room.first_team_standard()?;
+        (k.mindset.certainty > 0.0)
+            .then(|| (k.mindset.perceived_assurance.min(first) + first) * 0.5)
+    }
 
     /// How close to the senior room's last man an academy keeper must be
     /// before he is put on the pathway. The band is the specialist's
@@ -306,6 +318,9 @@ impl GoalkeepingDepartment {
 
         // ── The nomination ──
         let nominated = Self::nominate(&pathway_picks, &order, today);
+        let nominee_assurance = nominated
+            .and_then(|id| room.get(id))
+            .map(|k| k.mindset.perceived_assurance);
 
         // ── What he tells the manager ──
         let recommendations = Self::advise(
@@ -326,6 +341,7 @@ impl GoalkeepingDepartment {
             heir,
             succession,
             nominated,
+            nominee_assurance,
             recommendations,
             authority: authority.weight,
         })
@@ -522,6 +538,21 @@ impl GoalkeepingDepartment {
             ));
         }
 
+        // A shaken number one with a fit senior man behind him: out of the
+        // firing line for the nights that matter, until the read recovers.
+        if let (Some(one), Some(d)) = (number_one, deputy)
+            && d.is_senior()
+            && !d.is_injured
+            && one.mindset.certainty > 0.0
+            && one.mindset.perceived_confidence <= Self::SHAKEN
+        {
+            out.push(KeeperRecommendation::about(
+                KeeperAdvice::RestHimFromBigGames,
+                one.player_id,
+                KeeperUrgency::Pressing,
+            ));
+        }
+
         // Is there actually a deputy, or only a body?
         match (number_one, deputy) {
             (Some(one), Some(d)) if one.level as i16 - d.level as i16 > Self::DEPUTY_GAP_MAX => {
@@ -661,15 +692,18 @@ impl GoalkeepingDepartment {
             if on_pathway && blocked_by < 3 {
                 continue;
             }
-            out.push(KeeperRecommendation::about(
-                KeeperAdvice::LoanHimOutForMinutes,
-                k.player_id,
-                if k.age >= 21 {
-                    KeeperUrgency::Pressing
-                } else {
-                    KeeperUrgency::Noted
-                },
-            ));
+            out.push(
+                KeeperRecommendation::about(
+                    KeeperAdvice::LoanHimOutForMinutes,
+                    k.player_id,
+                    if k.age >= 21 {
+                        KeeperUrgency::Pressing
+                    } else {
+                        KeeperUrgency::Noted
+                    },
+                )
+                .aimed_at(Self::loan_standard(room, k)),
+            );
         }
         // The youngest are simply left alone.
         for k in room.pathway() {

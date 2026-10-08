@@ -61,6 +61,10 @@ impl AerialReach {
     /// aerial specialists head the ball around 2.9-3.0 m.
     const JUMP_MAX: f32 = 3.1;
 
+    /// Where an aerial delivery is aimed and attacked: the top of the
+    /// poorest leaper's jump, so every man it can be meant for meets it.
+    pub const ATTACKED: f32 = Self::JUMP_MIN;
+
     /// The highest ball ANYBODY on the pitch can play — the ceiling of
     /// the best leaper there could be.
     ///

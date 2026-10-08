@@ -2,7 +2,9 @@ use crate::r#match::{MatchObjectsPositions, StateProcessingContext};
 
 pub mod behaviours;
 pub mod context;
+pub mod counter_press;
 pub mod events;
+pub mod injury;
 pub mod memory;
 /// Runtime position-flicker / state-churn tracer. Dev diagnostic only —
 /// the whole module (and every call site) compiles out without

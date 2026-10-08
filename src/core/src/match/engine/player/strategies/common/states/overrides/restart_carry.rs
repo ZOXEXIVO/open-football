@@ -12,7 +12,7 @@
 //! it is standing on as reached, so he stops dead the moment he picks it
 //! up and the restart sits there until the patience bound teleports it.
 //!
-//! [`CornerHold`](super::CornerHold) solved this once, for the corner, and
+//! [`SetPieceHold`](super::SetPieceHold) solved this once, for the corner, and
 //! its solution is the right one: the engine writes the taker a
 //! `set_piece_station` and something outside the four state machines walks
 //! him to it. But that module is bounded to `PassOriginRestart::Corner` on
@@ -41,7 +41,7 @@ use crate::r#match::{GameTickContext, MatchPlayer, StateProcessingResult, Steeri
 pub struct RestartCarry;
 
 impl RestartCarry {
-    /// How hard he brakes onto the spot. Same value `CornerHold` uses for
+    /// How hard he brakes onto the spot. Same value `SetPieceHold` uses for
     /// the same job, and generous for the same reason: he has to stop
     /// beside a point, not land on a coordinate.
     const SLOWING: f32 = 10.0;

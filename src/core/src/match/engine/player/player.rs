@@ -1,4 +1,5 @@
 use crate::club::player::events::PositionLoad;
+use crate::club::player::mind::KickoffMind;
 use crate::club::player::traits::PlayerTrait;
 #[cfg(feature = "match-logs")]
 use crate::r#match::MovementEffort;
@@ -11,6 +12,8 @@ use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::flow::touchline::TouchlineStand;
+use crate::r#match::engine::player::counter_press::{CounterPress, CounterPressCall};
+use crate::r#match::engine::player::injury::{InjuryRisk, InjuryGrade};
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
@@ -164,8 +167,10 @@ pub struct MatchPlayer {
     pub yellow_cards: u8,
     /// Fouls committed in this match. Feeds end-of-match stats.
     pub fouls_committed: u8,
-    /// Player has been sent off — skip state processing, treat as off field.
-    pub is_sent_off: bool,
+    /// Gone from the pitch for the rest of the match — sent off, or carried
+    /// off injured with no change left to replace him. Skip state
+    /// processing, treat as off the field.
+    pub off_pitch: bool,
     /// Ticks remaining before this player may attempt another tackle.
     /// Decremented each tick in `update()`. Blocks Tackling-state entry
     /// via `can_attempt_tackle()`. Prevents the Tackling-state machine
@@ -218,7 +223,7 @@ pub struct MatchPlayer {
 
     /// Where this player has been told to stand for the corner that is
     /// being taken, if one is. Written by the corner set-up teleport
-    /// (`CornerShape::plan` decides it), read by `CornerHold` in the state
+    /// (`CornerShape::plan` decides it), read by `SetPieceHold` in the state
     /// dispatcher, cleared the moment the restart stops being a corner.
     ///
     /// A corner in this engine lives about a second and a half — the
@@ -315,6 +320,19 @@ pub struct MatchPlayer {
     /// See `club::player::personality::form` for why this belongs here
     /// and not at the rating layer.
     pub matchday_form: f32,
+    /// The state of mind he brought to kickoff — assurance, belief, morale.
+    /// Seeds his match psychology once the standard of the match is known;
+    /// the match never reads his career. See `KickoffMind`.
+    pub kickoff_mind: KickoffMind,
+
+    /// The worst injury he has picked up in this match, if any. Read by
+    /// the treatment, the medical pass, his effective skill and, after the
+    /// match, by the player himself through the physical snapshot.
+    pub injury: Option<InjuryGrade>,
+    /// Match time at which his treatment is over.
+    pub treated_by_ms: u64,
+    /// Tick the ball was taken off him, until he has reacted to it.
+    pub lost_ball_at: Option<u64>,
 
     /// Memo for `skills.max_speed_with_condition(condition)` keyed on
     /// the condition value it was computed for. Skills are static
@@ -366,6 +384,7 @@ struct SkillReadsKey {
     crowd_arousal: u32,
     settledness: u32,
     matchday_form: u32,
+    injury: Option<InjuryGrade>,
 }
 
 impl SkillReadsKey {
@@ -379,6 +398,7 @@ impl SkillReadsKey {
             crowd_arousal: player.crowd_arousal.to_bits(),
             settledness: player.settledness.to_bits(),
             matchday_form: player.matchday_form.to_bits(),
+            injury: player.injury,
         }
     }
 }
@@ -645,7 +665,7 @@ impl MatchPlayer {
             traits: player.traits.clone(),
             yellow_cards: 0,
             fouls_committed: 0,
-            is_sent_off: false,
+            off_pitch: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
             stretch_ticks: 0,
@@ -661,6 +681,10 @@ impl MatchPlayer {
             crowd_arousal: 1.0,
             settledness: player.match_performance_settledness(now),
             matchday_form: player.matchday_form(now),
+            kickoff_mind: player.kickoff_mind(now),
+            injury: None,
+            treated_by_ms: 0,
+            lost_ball_at: None,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
             fatigue_load: None,
@@ -695,6 +719,7 @@ impl MatchPlayer {
         starting_recovery_debt: f32,
         settledness: f32,
         matchday_form: f32,
+        kickoff_mind: KickoffMind,
         use_extended_state_logging: bool,
     ) -> Self {
         MatchPlayer {
@@ -726,7 +751,7 @@ impl MatchPlayer {
             traits,
             yellow_cards: 0,
             fouls_committed: 0,
-            is_sent_off: false,
+            off_pitch: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
             stretch_ticks: 0,
@@ -749,6 +774,10 @@ impl MatchPlayer {
             // Same for the form draw: it needs the matchday calendar,
             // which only the club side has.
             matchday_form,
+            kickoff_mind,
+            injury: None,
+            treated_by_ms: 0,
+            lost_ball_at: None,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
             fatigue_load: None,
@@ -818,6 +847,78 @@ impl MatchPlayer {
         ((elapsed / 60_000) as u16).min(120)
     }
 
+    /// Something has hurt him. He goes down, and how long for and what he
+    /// can do afterwards is the severity's; a second injury in the same
+    /// match only ever makes it worse.
+    pub fn on_injury(&mut self, severity: InjuryGrade, now_ms: u64) {
+        let worst = self.injury.map_or(severity, |had| had.max(severity));
+        self.injury = Some(worst);
+        self.treated_by_ms = now_ms + InjuryRisk::treatment_ms(severity);
+        self.velocity = Vector3::zeros();
+        self.transition_to(PlayerState::Injured, TransitionSource::EventHandler);
+    }
+
+    /// The ball has just been taken off him. What he does about it is
+    /// his next decision.
+    pub fn on_dispossessed(&mut self, tick: u64) {
+        self.lost_ball_at = Some(tick);
+    }
+
+    /// Acts on a lost ball still waiting for his reaction; true when he
+    /// has gone after it.
+    pub fn react_to_dispossession(
+        &mut self,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+    ) -> bool {
+        let Some(lost_at) = self.lost_ball_at else {
+            return false;
+        };
+        match CounterPress::call(self, lost_at, context, tick_context) {
+            CounterPressCall::Wait => false,
+            CounterPressCall::LetGo => {
+                self.lost_ball_at = None;
+                false
+            }
+            CounterPressCall::Press(state) => {
+                self.lost_ball_at = None;
+                self.redirect_to_fresh(state, TransitionSource::EventHandler);
+                true
+            }
+        }
+    }
+
+    /// Back on his feet: a knock or a hurt once treatment is over. A
+    /// serious injury does not get up — he is replaced or carried off.
+    pub fn is_treated(&self, now_ms: u64) -> bool {
+        self.injury != Some(InjuryGrade::Serious) && now_ms >= self.treated_by_ms
+    }
+
+    /// His match is over and he has to come off.
+    pub fn needs_replacing(&self) -> bool {
+        self.injury == Some(InjuryGrade::Serious)
+    }
+
+    pub fn is_hurt(&self) -> bool {
+        self.injury == Some(InjuryGrade::Hurt)
+    }
+
+    /// His injury as a small number for a memo key: 0 fit, then by grade.
+    /// An injury changes every skill read off him, so anything cached
+    /// across ticks has to know about it.
+    pub fn injury_rank(&self) -> u64 {
+        self.injury.map_or(0, |grade| grade as u64 + 1)
+    }
+
+    /// What playing on with an injury costs him on every skill.
+    pub fn injury_handicap(&self) -> f32 {
+        match self.injury {
+            None | Some(InjuryGrade::Knock) => 1.0,
+            Some(InjuryGrade::Hurt) => 0.88,
+            Some(InjuryGrade::Serious) => 0.72,
+        }
+    }
+
     /// Build the post-match physical snapshot for this player at the
     /// given absolute match time (substitution-off or full-time).
     /// Captures the starting tank, the current (drained) condition,
@@ -842,6 +943,7 @@ impl MatchPlayer {
             minutes_played,
             starting_condition: self.starting_condition,
             final_match_energy: self.player_attributes.condition,
+            injury: self.injury,
             high_intensity_load_hint: Self::derive_high_intensity_hint(
                 position_default,
                 &self.statistics,
@@ -1118,6 +1220,7 @@ impl MatchPlayer {
         let condition_ctx = ConditionContext {
             in_state_time: self.in_state_time,
             player: self,
+            conditions: &context.conditions,
             match_progress,
         };
         match group {

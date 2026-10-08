@@ -5,9 +5,9 @@
 //! state can see — and each exists because leaving it to the states
 //! produced a visible defect:
 //!
-//! * [`corner_hold`] — [`CornerHold`]: stand where the corner routine
-//!   put you until the ball comes near. Without it the box empties
-//!   inside the corner's own lifetime.
+//! * [`set_piece_hold`] — [`SetPieceHold`]: stand where the set piece put
+//!   you until the ball comes near. Without it the box empties inside
+//!   the corner's own lifetime and a wall never forms.
 //! * [`restart_carry`] — [`RestartCarry`]: the taker walking the ball
 //!   back to the spot. Every chase behaviour reads a ball at your feet
 //!   as reached, so he stopped dead the moment he picked it up.
@@ -25,6 +25,9 @@
 //!   Same defect, same restart shape: the taker was an ordinary carrier,
 //!   so a lone striker set off up the pitch with the kick-off rather
 //!   than playing it.
+//! * [`set_piece_kick`] — [`SetPieceKick`]: the man over a free kick or
+//!   a penalty. Same defect again: a free kick he did not shoot was
+//!   dribbled away from the mark.
 //!
 //! The first three are applied at the single point every state's
 //! movement converges on (`StateProcessor::process_inner`), and the
@@ -32,16 +35,18 @@
 //! whose slots would otherwise pull the player straight back into the
 //! position he is being moved out of.
 
-pub mod corner_hold;
+pub mod set_piece_hold;
 pub mod keeper_space;
 pub mod kickoff;
 pub mod loose_ball;
 pub mod restart_carry;
+pub mod set_piece_kick;
 pub mod throw_in;
 
-pub use corner_hold::*;
+pub use set_piece_hold::*;
 pub use keeper_space::*;
 pub use kickoff::*;
 pub use loose_ball::*;
 pub use restart_carry::*;
+pub use set_piece_kick::*;
 pub use throw_in::*;

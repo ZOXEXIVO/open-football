@@ -441,7 +441,6 @@ impl Ball {
         self.record_touch(blocker_id, blocker_team, tick, controlled);
         self.pass_target_player_id = None;
         self.clear_pending_pass_metadata();
-        self.offside_snapshot = None;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
         events.add_ball_event(BallEvent::Blocked(blocker_id, self.position));
 

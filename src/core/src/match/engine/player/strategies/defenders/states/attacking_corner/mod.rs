@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::engine::ball::ball::KICKABLE_DISTANCE;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::player::strategies::players::ShotType;
@@ -67,13 +68,22 @@ impl StateProcessingHandler for DefenderAttackingCornerState {
         // is a genuine shot. xG / accuracy of the header is resolved by
         // the shooting pipeline, so a poor header still mostly misses.
         let ball_pos = ctx.tick_context.positions.ball.position;
-        if ball_pos.z >= HEADER_HEIGHT && ctx.ball().distance() < HEADER_REACH {
+        // A header the aerial contest awarded him is already won: it is his
+        // within the reach the engine granted it at, and the contact is
+        // made — the shooting pipeline grades how good it is.
+        let awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        let reach = if awarded {
+            KICKABLE_DISTANCE
+        } else {
+            HEADER_REACH
+        };
+        if ball_pos.z >= HEADER_HEIGHT && ctx.ball().distance() < reach {
             #[cfg(feature = "match-logs")]
             {
                 use std::sync::atomic::Ordering;
                 crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::DEF_CORNER_HEAD_CHANCE.fetch_add(1, Ordering::Relaxed);
             }
-            if self.win_header(ctx) {
+            if awarded || self.win_header(ctx) {
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
@@ -199,13 +209,9 @@ impl DefenderAttackingCornerState {
     fn win_header(&self, ctx: &StateProcessingContext) -> bool {
         let heading = ctx.player.skills.technical.heading / 20.0;
         let jumping = ctx.player.skills.physical.jumping / 20.0;
-        // The discrete corner contest (engine `resolve_corner_contest`) has
-        // ALREADY decided this CB won the aerial duel and dropped the ball
-        // on their head — so this only models making CLEAN CONTACT, which a
-        // player who won the jump usually does. A high floor avoids
-        // double-jeopardy (the old 0.2-0.9 roll silently killed ~40% of
-        // won headers). The resulting header's xG / accuracy is still graded
-        // by the shooting pipeline, so a poor header mostly misses anyway.
+        // A header he challenged for without the aerial contest awarding it:
+        // whether he makes clean contact. The resulting header's xG and
+        // accuracy are graded by the shooting pipeline.
         let p = (0.62 + (heading + jumping) * 0.5 * 0.30).clamp(0.55, 0.95);
         ctx.context.rng.unit_f32() < p
     }

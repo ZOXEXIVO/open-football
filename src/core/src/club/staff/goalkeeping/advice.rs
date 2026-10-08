@@ -112,6 +112,10 @@ pub enum KeeperAdvice {
     SignAnExperiencedThird,
     /// "He is not going to play here again."
     TimeToMoveHimOn,
+    /// "Take him out of the firing line for the big nights until he is
+    /// himself again." Raised for a keeper the department reads as shaken
+    /// after a run of errors, only while a fit senior keeper can go in.
+    RestHimFromBigGames,
 }
 
 impl KeeperAdvice {
@@ -140,6 +144,7 @@ impl KeeperAdvice {
             Self::SignAKeeperForTheFuture => "gk_advice_sign_a_keeper_for_the_future",
             Self::SignAnExperiencedThird => "gk_advice_sign_an_experienced_third",
             Self::TimeToMoveHimOn => "gk_advice_time_to_move_him_on",
+            Self::RestHimFromBigGames => "gk_advice_rest_him_from_big_games",
         }
     }
 }
@@ -163,6 +168,9 @@ pub struct KeeperRecommendation {
     /// of the room.
     pub player_id: Option<u32>,
     pub urgency: KeeperUrgency,
+    /// The standard of football a loan should take him to, when the
+    /// department has read him well enough to say.
+    pub target_standard: Option<f32>,
 }
 
 impl KeeperRecommendation {
@@ -171,6 +179,7 @@ impl KeeperRecommendation {
             advice,
             player_id: Some(player_id),
             urgency,
+            target_standard: None,
         }
     }
 
@@ -179,7 +188,13 @@ impl KeeperRecommendation {
             advice,
             player_id: None,
             urgency,
+            target_standard: None,
         }
+    }
+
+    pub fn aimed_at(mut self, standard: Option<f32>) -> Self {
+        self.target_standard = standard;
+        self
     }
 }
 

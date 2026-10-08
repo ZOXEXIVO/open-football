@@ -3,6 +3,7 @@
 //! post-match condition model reads.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::player::injury::InjuryGrade;
 use crate::r#match::engine::zones::ZoneStats;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,10 @@ pub struct PlayerMatchPhysicalSnapshot {
     /// the position-group default share (0.05..0.32) so the model has
     /// a starting value before the engine grows per-player tracking.
     pub high_intensity_load_hint: f32,
+    /// The worst injury he picked up in the match, handed to the player
+    /// after it so the injury he carries is the one he got.
+    #[serde(default)]
+    pub injury: Option<InjuryGrade>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,4 +139,55 @@ pub struct PlayerMatchEndStats {
     /// by the rating helper to apply zone-aware multipliers without
     /// re-deriving the action stream.
     pub zone_stats: ZoneStats,
+}
+
+impl PlayerMatchEndStats {
+    /// A stat line with nothing on it but the minutes and the rating: a
+    /// match played and nothing recorded of how.
+    pub fn neutral(position_group: PlayerFieldPositionGroup, minutes: u16, rating: f32) -> Self {
+        PlayerMatchEndStats {
+            shots_on_target: 0,
+            shots_total: 0,
+            passes_attempted: 0,
+            passes_completed: 0,
+            tackles: 0,
+            interceptions: 0,
+            saves: 0,
+            shots_faced: 0,
+            goals: 0,
+            assists: 0,
+            match_rating: rating,
+            raw_match_rating: rating,
+            xg: 0.0,
+            position_group,
+            fouls: 0,
+            yellow_cards: 0,
+            red_cards: 0,
+            minutes_played: minutes,
+            key_passes: 0,
+            progressive_passes: 0,
+            progressive_carries: 0,
+            successful_dribbles: 0,
+            attempted_dribbles: 0,
+            successful_pressures: 0,
+            pressures: 0,
+            blocks: 0,
+            clearances: 0,
+            passes_into_box: 0,
+            crosses_attempted: 0,
+            crosses_completed: 0,
+            xg_chain: 0.0,
+            xg_buildup: 0.0,
+            miscontrols: 0,
+            heavy_touches: 0,
+            carry_distance: 0,
+            errors_leading_to_shot: 0,
+            errors_leading_to_goal: 0,
+            xg_prevented: 0.0,
+            xg_faced: 0.0,
+            offsides: 0,
+            own_goals: 0,
+            zone_stats: ZoneStats::default(),
+        }
+    }
 }

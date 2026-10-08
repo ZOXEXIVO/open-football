@@ -2,10 +2,10 @@ use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
-use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::states::{
-    TackleDecision, TackleEngagement, TackleOutcome,
+    TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -88,6 +88,16 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 //
                 // Declining keeps him in the state containing, exactly as
                 // it does for a defender.
+                if TacticalFoul::commits_now(ctx, opponent.position) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            FoulSeverity::Normal,
+                            FoulSource::ProfessionalFoul,
+                        )),
+                    ));
+                }
                 // The licence is asked of the CHALLENGE, not of the entry
                 // tick — see `DefenderTacklingState`.
                 if !TackleEngagement::may_engage_carrier(ctx)
@@ -154,7 +164,7 @@ impl MidfielderTacklingState {
             }
             TackleOutcome::Foul(severity) => StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Standing,
-                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
             TackleOutcome::Missed => {
                 StateChangeResult::with_midfielder_state(MidfielderState::Pressing)

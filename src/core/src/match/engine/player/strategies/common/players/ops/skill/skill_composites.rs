@@ -31,6 +31,7 @@ use crate::r#match::MatchPlayer;
 use crate::r#match::engine::player::strategies::common::players::ops::effective_skill::{
     ActionContext, SkillBands, SkillCategory, effective_skill,
 };
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 /// Category shorthands for the `SkillBands`-based reads below. Each
 /// composite builds the per-(player, minute) bands ONCE and applies them
@@ -731,15 +732,21 @@ pub fn set_piece_delivery(player: &MatchPlayer, minute: u32) -> f32 {
 /// threaten at all.
 /// `free_kicks^1.70*0.38 + technique^1.55*0.22 + composure^1.40*0.14
 ///  + long_shots^1.55*0.10 + vision^1.30*0.08 + balance^1.25*0.08`
-pub fn dead_ball_strike(player: &MatchPlayer, minute: u32) -> f32 {
+///
+/// Each attribute is read against the standard of the match
+/// (`MatchStandard::peer`) before it is curved, as the open-play shooting
+/// bands are: the curve has absolute pivots, so a shift applied to the
+/// blend afterwards would not be the same read.
+pub fn dead_ball_strike(player: &MatchPlayer, minute: u32, standard_shift: f32) -> f32 {
     let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (curve(n(b.apply(s.technical.free_kicks, TECH)), 1.70) * 0.38
-        + curve(n(b.apply(s.technical.technique, TECH)), 1.55) * 0.22
-        + curve(n(b.apply(s.mental.composure, MENT)), 1.40) * 0.14
-        + curve(n(b.apply(s.technical.long_shots, TECH)), 1.55) * 0.10
-        + curve(n(b.apply(s.mental.vision, MENT)), 1.30) * 0.08
-        + curve(n(b.apply(s.physical.balance, TECH)), 1.25) * 0.08)
+    let peer = |v: f32| MatchStandard::peer(n(v), standard_shift);
+    let v = (curve(peer(b.apply(s.technical.free_kicks, TECH)), 1.70) * 0.38
+        + curve(peer(b.apply(s.technical.technique, TECH)), 1.55) * 0.22
+        + curve(peer(b.apply(s.mental.composure, MENT)), 1.40) * 0.14
+        + curve(peer(b.apply(s.technical.long_shots, TECH)), 1.55) * 0.10
+        + curve(peer(b.apply(s.mental.vision, MENT)), 1.30) * 0.08
+        + curve(peer(b.apply(s.physical.balance, TECH)), 1.25) * 0.08)
         .clamp(0.0, 1.0);
     clamp_composite(v)
 }
@@ -1264,7 +1271,7 @@ mod tests {
             ("tackle_timing", tackle_timing(&max, m)),
             ("gk_rush_out", gk_rush_out(&max, m)),
             ("set_piece_delivery", set_piece_delivery(&max, m)),
-            ("dead_ball_strike", dead_ball_strike(&max, m)),
+            ("dead_ball_strike", dead_ball_strike(&max, m, 0.0)),
             ("penalty_execution", penalty_execution(&max, m)),
             ("long_throw_delivery", long_throw_delivery(&max, m)),
             ("resilience", resilience(&max, m)),
@@ -1419,7 +1426,9 @@ mod tests {
             ("tackle_timing", tackle_timing),
             ("gk_rush_out", gk_rush_out),
             ("set_piece_delivery", set_piece_delivery),
-            ("dead_ball_strike", dead_ball_strike),
+            ("dead_ball_strike", |p: &MatchPlayer, m: u32| {
+                dead_ball_strike(p, m, 0.0)
+            }),
             ("penalty_execution", penalty_execution),
             ("long_throw_delivery", long_throw_delivery),
             ("resilience", resilience),
@@ -1452,7 +1461,7 @@ mod tests {
             (
                 "free_kicks",
                 |p: &mut MatchPlayer| p.skills.technical.free_kicks = 19.0,
-                dead_ball_strike,
+                |p: &MatchPlayer, m: u32| dead_ball_strike(p, m, 0.0),
             ),
             (
                 "penalty_taking",
@@ -1498,6 +1507,19 @@ mod tests {
     /// 18-everything winger beat a 19-corners specialist, and the engine
     /// goes back to handing corners to whoever is generally best.
     #[test]
+    fn dead_ball_strike_reads_the_taker_against_the_standard_of_the_match() {
+        let m = 30u32;
+        let taker = build_player(14.0, 10_000);
+        let here = dead_ball_strike(&taker, m, 0.0);
+        assert!(dead_ball_strike(&taker, m, 0.1) < here);
+        // In a match a standard higher, a man two points better is the
+        // same taker.
+        let better = build_player(16.0, 10_000);
+        let up = dead_ball_strike(&better, m, n(16.0) - n(14.0));
+        assert!((up - here).abs() < 1e-3, "{up} vs {here}");
+    }
+
+    #[test]
     fn specialist_beats_all_rounder_without_the_specialism() {
         let m = 30u32;
         let mut all_rounder = build_player(16.0, 9000);
@@ -1513,7 +1535,7 @@ mod tests {
         specialist.skills.technical.long_throws = 19.0;
 
         assert!(set_piece_delivery(&specialist, m) > set_piece_delivery(&all_rounder, m));
-        assert!(dead_ball_strike(&specialist, m) > dead_ball_strike(&all_rounder, m));
+        assert!(dead_ball_strike(&specialist, m, 0.0) > dead_ball_strike(&all_rounder, m, 0.0));
         assert!(long_throw_delivery(&specialist, m) > long_throw_delivery(&all_rounder, m));
         // Penalties are the exception the weights encode on purpose:
         // composure is 0.24 of the blend, so a calm 16-everywhere player

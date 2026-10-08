@@ -1,6 +1,10 @@
 use crate::r#match::engine::ball::ball::HandlingVerdict;
+use crate::r#match::engine::officiating::management::TimeWastingRestart;
+use crate::r#match::events::Event;
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperRelease, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperAppetite, KeeperFeetDecision, KeeperRelease,
+    KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -30,6 +34,9 @@ use nalgebra::Vector3;
 /// his gloves for 27.9% of the match against a real 3-6%.
 const MIN_HOLDING_DURATION: u64 = 100;
 const MAX_HOLDING_DURATION: u64 = 275;
+/// AI ticks are 20 ms.
+const AI_TICK_MS: u64 = 20;
+const HANDS_LIMIT: u64 = KeeperRelease::HANDS_LIMIT_MS / AI_TICK_MS;
 
 /// How the keeper puts the ball back into play once it is in their hands.
 ///
@@ -102,11 +109,29 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
             ));
         }
 
+        // Past the count: the referee gives the corner.
+        if ctx.in_state_time > HANDS_LIMIT {
+            return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                GoalkeeperState::Standing,
+                Event::PlayerEvent(PlayerEvent::HeldTooLong(ctx.player.id)),
+            ));
+        }
+
         // After holding for a skill-based duration, release the ball.
-        // Better decision-makers distribute faster.
+        // Better decision-makers distribute faster. A keeper whose side is
+        // ahead late sits on it for as long as he dares — and only a poor
+        // reader of the referee's count dares past it.
         let decision = ctx.player.skills.mental.decisions / 20.0;
-        let holding_duration = MAX_HOLDING_DURATION
+        let natural = MAX_HOLDING_DURATION
             - ((MAX_HOLDING_DURATION - MIN_HOLDING_DURATION) as f32 * decision) as u64;
+        let wasting = ctx.context.time_wasting_delay_ms(
+            ctx.player.team_id,
+            ctx.player.skills.mental.aggression,
+            TimeWastingRestart::KeeperHold,
+        ) / AI_TICK_MS;
+        let margin = -25.0 + 125.0 * decision;
+        let dares = (HANDS_LIMIT as f32 - margin).max(0.0) as u64;
+        let holding_duration = (natural + wasting).min(dares.max(natural));
         if ctx.in_state_time >= holding_duration {
             return Some(StateChangeResult::with_goalkeeper_state(
                 Self::pick_distribution(ctx).into_state(),
@@ -183,9 +208,11 @@ impl GoalkeeperHoldingState {
         // Short build-up: needs a free nearby outlet AND the composure to
         // use it. The press directly suppresses it — that is the whole
         // point of pressing a keeper.
+        let (bolder, safer) = KeeperAppetite::short_ball(KeeperAppetite::of(ctx));
         let short = 0.30 + free_short * 0.45 + short_skill * 0.35 + composure * 0.20
             - press * 0.85
-            - directness * 0.45;
+            - directness * 0.45
+            + bolder;
 
         // Throw: the counter-attack release. Scales with arm strength and
         // with how exposed the opposition is; less press-sensitive than a
@@ -197,7 +224,8 @@ impl GoalkeeperHoldingState {
         // direct the side has been asked to be.
         let kick = 0.34 + kick_skill * 0.45 + press * 0.70 + directness * 0.55
             - free_short * 0.25
-            - prof.distribution * 0.15;
+            - prof.distribution * 0.15
+            - safer;
 
         if throw >= short && throw >= kick {
             DistributionChoice::Throw

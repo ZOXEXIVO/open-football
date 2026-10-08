@@ -218,11 +218,26 @@ impl DefenderClearingState {
             let angle = Self::FAN_SPREAD * step as f32 / Self::FAN_STEPS as f32;
             let dir = Vector3::new(forward * angle.cos(), angle.sin(), 0.0);
             let target = ball + dir * probe;
-            // On the pitch, in both axes: an off-pitch Y folds `to_line`
-            // to zero and scores the touchline term at its maximum, which
-            // would make the widest candidate the best one every time.
-            if target.x < 0.0 || target.x > field_width || target.y < 0.0 || target.y > field_height
-            {
+            if target.x < 0.0 || target.x > field_width {
+                continue;
+            }
+
+            // …and a kick that would land beyond the touchline is put into
+            // TOUCH: the throw is theirs, so nobody recovers it in play, and
+            // what it is worth is how far from goal it goes out. Skipped,
+            // the whole wide half of the fan from inside the area was never
+            // a candidate, and the one clearance a pressed defender in his
+            // own box makes most is the one he could not choose.
+            if target.y < 0.0 || target.y > field_height {
+                let line = if dir.y < 0.0 { 0.0 } else { field_height };
+                let out = ball + dir * ((line - ball.y) / dir.y);
+                let from_danger = ((out - own_goal).magnitude() / field_width).clamp(0.0, 1.0);
+                let score =
+                    0.40 * from_danger + 0.10 - 0.35 * Self::block_risk(ctx, ball, dir, probe);
+                if score > best_score {
+                    best_score = score;
+                    best = dir;
+                }
                 continue;
             }
 
@@ -249,33 +264,42 @@ impl DefenderClearingState {
             let to_line = target.y.min(field_height - target.y).max(0.0);
             let touchline = (1.0 - to_line / Self::TOUCHLINE_BAND).clamp(0.0, 1.0);
 
-            // …and a leg in the way is not a clearance at all.
-            let blocked = ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|o| {
-                    let rel = o.position - ball;
-                    let along = rel.x * dir.x + rel.y * dir.y;
-                    along > 0.0 && along < probe
-                })
-                .map(|o| {
-                    let rel = o.position - ball;
-                    (rel.x * dir.y - rel.y * dir.x).abs()
-                })
-                .fold(f32::MAX, f32::min);
-            let block_risk = (1.0 - blocked / Self::BLOCK_CORRIDOR).clamp(0.0, 1.0);
-
             let score = 0.40 * from_danger
                 + 0.30 * opponent_margin
                 + 0.20 * teammate_recovery
                 + 0.10 * touchline
-                - 0.35 * block_risk;
+                - 0.35 * Self::block_risk(ctx, ball, dir, probe);
             if score > best_score {
                 best_score = score;
                 best = dir;
             }
         }
         best
+    }
+
+    /// How near the line of the kick an opponent stands, 0 (nobody within
+    /// [`Self::BLOCK_CORRIDOR`]) to 1 (a leg in the way) — a leg in the
+    /// way is not a clearance at all.
+    fn block_risk(
+        ctx: &StateProcessingContext,
+        ball: Vector3<f32>,
+        dir: Vector3<f32>,
+        probe: f32,
+    ) -> f32 {
+        let blocked = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|o| {
+                let rel = o.position - ball;
+                let along = rel.x * dir.x + rel.y * dir.y;
+                along > 0.0 && along < probe
+            })
+            .map(|o| {
+                let rel = o.position - ball;
+                (rel.x * dir.y - rel.y * dir.x).abs()
+            })
+            .fold(f32::MAX, f32::min);
+        (1.0 - blocked / Self::BLOCK_CORRIDOR).clamp(0.0, 1.0)
     }
 }

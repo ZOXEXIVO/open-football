@@ -7,6 +7,7 @@
 //! chance was is only answerable against the other chances the same team
 //! had.
 
+use crate::r#match::engine::ball::ball::GoalOrigin;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::result::{GOAL_CLIP_POST_ROLL_MS, GOAL_CLIP_PRE_ROLL_MS};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ pub struct GoalDetail {
     pub stat_type: MatchStatisticType,
     pub is_auto_goal: bool,
     pub time: u64,
+    #[serde(default)]
+    pub origin: GoalOrigin,
 }
 
 /// A goal-scoring situation that did not end in a goal — the save, the post,
@@ -243,6 +246,7 @@ mod highlight_selector_tests {
             stat_type: MatchStatisticType::Goal,
             is_auto_goal: false,
             time: minute * 60_000,
+            origin: GoalOrigin::OpenPlay,
         }
     }
 

@@ -6,7 +6,10 @@ use crate::league::{
 use crate::r#match::MatchSquad;
 use crate::r#match::squad::selection::helpers::PlayerAvailability;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
+use crate::club::finance::RevenueModel;
+use crate::r#match::{
+    CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
+};
 use crate::{Club, ClubPhilosophy, MatchRuntime, Person, Player, Team, TeamType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -342,6 +345,7 @@ impl League {
         // the declared pecking order and any live request to play a
         // particular keeper. Only the side's own senior fixtures hear it —
         // an academy side picks its keepers on its own rotation plan.
+        let fixture_standard = (home_team.playing_standard + away_team.playing_standard) * 0.5;
         let keeper_brief = |team: &Team| {
             if team.team_type != TeamType::Main {
                 return None;
@@ -349,6 +353,7 @@ impl League {
             lookup
                 .club(team.club_id)
                 .and_then(|c| c.keeper_selection_brief(date))
+                .map(|b| b.with_fixture_standard(fixture_standard))
         };
 
         let mut home_ctx = SelectionContext {
@@ -381,16 +386,16 @@ impl League {
         // environment carries the venue, and congestion mirrors the same
         // upcoming-fixture count the importance dampener uses. Friendlies
         // skip it — the rotation selector never reads the model.
+        // Rivalry read for the derby classification — either club listing
+        // the other as a rival makes the fixture a derby.
+        let is_derby = match (
+            lookup.club(home_team.club_id),
+            lookup.club(away_team.club_id),
+        ) {
+            (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
+            _ => false,
+        };
         if !friendly {
-            // Rivalry read for the derby classification — either club
-            // listing the other as a rival makes the fixture a derby.
-            let is_derby = match (
-                lookup.club(home_team.club_id),
-                lookup.club(away_team.club_id),
-            ) {
-                (Some(h), Some(a)) => h.is_rival(a.id) || a.is_rival(h.id),
-                _ => false,
-            };
             home_ctx.game_model = Some(MatchSelectionGameModel::build_for_fixture(
                 &home_ctx,
                 home_team,
@@ -483,24 +488,32 @@ impl League {
         Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
         Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
 
-        if knockout {
-            Match::make_knockout(
-                scheduled_match.id.clone(),
-                scheduled_match.league_id,
-                &scheduled_match.league_slug,
-                home_squad,
-                away_squad,
-            )
+        let competition = if friendly {
+            CompetitionKind::Friendly
+        } else if is_cup {
+            CompetitionKind::DomesticCup
         } else {
-            Match::make(
-                scheduled_match.id.clone(),
-                scheduled_match.league_id,
-                &scheduled_match.league_slug,
-                home_squad,
-                away_squad,
-                friendly,
-            )
+            CompetitionKind::League
+        };
+        let mut fixture = FixtureContext::new(&scheduled_match.id, date, competition, knockout)
+            .with_importance((home_base + away_base) * 0.5)
+            .with_gate(RevenueModel::utilisation(
+                home_team.reputation.overall_score(),
+                1.0,
+                1.0,
+            ))
+            .with_rivalry(if is_derby { 1.0 } else { 0.0 });
+        if let Some(continent) = &ctx.continent {
+            fixture = fixture.on_continent(continent.id());
         }
+        Match::make(
+            scheduled_match.id.clone(),
+            scheduled_match.league_id,
+            &scheduled_match.league_slug,
+            home_squad,
+            away_squad,
+            fixture,
+        )
     }
 
     /// Resolve the club and hand the fixture to [`MatchdayPool`].

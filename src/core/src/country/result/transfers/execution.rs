@@ -570,7 +570,7 @@ impl SquadReactionPass {
 /// same code runs whether the caller holds one country (Phase A) or the
 /// whole world (Phase C) — one executor per product, so the two reaches
 /// cannot drift.
-pub(crate) struct TransferExecutor;
+pub struct TransferExecutor;
 
 /// What [`TransferExecutor::move_all`] did: one flag per input transfer, the
 /// players who actually moved, and which of those moves stage a development
@@ -721,6 +721,24 @@ impl TransferExecutor {
             }
         }
         success
+    }
+
+    /// A permanent move an editor states as a fact: the completion a
+    /// negotiated deal runs, then the same two steps [`Self::one`] takes
+    /// after it. None of [`Self::move_player`]'s market rules apply —
+    /// nothing was reserved to release, and the route, the squad room and
+    /// the budget are the market's questions, not the editor's.
+    pub fn editor_transfer(
+        data: &mut SimulatorData,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) -> bool {
+        let moved = Self::complete_permanent(data, transfer, date);
+        if moved {
+            ApproachPass::cleanup_player_transfer_interest(data, transfer.player_id);
+            Self::stage_development_loan(data, transfer, date);
+        }
+        moved
     }
 
     /// Move a tick's worth of deferred transfers for one country — the first
@@ -928,20 +946,18 @@ impl TransferExecutor {
         transfer: &DeferredTransfer,
         date: NaiveDate,
     ) -> bool {
-        let player_id = transfer.player_id;
-        let selling_country_id = transfer.selling_country_id;
-        let selling_club_id = transfer.selling_club_id;
-        let buying_country_id = transfer.buying_country_id;
-        let buying_club_id = transfer.buying_club_id;
-        let fee = transfer.fee;
         // Installments defer part of the fee; only the upfront portion is paid
         // (and gated for affordability) at completion. See `upfront_fee` —
         // cross-country deals collapse to the full fee upfront.
         let upfront = TransferExecution::upfront_fee(transfer);
 
         let can_accept = data
-            .country(buying_country_id)
-            .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
+            .country(transfer.buying_country_id)
+            .and_then(|c| {
+                c.clubs
+                    .iter()
+                    .find(|club| club.id == transfer.buying_club_id)
+            })
             .map(|club| {
                 ClubView::can_accept_player(club) && club.finance.can_afford_transfer(upfront)
             })
@@ -949,10 +965,28 @@ impl TransferExecutor {
         if !can_accept {
             debug!(
                 "Transfer rejected before mutation: club {} cannot accept player {}",
-                buying_club_id, player_id
+                transfer.buying_club_id, transfer.player_id
             );
             return false;
         }
+
+        Self::complete_permanent(data, transfer, date)
+    }
+
+    /// The permanent move itself, once whoever stated it has applied its own
+    /// rules — the market its squad-room and budget gate, an editor none.
+    fn complete_permanent<W: MarketWorld>(
+        data: &mut W,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) -> bool {
+        let player_id = transfer.player_id;
+        let selling_country_id = transfer.selling_country_id;
+        let selling_club_id = transfer.selling_club_id;
+        let buying_country_id = transfer.buying_country_id;
+        let buying_club_id = transfer.buying_club_id;
+        let fee = transfer.fee;
+        let upfront = TransferExecution::upfront_fee(transfer);
 
         let departing =
             Self::departing_player(data, selling_country_id, selling_club_id, player_id, date);
@@ -1361,12 +1395,14 @@ impl TransferExecutor {
             // this point could drop the owned `player` on the floor.
             let buying_club = &mut buying_country.clubs[buying_club_index];
             // Only the upfront portion leaves now; deferred installment tranches
-            // are paid over time by the settlement walk. Affordability was
-            // pre-checked above, so this debit always succeeds.
+            // are paid over time by the settlement walk. Whether the club
+            // could afford it was the caller's question — the market gates
+            // it, an editor's move does not — so the purchase that happened
+            // is booked either way, flooring the budget rather than vetoing.
             // Over the years the MANDATE says, so the club's books and the
             // book value under its own asking price are the same number
             // read from two places.
-            buying_club.finance.register_transfer_purchase(
+            buying_club.finance.register_obligated_purchase(
                 upfront,
                 transfer
                     .mandate

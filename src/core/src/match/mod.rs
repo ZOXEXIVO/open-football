@@ -5,6 +5,7 @@ pub mod calibration;
 pub mod dispatch;
 pub mod engine;
 
+pub mod fixture;
 pub mod game;
 
 pub mod pool;
@@ -17,6 +18,7 @@ pub mod state;
 
 pub use dispatch::*;
 pub use engine::*;
+pub use fixture::*;
 pub use game::*;
 pub use pool::*;
 

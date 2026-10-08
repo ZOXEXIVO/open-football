@@ -968,8 +968,14 @@ mod rebalance_patience_tests {
     use crate::academy::ClubAcademy;
     use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::competitions::global::GlobalCompetitions;
+    use crate::continent::Continent;
+    use crate::country::result::transfers::{DeferredTransfer, TransferExecutor};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::deal::offer::PromisedSquadStatus;
+    use crate::transfers::tests::kit::{TestClub, TestCountry};
+    use crate::world::SimulatorData;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPlan, PlayerPosition,
@@ -1112,6 +1118,32 @@ mod rebalance_patience_tests {
                 .iter()
                 .find(|p| p.id == id)
         }
+
+        /// The tenth midfielder at another club (50), and this club (100)
+        /// waiting for him with its midfield already at the depth cap.
+        fn world_before_signing() -> SimulatorData {
+            let mut buyer = Self::club(Self::player(
+                1,
+                PlayerPositionType::MidfielderCenter,
+                100,
+                27,
+            ));
+            let arriving = buyer.teams.teams[0].players.take_player(&1);
+            let seller = TestClub::new(50)
+                .players(arriving.into_iter().collect())
+                .build();
+            let country = TestCountry::new(1).clubs(vec![buyer, seller]).build();
+            SimulatorData::new(
+                Self::date().and_hms_opt(12, 0, 0).unwrap(),
+                vec![Continent::new(
+                    1,
+                    "Europe".to_string(),
+                    vec![country],
+                    Vec::new(),
+                )],
+                GlobalCompetitions::new(Vec::new()),
+            )
+        }
     }
 
     #[test]
@@ -1154,6 +1186,53 @@ mod rebalance_patience_tests {
         assert!(
             !kept.statuses.has(PlayerStatusType::Loa),
             "a signing inside his evaluation window must not be loan-listed"
+        );
+    }
+
+    #[test]
+    fn overdepth_editor_signing_is_not_chosen_as_surplus() {
+        // The same tenth midfielder, moved in by an editor's hand. Nobody
+        // negotiated the move, but it still writes the buying club's own
+        // plan, so he arrives inside its evaluation window like any signing.
+        let date = Fx::date();
+        let mut data = Fx::world_before_signing();
+        let transfer = DeferredTransfer::unnegotiated(
+            1,
+            1,
+            50,
+            1,
+            100,
+            1_000_000.0,
+            5_000,
+            Some(PromisedSquadStatus::MainBackupPlayer),
+        );
+        assert!(TransferExecutor::editor_transfer(
+            &mut data, &transfer, date
+        ));
+
+        let club = data
+            .country_mut(1)
+            .and_then(|country| country.clubs.iter_mut().find(|c| c.id == 100))
+            .unwrap();
+        assert!(
+            Fx::on_main(club, 1).is_some_and(|p| p.signing_protection_active(date)),
+            "the hand-moved signing carries the buyer's plan"
+        );
+
+        let main_idx = club.teams.main_index().unwrap();
+        let mut moves = Vec::new();
+        club.collect_surplus_demotions(date, main_idx, &mut moves);
+
+        assert!(
+            moves.iter().all(|m| m.player_id != 1),
+            "ranked past the depth cap, he is still not the surplus body"
+        );
+        assert!(
+            club.transfer_plan
+                .loan_out_candidates
+                .iter()
+                .all(|c| c.player_id != 1),
+            "and no loan is staged for him"
         );
     }
 }

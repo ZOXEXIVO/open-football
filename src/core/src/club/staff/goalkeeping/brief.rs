@@ -29,6 +29,13 @@ pub struct KeeperSelectionBrief {
     pub nominated: Option<u32>,
     /// 0..1 — how far the manager acts on the department's word.
     pub authority: f32,
+    /// How settled the nominee was read as when the department asked.
+    pub nominee_assurance: Option<f32>,
+    /// The standard of football this fixture is expected to be played at.
+    /// `None` until the matchday stamps it.
+    pub fixture_standard: Option<f32>,
+    /// The keeper the department wants kept out of the big nights.
+    pub rested: Option<u32>,
 }
 
 impl KeeperSelectionBrief {
@@ -80,6 +87,14 @@ impl KeeperSelectionBrief {
     const STAKES_FREE: f32 = 0.35;
     const STAKES_CLOSED: f32 = 0.62;
 
+    /// A perceived step up of this much or more from the football the
+    /// nominee is used to, and the fixture is no longer his: a debut is
+    /// made where the step is small, not where the stakes merely are.
+    const STEP_LIMIT: f32 = 0.08;
+    /// What resting a shaken keeper from a big night is worth, against the
+    /// number one's standing, at full authority.
+    const REST_PULL: f32 = 10.0;
+
     /// Build the matchday read from the standing plan.
     pub fn from_plan(plan: &KeeperRoomPlan, today: NaiveDate) -> Self {
         KeeperSelectionBrief {
@@ -88,6 +103,31 @@ impl KeeperSelectionBrief {
             third: plan.third(),
             nominated: plan.nominated(today),
             authority: plan.authority(),
+            nominee_assurance: plan
+                .nomination()
+                .filter(|n| n.is_live(today))
+                .and_then(|n| n.perceived_assurance),
+            fixture_standard: None,
+            rested: plan.rested(),
+        }
+    }
+
+    /// The same word, for a fixture expected at `standard`.
+    pub fn with_fixture_standard(mut self, standard: f32) -> Self {
+        self.fixture_standard = Some(standard);
+        self
+    }
+
+    /// How far this fixture sits within the nominee's reach: whole when
+    /// the step up from the football he is used to is small, nothing once
+    /// it is `STEP_LIMIT`. Whole when either side of the comparison is
+    /// unknown.
+    fn step_room(&self) -> f32 {
+        match (self.fixture_standard, self.nominee_assurance) {
+            (Some(fixture), Some(assured)) => {
+                1.0 - ((fixture - assured) / Self::STEP_LIMIT).clamp(0.0, 1.0)
+            }
+            _ => 1.0,
         }
     }
 
@@ -123,13 +163,20 @@ impl KeeperSelectionBrief {
         // How far this fixture belongs to the boy. Zero once the result
         // matters, and then the room is the number one's as usual.
         let room = if self.nominated.is_some() {
-            Self::stakes_room(match_importance)
+            Self::stakes_room(match_importance) * self.step_room()
+        } else {
+            0.0
+        };
+
+        // A shaken keeper is kept out of the nights that matter.
+        let rest = if self.rested == Some(player_id) && match_importance >= Self::STAKES_CLOSED {
+            -Self::REST_PULL * authority
         } else {
             0.0
         };
 
         if self.nominated == Some(player_id) && room > 0.0 {
-            return Self::NOMINATION_PULL * authority * room;
+            return Self::NOMINATION_PULL * authority * room + rest;
         }
 
         if self.number_one == Some(player_id) {
@@ -138,14 +185,14 @@ impl KeeperSelectionBrief {
             // the one the club has set aside — and comes straight back the
             // moment the stakes rise. Without this the two halves of the
             // department's own advice would compete with each other.
-            return Self::NUMBER_ONE_STANDING * authority * (1.0 - room);
+            return Self::NUMBER_ONE_STANDING * authority * (1.0 - room) + rest;
         }
         if self.deputy == Some(player_id) {
-            return Self::DEPUTY_STANDING * authority;
+            return Self::DEPUTY_STANDING * authority + rest;
         }
         if self.third == Some(player_id) {
-            return Self::THIRD_STANDING * authority;
+            return Self::THIRD_STANDING * authority + rest;
         }
-        0.0
+        rest
     }
 }

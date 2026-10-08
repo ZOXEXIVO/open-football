@@ -9,6 +9,7 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
 use crate::r#match::teamplay::coach::CoachInstruction;
 
 pub struct KeeperRelease;
@@ -36,9 +37,51 @@ impl KeeperRelease {
     /// Radius used to judge whether an outlet is actually free (~5 m).
     const MARKING_RADIUS: f32 = 40.0;
 
+    /// Law 12 since 2025: eight seconds with the ball in his hands, then a
+    /// corner to the opponents.
+    pub const HANDS_LIMIT_MS: u64 = 8_000;
+
     /// How far up the pitch we look for an opponent when deciding whether
     /// our own third is being pressed (~17.5 m).
     const PRESS_RADIUS: f32 = 140.0;
+
+    /// How long he keeps looking for the release he chose before he goes
+    /// long, in AI ticks: three seconds for a side playing at no tempo,
+    /// one for a side playing at full tempo.
+    fn patience_ticks(tempo: f32) -> u64 {
+        (50.0 + 100.0 * (1.0 - tempo.clamp(0.0, 1.0))) as u64
+    }
+
+    /// The time he keeps in hand on the referee's count while he waits:
+    /// half a second for a poor reader of the game, two for a good one.
+    fn count_margin_ms(decisions: f32) -> u64 {
+        (500.0 + 1500.0 * (decisions / 20.0).clamp(0.0, 1.0)) as u64
+    }
+
+    /// Whether he can keep looking: inside his side's patience and, with
+    /// the ball in his gloves for `held_ms`, inside the count with his
+    /// margin to spare.
+    pub fn may_wait(waited_ticks: u64, tempo: f32, held_ms: Option<u64>, decisions: f32) -> bool {
+        waited_ticks < Self::patience_ticks(tempo)
+            && held_ms.is_none_or(|held| {
+                held + Self::count_margin_ms(decisions) < Self::HANDS_LIMIT_MS
+            })
+    }
+
+    /// [`Self::may_wait`] for the keeper deciding in `ctx`.
+    pub fn may_keep_looking(ctx: &StateProcessingContext) -> bool {
+        let ball = &ctx.tick_context.ball;
+        let held_ms = ball.held_in_hands.then(|| {
+            ctx.context.current_tick().saturating_sub(ball.hands_since_tick)
+                * MATCH_TIME_INCREMENT_MS
+        });
+        Self::may_wait(
+            ctx.in_state_time,
+            ctx.team().tempo(),
+            held_ms,
+            ctx.player.skills.mental.decisions,
+        )
+    }
 
     /// Fraction (0..1) of nearby team-mates inside `range` who are not
     /// tightly marked. This is "have I got someone to give it to?", the

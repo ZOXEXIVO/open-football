@@ -21,6 +21,19 @@ pub enum CompetitionStage {
 }
 
 impl CompetitionStage {
+    /// How much a tie at this stage matters.
+    pub fn importance(&self) -> f32 {
+        match self {
+            CompetitionStage::NotStarted | CompetitionStage::Qualifying => 0.5,
+            CompetitionStage::GroupStage => 0.6,
+            CompetitionStage::RoundOf32 => 0.65,
+            CompetitionStage::RoundOf16 => 0.7,
+            CompetitionStage::QuarterFinals => 0.8,
+            CompetitionStage::SemiFinals => 0.9,
+            CompetitionStage::Final => 1.0,
+        }
+    }
+
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
             CompetitionStage::NotStarted => "stage_not_started",

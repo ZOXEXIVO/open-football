@@ -42,7 +42,7 @@
 //! times harder than the back one.
 
 use crate::r#match::ball::events::GoalSide;
-use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::ball::ball::{Ball, GoalOrigin};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
 
 /// The ball is in the goal. Set the instant it crosses the line and held
@@ -59,6 +59,9 @@ pub struct BallInNet {
     /// layer having to re-derive it from the event stream.
     pub scorer_id: u32,
     pub auto_goal: bool,
+    /// Where the goal is filed, read before the dead-ball clear drops the
+    /// set-piece phase it came from.
+    pub origin: GoalOrigin,
     /// **Slack the mesh is holding, latched at the moment the ball went
     /// past each panel and released when it comes back off.**
     ///
@@ -473,11 +476,13 @@ impl Ball {
                 self.velocity.z,
             ));
         }
+        let origin = self.goal_origin(auto_goal);
         self.clear_for_dead_ball();
         self.in_net = Some(BallInNet {
             side,
             scorer_id,
             auto_goal,
+            origin,
             give_back: None,
             give_side: None,
             give_roof: None,

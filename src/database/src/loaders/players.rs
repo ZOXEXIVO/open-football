@@ -490,6 +490,14 @@ impl PlayersOdb {
         &self.free_agents
     }
 
+    /// Every record, clubbed and free.
+    pub fn records(&self) -> impl Iterator<Item = &OdbPlayer> {
+        self.by_physical_club
+            .values()
+            .flatten()
+            .chain(&self.free_agents)
+    }
+
     /// Highest player id present in the index, or `None` when empty.
     /// Used to seed the procedural id sequence so generated players never
     /// collide with externally-supplied ids.

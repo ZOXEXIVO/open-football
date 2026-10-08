@@ -6,6 +6,7 @@ use super::rolls::FixedRolls;
 use super::skills_array::*;
 
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::condition::load::REGULAR_STOCK;
 use crate::club::player::player::Player;
 use crate::club::player::position::{PlayerPosition, PlayerPositions};
 use crate::shared::fullname::FullName;
@@ -1331,7 +1332,7 @@ fn teenage_ceiling_holds_the_mind_back_but_not_the_body() {
         PersonAttributes::default(),
     );
     // A regular, so the ceilings differ by age alone.
-    boy.load.minutes_last_30 = 400.0;
+    boy.load.football_absorbed = REGULAR_STOCK;
     let young = PositionalSkillCeilings::for_player(&boy, 17.5);
     let peak = PositionalSkillCeilings::for_player(&boy, 28.5);
 
@@ -1387,15 +1388,17 @@ fn age_ceiling_never_cuts_what_a_player_already_has() {
 fn teenage_keeper_cannot_reach_a_senior_handling_ceiling() {
     // PA kept clear of the absolute 20.0 clamp: a keeper's handling
     // weight would otherwise peg both ends at 20 and hide the curve.
-    let boy = make_player(
+    let mut boy = make_player(
         d(2009, 1, 1),
         PlayerPositionType::Goalkeeper,
         gk_skills(),
         120,
         PersonAttributes::default(),
     );
+    // A regular, so the ceilings differ by age alone.
+    boy.load.football_absorbed = REGULAR_STOCK;
     let young = PositionalSkillCeilings::for_player(&boy, 17.5).get(SkillKey::GkHandling);
-    let peak = PositionalSkillCeilings::for_player(&boy, 31.5).get(SkillKey::GkHandling);
+    let peak = PositionalSkillCeilings::for_player(&boy, 33.5).get(SkillKey::GkHandling);
     assert!(
         peak - young >= 2.5,
         "a 17-year-old keeper's handling ceiling must trail his peak — {young} vs {peak}"

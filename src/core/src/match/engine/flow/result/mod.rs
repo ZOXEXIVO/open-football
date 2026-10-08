@@ -10,6 +10,7 @@
 //! | [`highlights`]    | The goals, the near misses, and which near misses reach the sheet |
 //! | [`player_stats`]  | One player's stat line and physical state when he left the pitch |
 //! | [`substitution`]  | The record of a swap, and why it fired                          |
+//! | [`tally`]         | The match-report lines no stat line adds up to: restarts, offences, injuries, playing time |
 //! | [`raw`]           | The whole engine payload and the league-facing wrapper around it |
 //!
 //! Every item is re-exported below, so `flow::result::Item` resolves
@@ -21,9 +22,11 @@ pub mod player_stats;
 pub mod raw;
 pub mod score;
 pub mod substitution;
+pub mod tally;
 
 pub use highlights::{ChanceDetail, GoalDetail, HighlightSelector};
 pub use player_stats::{PlayerMatchEndStats, PlayerMatchPhysicalSnapshot};
 pub use raw::{FieldSquad, MatchResult, MatchResultRaw, PenaltyShootoutKick};
 pub use score::{MatchResultOutcome, Score, TeamScore};
 pub use substitution::{SubstitutionInfo, SubstitutionReason};
+pub use tally::{DeadTime, MatchTally, OffenceTally, PeriodKind, PlayingTime};

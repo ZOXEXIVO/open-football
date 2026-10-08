@@ -66,7 +66,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // that only watched the full ones lost half its sample.
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
-        Self::apply_pending_save_credit(field);
+        Self::apply_pending_save_credit(field, context);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_L_SAVE_CREDIT);
 
@@ -117,7 +117,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // pitch. See `MatchPlayer::check_boundary_collision`.
         let restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
 
-        for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
+        for player in field.players.iter_mut().filter(|p| !p.off_pitch) {
             // A keeper the shot branch above just ran has ALREADY been moved:
             // `MatchPlayer::update` ends in `move_to` + the boundary clamp.
             // Moving him again here integrated his velocity twice on every
@@ -210,7 +210,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut relocation = TeleportProbe::open(field);
 
         // ── AERIAL CONTESTS RESOLVE BEFORE THE BALL IS CLAIMABLE ─────
-        // Both discrete contests run BEFORE `play_ball`, because claims
+        // The aerial contest runs BEFORE `play_ball`, because claims
         // resolve inside it: on the tick a lofted delivery descended
         // into the claim ceiling (2.8 m), the intended receiver's
         // priority claim completed it as an ordinary pass and
@@ -221,13 +221,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // it unmeasurable; at the wide-play spine's ~40 lofted
         // deliveries a match the endline census counted **22.9 a match
         // disarmed INSIDE the contest band** — the whole missing aerial
-        // game. Running the contests first costs one 10 ms tick of
+        // game. Running the contest first costs one 10 ms tick of
         // staleness and settles the race by construction: a ball
         // descending into a contested box is attacked in the air before
         // anyone can bring it down.
-        Self::resolve_corner_contest(field, context);
-        #[cfg(feature = "match-logs")]
-        relocation.at(field, tc::STAGE_CORNER_CONTEST);
         Self::resolve_cross_contest(field, context, events);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_CROSS_CONTEST);
@@ -241,7 +238,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         relocation.at(field, tc::STAGE_SET_PIECE);
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
-        Self::apply_pending_save_credit(field);
+        Self::apply_pending_save_credit(field, context);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_SAVE_CREDIT);
         // Resolve any deferred-foul / advantage state. Cheap (one

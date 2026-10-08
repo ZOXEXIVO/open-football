@@ -6,7 +6,10 @@ use crate::continent::ContinentalRankings;
 use crate::league::Season;
 use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::r#match::{Match, MatchResult, SelectionCompetition, SelectionContext};
+use crate::club::finance::RevenueModel;
+use crate::r#match::{
+    CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
+};
 use crate::{Club, MatchRuntime, TeamType};
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::{debug, info};
@@ -305,24 +308,28 @@ impl ConferenceLeague {
                         | CompetitionStage::SemiFinals
                         | CompetitionStage::Final
                 );
-                Some(if is_knockout_stage {
-                    Match::make_knockout(
-                        match_id,
-                        CONFERENCE_LEAGUE_ID,
-                        CONFERENCE_LEAGUE_SLUG,
-                        home_squad,
-                        away_squad,
-                    )
-                } else {
-                    Match::make(
-                        match_id,
-                        CONFERENCE_LEAGUE_ID,
-                        CONFERENCE_LEAGUE_SLUG,
-                        home_squad,
-                        away_squad,
-                        false,
-                    )
-                })
+                let fixture = FixtureContext::new(
+                    &match_id,
+                    date,
+                    CompetitionKind::Continental,
+                    is_knockout_stage,
+                )
+                .with_importance(cm.stage.importance())
+                .on_continent(FixtureContext::EUROPE)
+                .with_gate(RevenueModel::utilisation(
+                    home_team.reputation.overall_score(),
+                    1.0,
+                    1.0,
+                ))
+                .with_rivalry(if is_derby { 1.0 } else { 0.0 });
+                Some(Match::make(
+                    match_id,
+                    CONFERENCE_LEAGUE_ID,
+                    CONFERENCE_LEAGUE_SLUG,
+                    home_squad,
+                    away_squad,
+                    fixture,
+                ))
             })
             .collect();
 

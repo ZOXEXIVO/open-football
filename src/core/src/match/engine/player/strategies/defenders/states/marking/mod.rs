@@ -1,9 +1,9 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, StationKeeping,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception, StationKeeping, LineStep,
 };
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{
@@ -142,6 +142,7 @@ impl StateProcessingHandler for DefenderMarkingState {
                     Event::PlayerEvent(PlayerEvent::CommitFoul(
                         ctx.player.id,
                         ContactFoul::severity(ctx, losing_him),
+                        FoulSource::Holding,
                     )),
                 ));
             }
@@ -435,6 +436,12 @@ impl StateProcessingHandler for DefenderMarkingState {
                 // dragged across the pitch, but he may go as far up as the
                 // man he was given.
                 DefensiveLine::hold_shape_on_man(ctx, desired_position, opponent_to_mark.position)
+            };
+            // …unless the line is stepping up past a runner, which takes
+            // his man with it.
+            let desired_position = match LineStep::depth(ctx, desired_position.x) {
+                Some(x) => Vector3::new(x, desired_position.y, desired_position.z),
+                None => desired_position,
             };
             // What did the leash actually cost this duel? See
             // `DefenceDiag::note_mark_leash`.

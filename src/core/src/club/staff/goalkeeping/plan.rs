@@ -43,6 +43,9 @@ pub struct KeeperNomination {
     /// The nomination stands until here; the next review renews it if the
     /// minutes still have not come.
     pub stands_until: NaiveDate,
+    /// The standard of football the department read him as used to when
+    /// it asked — what the matchday weighs the fixture's standard against.
+    pub perceived_assurance: Option<f32>,
 }
 
 impl KeeperNomination {
@@ -177,6 +180,14 @@ impl KeeperRoomPlan {
         self.nomination.as_ref()
     }
 
+    /// The keeper the department wants kept out of the big nights, if any.
+    pub fn rested(&self) -> Option<u32> {
+        self.recommendations
+            .iter()
+            .find(|r| r.advice == KeeperAdvice::RestHimFromBigGames)
+            .and_then(|r| r.player_id)
+    }
+
     /// A new goalkeeping coach inherits a group, not a pecking order.
     pub fn clear(&mut self) {
         *self = Self::new();
@@ -229,11 +240,13 @@ impl KeeperRoomPlan {
                 player_id: id,
                 opened_on: existing.opened_on,
                 stands_until: today + chrono::Duration::days(KeeperNomination::WINDOW_DAYS),
+                perceived_assurance: outcome.nominee_assurance,
             }),
             (Some(id), _) => Some(KeeperNomination {
                 player_id: id,
                 opened_on: today,
                 stands_until: today + chrono::Duration::days(KeeperNomination::WINDOW_DAYS),
+                perceived_assurance: outcome.nominee_assurance,
             }),
             (None, _) => None,
         };
@@ -263,6 +276,8 @@ pub struct KeeperReviewOutcome {
     pub heir: Option<u32>,
     pub succession: KeeperSuccession,
     pub nominated: Option<u32>,
+    /// How settled the nominee was read as — see `KeeperNomination`.
+    pub nominee_assurance: Option<f32>,
     pub recommendations: Vec<KeeperRecommendation>,
     pub authority: f32,
 }

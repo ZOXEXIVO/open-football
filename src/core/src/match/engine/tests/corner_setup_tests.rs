@@ -122,7 +122,7 @@ impl CornerMatch {
             .iter()
             .filter(|p| {
                 p.side == Some(side)
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && !p.tactical_position.current_position.is_goalkeeper()
                     && CornerShape::is_in_penalty_area(p.position, DEFENDED_GOAL_X, HEIGHT as f32)
             })
@@ -149,18 +149,18 @@ impl CornerMatch {
     /// is still whatever open play left it, which is the state these tests
     /// exist to catch. See `AwaitedRestart::take_from`.
     fn walk_the_corner_in(&mut self) -> usize {
-        const BOUND: usize = 3200;
+        let bound = 3200 + PassOriginRestart::Corner.set_routine_ticks() as usize;
         // Tick THEN check, so this returns on the tick the kick is taken
         // rather than one after it. A corner is delivered within a few
         // ticks of the ball being set down, and a spare tick here is
         // enough for the cross to have already left.
-        for elapsed in 1..=BOUND {
+        for elapsed in 1..=bound {
             self.tick();
             if self.field.ball.awaiting_restart.is_none() {
                 return elapsed;
             }
         }
-        panic!("the corner never got taken inside {BOUND} ticks");
+        panic!("the corner never got taken inside {bound} ticks");
     }
 }
 
@@ -239,18 +239,28 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
     // ball re-stamps its origin. A flat 400 sat 20 ticks INSIDE
     // `MAX_TICKS` and released only because the divisions this fixture
     // generates had not been reaching the clamp.
+    //
+    // Every man the corner pinned has to be let go at some point in that
+    // window, not be free at its end: a corner punched out for a throw-in
+    // is over, and the throw-in pins its own men on the tick it is given.
     m.walk_the_corner_in();
-    m.tick_n((CornerDeadline::SETUP_MAX_TICKS + CornerDeadline::MAX_TICKS) as usize + 50);
+    let mut held: Vec<u32> = m.pinned().iter().map(|p| p.id).collect();
+    let mut shape_released = false;
+    for _ in 0..(CornerDeadline::SETUP_MAX_TICKS + CornerDeadline::MAX_TICKS) as usize + 50 {
+        m.tick();
+        held.retain(|id| {
+            m.field
+                .get_player(*id)
+                .is_some_and(|p| p.set_piece_station.is_some())
+        });
+        shape_released |= m.field.ball.corner_shape.is_none();
+    }
 
-    let held: Vec<u32> = m.pinned().iter().map(|p| p.id).collect();
     assert!(
         held.is_empty(),
         "players are still pinned to a corner that finished long ago: {held:?}"
     );
-    assert!(
-        m.field.ball.corner_shape.is_none(),
-        "the corner shape was never released"
-    );
+    assert!(shape_released, "the corner shape was never released");
 }
 
 /// **The ball is not moved to the flag when the corner is awarded.**

@@ -443,7 +443,13 @@ impl GoalStack {
         let mut suppressors: [(GoalKind, f32); 12] = [(GoalKind::None, 0.0); 12];
         let mut count = 0usize;
         for goal in self.goals.iter() {
-            if !goal.is_live() || goal.kind.spec().competes_with.is_empty() {
+            // A want he cannot act on argues against nothing. The frozen-out
+            // man's blocked fight for his place must not wear down the way
+            // out his want was routed to instead.
+            if !goal.is_live()
+                || goal.blocked_by.is_blocked()
+                || goal.kind.spec().competes_with.is_empty()
+            {
                 continue;
             }
             suppressors[count] = (goal.kind, goal.pressure());
@@ -728,6 +734,150 @@ mod tests {
         assert!(
             stack.wants_to_leave() < unopposed,
             "a reason to stay nets off the pull out"
+        );
+    }
+
+    fn strength_of(stack: &GoalStack, kind: GoalKind) -> f32 {
+        stack.get(kind).map(|g| g.strength()).unwrap_or(0.0)
+    }
+
+    fn holding(kind: GoalKind, today: EpochDay) -> GoalStack {
+        let mut stack = GoalStack::new();
+        feed(&mut stack, kind, 8, today);
+        stack
+    }
+
+    /// The frozen-out pair: the fight for his place is blocked, and
+    /// permission to leave is where that want was routed instead.
+    fn frozen_out(today: EpochDay) -> GoalStack {
+        let mut stack = holding(GoalKind::WinBackMyPlace, today);
+        stack.block(GoalKind::WinBackMyPlace, GoalBlocker::FrozenOut);
+        feed(&mut stack, GoalKind::BeAllowedToLeave, 8, today);
+        stack
+    }
+
+    #[test]
+    fn a_want_he_cannot_act_on_argues_against_nothing() {
+        let mut torn = frozen_out(TODAY);
+        let mut way_out = holding(GoalKind::BeAllowedToLeave, TODAY);
+        let mut place = holding(GoalKind::WinBackMyPlace, TODAY);
+        place.block(GoalKind::WinBackMyPlace, GoalBlocker::FrozenOut);
+        for stack in [&mut torn, &mut way_out, &mut place] {
+            stack.review(TODAY + 7);
+        }
+
+        assert_eq!(
+            strength_of(&torn, GoalKind::BeAllowedToLeave),
+            strength_of(&way_out, GoalKind::BeAllowedToLeave),
+            "a blocked want wears down nothing"
+        );
+        assert!(
+            strength_of(&torn, GoalKind::WinBackMyPlace)
+                < strength_of(&place, GoalKind::WinBackMyPlace),
+            "but the way out still wears the blocked want down"
+        );
+    }
+
+    #[test]
+    fn competition_resumes_when_the_block_lifts() {
+        let mut torn = frozen_out(TODAY);
+        torn.review(TODAY + 7);
+        let mut still_blocked = torn;
+        torn.unblock(GoalBlocker::FrozenOut);
+        let place_pressure = torn.pressure_of(GoalKind::WinBackMyPlace);
+        torn.review(TODAY + 14);
+        still_blocked.review(TODAY + 14);
+
+        // The two copies differ only in the force the place exerts once it
+        // can act. Decay runs first and only lowers the pressure it competes
+        // with, so the loss is bounded by its pressure before the review.
+        let kept = strength_of(&torn, GoalKind::BeAllowedToLeave)
+            / strength_of(&still_blocked, GoalKind::BeAllowedToLeave);
+        let floor = 1.0 - GoalStack::COMPETITION_PRESSURE * place_pressure;
+        assert!(kept < 1.0, "the lifted block competes again");
+        assert!(
+            kept >= floor - 1e-6,
+            "at no more than its own pressure: kept {kept}, floor {floor}"
+        );
+    }
+
+    #[test]
+    fn a_want_carried_into_a_new_club_argues_for_nothing_until_he_settles() {
+        let mut moved = holding(GoalKind::PlayFirstTeamFootball, TODAY);
+        moved.on_spell_change(SubjectMask::of(&[
+            GoalSubject::ThisClub,
+            GoalSubject::ThisManager,
+            GoalSubject::ThisLeague,
+        ]));
+        assert!(
+            moved
+                .get(GoalKind::PlayFirstTeamFootball)
+                .is_some_and(|g| g.blocked_by == GoalBlocker::JustArrived),
+            "the want travels, held back while he settles"
+        );
+        feed(&mut moved, GoalKind::WinTheManagersTrust, 8, TODAY);
+        let mut fresh = holding(GoalKind::WinTheManagersTrust, TODAY);
+
+        moved.review(TODAY + 7);
+        fresh.review(TODAY + 7);
+        assert_eq!(
+            strength_of(&moved, GoalKind::WinTheManagersTrust),
+            strength_of(&fresh, GoalKind::WinTheManagersTrust),
+            "the new place is owed a fair look"
+        );
+
+        moved.unblock(GoalBlocker::JustArrived);
+        moved.review(TODAY + 14);
+        fresh.review(TODAY + 14);
+        assert!(
+            strength_of(&moved, GoalKind::WinTheManagersTrust)
+                < strength_of(&fresh, GoalKind::WinTheManagersTrust),
+            "once he has settled, the old want argues again"
+        );
+    }
+
+    /// Share of `kind`'s strength left after one review held beside
+    /// `other`, against the same want held alone. A fresh stack's first
+    /// review decays nothing, so the share is competition and nothing else.
+    fn kept_beside(kind: GoalKind, other: GoalKind) -> f32 {
+        let mut both = holding(kind, TODAY);
+        feed(&mut both, other, 8, TODAY);
+        let mut alone = holding(kind, TODAY);
+        both.review(TODAY + 7);
+        alone.review(TODAY + 7);
+        strength_of(&both, kind) / strength_of(&alone, kind)
+    }
+
+    #[test]
+    fn a_decision_to_stay_wears_down_permission_to_leave() {
+        for (kind, other) in [
+            (GoalKind::BeAllowedToLeave, GoalKind::StayAtThisClub),
+            (GoalKind::StayAtThisClub, GoalKind::BeAllowedToLeave),
+        ] {
+            let kept = kept_beside(kind, other);
+            assert!(kept < 1.0, "{other:?} wears {kind:?} down");
+            assert!(
+                kept > 0.9,
+                "gradually, not in one week: {kind:?} kept {kept}"
+            );
+        }
+    }
+
+    #[test]
+    fn wanting_the_armband_pushes_back_on_wanting_out() {
+        assert!(kept_beside(GoalKind::BeCaptain, GoalKind::StepUpToABiggerClub) < 1.0);
+        assert!(kept_beside(GoalKind::StepUpToABiggerClub, GoalKind::BeCaptain) < 1.0);
+    }
+
+    #[test]
+    fn wanting_a_loan_does_not_argue_against_staying() {
+        assert_eq!(
+            kept_beside(GoalKind::GoOutOnLoan, GoalKind::StayAtThisClub),
+            1.0
+        );
+        assert_eq!(
+            kept_beside(GoalKind::StayAtThisClub, GoalKind::GoOutOnLoan),
+            1.0
         );
     }
 

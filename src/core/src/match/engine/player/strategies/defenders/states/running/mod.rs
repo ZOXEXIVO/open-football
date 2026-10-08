@@ -461,9 +461,8 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            // 80-150 ticks: Look for safe short pass to nearby midfielder or defender
-            if ctx.in_state_time <= 150
-                && let Some(target) = self.find_safe_buildup_pass(ctx, 150.0)
+            // The out first: a safe short pass, then a longer one upfield.
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 150.0)
             {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
@@ -477,9 +476,7 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // 150-250 ticks: Look for longer pass upfield
-            if ctx.in_state_time <= 250
-                && let Some(target) = self.find_safe_buildup_pass(ctx, 300.0)
+            if let Some(target) = self.find_safe_buildup_pass(ctx, 300.0)
             {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
@@ -493,8 +490,10 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // 250+ ticks: Force clear as last resort
-            if ctx.in_state_time > 250 {
+            // Nothing on. With an opponent closing on him it goes;
+            // otherwise he carries on until the stall guard.
+            const DANGER_RADIUS: f32 = 48.0;
+            if ctx.players().opponents().exists(DANGER_RADIUS) || ctx.in_state_time > 750 {
                 #[cfg(feature = "match-logs")]
                 crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(4);
                 return Some(StateChangeResult::with_defender_state(

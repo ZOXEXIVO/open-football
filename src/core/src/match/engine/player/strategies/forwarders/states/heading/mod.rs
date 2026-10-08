@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::KICKABLE_DISTANCE;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -51,7 +52,9 @@ impl StateProcessingHandler for ForwardHeadingState {
                 // the ownership guard and this is an ordinary loose ball.
                 return Some(StateChangeResult::with_forward_state(ForwardState::Running));
             }
-            if ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD {
+            // Within the reach the engine awarded it at, not this state's
+            // own — see the midfielder heading state.
+            if ctx.ball().distance() > KICKABLE_DISTANCE {
                 // Still arriving — keep attacking the drop point.
                 return None;
             }

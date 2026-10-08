@@ -91,20 +91,20 @@ fn a_through_ball_about_to_be_flagged(
     // — see the `in_flight_state` gate at the top of `process_ownership`.
     field.ball.flags.in_flight_state = 30;
     field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
-    field.ball.offside_snapshot = Some(OffsideSnapshot {
-        origin: PassOriginRestart::OpenPlay,
-        passer_id: passer,
-        passer_side: PlayerSide::Left,
-        receiver_id: receiver,
-        ball_x_at_kick: 400.0,
-        second_last_defender_x: 520.0,
-        // Where he WAS when it was played — 20 m back up the pitch. This is
-        // the spot the old restart used, and the distance the ball used to
-        // be dragged.
-        receiver_x_at_kick: reception.x - RUN_LENGTH,
-        receiver_y_at_kick: reception.y,
-        set_tick: context.current_tick(),
-    });
+    // Where he WAS when it was played — 20 m back up the pitch, beyond a
+    // line at 520 with the ball at 400. That spot is the one the old restart
+    // used, and the distance the ball used to be dragged.
+    field.ball.offside_snapshot = OffsideSnapshot::at_kick(
+        PassOriginRestart::OpenPlay,
+        passer,
+        PlayerSide::Left,
+        400.0,
+        520.0,
+        420.0,
+        [(receiver, reception.x - RUN_LENGTH)].into_iter(),
+        context.current_tick(),
+    );
+    assert!(field.ball.offside_snapshot.is_some());
     (receiver, reception)
 }
 
@@ -128,6 +128,7 @@ fn the_free_kick_is_where_the_offence_was_and_the_ball_does_not_travel_to_it() {
         .ball
         .awaiting_restart
         .expect("the offside must set an awaited restart up");
+    assert_eq!(waiting.origin, PassOriginRestart::IndirectFreeKick);
     assert_ne!(
         waiting.taker_id, receiver,
         "the offside player cannot take his own free kick"
@@ -186,4 +187,97 @@ fn the_taker_walks_to_the_offside_free_kick() {
         );
         assert!(field.ball.current_owner.is_none());
     }
+}
+
+/// Two Left attackers when a team-mate plays the ball from 400: one onside
+/// on 500, one beyond a line on 520 on 700. Returns `(onside, offside)`.
+fn two_runners_one_offside(field: &mut MatchField, context: &MatchContext) -> (u32, u32) {
+    let mut attackers = field.players.iter().filter(|p| {
+        p.side == Some(PlayerSide::Left) && !p.tactical_position.current_position.is_goalkeeper()
+    });
+    let passer = attackers.next().unwrap().id;
+    let onside = attackers.next().unwrap().id;
+    let offside = attackers.next().unwrap().id;
+    field.ball.offside_snapshot = OffsideSnapshot::at_kick(
+        PassOriginRestart::OpenPlay,
+        passer,
+        PlayerSide::Left,
+        400.0,
+        520.0,
+        420.0,
+        [(onside, 500.0), (offside, 700.0)].into_iter(),
+        context.current_tick(),
+    );
+    (onside, offside)
+}
+
+/// `player` has just gained the ball where he stands.
+fn gains_it(field: &mut MatchField, context: &mut MatchContext, player: u32) {
+    let at = field.get_player(player).unwrap().position;
+    field.ball.position = Vector3::new(at.x, at.y, 0.1);
+    field.ball.velocity = Vector3::zeros();
+    field.ball.current_owner = Some(player);
+    let players = field.players.clone();
+    let mut events = EventCollection::with_capacity(8);
+    field.ball.update_light(context, &players, &mut events);
+}
+
+#[test]
+fn whoever_was_offside_is_flagged_not_only_the_intended_man() {
+    let (mut field, mut context) = kickoff();
+    let (_, offside) = two_runners_one_offside(&mut field, &context);
+    gains_it(&mut field, &mut context, offside);
+    let restart = field.ball.awaiting_restart.expect("flagged");
+    assert_eq!(restart.origin, PassOriginRestart::IndirectFreeKick);
+}
+
+#[test]
+fn a_long_ball_in_the_air_is_still_judged_from_the_kick() {
+    let (mut field, mut context) = kickoff();
+    let (_, offside) = two_runners_one_offside(&mut field, &context);
+    // Four seconds later — the old snapshot was gone after 2.2.
+    context.total_match_time += 4_000;
+    gains_it(&mut field, &mut context, offside);
+    assert!(field.ball.awaiting_restart.is_some());
+}
+
+#[test]
+fn a_rebound_off_the_keeper_to_the_offside_man_is_offside() {
+    let (mut field, mut context) = kickoff();
+    let (_, offside) = two_runners_one_offside(&mut field, &context);
+    let keeper = field
+        .players
+        .iter()
+        .find(|p| p.side == Some(PlayerSide::Right) && p.tactical_position.current_position.is_goalkeeper())
+        .map(|p| p.id)
+        .unwrap();
+    let tick = context.current_tick();
+    field.ball.record_touch(keeper, 2, tick, false);
+    gains_it(&mut field, &mut context, offside);
+    assert!(field.ball.awaiting_restart.is_some());
+}
+
+#[test]
+fn a_defender_playing_it_deliberately_ends_the_offside() {
+    let (mut field, mut context) = kickoff();
+    let (_, offside) = two_runners_one_offside(&mut field, &context);
+    let defender = field
+        .players
+        .iter()
+        .find(|p| p.side == Some(PlayerSide::Right) && !p.tactical_position.current_position.is_goalkeeper())
+        .map(|p| p.id)
+        .unwrap();
+    gains_it(&mut field, &mut context, defender);
+    assert!(field.ball.offside_snapshot.is_none());
+    gains_it(&mut field, &mut context, offside);
+    assert!(field.ball.awaiting_restart.is_none());
+}
+
+#[test]
+fn the_onside_man_gaining_it_is_play_on() {
+    let (mut field, mut context) = kickoff();
+    let (onside, _) = two_runners_one_offside(&mut field, &context);
+    gains_it(&mut field, &mut context, onside);
+    assert!(field.ball.awaiting_restart.is_none());
+    assert!(field.ball.offside_snapshot.is_none());
 }

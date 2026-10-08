@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::GoalOrigin;
 use crate::r#match::engine::zones::{MatchZone, ZoneStats};
 
 #[derive(Debug, Clone)]
@@ -259,11 +260,12 @@ impl MatchPlayerStatistics {
             .count() as u16
     }
 
-    pub fn add_goal(&mut self, match_second: u64, is_auto_goal: bool) {
+    pub fn add_goal(&mut self, match_second: u64, is_auto_goal: bool, origin: GoalOrigin) {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Goal,
             match_second,
             is_auto_goal,
+            origin,
         })
     }
 
@@ -272,6 +274,7 @@ impl MatchPlayerStatistics {
             stat_type: MatchStatisticType::Assist,
             match_second,
             is_auto_goal: false,
+            origin: GoalOrigin::OpenPlay,
         })
     }
 
@@ -280,6 +283,7 @@ impl MatchPlayerStatistics {
             stat_type: MatchStatisticType::Foul,
             match_second,
             is_auto_goal: false,
+            origin: GoalOrigin::OpenPlay,
         })
     }
 
@@ -288,6 +292,7 @@ impl MatchPlayerStatistics {
             stat_type: MatchStatisticType::YellowCard,
             match_second,
             is_auto_goal: false,
+            origin: GoalOrigin::OpenPlay,
         })
     }
 
@@ -296,6 +301,7 @@ impl MatchPlayerStatistics {
             stat_type: MatchStatisticType::RedCard,
             match_second,
             is_auto_goal: false,
+            origin: GoalOrigin::OpenPlay,
         })
     }
 
@@ -466,6 +472,7 @@ pub struct MatchPlayerStatisticsItem {
     pub stat_type: MatchStatisticType,
     pub match_second: u64,
     pub is_auto_goal: bool,
+    pub origin: GoalOrigin,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -491,7 +498,7 @@ mod tests {
     #[test]
     fn test_add_goal() {
         let mut stats = MatchPlayerStatistics::new();
-        stats.add_goal(30, false);
+        stats.add_goal(30, false, GoalOrigin::OpenPlay);
 
         assert_eq!(stats.items.len(), 1);
         assert_eq!(stats.items[0].stat_type, MatchStatisticType::Goal);
@@ -516,7 +523,7 @@ mod tests {
         assert!(stats.is_empty());
 
         let mut stats_with_goal = MatchPlayerStatistics::new();
-        stats_with_goal.add_goal(10, false);
+        stats_with_goal.add_goal(10, false, GoalOrigin::OpenPlay);
         assert!(!stats_with_goal.is_empty());
 
         let mut stats_with_assist = MatchPlayerStatistics::new();

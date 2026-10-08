@@ -13,7 +13,8 @@ use crate::worker::registry::LatencyTimer;
 use crate::worker::transport::Frame;
 use core::MatchRuntime;
 use core::r#match::{
-    Match, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts, RecordingScope,
+    FixtureContext, Match, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts,
+    RecordingScope,
     ResultMatchPositionData, Score,
 };
 use log::{debug, error, info, warn};
@@ -249,7 +250,7 @@ impl WorkerConnection {
     /// — a 10-match batch with `--match-threads 8` would still run
     /// matches one at a time, leaving 7 threads idle. This version
     /// dispatches league and squad envelopes through the pool's bulk
-    /// APIs (`play` / `play_squads_with_knockout`), which rayon-fan
+    /// APIs (`play` / `play_squads`), which rayon-fan
     /// across every configured match thread. The worker process has
     /// no `MatchDispatcher` installed, so those calls always take the
     /// local rayon path.
@@ -266,7 +267,7 @@ impl WorkerConnection {
         // Split envelopes by variant, remembering the original input
         // position so the response can be scattered back in order.
         let mut league: Vec<(usize, Match)> = Vec::new();
-        let mut squad: Vec<(usize, usize, MatchSquad, MatchSquad, bool)> = Vec::new();
+        let mut squad: Vec<(usize, usize, MatchSquad, MatchSquad, FixtureContext)> = Vec::new();
         for (input_pos, env) in items.into_iter().enumerate() {
             match env {
                 MatchEnvelope::League(wire) => league.push((input_pos, wire.into_match())),
@@ -274,7 +275,7 @@ impl WorkerConnection {
                     let caller_idx = wire.idx;
                     let home = wire.home.into_squad();
                     let away = wire.away.into_squad();
-                    squad.push((input_pos, caller_idx, home, away, wire.is_knockout));
+                    squad.push((input_pos, caller_idx, home, away, wire.fixture));
                 }
             }
         }
@@ -293,7 +294,7 @@ impl WorkerConnection {
         }
         if !squad.is_empty() {
             // Use the input position as the synthetic idx into
-            // `play_squads_with_knockout`, since that idx is only used
+            // `play_squads`, since that idx is only used
             // by the pool itself to pair input with output. We carry
             // the caller_idx (the wire's idx — the coordinator's
             // original fixture id) separately and stamp it on the
@@ -301,11 +302,11 @@ impl WorkerConnection {
             // coordinator can find its fixture again.
             let mut keyed = Vec::with_capacity(squad.len());
             let mut caller_idx_by_pos: HashMap<usize, usize> = HashMap::with_capacity(squad.len());
-            for (pos, caller_idx, home, away, ko) in squad {
+            for (pos, caller_idx, home, away, fixture) in squad {
                 caller_idx_by_pos.insert(pos, caller_idx);
-                keyed.push((pos, home, away, ko));
+                keyed.push((pos, home, away, fixture));
             }
-            let results = pool.play_squads_with_knockout(keyed);
+            let results = pool.play_squads(keyed);
             for (pos, mut raw) in results {
                 let caller_idx = *caller_idx_by_pos.get(&pos).unwrap_or(&pos);
                 if let Some(track) = Self::take_track(&mut raw) {

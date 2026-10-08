@@ -296,7 +296,8 @@ fn effective_skill_direct(player: &MatchPlayer, base: f32, ctx: ActionContext) -
         * player.crowd_arousal
         * settling
         * player.settledness
-        * player.matchday_form)
+        * player.matchday_form
+        * player.injury_handicap())
         .clamp(1.0, 20.0)
 }
 
@@ -341,6 +342,9 @@ pub struct SkillBands {
     /// Pre-match form draw (`MatchPlayer::matchday_form`, 1.0 on an
     /// ordinary day).
     matchday_form: f32,
+    /// What an injury he is playing on with costs him
+    /// (`MatchPlayer::injury_handicap`, 1.0 when fit).
+    injury: f32,
 }
 
 impl SkillBands {
@@ -387,6 +391,7 @@ impl SkillBands {
             settling: EntrySettling::factor(player, minute),
             settledness: player.settledness,
             matchday_form: player.matchday_form,
+            injury: player.injury_handicap(),
         }
     }
 
@@ -408,7 +413,8 @@ impl SkillBands {
             * self.crowd
             * self.settling
             * self.settledness
-            * self.matchday_form)
+            * self.matchday_form
+            * self.injury)
             .clamp(1.0, 20.0)
     }
 }

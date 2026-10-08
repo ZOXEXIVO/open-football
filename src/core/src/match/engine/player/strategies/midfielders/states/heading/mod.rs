@@ -1,4 +1,4 @@
-use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::ball::ball::{Ball, KICKABLE_DISTANCE};
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
@@ -99,21 +99,27 @@ impl StateProcessingHandler for MidfielderHeadingState {
         }
 
         let ball_position = ctx.tick_context.positions.ball.position;
+        // A ball the contest awarded him is his within the reach the engine
+        // granted it at (`PlayerReach::can_strike`): the delivery is applied
+        // there, and a tighter reach of this state's own left it hanging
+        // beside him unstruck.
+        let awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        let reach = if awarded {
+            KICKABLE_DISTANCE
+        } else {
+            HEADING_DISTANCE_THRESHOLD
+        };
 
         // Ball dropped out of the heading band or drifted out of reach —
         // go back to reading the play. Running re-evaluates the chase.
-        if ball_position.z < HEADING_HEIGHT_THRESHOLD
-            || ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD
-        {
+        if ball_position.z < HEADING_HEIGHT_THRESHOLD || ctx.ball().distance() > reach {
             // …unless a contest AWARDED him this delivery and it is
             // still hanging in the band on its way to him — an awarded
             // ball is attacked, not abandoned (the same leak the
             // forward state's awarded block closes; a bail here
             // vanished the won header and left the granted ball
             // unclaimable until the grant lapsed).
-            if ball_position.z >= HEADING_HEIGHT_THRESHOLD
-                && ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id)
-            {
+            if ball_position.z >= HEADING_HEIGHT_THRESHOLD && awarded {
                 return None;
             }
             return Some(StateChangeResult::with_midfielder_state(
@@ -126,7 +132,7 @@ impl StateProcessingHandler for MidfielderHeadingState {
         // ball, the duel is settled — rolling `wins_duel` on top of it is
         // double jeopardy, the same bug the forward heading state and the
         // CB `AttackingCorner` state both carve out.
-        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        let contest_awarded = awarded;
         if !contest_awarded && !self.wins_duel(ctx) {
             // Lost the header — the ball goes on and we react to it.
             return Some(StateChangeResult::with_midfielder_state(

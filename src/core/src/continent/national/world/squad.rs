@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::lookups::{country_lookup, country_lookup_mut};
 use crate::continent::Continent;
-use crate::r#match::MatchSquad;
+use crate::r#match::{CompetitionKind, FixtureContext, MatchSquad, SquadFixture};
 use crate::{
     Club, Country, NationalMatchImportance, NationalSelectionPolicy, NationalTeam,
     NationalTeamLevel,
@@ -109,16 +109,20 @@ impl NationalSquadBuilder {
     ///
     /// Each fixture is `(home_country_id, away_country_id, level,
     /// is_knockout)`. The return carries the fixture's original index (so
-    /// callers can map engine results back) and its `is_knockout` flag.
+    /// callers can map engine results back) and the fixture it is played
+    /// as.
     /// Output order matches input order; a fixture whose home OR away squad
     /// can't be built is dropped. The result is identical to building each
     /// squad one-by-one with [`build`](Self::build) — no shared mutation
     /// happens during the parallel pass, so fixture order can't matter.
+    /// A national team plays to a near-full ground.
+    const NATIONAL_GATE: f32 = 0.85;
+
     pub fn build_fixture_squads(
         continents: &mut [Continent],
         fixtures: &[(u32, u32, NationalTeamLevel, bool)],
         date: NaiveDate,
-    ) -> Vec<(usize, MatchSquad, MatchSquad, bool)> {
+    ) -> Vec<SquadFixture> {
         // Phase 1 (serial, rare): emergencies mutate `continents`. Home
         // then away, per fixture in order, firing only while the squad is
         // still empty — the same trigger order as the old per-fixture path.
@@ -144,7 +148,21 @@ impl NationalSquadBuilder {
                     Self::build_from_clubs(continents, &all_clubs, home, date, level, importance)?;
                 let away_squad =
                     Self::build_from_clubs(continents, &all_clubs, away, date, level, importance)?;
-                Some((idx, home_squad, away_squad, is_knockout))
+                let mut fixture = FixtureContext::new(
+                    &format!("nat_{home}_{away}"),
+                    date,
+                    CompetitionKind::International,
+                    is_knockout,
+                )
+                .with_importance(if is_knockout { 0.85 } else { 0.6 })
+                .with_gate(Self::NATIONAL_GATE);
+                if let Some(host) = continents
+                    .iter()
+                    .find(|c| c.countries.iter().any(|country| country.id == home))
+                {
+                    fixture = fixture.on_continent(host.id);
+                }
+                Some((idx, home_squad, away_squad, fixture))
             })
             .collect()
     }

@@ -1,6 +1,7 @@
 use crate::MatchRuntime;
 use crate::r#match::engine::FootballEngine;
-use crate::r#match::{Match, MatchDispatcherRegistry, MatchResult, MatchResultRaw, MatchSquad};
+use crate::r#match::engine::context::MatchEngineConfig;
+use crate::r#match::{Match, MatchDispatcherRegistry, MatchResult, MatchResultRaw, SquadFixture};
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -41,28 +42,8 @@ impl MatchPlayEnginePool {
 
     /// Squad-only counterpart to [`play_local`]. Same semantics —
     /// bypasses the dispatcher; runs on the local rayon pool only.
-    pub fn play_squads_local(
-        &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Vec<(usize, MatchResultRaw)> {
-        // Recordings follow the process-global flag here too — see
-        // `play_squads_with_knockout`.
-        let recordings = MatchRuntime::recordings_mode();
-        self.pool.install(|| {
-            matches
-                .into_par_iter()
-                .map(|(idx, home, away, is_knockout)| {
-                    let result = FootballEngine::<840, 545>::play(
-                        home,
-                        away,
-                        recordings,
-                        false,
-                        is_knockout,
-                    );
-                    (idx, result)
-                })
-                .collect()
-        })
+    pub fn play_squads_local(&self, matches: Vec<SquadFixture>) -> Vec<(usize, MatchResultRaw)> {
+        self.play_squads_here(matches)
     }
 
     /// Play league/cup matches through the pool (produces MatchResult with league metadata).
@@ -84,29 +65,10 @@ impl MatchPlayEnginePool {
             .install(|| matches.into_par_iter().map(|m| m.play()).collect())
     }
 
-    /// Play raw squad-vs-squad matches through the pool (for national team / international matches).
-    /// Each input is (index, home_squad, away_squad). Returns (index, MatchResultRaw).
-    /// Convenience wrapper that defaults `is_knockout = false`.
-    pub fn play_squads(
-        &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad)>,
-    ) -> Vec<(usize, MatchResultRaw)> {
-        let with_flag: Vec<(usize, MatchSquad, MatchSquad, bool)> = matches
-            .into_iter()
-            .map(|(i, h, a)| (i, h, a, false))
-            .collect();
-        self.play_squads_with_knockout(with_flag)
-    }
-
-    /// Play raw squad-vs-squad matches with explicit knockout flagging.
-    /// Knockout fixtures route through the engine's full penalty
-    /// shootout when the score is level after extra time — callers can
-    /// then read the winner straight from `Score::outcome()` instead of
-    /// guessing based on reputation.
-    pub fn play_squads_with_knockout(
-        &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Vec<(usize, MatchResultRaw)> {
+    /// Play raw squad-vs-squad matches — the national-team fixtures, the
+    /// one match kind that never becomes a `Match` — each as its fixture
+    /// says: format, weather, crowd and referee.
+    pub fn play_squads(&self, matches: Vec<SquadFixture>) -> Vec<(usize, MatchResultRaw)> {
         let matches = match MatchDispatcherRegistry::try_get() {
             Some(dispatcher) => match dispatcher.dispatch_squads(matches) {
                 Ok(results) => return results,
@@ -114,26 +76,20 @@ impl MatchPlayEnginePool {
             },
             None => matches,
         };
-        // The same flag `Match::play` reads, decided the same way. A
-        // national-team fixture is the one match kind that never becomes a
-        // `Match`, and this path hardcoded `false` from the day it was
-        // written — so every international, senior and U21 alike, was played
-        // with the recorder switched off, and the match page had nothing to
-        // offer but "Nothing was recorded in this match". A cap is not a
-        // lesser fixture than a league game.
+        self.play_squads_here(matches)
+    }
+
+    /// The local rayon run of a squad batch. Recordings follow the same
+    /// process-global flag `Match::play` reads: a cap is not a lesser
+    /// fixture than a league game.
+    fn play_squads_here(&self, matches: Vec<SquadFixture>) -> Vec<(usize, MatchResultRaw)> {
         let recordings = MatchRuntime::recordings_mode();
         self.pool.install(|| {
             matches
                 .into_par_iter()
-                .map(|(idx, home, away, is_knockout)| {
-                    let result = FootballEngine::<840, 545>::play(
-                        home,
-                        away,
-                        recordings,
-                        false,
-                        is_knockout,
-                    );
-                    (idx, result)
+                .map(|(idx, home, away, fixture)| {
+                    let config = MatchEngineConfig::for_fixture(&fixture, recordings);
+                    (idx, FootballEngine::<840, 545>::play_with_config(home, away, config))
                 })
                 .collect()
         })

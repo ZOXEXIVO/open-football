@@ -7,6 +7,7 @@ use crate::r#match::engine::rating::{
     EngineVolumeCalibration, RatingExpectationContext, TeamRatingSummary,
 };
 use crate::r#match::engine::result::HighlightSelector;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(in crate::r#match::engine::engine) fn build_result(
@@ -19,7 +20,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context.fill_details();
 
         result.additional_time_ms = context.additional_time_ms;
+        result.tally = context.tally.clone();
+        result.weather = context.environment.weather;
+        result.pitch = context.environment.pitch;
         result.penalty_shootout = context.penalty_shootout_kicks.clone();
+        result.penalty_saves = context.penalty_saves.clone();
+        result.standard_of_football = context
+            .standard
+            .map(|r| r.outfield)
+            .unwrap_or(MatchStandard::CALIBRATION);
         result.score = Some(context.score.clone());
 
         // The near misses worth keeping, and — the same answer, said to the

@@ -27,10 +27,15 @@
 //!   state machine happened to run first.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::r#match::engine::zones::LateralLane;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
-use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
+use crate::r#match::{
+    MatchContext, MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext,
+};
 use nalgebra::Vector3;
 
 /// Half-width of the penalty area in game units (20.16 m at 0.125 m/u).
@@ -183,8 +188,6 @@ pub struct CrossDecision {
     /// is attacking. Aiming at a space rather than a player is what lets
     /// a second attacker and a defender contest the same delivery.
     pub aim_point: Vector3<f32>,
-    /// 0..1 quality of the delivery lane, before execution error.
-    pub lane_quality: f32,
 }
 
 /// Crossing decision + aerial-duel calculators. Everything the crossing
@@ -193,25 +196,6 @@ pub struct CrossDecision {
 pub struct CrossModel;
 
 impl CrossModel {
-    /// True once an attacking corner's box is "loaded": at least one of
-    /// our pushed-up centre-backs has arrived within heading range. The
-    /// corner taker holds the delivery until this returns true (or the
-    /// set-up window expires) so the run from defence has time to arrive
-    /// — there is no dead-ball pause in the sim, so the taker has to
-    /// create the window itself.
-    ///
-    /// Keyed off a centre-back specifically: the forwards and midfielders
-    /// are already up, so an "≥N attackers" test would fire instantly and
-    /// the CB run from defence would never have time to arrive.
-    pub fn box_loaded_for_corner(ctx: &StateProcessingContext) -> bool {
-        let goal = ctx.player().opponent_goal_position();
-        ctx.players().teammates().all().any(|t| {
-            t.id != ctx.player.id
-                && t.tactical_positions.is_central_defender()
-                && (t.position - goal).magnitude() < 130.0
-        })
-    }
-
     /// Whether a player is wide enough to cross. Used by the crossing
     /// states' entry guard.
     /// Is this player wide enough to be crossing?
@@ -235,16 +219,50 @@ impl CrossModel {
         y < wide_margin || y > field_height - wide_margin
     }
 
+    /// Is a ball from `from` to `to` a cross: struck from a wide channel
+    /// in the attacking third and into the opponents' box, or within 10u
+    /// of its edge — a wide delivery to the edge of the area is still a
+    /// cross. The distance to the edge used to read zero for any target
+    /// level with the box's width however far upfield it was, and every
+    /// ball played inside from a wide channel was booked as a cross.
+    pub fn is_cross(
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        side: PlayerSide,
+        context: &MatchContext,
+    ) -> bool {
+        let field_h = context.field_size.height as f32;
+        let field_w = context.field_size.width as f32;
+        if !LateralLane::classify(from.y, field_h).is_wide()
+            || side.attacking_progress_x(from.x, field_w) < 2.0 / 3.0
+        {
+            return false;
+        }
+        let opp_box = match side {
+            PlayerSide::Left => context.penalty_area(false),
+            PlayerSide::Right => context.penalty_area(true),
+        };
+        let dx = (opp_box.min.x - to.x).max(to.x - opp_box.max.x).max(0.0);
+        let dy = (opp_box.min.y - to.y).max(to.y - opp_box.max.y).max(0.0);
+        dx.hypot(dy) <= 10.0
+    }
+
     /// Pick the best cross for the current context. `None` when the
     /// crosser has no viable target — the caller should fall back to a
     /// regular pass.
     pub fn pick(ctx: &StateProcessingContext<'_>) -> Option<CrossDecision> {
+        Self::pick_rated(ctx).map(|(decision, _)| decision)
+    }
+
+    /// [`Self::pick`], with how good the best delivery is: the runner's
+    /// fit for the ball, whether he can reach it, how contested its patch
+    /// is, how deep it lands and how much of it is the keeper's.
+    pub fn pick_rated(ctx: &StateProcessingContext<'_>) -> Option<(CrossDecision, f32)> {
         let goal_pos = ctx.player().opponent_goal_position();
         let crosser_pos = ctx.player.position;
         let crosser_dist_to_goal = (crosser_pos - goal_pos).magnitude();
         let field_height = ctx.context.field_size.height as f32;
         let forward_dir = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
-        let on_corner = ctx.ball().is_team_attacking_corner();
 
         let gk_pos = ctx
             .players()
@@ -300,7 +318,7 @@ impl CrossModel {
             // every ground delivery out of the model (driven-low 1%,
             // cutback 0% of deliveries).
             let needs_lane = matches!(cross_type, CrossType::Cutback);
-            if needs_lane && !on_corner && !ctx.player().has_clear_pass(teammate.id) {
+            if needs_lane && !ctx.player().has_clear_pass(teammate.id) {
                 continue;
             }
 
@@ -350,9 +368,6 @@ impl CrossModel {
             let aim_depth = (aim_point - goal_pos).magnitude();
             let depth_bonus = (1.0 - (aim_depth / 190.0)).clamp(0.0, 1.0);
 
-            let lane_quality = (separation * 0.45 + reachability * 0.35 + depth_bonus * 0.20)
-                * (1.0 - gk_claim_risk * 0.55);
-
             // A ground delivery is attacked with the feet, an aerial one
             // with the head — score the runner on the attribute the
             // delivery actually asks of them.
@@ -362,7 +377,7 @@ impl CrossModel {
                 finishing * 0.45 + composure * 0.30 + anticipation * 0.25
             };
 
-            let mut score = attack_ability * 0.34
+            let score = attack_ability * 0.34
                 + off_the_ball * 0.20
                 + anticipation * 0.08
                 + reachability * 0.16
@@ -370,18 +385,10 @@ impl CrossModel {
                 + depth_bonus * 0.08
                 - gk_claim_risk * 0.22;
 
-            // On a corner the pushed-up centre-back is the designated
-            // target ("find the big man"). Inert in open play — CBs aren't
-            // in the box.
-            if on_corner && teammate.tactical_positions.is_central_defender() {
-                score += 0.35;
-            }
-
             let candidate = CrossDecision {
                 cross_type,
                 target_id: teammate.id,
                 aim_point,
-                lane_quality,
             };
 
             if best.as_ref().is_none_or(|(_, bs)| score > *bs) {
@@ -389,7 +396,49 @@ impl CrossModel {
             }
         }
 
-        best.map(|(d, _)| d)
+        best
+    }
+
+    /// A corner delivered as the routine called it: aimed at the runner the
+    /// corner shape stationed for that routine, with the routine's ball.
+    /// Who wins it in the air is the aerial contest's question. `None` for
+    /// a short corner, which is a pass rather than a delivery.
+    pub fn corner(
+        ctx: &StateProcessingContext<'_>,
+        routine: CornerRoutine,
+    ) -> Option<CrossDecision> {
+        let goal = ctx.player().opponent_goal_position();
+        let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let near = if ctx.player.position.y >= ctx.context.field_size.height as f32 * 0.5 {
+            1.0
+        } else {
+            -1.0
+        };
+        let (cross_type, (depth, offset)) = match routine {
+            CornerRoutine::NearPost => (CrossType::WhippedNearPost, CornerShape::NEAR_POST_RUN),
+            CornerRoutine::PenaltySpot => {
+                (CrossType::WhippedNearPost, CornerShape::PENALTY_SPOT_RUN)
+            }
+            CornerRoutine::FarPost => (CrossType::FloatedFarPost, CornerShape::BACK_POST_RUN),
+            CornerRoutine::EdgeCutback => (CrossType::Cutback, CornerShape::EDGE_RUN),
+            CornerRoutine::Short => return None,
+        };
+        let aim_point = Vector3::new(goal.x - forward * depth, goal.y + near * offset, 0.0);
+        let target = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| t.id != ctx.player.id && !t.tactical_positions.is_goalkeeper())
+            .min_by(|a, b| {
+                (a.position - aim_point)
+                    .norm()
+                    .total_cmp(&(b.position - aim_point).norm())
+            })?;
+        Some(CrossDecision {
+            cross_type,
+            target_id: target.id,
+            aim_point,
+        })
     }
 
     /// Where the ball is actually struck for a given cross type. Zones are
@@ -494,7 +543,10 @@ impl CrossModel {
             // depends on whether the runner is trailing the play (a
             // cutback needs somebody arriving behind the ball) and on
             // their aerial profile.
-            let trailing = (target_pos - goal_pos).magnitude() > crosser_dist_to_goal;
+            // Behind the ball means further from the goal LINE: measured
+            // to the goal centre, nobody in the box was ever behind a
+            // crosser standing wide on the byline.
+            let trailing = (goal_pos.x - target_pos.x).abs() > byline_depth;
             if trailing && ctx.context.rng.unit_f32() < p_poor_header_byline {
                 return CrossType::Cutback;
             }

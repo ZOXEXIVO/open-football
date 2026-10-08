@@ -141,7 +141,7 @@ impl ShapeBuilder<'_> {
             .field
             .players
             .iter()
-            .find(|p| p.team_id == self.team_id && !p.is_sent_off)
+            .find(|p| p.team_id == self.team_id && !p.off_pitch)
             .and_then(|p| p.side)
         else {
             shape.active = false;
@@ -335,7 +335,7 @@ impl ShapeBuilder<'_> {
         // ── Project every player into it ─────────────────────────────
         let mut len = 0usize;
         for p in self.field.players.iter() {
-            if p.team_id != self.team_id || p.is_sent_off || len == MAX_ON_PITCH {
+            if p.team_id != self.team_id || p.off_pitch || len == MAX_ON_PITCH {
                 continue;
             }
             let anchor = if p.tactical_position.current_position.is_goalkeeper() {
@@ -435,7 +435,7 @@ impl ShapeBuilder<'_> {
         self.field
             .players
             .iter()
-            .filter(move |p| p.team_id == self.team_id && !p.is_sent_off)
+            .filter(move |p| p.team_id == self.team_id && !p.off_pitch)
             .filter(|p| !p.tactical_position.current_position.is_goalkeeper())
     }
 }

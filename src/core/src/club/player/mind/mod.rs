@@ -72,7 +72,7 @@ pub mod social;
 pub mod submind;
 
 pub use career::{CareerMind, CareerStage};
-pub use competitive::CompetitiveMind;
+pub use competitive::{CompetitiveMatchRead, CompetitiveMind, KickoffMind, MindSwitch};
 pub use financial::FinancialMind;
 pub use plan::{CareerArc, CareerPlan, CareerPlanView, CareerPlanner, PlanStage};
 pub use professional::ProfessionalMind;

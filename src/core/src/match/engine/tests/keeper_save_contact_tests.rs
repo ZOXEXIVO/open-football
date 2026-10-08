@@ -15,10 +15,12 @@
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::result::Score;
 use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
+use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide, ShotTarget,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
+    ResultMatchPositionData, ShotTarget, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
     events::{Event, EventCollection},
 };
 use nalgebra::Vector3;
@@ -83,6 +85,7 @@ fn set_up_shot_at_the_right_goal(
         deflected: false,
         shooter_threat: 0.5,
         struck_from,
+        seen_from: struck_from,
     });
     keeper_id
 }
@@ -384,4 +387,28 @@ fn a_punch_leaves_the_fist_flatter_than_it_climbs() {
         (25.0..45.0).contains(&angle),
         "the punch left the fist at {angle:.0} degrees: {launch:?}"
     );
+}
+
+#[test]
+fn a_howler_is_the_keepers_error() {
+    let (mut field, mut context) = kickoff();
+    let (keeper_id, _) = right_keeper_alone_at(&mut field, Vector3::new(811.0, 248.0, 0.0));
+    let before = context.psychology.get(keeper_id).map_or(0.0, |s| s.confidence);
+
+    let mut data = ResultMatchPositionData::new();
+    PlayerEventDispatcher::dispatch(
+        PlayerEvent::Howler(keeper_id),
+        &mut field,
+        &mut context,
+        &mut data,
+    );
+
+    let keeper = field.get_player(keeper_id).unwrap();
+    assert_eq!(keeper.statistics.errors_leading_to_shot, 1);
+    assert_eq!(
+        field.ball.pending_error_to_shot_player_id,
+        Some(keeper_id),
+        "the goal it becomes is charged to him"
+    );
+    assert!(context.psychology.get(keeper_id).unwrap().confidence < before);
 }

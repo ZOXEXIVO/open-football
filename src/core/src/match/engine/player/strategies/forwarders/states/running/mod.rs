@@ -5,7 +5,7 @@ use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::midfielders::states::common::LaneAhead;
+use crate::r#match::midfielders::states::common::{CarryHeading, LaneAhead};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
@@ -286,14 +286,6 @@ impl StateProcessingHandler for ForwardRunningState {
 
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Corner taker: set the corner up via Crossing (which holds the
-            // delivery until centre-backs have pushed up to attack it).
-            if ctx.ball().is_team_attacking_corner() {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Crossing,
-                ));
-            }
-
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
             // Team-level cooldown (~500 ms between any team shot).
@@ -1965,14 +1957,13 @@ impl ForwardRunningState {
         ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big
     }
 
-    /// Check if forward should help defend
+    /// A hard-working forward drops into his own third late on when his
+    /// side has a lead to protect. A side chasing the game keeps him up.
     fn should_help_defend(&self, ctx: &StateProcessingContext) -> bool {
-        // Check game situation
-        let losing_badly = ctx.team().is_loosing() && ctx.context.time.is_running_out();
+        let protecting_a_lead = ctx.team().score_diff() > 0 && ctx.context.is_running_out();
         let work_rate = ctx.player.skills.mental.work_rate / 20.0;
 
-        // High work rate forwards help more
-        work_rate > 0.7 && losing_badly && ctx.ball().on_own_third()
+        work_rate > 0.7 && protecting_a_lead && ctx.ball().on_own_third()
     }
 
     /// Check if player needs recovery
@@ -2009,6 +2000,9 @@ impl ForwardRunningState {
         // it stops the ball vibrating on the spot, which is what this
         // reads as on the pitch.
         const CARRY_DEADBAND: f32 = 6.0; // 0.75 m
+        // Inside it the carry is about the shot, and the box movement
+        // below takes over from heading for open grass.
+        const BOX_APPROACH: f32 = 120.0; // 15 m
 
         // The byline, ahead of everything else a wide carrier might do.
         //
@@ -2030,6 +2024,14 @@ impl ForwardRunningState {
             .velocity;
         }
 
+        if ctx.ball().distance_to_opponent_goal() > BOX_APPROACH {
+            return SteeringBehavior::Arrive {
+                target: CarryHeading::aim(ctx),
+                slowing_distance: 20.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+        }
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
             if (target_position - ctx.player.position).magnitude() < CARRY_DEADBAND {
                 return self.settle_over_the_ball(ctx);

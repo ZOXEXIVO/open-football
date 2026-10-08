@@ -119,7 +119,14 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::worker::protocol::{PROTOCOL_VERSION, RecordingSettings, Request, Response};
+    use crate::worker::protocol::{
+        MatchOutcome, PROTOCOL_VERSION, RecordingSettings, Request, Response,
+    };
+    use crate::worker::wire::PlayerWire;
+    use chrono::NaiveDate;
+    use core::club::player::mind::KickoffMind;
+    use core::r#match::{MatchPlayer, MatchResultRaw};
+    use core::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
     use tokio::net::TcpListener;
 
     fn handshake() -> Request {
@@ -185,6 +192,59 @@ mod tests {
         assert!(
             matches!(back, Response::HandshakeRejected { reason } if reason == "version mismatch")
         );
+    }
+
+    #[test]
+    fn a_remote_result_keeps_its_standard_and_penalty_saves() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.standard_of_football = 0.712;
+        result.penalty_saves = vec![101];
+        let reply = Response::PlayBatch {
+            items: vec![MatchOutcome::Squad { idx: 0, result }],
+        };
+        let back: Response = Frame::decode(&Frame::encode(&reply).unwrap()).unwrap();
+        match back {
+            Response::PlayBatch { items } => match items.as_slice() {
+                [MatchOutcome::Squad { result, .. }] => {
+                    assert_eq!(result.standard_of_football, 0.712);
+                    assert_eq!(result.penalty_saves, vec![101]);
+                }
+                other => panic!("decoded {:?}", other.len()),
+            },
+            other => panic!("decoded {:?}", other),
+        }
+    }
+
+    #[test]
+    fn a_player_crosses_the_wire_with_his_state_of_mind() {
+        let mind = KickoffMind {
+            assurance: Some(0.58),
+            self_belief: -0.3,
+            morale: 41.0,
+            big_match_record: 2,
+        };
+        let mut player = PlayerWire::from_player(&MatchPlayer::from_inputs(
+            7,
+            1,
+            [0.0; 3],
+            [0.0; 3],
+            PersonAttributes::default(),
+            PlayerAttributes::default(),
+            PlayerSkills::default(),
+            PlayerPositionType::Goalkeeper,
+            None,
+            Vec::new(),
+            NaiveDate::from_ymd_opt(2004, 3, 1).unwrap(),
+            false,
+            10_000,
+            0.0,
+            1.0,
+            1.0,
+            mind,
+            false,
+        ));
+        player = Frame::decode(&Frame::encode(&player).unwrap()).unwrap();
+        assert_eq!(player.into_player().kickoff_mind, mind);
     }
 
     #[test]

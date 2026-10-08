@@ -9,21 +9,28 @@ use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::engine::BoxEpisode;
-use crate::r#match::engine::environment::MatchEnvironment;
+use crate::r#match::engine::environment::{EnvModifiers, MatchEnvironment};
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
-use crate::r#match::engine::player::events::players::FoulSeverity;
-use crate::r#match::engine::psychology::PsychologyState;
+use crate::r#match::engine::player::events::players::{FoulSeverity, FoulSource};
+use nalgebra::Vector3;
+use crate::r#match::engine::psychology::{Psychology, PsychologyState};
+use crate::r#match::engine::officiating::management::{
+    TimeWasting, TimeWastingLedger, TimeWastingRestart,
+};
 use crate::r#match::engine::referee::RefereeProfile;
+use crate::r#match::engine::teamplay::coach::instruction::CoachInstruction;
 use crate::r#match::engine::result::{
-    ChanceDetail, PenaltyShootoutKick, PlayerMatchEndStats, PlayerMatchPhysicalSnapshot,
+    ChanceDetail, MatchTally, PenaltyShootoutKick, PlayerMatchEndStats,
+    PlayerMatchPhysicalSnapshot,
 };
 use crate::r#match::engine::set_pieces::SetPieceHistory;
 use crate::r#match::engine::teamplay::standard::StandardReading;
 use crate::r#match::rules::MatchRules;
+use crate::r#match::CompetitionKind;
 use crate::r#match::{
     AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition, MatchCoach,
-    MatchField, MatchFieldSize, MatchPlayerCollection, MatchTime, Score, TeamShape,
+    MatchField, MatchFieldSize, MatchPlayer, MatchPlayerCollection, MatchTime, Score, TeamShape,
     TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use chrono::{NaiveDate, Utc};
@@ -61,7 +68,15 @@ pub struct MatchContext {
     pub substitution_windows: SubstitutionWindows,
     pub additional_time_ms: u64,
     pub period_stoppage_time_ms: u64,
+    /// Fraction of a millisecond of stoppage owed but not yet added — the
+    /// referee adds back a share of each 10 ms tick, not whole ticks.
+    pub stoppage_credit_ms: f32,
+    /// The team that kicked off the period being played. The other one
+    /// kicks off the next.
+    pub period_kickoff_team: Option<u32>,
     pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
+    /// Keepers who kept out a penalty during play, one entry per save.
+    pub penalty_saves: Vec<u32>,
 
     /// Every strike that was worth calling a chance, in the order they were
     /// taken — candidates, not the shortlist. `HighlightSelector::select`
@@ -148,6 +163,9 @@ pub struct MatchContext {
     /// Weather + pitch + crowd + importance. Defaults to a neutral
     /// fixture; harnesses can override before kickoff.
     pub environment: MatchEnvironment,
+    /// `environment.modifiers()`, drawn once: the deltas the weather and
+    /// the pitch put on the match.
+    pub conditions: EnvModifiers,
 
     /// Referee strictness/leniency/card profile. Defaults to a balanced
     /// referee.
@@ -267,6 +285,9 @@ pub struct MatchContext {
     ///
     /// `None` whenever no advantage is in play.
     pub pending_advantage: Option<PendingAdvantage>,
+    /// The match-report lines kept as they happen — see [`MatchTally`].
+    pub tally: MatchTally,
+    pub time_wasting: TimeWastingLedger,
 }
 
 /// Snapshot of a foul that the referee elected to let play continue
@@ -288,6 +309,10 @@ pub struct PendingAdvantage {
     pub fouled_team_id: u32,
     /// Severity of the original foul — drives the card decision.
     pub severity: FoulSeverity,
+    pub source: FoulSource,
+    /// Where the offence was. A pulled-back advantage restarts here, not
+    /// wherever the ball has got to since.
+    pub spot: Vector3<f32>,
     /// Card decision pre-computed at foul time so referee bias /
     /// match temperature at the moment of the foul govern the booking.
     pub yellow_prob: f32,
@@ -295,6 +320,16 @@ pub struct PendingAdvantage {
 }
 
 impl MatchContext {
+    /// Seed `player`'s psychology from the state of mind he brought: the
+    /// starters when the standard of the match is first read, a substitute
+    /// when he comes on. Nothing until the standard is known.
+    pub fn seed_psychology(&mut self, player: &MatchPlayer) {
+        if let Some(reading) = self.standard {
+            let occasion = Psychology::occasion(&self.environment, self.is_knockout);
+            self.psychology.seed(player, reading.outfield, occasion);
+        }
+    }
+
     pub fn new(
         field: &MatchField,
         players: MatchPlayerCollection,
@@ -308,7 +343,11 @@ impl MatchContext {
             score,
             is_friendly,
             is_knockout,
-            MatchRules::resolve_default(is_friendly, is_knockout),
+            MatchRules::resolve_default(if is_friendly {
+                CompetitionKind::Friendly
+            } else {
+                CompetitionKind::League
+            }),
         )
     }
 
@@ -329,7 +368,11 @@ impl MatchContext {
             score,
             is_friendly,
             is_knockout,
-            MatchRules::resolve_default(is_friendly, is_knockout),
+            MatchRules::resolve_default(if is_friendly {
+                CompetitionKind::Friendly
+            } else {
+                CompetitionKind::League
+            }),
         );
         ctx.rng = MatchRng::from_seed(seed);
         ctx
@@ -366,7 +409,10 @@ impl MatchContext {
             substitution_windows: SubstitutionWindows::default(),
             additional_time_ms: 0,
             period_stoppage_time_ms: 0,
+            stoppage_credit_ms: 0.0,
+            period_kickoff_team: None,
             penalty_shootout_kicks: Vec::new(),
+            penalty_saves: Vec::new(),
             chances: Vec::new(),
             #[cfg(feature = "match-logs")]
             box_episode: Default::default(),
@@ -386,6 +432,7 @@ impl MatchContext {
             shape_away: TeamShape::idle(),
             is_knockout,
             environment: MatchEnvironment::default(),
+            conditions: EnvModifiers::default(),
             referee: RefereeProfile::default(),
             set_piece_history: SetPieceHistory::default(),
             psychology: PsychologyState::default(),
@@ -407,6 +454,8 @@ impl MatchContext {
             rng: MatchRng::from_entropy(),
             today: Utc::now().naive_utc().date(),
             pending_advantage: None,
+            tally: MatchTally::default(),
+            time_wasting: TimeWastingLedger::default(),
         }
     }
 
@@ -426,9 +475,9 @@ impl MatchContext {
             field,
             players,
             score,
-            config.is_friendly,
+            config.is_friendly(),
             config.is_knockout,
-            MatchRules::resolve_default(config.is_friendly, config.is_knockout),
+            MatchRules::resolve_default(config.competition),
         );
         ctx.rng = match config.seed {
             Some(s) => MatchRng::from_seed(s),
@@ -437,6 +486,7 @@ impl MatchContext {
         ctx.today = config.today;
         ctx.environment = config.environment;
         ctx.environment.clamp_inputs();
+        ctx.conditions = ctx.environment.modifiers();
         ctx.referee = config.referee;
         ctx.referee.clamp_inputs();
         ctx
@@ -498,6 +548,7 @@ impl MatchContext {
                     time: stat.match_second,
                     stat_type: stat.stat_type,
                     is_auto_goal: stat.is_auto_goal,
+                    origin: stat.origin,
                 };
 
                 self.score.add_goal_detail(detail);
@@ -509,11 +560,86 @@ impl MatchContext {
         self.logging_enabled = true;
     }
 
+    pub fn familiarity_for_team(&self, team_id: u32) -> &TacticalFamiliarity {
+        if team_id == self.field_home_team_id {
+            &self.tactical_familiarity_home
+        } else {
+            &self.tactical_familiarity_away
+        }
+    }
+
+    pub fn skill_aggregates_for_team(&self, team_id: u32) -> &TeamSkillAggregates {
+        if team_id == self.field_home_team_id {
+            &self.home_skill_aggregates
+        } else {
+            &self.away_skill_aggregates
+        }
+    }
+
     pub fn coach_for_team(&self, team_id: u32) -> &MatchCoach {
         if team_id == self.field_home_team_id {
             &self.coach_home
         } else {
             &self.coach_away
+        }
+    }
+
+    /// How long `team_id` drags out a restart of this kind: nothing unless
+    /// it is ahead late and its manager has told it to slow the game.
+    pub fn time_wasting_delay_ms(
+        &self,
+        team_id: u32,
+        aggression: f32,
+        kind: TimeWastingRestart,
+    ) -> u64 {
+        let share = match self.coach_for_team(team_id).instruction {
+            CoachInstruction::WasteTime => 1.0,
+            CoachInstruction::SlowDown => 0.5,
+            _ => return 0,
+        };
+        let minute = (self.total_match_time / 60_000) as u32;
+        (TimeWasting::delay_ms(self.lead(team_id), minute, kind, aggression) as f32 * share) as u64
+    }
+
+    /// How far the clock is against `team_id` getting a restart taken,
+    /// 0..1: the share of the second half gone while it is behind. Level
+    /// or ahead it has no reason to hurry.
+    pub fn restart_hurry(&self, team_id: u32) -> f32 {
+        if self.lead(team_id) >= 0 {
+            return 0.0;
+        }
+        let minute = self.total_match_time as f32 / 60_000.0;
+        ((minute - 45.0) / 45.0).clamp(0.0, 1.0)
+    }
+
+    fn lead(&self, team_id: u32) -> i32 {
+        let (home, away) = (
+            self.score.home_team.get() as i32,
+            self.score.away_team.get() as i32,
+        );
+        if team_id == self.field_home_team_id {
+            home - away
+        } else {
+            away - home
+        }
+    }
+
+    /// The referee's patience with a side slowing the game, spent by
+    /// `delay_ms` more of it. True when it has run out and the man
+    /// delaying is booked.
+    pub fn time_wasting_caution(&mut self, team_id: u32, delay_ms: u64) -> bool {
+        let is_home = team_id == self.field_home_team_id;
+        let total = self.time_wasting.note_delay(is_home, delay_ms);
+        let p = TimeWasting::yellow_prob(
+            total,
+            self.referee.strictness,
+            self.time_wasting.offences(is_home),
+        );
+        if p > 0.0 && self.rng.unit_f32() < p {
+            self.time_wasting.note_offence(is_home);
+            true
+        } else {
+            false
         }
     }
 

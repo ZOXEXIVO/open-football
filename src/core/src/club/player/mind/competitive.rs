@@ -16,12 +16,33 @@ use super::organs::goals::{GoalBlocker, GoalDomain, GoalEvidence, GoalKind, Goal
 use super::organs::memory::{EpisodeKind, EpochDay, MindEpisode};
 use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
+use crate::club::player::player::Player;
+use crate::club::player::statistics::PlayerStatisticsHistoryItem;
+use crate::PlayerSquadStatus;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 
 /// His belief in himself as a player.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct CompetitiveMind {
     /// −100..=100. Built from what actually happens on the pitch.
     belief_pct: i8,
+    /// The standard of football he is used to, on the scale the match
+    /// reads from both sides at kickoff. Learnt only by playing; how the
+    /// football went is left to `belief_pct`.
+    assurance: f32,
+    /// Fade taken off `assurance` since his last match, capped so a long
+    /// absence never turns a veteran back into a debutant.
+    absent_fade: f32,
+    played_this_week: bool,
+    /// His assurance has been set from something he lived — a recorded
+    /// career or the squad he joined — rather than left at the neutral.
+    seeded: bool,
+    /// How far the evidence of his latest match moves his belief: the
+    /// step he took up to play it. Staged by `on_match_played` before that
+    /// match's episodes are filed.
+    match_steadiness: f32,
     /// Consecutive matches started, or (negative) consecutive matches
     /// watched. The run, not the season total — a man who has started
     /// the last six feels different from one who started six in August.
@@ -39,7 +60,277 @@ pub struct CompetitiveMind {
     pub injuries_seen: u8,
 }
 
+impl Default for CompetitiveMind {
+    fn default() -> Self {
+        CompetitiveMind {
+            belief_pct: 0,
+            assurance: Self::NEUTRAL_ASSURANCE,
+            absent_fade: 0.0,
+            played_this_week: false,
+            seeded: false,
+            match_steadiness: 1.0,
+            run: 0,
+            big_match_record: 0,
+            barren_weeks: 0,
+            injuries_seen: 0,
+        }
+    }
+}
+
+/// The football one match gave him, as the competitive mind reads it.
+#[derive(Debug, Clone, Copy)]
+pub struct CompetitiveMatchRead {
+    pub standard: f32,
+    pub minutes: f32,
+    pub competitive: bool,
+    /// A keeper who started and finished a competitive match without
+    /// conceding.
+    pub kept_clean_sheet: bool,
+}
+
+/// The state of mind a player brings to kickoff — never his statistics.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct KickoffMind {
+    /// `None` for a player with no football behind him to step up from —
+    /// a synthetic squad — who is at home at any standard.
+    pub assurance: Option<f32>,
+    pub self_belief: f32,
+    /// 0..100, as `PlayerHappiness::morale`.
+    pub morale: f32,
+    pub big_match_record: i8,
+}
+
+impl KickoffMind {
+    /// At home whatever the standard, believing nothing either way.
+    pub fn neutral() -> Self {
+        KickoffMind {
+            assurance: None,
+            self_belief: 0.0,
+            morale: 50.0,
+            big_match_record: 0,
+        }
+    }
+}
+
+impl Player {
+    /// Seed his assurance by replaying his recorded career, each season at
+    /// the standard `standard_of` reads for the club he played it for.
+    /// False when he has no recorded season.
+    pub fn seed_assurance_from_career(
+        &mut self,
+        standard_of: impl Fn(&PlayerStatisticsHistoryItem) -> f32,
+    ) -> bool {
+        let mut seasons: Vec<&PlayerStatisticsHistoryItem> =
+            self.statistics_history.items.iter().collect();
+        let Some(first) = seasons.iter().min_by_key(|i| (i.season.start_year, i.seq_id)) else {
+            return false;
+        };
+        let start = standard_of(first) - CompetitiveMind::ROOKIE_GAP;
+        seasons.sort_by_key(|i| (i.season.start_year, i.seq_id));
+        let pace = CompetitiveMind::settling_pace(
+            self.skills.mental.composure,
+            self.attributes.adaptability,
+        );
+        let mind = &mut self.mind.competitive;
+        mind.seed_assurance(start);
+        for season in seasons {
+            mind.replay_season(
+                standard_of(season),
+                season.statistics.played,
+                season.statistics.played_subs,
+                pace,
+            );
+        }
+        true
+    }
+
+    /// Seed his assurance from his place in the side he plays for, when
+    /// nothing of his career is recorded.
+    pub fn seed_assurance_from_role(&mut self, team_standard: f32) {
+        let gap = match self.contract.as_ref().map(|c| &c.squad_status) {
+            Some(PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular) => 0.0,
+            Some(
+                PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::MainBackupPlayer,
+            ) => CompetitiveMind::ROLE_GAP,
+            _ => CompetitiveMind::ROLE_GAP * 2.0,
+        };
+        self.mind.competitive.seed_assurance(team_standard - gap);
+    }
+
+    /// The state of mind he brings to kickoff on `now`. A synthetic squad
+    /// with no calendar, and every player under `OF_MIND_OFF`, arrives
+    /// neutral.
+    pub fn kickoff_mind(&self, now: Option<NaiveDate>) -> KickoffMind {
+        if now.is_none() || !MindSwitch::armed() {
+            return KickoffMind::neutral();
+        }
+        let c = &self.mind.competitive;
+        KickoffMind {
+            assurance: Some(c.assurance()),
+            self_belief: c.self_belief(),
+            morale: self.happiness.morale,
+            big_match_record: c.big_match_record,
+        }
+    }
+}
+
+/// `OF_MIND_OFF=1` turns the whole assurance-and-nerves mechanism off:
+/// neutral kickoff minds, no seeding, no keeper lapses and the two-keeper
+/// standard. Read once per process. The A/B control every calibration of
+/// the mechanism is measured against.
+pub struct MindSwitch;
+
+impl MindSwitch {
+    pub fn armed() -> bool {
+        use std::sync::OnceLock;
+        static ARMED: OnceLock<bool> = OnceLock::new();
+        *ARMED.get_or_init(|| {
+            std::env::var("OF_MIND_OFF")
+                .map(|v| v.is_empty() || v == "0")
+                .unwrap_or(true)
+        })
+    }
+}
+
 impl CompetitiveMind {
+    /// A player nobody has told us about is at home in the division every
+    /// engine constant was fitted in.
+    pub const NEUTRAL_ASSURANCE: f32 = MatchStandard::CALIBRATION;
+
+    /// Share of the gap to a match's standard one full competitive match
+    /// closes for a median temperament: about 70% over twelve matches.
+    const RISE: f32 = 0.095;
+    /// Playing below his level unlearns it far more slowly than playing
+    /// above it teaches.
+    const FALL_SHARE: f32 = 0.2;
+    const FRIENDLY_WEIGHT: f32 = 0.5;
+    const FADE_PER_WEEK: f32 = 0.002;
+    const FADE_CAP: f32 = 0.015;
+    /// A step of this size or more leaves his belief as exposed as it ever
+    /// is; at or below his assurance a single match moves it by
+    /// `STEADY_FLOOR` of that.
+    const STEP_SCALE: f32 = 0.10;
+    const STEADY_FLOOR: f32 = 0.5;
+    const CLEAN_SHEET_SHARE: f32 = 0.25;
+    /// Minutes a recorded substitute appearance stands for.
+    const SEEDED_SUB_MINUTES: f32 = 25.0;
+    /// Where a career replay starts: below the first club he is recorded
+    /// at, so a youngster who never got on is not assured at his parent
+    /// club's standard by having been on its books.
+    const ROOKIE_GAP: f32 = 0.15;
+    /// How far below his side's standard a squad player and a youngster
+    /// sit when nothing of their career is recorded.
+    const ROLE_GAP: f32 = 0.03;
+
+    #[inline]
+    pub fn assurance(&self) -> f32 {
+        self.assurance
+    }
+
+    /// Place his assurance directly — world-start seeding and new players
+    /// only. Everything after that goes through `on_match_played`.
+    pub fn seed_assurance(&mut self, standard: f32) {
+        self.assurance = standard.clamp(0.0, 1.0);
+        self.absent_fade = 0.0;
+        self.seeded = true;
+    }
+
+    #[inline]
+    pub fn is_seeded(&self) -> bool {
+        self.seeded
+    }
+
+    /// A recorded season, learnt as the matches it was made of.
+    pub fn replay_season(&mut self, standard: f32, starts: u16, sub_apps: u16, pace: f32) {
+        let full = CompetitiveMatchRead {
+            standard,
+            minutes: 90.0,
+            competitive: true,
+            kept_clean_sheet: false,
+        };
+        let cameo = CompetitiveMatchRead {
+            minutes: Self::SEEDED_SUB_MINUTES,
+            ..full
+        };
+        for _ in 0..starts {
+            self.absorb(&full, pace);
+        }
+        for _ in 0..sub_apps {
+            self.absorb(&cameo, pace);
+        }
+        self.played_this_week = false;
+    }
+
+    /// How quickly he settles at a new standard: composure and
+    /// adaptability on the 1..20 scale, about 1.0 for a median man.
+    pub fn settling_pace(composure: f32, adaptability: f32) -> f32 {
+        let t = (((composure + adaptability) * 0.5 - 1.0) / 19.0).clamp(0.0, 1.0);
+        0.6 + 0.8 * t
+    }
+
+    /// 1.0 for a step far above him, `STEADY_FLOOR` at his own level.
+    fn steadiness_at(&self, standard: f32) -> f32 {
+        let step = ((standard - self.assurance).max(0.0) / Self::STEP_SCALE).clamp(0.0, 1.0);
+        Self::STEADY_FLOOR + (1.0 - Self::STEADY_FLOOR) * step
+    }
+
+    /// The match is in: stage how exposed his belief was to it, take the
+    /// clean sheet, then learn the standard he played at.
+    pub fn on_match_played(&mut self, read: &CompetitiveMatchRead, pace: f32) {
+        self.match_steadiness = self.steadiness_at(read.standard);
+        if read.kept_clean_sheet && read.competitive {
+            self.shift(Self::LIFT * Self::CLEAN_SHEET_SHARE * self.match_steadiness);
+        }
+        self.absorb(read, pace);
+    }
+
+    fn absorb(&mut self, read: &CompetitiveMatchRead, pace: f32) {
+        let weight = (read.minutes / 90.0).clamp(0.0, 1.5)
+            * if read.competitive {
+                1.0
+            } else {
+                Self::FRIENDLY_WEIGHT
+            };
+        if weight <= 0.0 {
+            return;
+        }
+        let gap = read.standard - self.assurance;
+        let rate = Self::RISE * pace * if gap > 0.0 { 1.0 } else { Self::FALL_SHARE };
+        self.assurance = (self.assurance + gap * (rate * weight).min(1.0)).clamp(0.0, 1.0);
+        self.absent_fade = 0.0;
+        self.played_this_week = true;
+    }
+
+    /// The weekly think's half of assurance: a week without football fades
+    /// it, up to `FADE_CAP` since his last match.
+    fn fade_if_idle(&mut self) {
+        if !self.played_this_week && self.absent_fade < Self::FADE_CAP {
+            let step = Self::FADE_PER_WEEK.min(Self::FADE_CAP - self.absent_fade);
+            self.assurance = (self.assurance - step).max(0.0);
+            self.absent_fade += step;
+        }
+        self.played_this_week = false;
+    }
+
+    /// What the match evidence of his latest match is worth to his belief.
+    /// Selection, injury and press episodes are not match evidence and
+    /// always land whole.
+    fn evidence_weight(&self, kind: EpisodeKind) -> f32 {
+        match kind {
+            EpisodeKind::DecisiveGoal
+            | EpisodeKind::ManOfTheMatch
+            | EpisodeKind::CostlyError
+            | EpisodeKind::MissedDecisivePenalty
+            | EpisodeKind::PenaltySaved
+            | EpisodeKind::MatchSavingDisplay
+            | EpisodeKind::SentOff
+            | EpisodeKind::HeavyDefeat
+            | EpisodeKind::DerbyWin
+            | EpisodeKind::DerbyDefeat => self.match_steadiness,
+            _ => 1.0,
+        }
+    }
+
     /// How far one event moves self-belief, as a fraction of the gap to
     /// the extreme. Asymmetric on purpose: a mistake costs more belief
     /// than a good game buys, which is both true and what makes a slump
@@ -134,13 +425,17 @@ impl SubMind for CompetitiveMind {
     }
 
     fn observe(&mut self, episode: &MindEpisode, _organs: &mut MindOrgans) {
+        let w = self.evidence_weight(episode.kind);
         match episode.kind {
-            EpisodeKind::DecisiveGoal | EpisodeKind::ManOfTheMatch => {
-                self.shift(Self::LIFT);
+            EpisodeKind::DecisiveGoal
+            | EpisodeKind::ManOfTheMatch
+            | EpisodeKind::PenaltySaved
+            | EpisodeKind::MatchSavingDisplay => {
+                self.shift(Self::LIFT * w);
                 self.barren_weeks = 0;
             }
             EpisodeKind::StartedBigMatch | EpisodeKind::DerbyWin => {
-                self.shift(Self::LIFT);
+                self.shift(Self::LIFT * w);
                 self.big_match_record = self.big_match_record.saturating_add(1);
                 self.extend_run(true);
                 self.barren_weeks = 0;
@@ -150,7 +445,7 @@ impl SubMind for CompetitiveMind {
                 self.extend_run(true);
             }
             EpisodeKind::CostlyError | EpisodeKind::MissedDecisivePenalty => {
-                self.shift(-Self::KNOCK);
+                self.shift(-Self::KNOCK * w);
             }
             EpisodeKind::LeftOutOfBigMatch => {
                 self.shift(-Self::KNOCK);
@@ -162,7 +457,7 @@ impl SubMind for CompetitiveMind {
                 self.extend_run(false);
             }
             EpisodeKind::SentOff | EpisodeKind::DerbyDefeat | EpisodeKind::HeavyDefeat => {
-                self.shift(-Self::LIFT);
+                self.shift(-Self::LIFT * w);
             }
             // The body speaks to this faculty too — a long lay-off is a
             // blow to a player's belief in himself, not just his fitness.
@@ -176,6 +471,8 @@ impl SubMind for CompetitiveMind {
     fn reflect(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
         let s = view.situation;
         let today = view.today();
+
+        self.fade_if_idle();
 
         // A goal drought, for the players it means anything to.
         if s.apps_since_goal >= 8 {
@@ -687,6 +984,183 @@ mod tests {
 
         mind.observe(&episode(EpisodeKind::ReturnedFromLongInjury), &mut organs);
         assert!(mind.self_belief() > hurt);
+    }
+
+    fn read(standard: f32, minutes: f32) -> CompetitiveMatchRead {
+        CompetitiveMatchRead {
+            standard,
+            minutes,
+            competitive: true,
+            kept_clean_sheet: false,
+        }
+    }
+
+    fn seeded(assurance: f32) -> CompetitiveMind {
+        let mut mind = CompetitiveMind::default();
+        mind.seed_assurance(assurance);
+        mind
+    }
+
+    fn closed_share(from: f32, to: f32, matches: usize, pace: f32) -> f32 {
+        let mut mind = seeded(from);
+        for _ in 0..matches {
+            mind.on_match_played(&read(to, 90.0), pace);
+        }
+        (mind.assurance() - from) / (to - from)
+    }
+
+    #[test]
+    fn the_mind_switch_is_armed_unless_switched_off() {
+        assert!(MindSwitch::armed());
+    }
+
+    #[test]
+    fn a_median_keeper_settles_over_a_dozen_matches() {
+        let median = CompetitiveMind::settling_pace(11.0, 11.0);
+        let closed = closed_share(0.55, 0.67, 12, median);
+        assert!(
+            (0.5..=0.9).contains(&closed),
+            "twelve full matches close half to nine-tenths of the step: {closed}"
+        );
+    }
+
+    #[test]
+    fn how_the_match_went_does_not_change_assurance() {
+        let mut organs = MindOrgans::new();
+        let pace = CompetitiveMind::settling_pace(11.0, 11.0);
+
+        let mut hero = seeded(0.55);
+        hero.on_match_played(
+            &CompetitiveMatchRead {
+                kept_clean_sheet: true,
+                ..read(0.67, 90.0)
+            },
+            pace,
+        );
+        hero.observe(&episode(EpisodeKind::ManOfTheMatch), &mut organs);
+
+        let mut culprit = seeded(0.55);
+        culprit.on_match_played(&read(0.67, 90.0), pace);
+        culprit.observe(&episode(EpisodeKind::CostlyError), &mut organs);
+        culprit.observe(&episode(EpisodeKind::CostlyError), &mut organs);
+
+        assert_eq!(hero.assurance(), culprit.assurance());
+        assert!(hero.self_belief() > culprit.self_belief());
+    }
+
+    #[test]
+    fn a_composed_player_settles_faster() {
+        let composed = CompetitiveMind::settling_pace(18.0, 18.0);
+        let nervous = CompetitiveMind::settling_pace(4.0, 4.0);
+        assert!(closed_share(0.55, 0.67, 12, composed) > closed_share(0.55, 0.67, 12, nervous));
+    }
+
+    #[test]
+    fn a_loan_down_lowers_assurance_slowly() {
+        let pace = CompetitiveMind::settling_pace(11.0, 11.0);
+        let run = |to: f32| {
+            let mut mind = seeded(0.70);
+            for _ in 0..38 {
+                mind.on_match_played(&read(to, 90.0), pace);
+            }
+            (mind.assurance() - 0.70).abs()
+        };
+        assert!(run(0.60) < run(0.80));
+    }
+
+    #[test]
+    fn a_cameo_counts_for_less_than_a_full_match() {
+        let pace = CompetitiveMind::settling_pace(11.0, 11.0);
+        let mut full = seeded(0.55);
+        full.on_match_played(&read(0.67, 90.0), pace);
+        let mut cameo = seeded(0.55);
+        cameo.on_match_played(&read(0.67, 15.0), pace);
+        assert!(full.assurance() > cameo.assurance());
+        assert!(cameo.assurance() > 0.55);
+    }
+
+    #[test]
+    fn a_friendly_teaches_less_than_a_competitive_match() {
+        let pace = CompetitiveMind::settling_pace(11.0, 11.0);
+        let mut competitive = seeded(0.55);
+        competitive.on_match_played(&read(0.67, 90.0), pace);
+        let mut friendly = seeded(0.55);
+        friendly.on_match_played(
+            &CompetitiveMatchRead {
+                competitive: false,
+                ..read(0.67, 90.0)
+            },
+            pace,
+        );
+        assert!(competitive.assurance() > friendly.assurance());
+    }
+
+    #[test]
+    fn a_long_absence_fades_assurance_by_a_bounded_amount() {
+        let mut mind = seeded(0.67);
+        let mut organs = MindOrgans::new();
+        let situation = MindSituation {
+            days_at_club: 400,
+            starter_ratio: 0.4,
+            expected_start_share: 0.4,
+            ..MindSituation::neutral()
+        };
+        for _ in 0..13 {
+            reflect(&mut mind, &situation, &mut organs);
+        }
+        let faded = 0.67 - mind.assurance();
+        assert!(faded > 0.0, "three months out leaves a mark");
+        assert!(
+            faded <= CompetitiveMind::FADE_CAP + 1e-6,
+            "and never more than the cap: {faded}"
+        );
+
+        mind.on_match_played(&read(0.67, 90.0), 1.0);
+        assert_eq!(mind.absent_fade, 0.0, "playing again resets the fade");
+    }
+
+    #[test]
+    fn a_debutant_takes_a_costly_error_harder_than_a_veteran() {
+        let mut organs = MindOrgans::new();
+        let pace = CompetitiveMind::settling_pace(11.0, 11.0);
+
+        let mut veteran = seeded(0.67);
+        veteran.on_match_played(&read(0.67, 90.0), pace);
+        veteran.observe(&episode(EpisodeKind::CostlyError), &mut organs);
+
+        let mut debutant = seeded(0.52);
+        debutant.on_match_played(&read(0.67, 90.0), pace);
+        debutant.observe(&episode(EpisodeKind::CostlyError), &mut organs);
+
+        assert!(debutant.self_belief() < veteran.self_belief());
+    }
+
+    #[test]
+    fn a_penalty_save_lifts_a_keeper() {
+        let mut organs = MindOrgans::new();
+        let mut mind = seeded(0.67);
+        mind.on_match_played(&read(0.67, 90.0), 1.0);
+        mind.observe(&episode(EpisodeKind::PenaltySaved), &mut organs);
+        assert!(mind.self_belief() > 0.0);
+    }
+
+    #[test]
+    fn a_clean_sheet_lifts_belief_a_little() {
+        let mut clean = seeded(0.67);
+        clean.on_match_played(
+            &CompetitiveMatchRead {
+                kept_clean_sheet: true,
+                ..read(0.67, 90.0)
+            },
+            1.0,
+        );
+        let mut organs = MindOrgans::new();
+        let mut motm = seeded(0.67);
+        motm.on_match_played(&read(0.67, 90.0), 1.0);
+        motm.observe(&episode(EpisodeKind::ManOfTheMatch), &mut organs);
+
+        assert!(clean.self_belief() > 0.0);
+        assert!(clean.self_belief() < motm.self_belief());
     }
 
     #[test]

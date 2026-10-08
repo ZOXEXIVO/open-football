@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperOneOnOne, KeeperRestPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperAppetite, KeeperDelivery, KeeperOneOnOne,
+    KeeperRestPosition,
     KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -306,7 +307,9 @@ impl GoalkeeperWalkingState {
 
         // Base threshold adjusted by skills
         let base_threshold = 100.0;
-        let skill_adjusted_threshold = base_threshold * (0.6 + coming_out_ability * 0.8); // Range: 60-140
+        let skill_adjusted_threshold = base_threshold
+            * (0.6 + coming_out_ability * 0.8)
+            * (1.0 + KeeperAppetite::rush_risk(KeeperAppetite::of(ctx))); // Range: 60-140, settled
 
         // Check if ball is loose and in dangerous area — and in the ground
         // he defends, which is a different question from how far it is

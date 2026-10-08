@@ -5,6 +5,7 @@ use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::passing::CrossType;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::CrossDiag;
+use std::collections::VecDeque;
 
 /// How the current ball carrier came by the ball.
 ///
@@ -61,6 +62,35 @@ pub struct PassChainEntry {
     pub player_id: u32,
     pub team_id: u32,
     pub tick: u64,
+}
+
+/// How far upfield each side's last six completed passes took the ball,
+/// in units from its own goal line. Progress is measured from the furthest
+/// of those, as match data counts it, not from where a pass or a carry
+/// started: a ball worked back and played forward again has not been
+/// progressed twice.
+#[derive(Clone, Debug, Default)]
+pub struct PassReach {
+    marks: VecDeque<(u32, f32)>,
+}
+
+impl PassReach {
+    const DEPTH: usize = 6;
+
+    pub fn note(&mut self, team_id: u32, depth: f32) {
+        if self.marks.len() >= Self::DEPTH {
+            self.marks.pop_front();
+        }
+        self.marks.push_back((team_id, depth));
+    }
+
+    pub fn furthest(&self, team_id: u32) -> Option<f32> {
+        self.marks
+            .iter()
+            .filter(|(team, _)| *team == team_id)
+            .map(|(_, depth)| *depth)
+            .reduce(f32::max)
+    }
 }
 
 impl Ball {

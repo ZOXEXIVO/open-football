@@ -1,7 +1,7 @@
 use crate::r#match::MatchPlayerLite;
-use crate::r#match::PassOriginRestart;
 use crate::r#match::PlayerSide;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{FreeKickBand, score_free_kick_choices};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
@@ -4600,8 +4600,9 @@ pub mod mid_run_diag {
     /// the THROWER himself was first to touch again (Law 15's offence),
     /// 4 of those a team-mate received, 5 Σ of the distance the ball
     /// travelled from the spot to that first touch, in units, 6 Σ of the
-    /// ticks between the throw being taken and it.
-    pub static THROW_DELIVERY: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    /// ticks between the throw being taken and it, 12 of the team-mate
+    /// receptions, those by a man stationed to show short.
+    pub static THROW_DELIVERY: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 
     /// The two legs a corner is now walked rather than teleported, in game
     /// units: `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ)`. See
@@ -4862,6 +4863,7 @@ pub mod mid_run_diag {
             released: bool,
             by_the_thrower: bool,
             same_team: bool,
+            short_option: bool,
             travelled: f32,
             held_ticks: u64,
             still_in_his_hands: bool,
@@ -4881,6 +4883,9 @@ pub mod mid_run_diag {
                 THROW_DELIVERY[3].fetch_add(1, Ordering::Relaxed);
             } else if same_team {
                 THROW_DELIVERY[4].fetch_add(1, Ordering::Relaxed);
+                if short_option {
+                    THROW_DELIVERY[12].fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
 
@@ -4910,8 +4915,8 @@ pub mod mid_run_diag {
             THROW_DELIVERY[11].fetch_add(1, Ordering::Relaxed);
         }
 
-        pub fn throw_snapshot() -> [u64; 12] {
-            let mut out = [0u64; 12];
+        pub fn throw_snapshot() -> [u64; 13] {
+            let mut out = [0u64; 13];
             for (slot, c) in out.iter_mut().zip(THROW_DELIVERY.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -5911,7 +5916,38 @@ impl ShotBarPopulation {
 ///
 /// Sweep on the live arm, one run each: 0.975 → 3.14 goals / 14.6 shots,
 /// **0.985 → 3.09 / 13.7**, 0.995 → 3.11 / 13.7.
-const SHOT_BAR_BASE: f32 = 0.985;
+///
+/// # 0.985 → 0.940, once restarts took their real time
+///
+/// The volume above was held against 74-79 live minutes a match. With
+/// every restart set before it is taken the ball is in play for 61, and
+/// the side was producing 0.40 shots a live minute against a real ~0.46.
+/// Below 0.955 the bar takes volume again without costing quality —
+/// 300 matches an arm, xG a shot held at 0.11 throughout:
+///
+/// | bar | shots/team | goals | outside-box share |
+/// |---|---|---|---|
+/// | 0.985 | 12.7 | 2.60 | 52.0% |
+/// | **0.940** | **13.7** | **2.78** | **53.1%** |
+/// | 0.920 | 14.9 | 2.95 | 53.8% |
+/// | 0.900 | 15.5 | 3.14 | 55.2% |
+///
+/// # 0.940 → 0.820, once crosses came down to a real volume
+///
+/// The volume above leaned on ~120 crosses a match against a real ~35.
+/// With deliveries decided once a possession and the box relief held
+/// through the penalty spot, the side took 10.6 shots against a real 13
+/// at an unchanged 0.11 xG a shot. 100 matches an arm:
+///
+/// | bar | shots/team | goals | xG/shot |
+/// |---|---|---|---|
+/// | 0.940 | 10.6 | 1.90 | 0.114 |
+/// | 0.880 | 11.5 | 2.06 | 0.113 |
+/// | 0.840 | 13.2 | 2.36 | 0.111 |
+///
+/// 0.820 rather than 0.840 because the 200-match realism batch read 2.305
+/// goals at 0.840, on the band's floor.
+const SHOT_BAR_BASE: f32 = 0.820;
 
 /// `SHOT_BAR_BASE`, with `OF_SHOT_BAR` allowed to override it.
 ///
@@ -6370,35 +6406,22 @@ impl FreeKickResolver {
     /// 1u = 0.125 m. Picks out who is in there to aim at.
     const BOX_RADIUS: f32 = 132.0;
 
-    /// Resolve a direct free kick, or `None` if this isn't one.
-    ///
-    /// Returns `Shoot` when the taker goes for goal and `Pass` otherwise
-    /// — a box delivery, a short routine and a recycle are all "give it
-    /// to somebody", and the passing model already picks between them.
+    /// Does the man standing over a direct free kick go for goal? A box
+    /// delivery, a short routine and a recycle are all "give it to
+    /// somebody", and the passing model picks between them.
     ///
     /// The choice is drawn ONCE per set piece, the same way
     /// [`evaluate_forward_shot_decision`] draws its appetite threshold:
     /// the distribution [`score_free_kick_choices`] returns is sampled
-    /// with a spread hashed from the taker and the tick he took
-    /// possession of the dead ball. Deterministic for as long as he
+    /// with a spread hashed from the match, the taker and the tick he was
+    /// handed the dead ball. Deterministic for as long as he
     /// stands over it — asking again next tick can never turn a whipped
     /// cross into a shot — but different takers and different free kicks
     /// genuinely differ, which plain argmax would not give: the per-band
     /// base scores put box delivery ahead of a direct shot in every band,
     /// so argmax means *nobody ever shoots one*, which is less true to
     /// football, not more.
-    fn decide(
-        ctx: &StateProcessingContext,
-        distance: f32,
-        tag: &'static str,
-    ) -> Option<ShotDecision> {
-        if ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::DirectFreeKick {
-            return None;
-        }
-        if ctx.ball().owner_id() != Some(ctx.player.id) {
-            return None;
-        }
-
+    pub fn shoots(ctx: &StateProcessingContext) -> bool {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let late = minute >= 70;
         let (mine, theirs) = if ctx.player.team_id == ctx.context.field_home_team_id {
@@ -6413,13 +6436,14 @@ impl FreeKickResolver {
             )
         };
 
+        let shift = MatchStandard::shift(ctx.context);
         let scores = score_free_kick_choices(
-            FreeKickBand::from_distance(distance),
-            // Indirect free kicks aren't a distinct restart in this
-            // engine; every awarded free kick is direct.
+            FreeKickBand::from_distance(ctx.ball().distance_to_opponent_goal()),
+            Self::goal_angle(ctx),
+            // Only a direct free kick reaches this decision.
             false,
-            ctx.player.skills.technical.free_kicks,
-            ctx.player.skills.technical.crossing,
+            MatchStandard::peer(sc::n(ctx.player.skills.technical.free_kicks), shift),
+            MatchStandard::peer(sc::n(ctx.player.skills.technical.crossing), shift),
             Self::aerial_advantage(ctx, minute),
             late && mine < theirs,
             late && mine > theirs,
@@ -6429,19 +6453,23 @@ impl FreeKickResolver {
         let total =
             scores.direct_shot + scores.box_delivery + scores.short_routine + scores.recycle;
         if total <= 0.0 {
-            return Some(ShotDecision::Pass);
+            return false;
         }
         let direct = Self::spread(ctx) * total < scores.direct_shot;
         #[cfg(feature = "match-logs")]
         mid_run_diag::SetPieceDiag::note_free_kick(direct);
-        Some(if direct {
-            ShotDecision::Shoot { reason: tag }
-        } else {
-            // Box delivery / short / recycle are all "find a team-mate",
-            // and the passing model already picks well between a ball
-            // into the box, a square one and a recycle.
-            ShotDecision::Pass
-        })
+        direct
+    }
+
+    /// The angle the goal mouth subtends at the ball, in radians: how much
+    /// of the goal he can see to aim at, which falls away with distance and
+    /// with width alike.
+    fn goal_angle(ctx: &StateProcessingContext) -> f32 {
+        let goal = ctx.player().opponent_goal_position();
+        let ball = ctx.tick_context.positions.ball.position;
+        let near = (Vector3::new(goal.x, goal.y - GOAL_WIDTH, 0.0) - ball).xy();
+        let far = (Vector3::new(goal.x, goal.y + GOAL_WIDTH, 0.0) - ball).xy();
+        near.angle(&far)
     }
 
     /// Who is in the box to aim at, against who is marking them. 0.5 is
@@ -6473,15 +6501,20 @@ impl FreeKickResolver {
 
     /// Per-set-piece deterministic draw in 0..1 — the same "one
     /// opportunity, one decision" construction as the appetite threshold
-    /// in [`evaluate_forward_shot_decision`], hashed from the taker and
-    /// the tick this dead-ball possession began.
+    /// in [`evaluate_forward_shot_decision`], hashed from the match, the
+    /// taker and the tick he was handed the ball.
     fn spread(ctx: &StateProcessingContext) -> f32 {
-        let possession_start = ctx
-            .current_tick()
-            .saturating_sub(ctx.tick_context.ball.ownership_duration as u64);
-        let opportunity = possession_start.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-            ^ (ctx.player.id as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        (((opportunity >> 40) as f32) / ((1u32 << 24) as f32)).clamp(0.0, 1.0)
+        let mut z = ctx
+            .tick_context
+            .ball
+            .set_piece_handed_tick
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (ctx.player.id as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9)
+            ^ ctx.context.rng.seed();
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        ((z >> 40) as f32) / ((1u32 << 24) as f32)
     }
 }
 
@@ -6563,38 +6596,6 @@ pub fn evaluate_forward_shot_decision(
         #[cfg(feature = "match-logs")]
         time_band_diag::record_reject(0, distance);
         return ShotDecision::Hold;
-    }
-
-    // ── Dead ball: the decision was made standing over it ─────────────
-    //
-    // A direct free kick is not an open-play look, and the open-play
-    // gates below are right to refuse it: they see a 25 m strike with a
-    // wall planted in the lane and hold the ball. That is why nobody in
-    // this engine ever hit a free kick — and why `free_kicks` could
-    // decide who stood over the ball and then never touch an outcome.
-    //
-    // `score_free_kick_choices` is the model written for this exact
-    // decision (band, taker's free-kick and crossing ability, who is in
-    // the box, chasing or protecting, wind) and it had no callers at all.
-    // Resolved ahead of the open-play gates because it answers a
-    // different question.
-    if let Some(decision) = FreeKickResolver::decide(ctx, distance, tag) {
-        return decision;
-    }
-    // **A penalty is struck.** There is no other thing to do with one, and
-    // the open-play gates below do not know that: they weighed a man
-    // standing over a dead ball eleven metres out against the same
-    // appetite, cover and clarity terms as any other carrier, and three
-    // penalties in four were passed or carried away — measured, four
-    // awarded in forty matches and one struck as a penalty. Every keeper
-    // number about a penalty (`KeeperPenaltyStance`) was invisible behind
-    // it.
-    if ctx.tick_context.ball.pass_origin_restart == PassOriginRestart::Penalty
-        && ctx.ball().owner_id() == Some(ctx.player.id)
-    {
-        return ShotDecision::Shoot {
-            reason: "PENALTY_KICK",
-        };
     }
 
     let skills = &ctx.player.skills;
@@ -7095,15 +7096,14 @@ pub fn evaluate_forward_shot_decision(
     // tick" from being a winning strategy; a sloped bar reintroduced the
     // same exploit in space instead of time.
     //
-    // Flat across 12-23 m, so anywhere in the normal shooting band is
-    // equally a shot and there is nothing to walk toward. Rises quickly
-    // from 9 m (below that the close relief and the appetite's own
-    // `target_size` already own the decision) and fades into the
-    // speculative ramp by 30 m.
+    // Flat from the goal line to 23 m, so anywhere in the normal shooting
+    // band is equally a shot and there is nothing to walk toward, and it
+    // fades into the speculative ramp by 30 m. It used to rise only from
+    // 9 m, leaving the close relief alone to cover the penalty spot — and
+    // that relief is down to 0.10 there — so the bar peaked at 9-11 m,
+    // the best place on the pitch to shoot from.
     let box_relief = BOX_RELIEF
-        * if distance < 96.0 {
-            ((distance - 72.0) / 24.0).clamp(0.0, 1.0)
-        } else if distance <= 184.0 {
+        * if distance <= 184.0 {
             1.0
         } else {
             (1.0 - (distance - 184.0) / 56.0).clamp(0.0, 1.0)

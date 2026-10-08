@@ -523,17 +523,9 @@ fn skills_from_array(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
 fn generate_gk_skills(pa_final: f32, age: u32, roll: f32) -> Goalkeeping {
     use crate::Goalkeeping;
 
-    let gk_age_ratio = match age {
-        0..=17 => 0.60,
-        18..=19 => 0.70,
-        20..=22 => 0.80,
-        23..=26 => 0.90,
-        27..=29 => 0.97,
-        30..=34 => 1.0,
-        _ => 0.95,
-    };
-
-    let gk_mean = pa_final * gk_age_ratio;
+    // The curve the development ceilings read, at the middle of his year.
+    let maturity = SkillMaturation::ratio(age as f32 + 0.5, MaturationGroup::Goalkeeping);
+    let gk_mean = pa_final * maturity;
     let spread = (pa_final * 0.45).max(2.0);
     let noise = 1.5;
 
@@ -1593,6 +1585,53 @@ mod academy_realism_tests {
 
     fn cps_score(ctx: &AcademyGenerationContext) -> f32 {
         ctx.combined_potential_score()
+    }
+
+    /// Two intakes two years apart: before the age caps, the keepers'
+    /// goalkeeping attributes stand in the ratio the goalkeeping maturity
+    /// curve gives the middles of their years.
+    #[test]
+    fn academy_keepers_follow_the_goalkeeping_maturity_curve() {
+        use super::generate_gk_skills;
+        use crate::PlayerSkills;
+        use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
+
+        let pa_final = PlayerSkills::ability_skill_level(150);
+        let mean = |age: u32| {
+            let n = 4000;
+            let total: f32 = (0..n)
+                .map(|_| {
+                    let g = generate_gk_skills(pa_final, age, rand::random::<f32>());
+                    [
+                        g.aerial_reach,
+                        g.command_of_area,
+                        g.communication,
+                        g.eccentricity,
+                        g.first_touch,
+                        g.handling,
+                        g.kicking,
+                        g.one_on_ones,
+                        g.passing,
+                        g.punching,
+                        g.reflexes,
+                        g.rushing_out,
+                        g.throwing,
+                    ]
+                    .iter()
+                    .sum::<f32>()
+                        / 13.0
+                })
+                .sum();
+            total / n as f32
+        };
+        let generated = mean(17) / mean(19);
+        let maturity = SkillMaturation::ratio(17.5, MaturationGroup::Goalkeeping)
+            / SkillMaturation::ratio(19.5, MaturationGroup::Goalkeeping);
+        assert!(
+            (generated - maturity).abs() <= 0.03,
+            "17-year-old keepers hold {generated:.3} of 19-year-olds' goalkeeping; \
+             the maturity curve says {maturity:.3}"
+        );
     }
 
     #[test]

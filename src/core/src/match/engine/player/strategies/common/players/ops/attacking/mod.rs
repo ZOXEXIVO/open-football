@@ -10,6 +10,8 @@
 //! * [`forward_shot_decision`] — the shoot / hold / lay-off decision
 //!   itself, plus the striking-range, poise, carry and free-kick models
 //!   behind it. Owns the `*_diag` counters `dev_match` reads.
+//! * [`dead_ball_strike`] — where a penalty or a direct free kick goes,
+//!   how hard and how high, and how often it misses the target.
 //! * [`support`] — where an off-ball team-mate offers himself to the
 //!   man on the ball: the angle, and the distance that has a floor.
 //! * [`shooting`] — the context-bound facade the states call
@@ -18,6 +20,7 @@
 //!   post-hoc stat so both price a chance the same way.
 
 pub mod box_movement;
+pub mod dead_ball_strike;
 pub mod forward_shot_decision;
 pub mod movement;
 pub mod passing;
@@ -26,6 +29,7 @@ pub mod support;
 pub mod xg;
 
 pub use box_movement::*;
+pub use dead_ball_strike::*;
 pub use forward_shot_decision::*;
 pub use movement::*;
 pub use passing::*;

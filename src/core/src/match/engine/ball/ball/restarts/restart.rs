@@ -13,8 +13,15 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, GoalKickRunUp, RunOff, RunUpPhase};
+use crate::r#match::engine::ball::ball::{
+    AwaitedRestart, Ball, GoalKickRunUp, PhaseOrigin, RestartHold, RunOff, RunUpPhase,
+};
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
+use crate::r#match::engine::officiating::management::TimeWastingRestart;
+use crate::r#match::engine::player::events::players::FoulSource;
+use crate::r#match::engine::result::DeadTime;
 use crate::r#match::engine::set_pieces::ThrowAppetite;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::common::KeeperGoalKick;
@@ -197,6 +204,22 @@ impl Ball {
         if runs_out {
             RestartCensus::note_run_out_begun();
         }
+        self.pending_restart_stations = RestartShape::plan(
+            PassOriginRestart::ThrowIn,
+            players,
+            thrower_id,
+            throw_pos,
+            self.field_width,
+            self.field_height,
+        );
+        #[cfg(feature = "match-logs")]
+        {
+            self.throw_in_options = self
+                .pending_restart_stations
+                .iter()
+                .map(|station| station.player_id)
+                .collect();
+        }
         self.awaiting_restart = Some(AwaitedRestart {
             take_from: runs_out.then_some(throw_pos),
             settled: !runs_out,
@@ -207,6 +230,7 @@ impl Ball {
             awarded_tick: context.current_tick(),
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
             settled_tick: None,
+            hold: None,
         });
         // Send him. `TakeMe` is the engine's existing "go and get the
         // ball" signal (`MatchPlayer::run_for_ball`), so the taker runs
@@ -224,7 +248,7 @@ impl Ball {
     /// Which goal a corner taken from `spot` is attacking, as an x
     /// coordinate. The kick is taken from the byline of the goal being
     /// attacked, so the nearer end is the answer.
-    fn corner_attacked_goal_x(&self, spot: Vector3<f32>) -> f32 {
+    fn attacked_goal_x(&self, spot: Vector3<f32>) -> f32 {
         if spot.x < self.field_width * 0.5 {
             0.0
         } else {
@@ -246,11 +270,72 @@ impl Ball {
             .filter(|p| {
                 p.team_id == attacking_team
                     && p.id != taker_id
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && !p.tactical_position.current_position.is_goalkeeper()
                     && CornerShape::is_in_penalty_area(p.position, goal_x, field_height)
             })
             .count()
+    }
+
+    /// What a restart waits for once its taker is over the ball and his
+    /// routine is done: whether its shape has formed, and the longest it
+    /// may go on waiting for that.
+    fn set_up(
+        &self,
+        restart: &AwaitedRestart,
+        players: &[MatchPlayer],
+        taker: &MatchPlayer,
+    ) -> (bool, u64) {
+        let goal_x = self.attacked_goal_x(restart.spot);
+        match restart.origin {
+            PassOriginRestart::Corner => (
+                Self::attackers_in_the_box(
+                    players,
+                    taker.team_id,
+                    restart.taker_id,
+                    goal_x,
+                    self.field_height,
+                ) >= AwaitedRestart::CORNER_BOX_TARGET,
+                AwaitedRestart::CORNER_SETUP_CEILING,
+            ),
+            origin if origin.keeps_opponents_off() => (
+                RestartShape::formed(
+                    origin,
+                    players,
+                    taker,
+                    restart.spot,
+                    goal_x,
+                    self.field_height,
+                ),
+                AwaitedRestart::RETREAT_CEILING,
+            ),
+            _ => (true, 0),
+        }
+    }
+
+    /// **Play stopped with the ball live**, for an injured player: the ball
+    /// goes dead where it is and is dropped to `taker_id` once the hold is
+    /// over.
+    pub fn stop_for_drop_ball(&mut self, taker_id: u32, walk: f32, tick: u64, hold: RestartHold) {
+        let spot = Vector3::new(
+            self.position.x.clamp(0.0, self.field_width),
+            self.position.y.clamp(0.0, self.field_height),
+            0.0,
+        );
+        self.clear_for_dead_ball();
+        self.velocity = Vector3::zeros();
+        self.awaiting_restart = Some(AwaitedRestart {
+            taker_id,
+            spot,
+            take_from: None,
+            settled: true,
+            carrying: false,
+            origin: PassOriginRestart::DropBall,
+            awarded_tick: tick,
+            patience_ticks: AwaitedRestart::patience_for(walk),
+            settled_tick: None,
+            hold: Some(hold),
+        });
     }
 
     /// A restart with an [`AwaitedRestart::take_from`] — the corner, and
@@ -258,7 +343,7 @@ impl Ball {
     /// from wherever it went out, and then carries it to the arc.
     pub(crate) fn tick_awaited_restart(
         &mut self,
-        context: &MatchContext,
+        context: &mut MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
@@ -329,11 +414,7 @@ impl Ball {
             // metres further than the award assumed runs out of clock for
             // a reason that has nothing to do with him.
             let left = (taker.position - await_state.spot).magnitude();
-            let ceiling = if await_state.origin == PassOriginRestart::Corner {
-                AwaitedRestart::corner_patience_for(left)
-            } else {
-                AwaitedRestart::patience_for(left)
-            };
+            let ceiling = AwaitedRestart::patience_for(left);
             await_state.patience_ticks = now
                 .saturating_sub(await_state.awarded_tick)
                 .saturating_add(ceiling);
@@ -435,63 +516,29 @@ impl Ball {
                 && taker.position.y <= self.field_height - clearance);
         let arrived = range <= AwaitedRestart::REACH && on_the_pitch;
 
-        // **The corner waits for the box.**
-        //
-        // He is on the arc with the ball at his feet and every other
-        // restart would be taken now. A corner is not ready: five runners
-        // have to arrive from the other half, and taking it the moment the
-        // TAKER was ready is the single reason the walked corner was left
-        // switched off — the attacking box at the delivery measured 3.5
-        // against a placed corner's 5.4 and a real 5-7.
-        //
-        // ⚠ **Ahead of the patience gate, and it resets the clock.**
-        // `patience_ticks` bounds how long he may take to REACH the ball;
-        // standing over it is not taking too long, it is the restart
-        // working. Put after the gate instead, the wait ran the same
-        // counter down and the backstop teleport fired on a man already
-        // on the spot: measured **9.5 timed-out legs a match at a mean of
-        // 0.8 m still to go**, which is the signature of a bound expiring
-        // under somebody standing still rather than of a walk that failed.
-        //
-        // See [`AwaitedRestart::settled_tick`].
-        if arrived
-            && await_state.take_from.is_none()
-            && await_state.origin == PassOriginRestart::Corner
-        {
-            let now = context.current_tick();
-            let settled_at = *await_state.settled_tick.get_or_insert(now);
-            let holding = now.saturating_sub(settled_at);
-            let box_full = Self::attackers_in_the_box(
-                players,
-                taker.team_id,
-                await_state.taker_id,
-                self.corner_attacked_goal_x(await_state.spot),
-                self.field_height,
-            ) >= AwaitedRestart::CORNER_BOX_TARGET;
-            let ceiling = holding >= AwaitedRestart::CORNER_SETUP_CEILING;
-            if !box_full && !ceiling {
-                // No `TakeMe`: he is standing over the ball, not
-                // running at it, and the nudge would restart a chase
-                // he has already finished.
-                await_state.awarded_tick = now;
-                self.awaiting_restart = Some(await_state);
-                return;
-            }
-            #[cfg(feature = "match-logs")]
-            RestartCensus::note_corner_setup_wait(holding, ceiling && !box_full);
-        }
+        let now = context.current_tick();
+        let settled_at = (arrived && await_state.take_from.is_none())
+            .then(|| *await_state.settled_tick.get_or_insert(now));
+        let routine = await_state.routine_ticks(context.restart_hurry(taker.team_id));
+        let routine_done = await_state
+            .settled_tick
+            .is_some_and(|at| now.saturating_sub(at) >= routine);
 
         // **The goal kick's run-up.** He has reached the ball; if he is
         // going long he places it, walks back to his mark, stands there
-        // and runs in — and the restart holds for the whole of it, the
-        // same way the corner above holds for the box. Each leg resets
-        // the clock like the corner does: the walk back is the restart
-        // working, not the taker taking too long. See `KeeperGoalKick`.
+        // for the rest of his routine and runs in — and the restart holds
+        // for the whole of it, the same way the corner below holds for the
+        // box. Each leg resets the clock like the corner does: the walk
+        // back is the restart working, not the taker taking too long. See
+        // `KeeperGoalKick`.
+        //
+        // Ahead of the routine because long or short is read off the press
+        // on his box as he PLACES the ball: read at the end of it, every
+        // attacker had long since jogged out and only 2% went long.
         if await_state.origin == PassOriginRestart::GoalKick
             && await_state.take_from.is_none()
             && KeeperGoalKick::armed()
         {
-            let now = context.current_tick();
             match self.goal_kick_run_up {
                 None if arrived && KeeperGoalKick::is_keeper(taker) => {
                     let patience = context.tactical_for_team(taker.team_id).build_up_patience;
@@ -540,7 +587,9 @@ impl Ball {
                         return;
                     }
                     RunUpPhase::Set => {
-                        if now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS {
+                        if now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS
+                            || !routine_done
+                        {
                             await_state.awarded_tick = now;
                             self.awaiting_restart = Some(await_state);
                             return;
@@ -580,6 +629,52 @@ impl Ball {
                     }
                 },
                 None => {}
+            }
+        }
+
+        // **He stands over it, and a corner waits for the box, a free kick
+        // or a penalty for the opponents to stand off.**
+        //
+        // Every restart has its routine first — see
+        // [`PassOriginRestart::set_routine_ticks`] — and the side the clock
+        // is against cuts it short. Then a corner is not ready: five runners
+        // have to arrive from the other half, and taking it the moment the
+        // TAKER was ready is the single reason the walked corner was left
+        // switched off — the attacking box at the delivery measured 3.5
+        // against a placed corner's 5.4 and a real 5-7.
+        //
+        // A penalty or a free kick is the same wait the other way round:
+        // the referee does not whistle until the opponents have stood off
+        // it, out of the area and the arc at a penalty and 9.15 m away with
+        // the wall up at a free kick. Struck the moment the taker reached
+        // the ball, the defenders the foul was given against were still
+        // standing a metre in front of the spot and blocked it.
+        //
+        // ⚠ **Ahead of the patience gate, and it resets the clock.**
+        // `patience_ticks` bounds how long he may take to REACH the ball;
+        // standing over it is not taking too long, it is the restart
+        // working. Put after the gate instead, the wait ran the same
+        // counter down and the backstop teleport fired on a man already
+        // on the spot: measured **9.5 timed-out legs a match at a mean of
+        // 0.8 m still to go**, which is the signature of a bound expiring
+        // under somebody standing still rather than of a walk that failed.
+        //
+        // See [`AwaitedRestart::settled_tick`].
+        if let Some(settled_at) = settled_at {
+            let (formed, ceiling) = self.set_up(&await_state, players, taker);
+            let holding = now.saturating_sub(settled_at);
+            let expired = holding >= routine + ceiling;
+            if !routine_done || (!formed && !expired) {
+                // No `TakeMe`: he is standing over the ball, not
+                // running at it, and the nudge would restart a chase
+                // he has already finished.
+                await_state.awarded_tick = now;
+                self.awaiting_restart = Some(await_state);
+                return;
+            }
+            #[cfg(feature = "match-logs")]
+            if await_state.origin == PassOriginRestart::Corner {
+                RestartCensus::note_corner_setup_wait(holding, expired && !formed);
             }
         }
 
@@ -629,7 +724,7 @@ impl Ball {
             await_state.spot = take_from;
             await_state.awarded_tick = context.current_tick();
             let carry = (taker.position - take_from).magnitude();
-            await_state.patience_ticks = AwaitedRestart::corner_patience_for(carry);
+            await_state.patience_ticks = AwaitedRestart::patience_for(carry);
             self.awaiting_restart = Some(await_state);
             // His touch, from here on. `clear_expired_corner_stations`
             // releases the shape when anybody OTHER than the taker touches
@@ -642,17 +737,43 @@ impl Ball {
             );
             // ⚠ **Nothing else can steer him now.** `run_for_ball` sends a
             // man to the ball and the ball is at his feet, so he reads as
-            // arrived and stands still; `CornerHold` releases anybody
+            // arrived and stands still; `SetPieceHold` releases anybody
             // within four metres of it for the same reason. The station is
-            // what walks him to the flag — see `CornerHold::hold_weight`.
+            // what walks him to the flag — see `SetPieceHold::hold_weight`.
             self.pending_restart_station = Some((await_state.taker_id, take_from));
             events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
             #[cfg(feature = "match-logs")]
             RestartCensus::note_restart_carry(carry);
             return;
         }
+        // A side ahead late takes its time over its own restarts — once per
+        // restart, and the referee may run out of patience with it.
+        if await_state.hold.is_none()
+            && let Some(kind) = TimeWastingRestart::for_origin(await_state.origin)
+        {
+            let delay =
+                context.time_wasting_delay_ms(taker.team_id, taker.skills.mental.aggression, kind);
+            if delay > 0 {
+                let now = context.current_tick();
+                await_state.hold_until(DeadTime::Delay, now + delay / MATCH_TIME_INCREMENT_MS);
+                if context.time_wasting_caution(taker.team_id, delay) {
+                    events.add_ball_event(BallEvent::Caution(taker.id, FoulSource::TimeWasting));
+                }
+                self.awaiting_restart = Some(await_state);
+                return;
+            }
+        }
+        // The taker is on the ball; somebody else is not finished. Held
+        // here rather than ahead of the walk so a taker who is still
+        // coming is never the reason a booking ends early, and a backstop
+        // placement above cannot skip it.
+        if await_state.is_held(context.current_tick()) {
+            self.awaiting_restart = Some(await_state);
+            return;
+        }
         #[cfg(feature = "match-logs")]
         RestartCensus::note_restart_taken(waited, arrived);
+        context.tally.note_restart(await_state.origin);
 
         self.awaiting_restart = None;
         // A goal kick reached off a run-up is kicked long — recorded for
@@ -670,6 +791,21 @@ impl Ball {
         self.claim_cooldown = 45;
         self.flags.in_flight_state = 20;
         self.pass_origin_restart = await_state.origin;
+        self.set_piece_kicker = await_state
+            .origin
+            .keeps_opponents_off()
+            .then_some(await_state.taker_id);
+        self.phase_origin = await_state
+            .origin
+            .opens_set_piece_phase()
+            .then(|| {
+                PhaseOrigin::open(
+                    await_state.origin,
+                    taker.team_id,
+                    taker.id,
+                    context.current_tick(),
+                )
+            });
         self.record_touch(
             await_state.taker_id,
             taker.team_id,
@@ -695,6 +831,7 @@ impl Ball {
             //
             // `note_release` lowers it again on the throw itself.
             self.held_in_hands = true;
+            self.hands_since_tick = context.current_tick();
             #[cfg(feature = "match-logs")]
             {
                 self.throw_in_spot = self.position;
@@ -707,36 +844,16 @@ impl Ball {
         // with the ball at his feet, several seconds after it was awarded.
         // Both of these used to be armed at the award because that WAS the
         // same tick.
-        if await_state.origin == PassOriginRestart::Corner {
-            if let Some(shape) = self.corner_shape.as_mut() {
-                // The deadline runs from the kick, not from the award, or
-                // the walk-in spends it and the shape drops before the
-                // cross — see `CornerShapeHold::armed_tick`.
-                shape.armed_tick = context.current_tick();
-                shape.live_tick = Some(context.current_tick());
-            }
-            self.corner_contest_resolved = false;
+        if await_state.origin == PassOriginRestart::Corner
+            && let Some(shape) = self.corner_shape.as_mut()
+        {
+            // The deadline runs from the kick, not from the award, or the
+            // walk-in spends it and the shape drops before the cross — see
+            // `CornerShapeHold::armed_tick`.
+            shape.armed_tick = context.current_tick();
+            shape.live_tick = Some(context.current_tick());
         }
         events.add_ball_event(BallEvent::Claimed(await_state.taker_id));
-    }
-
-    /// Drop the offside snapshot once its lifetime expires. Real-world
-    /// passes that don't reach a receiver should end the offside
-    /// pretence — anything older than ~220 ticks is stale.
-    pub(in crate::r#match::engine::ball::ball) fn expire_offside_snapshot(
-        &mut self,
-        context: &MatchContext,
-    ) {
-        const OFFSIDE_LIFETIME_TICKS: u64 = 220;
-        if let Some(snap) = self.offside_snapshot {
-            let now = context.current_tick();
-            if now.saturating_sub(snap.set_tick) > OFFSIDE_LIFETIME_TICKS {
-                self.offside_snapshot = None;
-                if self.pass_origin_restart != PassOriginRestart::OpenPlay {
-                    self.pass_origin_restart = PassOriginRestart::OpenPlay;
-                }
-            }
-        }
     }
 }
 
@@ -839,7 +956,7 @@ impl DeadBall {
 /// Armed, the taker fetches the ball from wherever it went out and carries
 /// it to the arc ([`AwaitedRestart::take_from`]), which takes several
 /// seconds — and those seconds are the stoppage the shape needed all
-/// along, so the twenty walk into it under `CornerHold` instead of being
+/// along, so the twenty walk into it under `SetPieceHold` instead of being
 /// written there.
 ///
 /// # ⚠ ON BY DEFAULT since 2026-08-21. `OF_CORNER_WALK=off` restores the
@@ -857,10 +974,10 @@ impl DeadBall {
 ///   refused a taker standing on it. That is the whole of the "44% never
 ///   complete the fetch": 6.98 legs a match timed out **a mean of 0.3 m
 ///   short**. Now 0.13/match. See `Ball::check_wide_of_goal`.
-/// * **`CornerHold` imposed a velocity without an effort floor**, so the
+/// * **`SetPieceHold` imposed a velocity without an effort floor**, so the
 ///   twenty were steered to their stations at the speed cap of whatever
 ///   low-intensity state they were drifting in — `Standing` is `Recovery`,
-///   0.12 of top speed. See `CornerHold::apply`.
+///   0.12 of top speed. See `SetPieceHold::apply`.
 /// * **`is_team_attacking_corner` answered FALSE during the whole set-up**,
 ///   because it asks who last touched the ball and the last toucher at a
 ///   corner is by definition an opponent. `DefenderAttackingCornerState`
@@ -1053,7 +1170,7 @@ impl ThrowIn {
             if p.side != Some(throwing_side) {
                 continue;
             }
-            if p.is_sent_off {
+            if p.off_pitch {
                 continue;
             }
             if p.tactical_position.current_position.position_group()
@@ -1147,3 +1264,4 @@ mod throw_in_tests {
         }
     }
 }
+

@@ -4,6 +4,8 @@
 //! Pure helpers; no engine state mutation. Returned values are
 //! probabilities the caller folds into the existing referee logic.
 
+use nalgebra::Vector3;
+
 /// Estimate of the post-foul attacking threat. Caller computes from the
 /// match state; high values mean the foul prevented a likely chance.
 #[derive(Debug, Clone, Copy)]
@@ -19,6 +21,48 @@ pub struct CounterAttackThreat {
 }
 
 impl CounterAttackThreat {
+    /// A defender this far either side of the carrier's line to goal is
+    /// in the way. 24u = 3 m.
+    const LANE_HALF_WIDTH: f32 = 24.0;
+
+    /// The threat read off the pitch: the carrier running at `goal`, the
+    /// man who might bring him down at `fouler`, and every other player of
+    /// the defending side, keeper included.
+    pub fn from_positions(
+        carrier: Vector3<f32>,
+        goal: Vector3<f32>,
+        fouler: Vector3<f32>,
+        defenders: impl Iterator<Item = (Vector3<f32>, bool)>,
+    ) -> Self {
+        let to_goal = Vector3::new(goal.x - carrier.x, goal.y - carrier.y, 0.0);
+        let distance_to_goal_units = to_goal.norm();
+        let dir = if distance_to_goal_units > 0.0 {
+            to_goal / distance_to_goal_units
+        } else {
+            to_goal
+        };
+        let mut behind = 0u8;
+        let mut lane_open = true;
+        for (at, is_keeper) in defenders {
+            let rel = Vector3::new(at.x - carrier.x, at.y - carrier.y, 0.0);
+            let along = rel.dot(&dir);
+            if along <= 0.0 || along >= distance_to_goal_units {
+                continue;
+            }
+            behind = behind.saturating_add(1);
+            let across = (rel - dir * along).norm();
+            if !is_keeper && across < Self::LANE_HALF_WIDTH {
+                lane_open = false;
+            }
+        }
+        CounterAttackThreat {
+            lane_open,
+            defenders_behind_ball: behind,
+            distance_to_goal_units,
+            fouler_distance_units: (fouler - carrier).norm(),
+        }
+    }
+
     pub fn is_dogso_zone(&self) -> bool {
         self.distance_to_goal_units < 260.0
     }
@@ -108,6 +152,33 @@ mod tests {
             distance_to_goal_units: 220.0,
             fouler_distance_units: 5.0,
         }
+    }
+
+    #[test]
+    fn a_runner_with_only_the_keeper_to_beat_has_an_open_lane() {
+        let carrier = Vector3::new(150.0, 272.0, 0.0);
+        let goal = Vector3::new(0.0, 272.0, 0.0);
+        let fouler = Vector3::new(156.0, 270.0, 0.0);
+        let keeper = (Vector3::new(10.0, 272.0, 0.0), true);
+        let beaten = (Vector3::new(200.0, 260.0, 0.0), false);
+        let threat =
+            CounterAttackThreat::from_positions(carrier, goal, fouler, [keeper, beaten].into_iter());
+        assert!(threat.lane_open);
+        assert_eq!(threat.defenders_behind_ball, 1);
+        assert!(threat.is_dogso_zone());
+    }
+
+    #[test]
+    fn a_covering_defender_on_the_line_closes_the_lane() {
+        let carrier = Vector3::new(150.0, 272.0, 0.0);
+        let goal = Vector3::new(0.0, 272.0, 0.0);
+        let fouler = Vector3::new(156.0, 270.0, 0.0);
+        let keeper = (Vector3::new(10.0, 272.0, 0.0), true);
+        let cover = (Vector3::new(80.0, 280.0, 0.0), false);
+        let threat =
+            CounterAttackThreat::from_positions(carrier, goal, fouler, [keeper, cover].into_iter());
+        assert!(!threat.lane_open);
+        assert_eq!(threat.defenders_behind_ball, 2);
     }
 
     #[test]

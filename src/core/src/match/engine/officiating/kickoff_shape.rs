@@ -107,7 +107,7 @@ impl KickoffShape {
             .filter(|p| {
                 p.side == Some(side)
                     && p.id != taker_id
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper
             })
@@ -151,7 +151,7 @@ impl KickoffShape {
         let own_half = Vector3::new(-defending.forward_dir_x(), 0.0, 0.0);
         for player in players
             .iter()
-            .filter(|p| p.side == Some(defending) && !p.is_sent_off)
+            .filter(|p| p.side == Some(defending) && !p.off_pitch)
         {
             let away = player.position - spot;
             if away.norm_squared() >= Self::CIRCLE * Self::CIRCLE {

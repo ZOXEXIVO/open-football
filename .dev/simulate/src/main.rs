@@ -27,7 +27,7 @@ use core::PlayerFieldPositionGroup;
 use core::club::staff::perception::{
     AbilityEstimator, CoachEye, EstimationContext, PotentialEstimator,
 };
-use core::r#match::FieldSquad;
+use core::r#match::{FieldSquad, Pitch, Weather};
 use core::utils::DateUtils;
 use core::continent::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
@@ -282,6 +282,12 @@ fn main() {
     // lines that would swamp the per-day timing); raise with RUST_LOG.
     env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
 
+    // The breakthrough census needs the stub to credit who played. Set
+    // before world generation starts the first worker thread.
+    if std::env::args().nth(1).is_some_and(|a| a == "keeper-breakthrough") {
+        unsafe { std::env::set_var("OF_STUB_MINUTES", "1") };
+    }
+
     // Accept `dev_simulate [days]` or `dev_simulate bench [days]`: take the
     // first argument that parses as a day count so both spellings work.
     let days = std::env::args()
@@ -314,6 +320,18 @@ fn main() {
         return;
     }
 
+    // `dev_simulate injuries [days]` — the season injury census: every
+    // injury the world's club players picked up over the run, from every
+    // source, read off the per-player injury counter at both ends.
+    if args.first().map(|a| a == "injuries").unwrap_or(false) {
+        let before = InjuryCensus::take(&harness.data);
+        for _ in 0..days {
+            harness.tick();
+        }
+        InjuryCensus::take(&harness.data).print_since(&before, days);
+        return;
+    }
+
     // `dev_simulate clash [days]` — the fixture-calendar census: players
     // named twice on one day, teams playing twice on one day, first teams
     // inside the rest gap, and when the day's domestic fixtures kick off.
@@ -326,6 +344,32 @@ fn main() {
             census.record(date, &result, &harness.data);
         }
         census.print();
+        return;
+    }
+
+    // `dev_simulate keeper-breakthrough [seasons]` — the age at which a
+    // world's keepers become regulars; see `KeeperBreakthroughCensus`.
+    if args.first().map(|a| a == "keeper-breakthrough").unwrap_or(false) {
+        let seasons = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(10);
+        let census = KeeperBreakthroughCensus::new(&harness.data);
+        let run = Instant::now();
+        // A season's history folds at the start of the next, a week on.
+        for day in 1..=seasons * 365 + 7 {
+            harness.tick();
+            if day % 365 == 0 {
+                eprintln!(
+                    "season {} done — {} after {:.1} min",
+                    day / 365,
+                    harness.data.date.date(),
+                    run.elapsed().as_secs_f64() / 60.0
+                );
+            }
+        }
+        census.print(&harness.data);
         return;
     }
 
@@ -355,6 +399,51 @@ fn main() {
     }
 
     harness.bench(days);
+}
+
+/// Every club player's injury counter summed, and how many are injured
+/// right now. The difference between two takes is every injury picked up
+/// in between, whatever caused it.
+struct InjuryCensus {
+    players: u64,
+    injuries: u64,
+    injured_now: u64,
+}
+
+impl InjuryCensus {
+    fn take(data: &SimulatorData) -> Self {
+        let mut census = InjuryCensus {
+            players: 0,
+            injuries: 0,
+            injured_now: 0,
+        };
+        for club in data
+            .continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|c| &c.clubs)
+        {
+            for team in &club.teams.teams {
+                for p in team.players.iter() {
+                    census.players += 1;
+                    census.injuries += p.player_attributes.injury_count as u64;
+                    census.injured_now += p.player_attributes.is_injured as u64;
+                }
+            }
+        }
+        census
+    }
+
+    fn print_since(&self, before: &InjuryCensus, days: u32) {
+        let new = self.injuries.saturating_sub(before.injuries);
+        println!(
+            "--- INJURIES over {days} days --- {new} new across {} club players ({:.2} per 1000 player-days), {} injured at the end (were {})",
+            self.players,
+            new as f64 * 1000.0 / (self.players.max(1) as f64 * days.max(1) as f64),
+            self.injured_now,
+            before.injured_now,
+        );
+    }
 }
 
 /// The fixture-calendar census: everything the real game would never
@@ -980,6 +1069,9 @@ struct WorldMatchCensus {
     overall: MatchStatTotals,
     by_tactic: HashMap<&'static str, MatchStatTotals>,
     by_competition: HashMap<String, MatchStatTotals>,
+    /// What the fixtures were played in.
+    weather: HashMap<Weather, u32>,
+    pitch: HashMap<Pitch, u32>,
 }
 
 impl WorldMatchCensus {
@@ -996,6 +1088,8 @@ impl WorldMatchCensus {
                 continue;
             };
             self.matches += 1;
+            *self.weather.entry(details.weather).or_default() += 1;
+            *self.pitch.entry(details.pitch).or_default() += 1;
             for squad in [&details.left_team_players, &details.right_team_players] {
                 self.overall.add_team_match(details, squad);
                 self.by_competition
@@ -1025,6 +1119,22 @@ impl WorldMatchCensus {
             println!("\nno non-friendly match carried details — nothing to census");
             return;
         }
+        let shares = |counts: Vec<(String, u32)>| -> String {
+            let mut rows = counts;
+            rows.sort_by_key(|row| Reverse(row.1));
+            rows.iter()
+                .map(|(name, n)| format!("{name} {:.1}%", *n as f64 * 100.0 / self.matches as f64))
+                .collect::<Vec<_>>()
+                .join("  ")
+        };
+        println!(
+            "\n--- WEATHER --- {}",
+            shares(self.weather.iter().map(|(w, n)| (format!("{w:?}"), *n)).collect())
+        );
+        println!(
+            "--- PITCH --- {}",
+            shares(self.pitch.iter().map(|(p, n)| (format!("{p:?}"), *n)).collect())
+        );
         println!(
             "\n--- WORLD MATCH CENSUS ({} matches, per team-match) ---",
             self.matches
@@ -1577,5 +1687,167 @@ impl StarCensus {
             }
         }
         println!("\nno team with slug {slug}");
+    }
+}
+
+/// `dev_simulate keeper-breakthrough [seasons]` — when a world's keepers
+/// break through. Runs the shipped world for `seasons` seasons with
+/// `OF_STUB_MINUTES=1`, so the stubbed matches credit every starter, and
+/// reads league appearances from each player's folded season history:
+///
+/// * the age profile of 30-plus-appearance seasons from the third season
+///   on, keepers against outfielders;
+/// * among keepers aged 17 or younger at the start, the age of the first
+///   30-appearance season.
+///
+/// An age is the season's start year less the birth year, as in the
+/// database reference, which reads keeper 30-plus seasons at a median of
+/// 26 (11.3% at 20 or younger, 23.9% at 22 or younger), outfield ones at
+/// 24, and a young keeper's first such season at 22:
+///
+/// ```text
+/// gunzip -c src/database/src/data/database.db | jq -r '
+///   def kind: if .positions[0].code == "GK" then "keeper" else "outfield" end;
+///   [.players[] | kind as $k | (.birth_date[0:4] | tonumber) as $y
+///    | (.history // []) | group_by(.s)[]
+///    | {k: $k, age: (.[0].s - $y), apps: (map(.p // 0) | add)} | select(.apps >= 30)]
+///   | group_by(.k)[] | (map(.age) | sort) as $a | ($a | length) as $n
+///   | [.[0].k, $n, $a[$n / 2 | floor], ($a | map(select(. <= 20)) | length) / $n,
+///      ($a | map(select(. <= 22)) | length) / $n] | @tsv'
+/// ```
+struct KeeperBreakthroughCensus {
+    opening_season: u16,
+    /// Keepers aged 17 or younger when the world opens.
+    young_keepers: HashSet<u32>,
+}
+
+impl KeeperBreakthroughCensus {
+    const REGULAR_APPEARANCES: u16 = 30;
+    /// The first two seasons still carry the generated world's ages.
+    const FIRST_COUNTED_SEASON: u16 = 2;
+    const YOUNG_KEEPER_AGE: i32 = 17;
+
+    fn new(data: &SimulatorData) -> Self {
+        let opening_season = core::league::Season::from_date(data.date.date()).start_year;
+        let young_keepers = Self::players(data)
+            .filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper)
+            .filter(|p| opening_season as i32 - p.birth_date.year() <= Self::YOUNG_KEEPER_AGE)
+            .map(|p| p.id)
+            .collect();
+        KeeperBreakthroughCensus {
+            opening_season,
+            young_keepers,
+        }
+    }
+
+    /// Everyone whose career the world still holds: rostered, free and
+    /// retired.
+    fn players(data: &SimulatorData) -> impl Iterator<Item = &core::Player> {
+        data.continents
+            .iter()
+            .flat_map(|c| &c.countries)
+            .flat_map(|country| {
+                country
+                    .clubs
+                    .iter()
+                    .flat_map(|c| &c.teams.teams)
+                    .flat_map(|t| &t.players.players)
+                    .chain(&country.retired_players)
+            })
+            .chain(&data.free_agents)
+    }
+
+    /// League appearances per season played in this world, every spell
+    /// of a season summed.
+    fn seasons(&self, player: &core::Player) -> BTreeMap<u16, u16> {
+        let mut seasons = BTreeMap::new();
+        for item in &player.statistics_history.items {
+            let year = item.season.start_year;
+            if year >= self.opening_season {
+                *seasons.entry(year).or_default() +=
+                    item.statistics.played + item.statistics.played_subs;
+            }
+        }
+        seasons
+    }
+
+    fn print(&self, data: &SimulatorData) {
+        let mut regular: [Vec<i32>; 2] = [Vec::new(), Vec::new()];
+        let mut first_regular: Vec<i32> = Vec::new();
+        let mut seasons_folded = 0u16;
+        let mut by_season: BTreeMap<u16, [u32; 2]> = BTreeMap::new();
+        for player in Self::players(data) {
+            let keeper = player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper;
+            let born = player.birth_date.year();
+            let seasons = self.seasons(player);
+            if let Some((&last, _)) = seasons.last_key_value() {
+                seasons_folded = seasons_folded.max(last - self.opening_season + 1);
+            }
+            for (&year, &apps) in &seasons {
+                if apps < Self::REGULAR_APPEARANCES {
+                    continue;
+                }
+                by_season.entry(year).or_default()[keeper as usize] += 1;
+                if year >= self.opening_season + Self::FIRST_COUNTED_SEASON {
+                    regular[keeper as usize].push(year as i32 - born);
+                }
+            }
+            if self.young_keepers.contains(&player.id)
+                && let Some((&year, _)) = seasons
+                    .iter()
+                    .find(|(_, apps)| **apps >= Self::REGULAR_APPEARANCES)
+            {
+                first_regular.push(year as i32 - born);
+            }
+        }
+
+        println!(
+            "\nKEEPER BREAKTHROUGH — {seasons_folded} seasons folded since {}",
+            self.opening_season
+        );
+        let per_season: String = by_season
+            .iter()
+            .map(|(year, [outfield, keeper])| format!(" {year}:{keeper}/{outfield}"))
+            .collect();
+        println!("30-plus-appearance seasons by season (keeper/outfield):{per_season}");
+        println!(
+            "30-plus-appearance league seasons from season {}:",
+            Self::FIRST_COUNTED_SEASON + 1
+        );
+        let [outfield, keeper] = &mut regular;
+        for (label, ages) in [("keeper", keeper), ("outfield", outfield)] {
+            ages.sort_unstable();
+            let n = ages.len().max(1) as f32;
+            let share =
+                |limit: i32| ages.iter().filter(|&&a| a <= limit).count() as f32 / n * 100.0;
+            println!(
+                "  {label:>8}: {:>6} seasons  median {:>2}  <=20 {:>5.1}%  <=22 {:>5.1}%",
+                ages.len(),
+                ages.get(ages.len() / 2).copied().unwrap_or(0),
+                share(20),
+                share(22),
+            );
+            let mut by_age: BTreeMap<i32, u32> = BTreeMap::new();
+            for &age in ages.iter() {
+                *by_age.entry(age).or_default() += 1;
+            }
+            let row: String = by_age
+                .iter()
+                .map(|(age, count)| format!(" {age}:{:.1}", *count as f32 / n * 100.0))
+                .collect();
+            println!("            by age %{row}");
+        }
+        first_regular.sort_unstable();
+        println!(
+            "keepers aged {} or younger at the start: {} tracked, {} reached a {}-appearance season, first at median {}",
+            Self::YOUNG_KEEPER_AGE,
+            self.young_keepers.len(),
+            first_regular.len(),
+            Self::REGULAR_APPEARANCES,
+            first_regular
+                .get(first_regular.len() / 2)
+                .copied()
+                .unwrap_or(0),
+        );
     }
 }

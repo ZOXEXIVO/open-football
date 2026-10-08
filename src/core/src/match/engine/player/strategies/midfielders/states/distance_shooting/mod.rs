@@ -226,7 +226,7 @@ impl MidfielderDistanceShootingState {
         ctx: &StateProcessingContext,
         teammate: &MatchPlayerLite,
     ) -> bool {
-        // Check if there is a clear passing lane to a teammate without any obstructing opponents
+        // Nobody between him and the man he is passing to.
         let player_position = ctx.player.position;
         let teammate_position = teammate.position;
         let passing_direction = (teammate_position - player_position).normalize();
@@ -235,10 +235,10 @@ impl MidfielderDistanceShootingState {
             player_position,
             passing_direction,
             (teammate_position - player_position).magnitude(),
-            false,
+            &[ctx.player.id, teammate.id],
         );
 
-        ray_cast_result.is_none() // No collisions with opponents
+        ray_cast_result.is_none()
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {

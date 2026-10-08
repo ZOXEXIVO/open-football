@@ -2,9 +2,9 @@ use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
+use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::states::{
-    TackleDecision, TackleEngagement, TackleOutcome,
+    TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -86,6 +86,16 @@ impl StateProcessingHandler for ForwardTacklingState {
                 // whether he COMMITS, which `TackleDecision` already
                 // prices continuously, and the licence belongs to the
                 // challenge rather than to the entry tick.
+                if TacticalFoul::commits_now(ctx, opponent.position) {
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            FoulSeverity::Normal,
+                            FoulSource::ProfessionalFoul,
+                        )),
+                    ));
+                }
                 if !TackleEngagement::may_engage_carrier(ctx)
                     || !TackleDecision::is_eligible(ctx)
                     || !ctx
@@ -209,7 +219,7 @@ impl ForwardTacklingState {
             }
             TackleOutcome::Foul(severity) => StateChangeResult::with_forward_state_and_event(
                 ForwardState::Standing,
-                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+                Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
             TackleOutcome::Missed => StateChangeResult::with_forward_state(ForwardState::Pressing),
         }
@@ -272,7 +282,7 @@ impl ForwardTacklingState {
         // Calculate foul probability - more refined
         let foul_base_risk = FOUL_CHANCE_BASE;
         let aggression_risk = aggression * 0.1;
-        let desperation_risk = if ctx.team().is_loosing() && ctx.context.time.is_running_out() {
+        let desperation_risk = if ctx.team().is_loosing() && ctx.context.is_running_out() {
             0.05 // More desperate when losing late in game
         } else {
             0.0
@@ -295,6 +305,12 @@ impl ForwardTacklingState {
                 - skill_protection
         };
 
+        // Self-preservation on a booking, as in the other tackling states.
+        let foul_chance = if ctx.player.yellow_cards > 0 {
+            foul_chance * 0.70
+        } else {
+            foul_chance
+        };
         let foul_chance = foul_chance.clamp(0.0, 0.4); // Cap maximum foul chance
         let committed_foul = rng.random::<f32>() < foul_chance;
 

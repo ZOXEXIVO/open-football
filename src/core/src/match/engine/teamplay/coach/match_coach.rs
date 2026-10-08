@@ -8,6 +8,7 @@
 //! [`MatchContext::score_reaction_threshold`].
 
 use crate::r#match::MatchContext;
+use crate::r#match::engine::flow::arena::formation_variant::FormationLine;
 use crate::r#match::engine::teamplay::coach::instruction::{
     CoachInstruction, InstructionCoefficients,
 };
@@ -291,6 +292,7 @@ impl MatchCoach {
     pub fn evaluate_with_metrics(
         &mut self,
         score_diff: i8,
+        player_deficit: i8,
         match_progress: f32,
         avg_team_condition: f32,
         current_tick: u64,
@@ -356,6 +358,33 @@ impl MatchCoach {
             )
         {
             self.instruction = CoachInstruction::Normal;
+        }
+
+        self.instruction = self
+            .instruction
+            .capped_at(Self::ambition_cap(score_diff, player_deficit));
+    }
+
+    /// The most a side `player_deficit` men short can ask of itself. With
+    /// nothing to chase it protects what it has; chasing, it still cannot
+    /// commit men it no longer has. Read from the first minute — the
+    /// missing man is on the pitch for everybody to see, unlike the score
+    /// the late-game reactions wait for.
+    fn ambition_cap(score_diff: i8, player_deficit: i8) -> f32 {
+        if player_deficit <= 0 {
+            return 1.0;
+        }
+        let room = if score_diff < 0 { 1.0 } else { 0.5 };
+        room - 0.2 * player_deficit as f32
+    }
+
+    /// The line this coach gives up a man from when his side goes short:
+    /// the midfield while he is chasing the game, the attack otherwise.
+    pub fn spare_line(&self) -> FormationLine {
+        if self.instruction.ambition() > CoachInstruction::Normal.ambition() {
+            FormationLine::Midfield
+        } else {
+            FormationLine::Attack
         }
     }
 }

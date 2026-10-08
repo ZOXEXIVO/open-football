@@ -5300,7 +5300,13 @@ mod book_floor_tests {
                 .unwrap();
             player.sold_from = Some((99, Self::PAID));
             player.last_transfer_date = Some(last_transfer);
-            player.install_permanent_contract(contract_started, 6000, 6000, Some(2_000_000));
+            player.install_permanent_contract_with_terms(
+                contract_started,
+                6000,
+                6000,
+                Some(2_000_000),
+                None,
+            );
             if let Some(contract) = player.contract.as_mut() {
                 contract.started = Some(contract_started);
             }

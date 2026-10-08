@@ -1,8 +1,13 @@
 use super::distances::TackleEngagement;
 use crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::context::PenaltyArea;
+use crate::r#match::engine::officiating::management::{CounterAttackThreat, ProfessionalFoul};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
+use crate::r#match::player::strategies::players::ops::skill::traits_bias::{
+    defending_bias, personality_bias,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     MATCH_TIME_INCREMENT_MS, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext,
@@ -92,6 +97,56 @@ impl EngagementClock {
     #[inline]
     pub fn per_tick(rate: f32, window: f32) -> f32 {
         1.0 - (1.0 - rate).powf(Self::TICK_SECONDS / window)
+    }
+}
+
+/// **Bringing a breaking man down on purpose.** The cynical foul a
+/// defender commits when the carrier is through on goal with the lane open
+/// and almost nobody left behind him — rolled at the same cadence as any
+/// other challenge he could make, and only ever in contact range. The odds
+/// are `ProfessionalFoul::commit_prob`: an aggressive, calculating man
+/// with a lead to protect late on does it, a sporting one or one already
+/// on a yellow mostly does not.
+pub struct TacticalFoul;
+
+impl TacticalFoul {
+    /// Window the commit odds are quoted over, as for a tackle.
+    const RATE_WINDOW: f32 = 1.0;
+
+    pub fn threat(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> CounterAttackThreat {
+        let goal = ctx.ball().direction_to_own_goal();
+        CounterAttackThreat::from_positions(
+            carrier,
+            goal,
+            ctx.player.position,
+            ctx.players().teammates().all().map(|mate| {
+                (
+                    mate.position,
+                    mate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper,
+                )
+            }),
+        )
+    }
+
+    /// Whether he brings the carrier down on this AI tick.
+    pub fn commits_now(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> bool {
+        let threat = Self::threat(ctx, carrier);
+        let minute = (ctx.context.total_match_time / 60_000) as u32;
+        let desperation = if ctx.team().score_diff() >= 0 && ctx.context.is_running_out() {
+            1.0
+        } else {
+            0.5
+        };
+        let p = ProfessionalFoul::commit_prob(
+            threat,
+            ctx.player.skills.mental.aggression,
+            ctx.player.skills.mental.decisions,
+            ctx.player.attributes.sportsmanship,
+            desperation,
+            minute,
+            ctx.player.yellow_cards > 0,
+        );
+        p > 0.0 && ctx.context.rng.bernoulli(EngagementClock::per_tick(p, Self::RATE_WINDOW))
     }
 }
 
@@ -379,11 +434,35 @@ impl TackleDecision {
             * timing
             * reach
             * Self::urgency(ctx)
-            * Self::box_restraint(ctx))
+            * Self::box_restraint(ctx)
+            * Self::booked_caution(ctx)
+            * Self::trait_temper(ctx))
         .clamp(0.0, 0.55);
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::DuelDiag::note_decision(p, PenaltyRisk::in_own_box(ctx));
         p
+    }
+
+    /// A man on a yellow picks his moments, because the next mistimed one
+    /// is a red. A clear-headed player holds back more than a hothead.
+    /// Read where he decides whether to go in, not after he has — a booked
+    /// player who commits is no less likely to get it wrong.
+    pub fn booked_caution(ctx: &StateProcessingContext) -> f32 {
+        if ctx.player.yellow_cards == 0 {
+            return 1.0;
+        }
+        let decisions = (ctx.player.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
+        let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        (0.80 - 0.25 * decisions + 0.15 * aggression).clamp(0.5, 0.95)
+    }
+
+    /// His own nature: a man who dives into tackles goes in more readily,
+    /// one who stays on his feet less, and one who winds opponents up
+    /// carries the needle into every duel.
+    pub fn trait_temper(ctx: &StateProcessingContext) -> f32 {
+        let diving_in = defending_bias(ctx.player).tackle_attempt_threshold_delta;
+        let needle = personality_bias(ctx.player).own_card_risk_delta;
+        (1.0 - diving_in * 2.5 + needle * 5.0).clamp(0.5, 1.6)
     }
 
     /// How much the state of the match makes this defender go and get it.
@@ -779,7 +858,9 @@ impl RecoveryChallenge {
             * desperation
             * stretch
             * necessity
-            * TackleDecision::box_restraint(ctx))
+            * TackleDecision::box_restraint(ctx)
+            * TackleDecision::booked_caution(ctx)
+            * TackleDecision::trait_temper(ctx))
         .clamp(0.0, 0.45);
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RecoveryDiag::note_decision(p);
@@ -808,9 +889,7 @@ impl RecoveryChallenge {
         let rng = &ctx.context.rng;
         let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
         let beaten = Self::beaten(lead);
-        let over = ((distance - TackleEngagement::CONTACT)
-            / (Self::REACH - TackleEngagement::CONTACT))
-            .clamp(0.0, 1.0);
+        let over = Self::over(ctx, distance);
 
         // Winning it. The duel is the same contest of ability the block
         // tackle scores — `defensive_duel` against the carry — handicapped
@@ -820,7 +899,9 @@ impl RecoveryChallenge {
         // hoping.
         let handicap = 0.55 + beaten * 0.85 + over * 0.55;
         let raw_diff = defender_score - attacker_score - handicap * 0.45;
-        let success = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.05, 0.40);
+        let success = (1.0 / (1.0 + (-raw_diff * 2.4).exp())
+            + ctx.context.conditions.sliding_tackle_success)
+            .clamp(0.05, 0.40);
         let won = rng.random::<f32>() < success;
 
         // Fouling. A block tackle that misses often just misses; a
@@ -878,6 +959,15 @@ impl RecoveryChallenge {
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RecoveryDiag::note_attempt(won, fouled, distance, lead);
         TackleOutcome::of(won, fouled, severity)
+    }
+
+    /// How far past contact range he is reaching, 0..1. A wet surface
+    /// carries a slide, so the same reach is less of a stretch on it — the
+    /// reach itself stays the distance a man can play a ball from.
+    fn over(ctx: &StateProcessingContext, distance: f32) -> f32 {
+        let carry = ctx.context.conditions.slide_tackle_range_units;
+        ((distance - TackleEngagement::CONTACT - carry) / (Self::REACH - TackleEngagement::CONTACT))
+            .clamp(0.0, 1.0)
     }
 
     /// Diagnostic switch: with `OF_NO_RECOVERY_TACKLE` set, a beaten
@@ -1043,7 +1133,14 @@ impl ContactFoul {
             1.0
         };
 
-        (Self::BASE * temperament * desperation * closeness * box_restraint).clamp(0.0, 0.30)
+        (Self::BASE
+            * temperament
+            * desperation
+            * closeness
+            * box_restraint
+            * TackleDecision::booked_caution(ctx)
+            * TackleDecision::trait_temper(ctx))
+        .clamp(0.0, 0.30)
     }
 
     /// Severity of a non-tackle foul. These are overwhelmingly cynical

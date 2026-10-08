@@ -184,7 +184,7 @@ fn a_taker_who_never_arrives_is_placed_rather_than_waited_for() {
         let players = field.players.clone();
         field
             .ball
-            .tick_awaited_restart(&context, &players, &mut events);
+            .tick_awaited_restart(&mut context, &players, &mut events);
     }
 
     assert!(

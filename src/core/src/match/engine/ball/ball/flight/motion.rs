@@ -289,13 +289,14 @@ impl Ball {
             self.velocity.z = max_vertical;
         }
 
-        let mut velocity_norm_sq = self.velocity.norm_squared();
+        // One unit for the cap and for the drag below — see
+        // `Ball::flight_speed`.
+        let mut velocity_norm = Ball::flight_speed(self.velocity);
 
         // Clamp velocity if it exceeds maximum
-        if velocity_norm_sq > MAX_VELOCITY * MAX_VELOCITY {
-            let velocity_norm = velocity_norm_sq.sqrt();
+        if velocity_norm > MAX_VELOCITY {
             self.velocity *= MAX_VELOCITY / velocity_norm;
-            velocity_norm_sq = MAX_VELOCITY * MAX_VELOCITY;
+            velocity_norm = MAX_VELOCITY;
         }
 
         // GROUND COLLISION FIRST.
@@ -374,8 +375,7 @@ impl Ball {
         // Anything above the deck therefore takes the aerial branch however
         // slowly it is moving, and gravity brings it down at gravity's pace.
         let airborne = self.position.z > 0.1 || self.velocity.z > 0.0;
-        if velocity_norm_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD || airborne {
-            let velocity_norm = velocity_norm_sq.sqrt();
+        if velocity_norm > STOPPING_THRESHOLD || airborne {
             // A ball that has just bounced is on its way UP, so it is not
             // rolling however low it is.
             let is_on_ground = self.position.z <= 0.1 && self.velocity.z <= 0.0;

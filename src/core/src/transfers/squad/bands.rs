@@ -46,6 +46,17 @@ impl LevelBand {
         Self::of(level, group, &ClubLevelAnchor::for_reputation(score))
     }
 
+    /// The band a player at `band` here occupies at a club whose standard
+    /// of football is `drop` lower (negative: higher), clamped to the band
+    /// range.
+    pub fn below_standard(band: f32, drop: f32) -> f32 {
+        (band + drop * Self::PER_STANDARD).clamp(Self::MIN, Self::MAX)
+    }
+
+    /// A unit of standard is a mean attribute of 20, which is 380 ability
+    /// points (CA = 19·avg − 110), over a band `ROTATION_BAND` points wide.
+    const PER_STANDARD: f32 = 19.0 * 20.0 / ClubLevelAnchor::ROTATION_BAND as f32;
+
     /// How well a band matches what somebody meant him to be playing at,
     /// 1.0 for a match and 0.0 a full level away.
     pub fn fit(band: f32, target: f32) -> f32 {
@@ -272,5 +283,16 @@ mod tests {
             LevelBand::at_reputation(player.player_attributes.current_ability, group, 0.7),
             "so a band built on the wrong one places him at the wrong club"
         );
+    }
+
+    #[test]
+    fn a_club_a_division_down_reads_a_division_up() {
+        // One level of the generator moves a squad's standard 0.0295 and its
+        // ability about eleven points, which is about one division of band.
+        let here = 0.2;
+        let below = LevelBand::below_standard(here, 0.0295);
+        assert!((below - here - LevelBand::ONE_LEVEL).abs() < 0.05, "{below}");
+        assert!(LevelBand::below_standard(here, -0.03) < here);
+        assert_eq!(LevelBand::below_standard(here, 1.0), LevelBand::MAX);
     }
 }

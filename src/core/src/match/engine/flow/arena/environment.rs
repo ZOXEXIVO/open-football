@@ -1,11 +1,17 @@
-/// Match environment: weather, pitch, crowd, importance.
-///
-/// Pure data + clamp helpers. Consumed by passing/shooting/first-touch/
-/// fatigue/injury logic via `EnvModifiers`. RNG belongs at event resolution
-/// — this module only returns deterministic deltas.
+//! Match environment: weather, pitch, crowd, importance.
+//!
+//! Drawn once per fixture (`MatchEnvironment::for_fixture`), then pure
+//! data: consumed by passing/shooting/first-touch/fatigue/injury logic via
+//! `EnvModifiers`, which only returns deterministic deltas.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::r#match::engine::flow::context::rng::MatchRng;
+use crate::r#match::FixtureContext;
+use chrono::Datelike;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Weather {
+    #[default]
     Clear,
     Rain,
     HeavyRain,
@@ -15,9 +21,10 @@ pub enum Weather {
     Cold,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Pitch {
     Perfect,
+    #[default]
     Normal,
     Worn,
     Wet,
@@ -25,7 +32,7 @@ pub enum Pitch {
     DryFast,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MatchEnvironment {
     pub weather: Weather,
     pub pitch: Pitch,
@@ -55,32 +62,26 @@ impl Default for MatchEnvironment {
     }
 }
 
-/// Multiplicative/additive deltas the environment applies to specific
-/// match-engine quantities. All deltas are *added* to a baseline that
-/// callers normally clamp to [0,1] for probabilities or to skill-bounded
-/// values for accuracy. Callers are responsible for clamping after combining.
-///
-/// **Live consumers** (read by hot-path code):
-///   * `pass_accuracy` / `long_pass_accuracy` — `PassEvaluator`
-///   * `goalkeeper_handling` — physics save resolution in
-///     `ball/interactions.rs`
-///   * `injury_risk` — in-match injury rolls in
-///     `substitution/substitutions.rs`
-///
-/// **Deferred** (computed by weather / pitch tables, no live consumer
-/// yet — kept on the struct so they don't need re-derivation when the
-/// downstream wiring lands):
-///   * `first_touch`, `cross_accuracy`, `shot_accuracy_long`,
-///     `goalkeeper_claim_cross`, `sliding_tackle_success`,
-///     `long_shot_rebound_chance`, `fatigue_rate`, `recovery_rate`,
-///     `high_press_intensity_cap`, `dribble_control`,
-///     `dribble_success`, `ball_roll_speed`, `pass_speed`,
-///     `acceleration`, `slide_tackle_range_units`,
-///     `early_touch_penalty_first_15min`.
-///
-/// When wiring a deferred field, add the consumer site below this
-/// docstring and move the field into the "live consumers" list so the
-/// audit stays trustworthy.
+/// The deltas the weather and the pitch put on the match, drawn once per
+/// match onto `MatchContext::conditions`. Each is added to the baseline it
+/// shifts (or to 1 for a rate); callers clamp after combining. Where each
+/// one is read:
+///   * `pass_accuracy` / `long_pass_accuracy` — the pass evaluator
+///   * `first_touch`, `early_touch_penalty_first_15min` — the reception
+///     miscontrol roll
+///   * `cross_accuracy` — the cross's execution error
+///   * `shot_accuracy_long` — the accuracy of a strike from outside the area
+///   * `goalkeeper_handling`, `long_shot_rebound_chance` — the save roll
+///   * `goalkeeper_claim_cross` — the keeper's claim in the cross and
+///     corner contests
+///   * `sliding_tackle_success`, `slide_tackle_range_units` — the slide
+///     and the stretch
+///   * `injury_risk` — the in-match injury rolls
+///   * `fatigue_rate` / `recovery_rate` — the condition processor
+///   * `high_press_intensity_cap` — the tactical press ceiling
+///   * `dribble_control` / `dribble_success` — the dribble duel
+///   * `ball_roll_speed` / `pass_speed` — `Ball::pass_pace`
+///   * `acceleration` — the sprint ramp
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EnvModifiers {
     pub pass_accuracy: f32,
@@ -106,6 +107,18 @@ pub struct EnvModifiers {
 }
 
 impl EnvModifiers {
+    /// What the conditions do to a first touch at `minute`: a wet ball
+    /// skids off the boot, and on a cold afternoon nobody's touch is
+    /// right for the first quarter of an hour.
+    pub fn touch(&self, minute: u32) -> f32 {
+        let cold_start = if minute < 15 {
+            self.early_touch_penalty_first_15min
+        } else {
+            0.0
+        };
+        self.first_touch + cold_start
+    }
+
     /// Combine two modifier sets (used to fold weather + pitch together).
     pub fn combine(mut self, other: EnvModifiers) -> EnvModifiers {
         self.pass_accuracy += other.pass_accuracy;
@@ -132,9 +145,57 @@ impl EnvModifiers {
     }
 }
 
+/// The quarter of the football year a fixture falls in, at its ground.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Season {
+    Winter,
+    Spring,
+    Summer,
+    Autumn,
+}
+
+impl Season {
+    pub fn of(fixture: &FixtureContext) -> Self {
+        let month = fixture.date.month();
+        let month = if fixture.southern { (month + 5) % 12 + 1 } else { month };
+        match month {
+            12 | 1 | 2 => Season::Winter,
+            3..=5 => Season::Spring,
+            6..=8 => Season::Summer,
+            _ => Season::Autumn,
+        }
+    }
+}
+
 impl MatchEnvironment {
+    /// Six in ten of every crowd is the ground itself; the rest is what
+    /// the match means.
+    const CROWD_FROM_GATE: f32 = 0.6;
+
+    /// The match this fixture is played in: weather for the season at
+    /// its ground, a pitch to go with it, a crowd from how full the
+    /// ground is and what is at stake, and the rivalry. The same fixture
+    /// always draws the same.
+    pub fn for_fixture(fixture: &FixtureContext) -> Self {
+        let rng = MatchRng::from_seed(fixture.seed);
+        let season = Season::of(fixture);
+        let weather = Weather::draw(season, rng.unit_f32());
+        let pitch = Pitch::draw(weather, season, rng.unit_f32());
+        let mut environment = MatchEnvironment {
+            weather,
+            pitch,
+            crowd_intensity: fixture.gate
+                * (Self::CROWD_FROM_GATE + (1.0 - Self::CROWD_FROM_GATE) * fixture.importance),
+            home_advantage: 0.35 + 0.30 * fixture.gate,
+            match_importance: fixture.importance,
+            derby_intensity: fixture.rivalry,
+        };
+        environment.clamp_inputs();
+        environment
+    }
+
     pub fn modifiers(&self) -> EnvModifiers {
-        weather_modifiers(self.weather).combine(pitch_modifiers(self.pitch))
+        self.weather.modifiers().combine(self.pitch.modifiers())
     }
 
     pub fn clamp_inputs(&mut self) {
@@ -145,9 +206,45 @@ impl MatchEnvironment {
     }
 }
 
-fn weather_modifiers(w: Weather) -> EnvModifiers {
-    let mut m = EnvModifiers::default();
-    match w {
+impl Weather {
+    /// Cumulative odds per season, in declaration order (clear, rain,
+    /// heavy rain, wind, snow, hot, cold).
+    const ODDS: [(Season, [f32; 7]); 4] = [
+        (Season::Winter, [0.38, 0.22, 0.08, 0.10, 0.07, 0.00, 0.15]),
+        (Season::Spring, [0.48, 0.22, 0.06, 0.12, 0.01, 0.06, 0.05]),
+        (Season::Summer, [0.55, 0.12, 0.04, 0.07, 0.00, 0.22, 0.00]),
+        (Season::Autumn, [0.42, 0.24, 0.08, 0.14, 0.01, 0.04, 0.07]),
+    ];
+    pub const ALL: [Weather; 7] = [
+        Weather::Clear,
+        Weather::Rain,
+        Weather::HeavyRain,
+        Weather::Wind,
+        Weather::Snow,
+        Weather::Hot,
+        Weather::Cold,
+    ];
+
+    /// The weather a `roll` in 0..1 draws in `season`.
+    pub fn draw(season: Season, roll: f32) -> Self {
+        let odds = Self::ODDS
+            .iter()
+            .find(|(s, _)| *s == season)
+            .map(|(_, odds)| odds)
+            .unwrap_or(&Self::ODDS[0].1);
+        let mut cumulative = 0.0;
+        for (weather, chance) in Self::ALL.into_iter().zip(odds) {
+            cumulative += chance;
+            if roll < cumulative {
+                return weather;
+            }
+        }
+        Weather::Clear
+    }
+
+    pub fn modifiers(self) -> EnvModifiers {
+        let mut m = EnvModifiers::default();
+        match self {
         Weather::Clear => {}
         Weather::Rain => {
             m.pass_accuracy = -0.04;
@@ -189,11 +286,45 @@ fn weather_modifiers(w: Weather) -> EnvModifiers {
         }
     }
     m
+    }
 }
 
-fn pitch_modifiers(p: Pitch) -> EnvModifiers {
-    let mut m = EnvModifiers::default();
-    match p {
+impl Pitch {
+    /// The surface a `roll` in 0..1 draws under `weather` in `season`:
+    /// rain makes it wet or muddy, snow muddy or worn, heat dry and fast,
+    /// and otherwise it is the groundsman's.
+    pub fn draw(weather: Weather, season: Season, roll: f32) -> Self {
+        let odds: &[(Pitch, f32)] = match weather {
+            Weather::HeavyRain => &[(Pitch::Muddy, 0.55), (Pitch::Wet, 0.45)],
+            Weather::Rain => &[(Pitch::Wet, 0.60), (Pitch::Normal, 0.30), (Pitch::Muddy, 0.10)],
+            Weather::Snow => &[(Pitch::Muddy, 0.50), (Pitch::Worn, 0.50)],
+            Weather::Hot => &[(Pitch::DryFast, 0.60), (Pitch::Normal, 0.30), (Pitch::Worn, 0.10)],
+            _ if season == Season::Summer => &[
+                (Pitch::Perfect, 0.25),
+                (Pitch::Normal, 0.50),
+                (Pitch::DryFast, 0.20),
+                (Pitch::Worn, 0.05),
+            ],
+            _ => &[
+                (Pitch::Perfect, 0.15),
+                (Pitch::Normal, 0.60),
+                (Pitch::Worn, 0.20),
+                (Pitch::DryFast, 0.05),
+            ],
+        };
+        let mut cumulative = 0.0;
+        for (pitch, chance) in odds {
+            cumulative += chance;
+            if roll < cumulative {
+                return *pitch;
+            }
+        }
+        odds[odds.len() - 1].0
+    }
+
+    pub fn modifiers(self) -> EnvModifiers {
+        let mut m = EnvModifiers::default();
+        match self {
         Pitch::Perfect => {
             m.pass_accuracy = 0.02;
             m.first_touch = 0.02;
@@ -223,6 +354,7 @@ fn pitch_modifiers(p: Pitch) -> EnvModifiers {
         }
     }
     m
+    }
 }
 
 #[cfg(test)]

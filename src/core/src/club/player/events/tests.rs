@@ -7,12 +7,14 @@
 //! would duplicate ~50 lines of boilerplate per file with no payoff.
 
 use super::types::{MatchOutcome, MatchParticipation, MatchTeamRef};
-use crate::club::mind::organs::memory::ActorRef;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::player::mind::KickoffMind;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::player::Player;
 use crate::league::Season;
 use crate::r#match::engine::result::PlayerMatchEndStats;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::shared::fullname::FullName;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, PersonAttributes,
@@ -138,6 +140,8 @@ fn outcome<'a>(
         opponent_club_id: None,
         played_for: None,
         club_id: 7,
+        standard_of_football: MatchStandard::CALIBRATION,
+        penalties_saved: 0,
         match_season_year: 0,
         date: d(2026, 9, 1),
     }
@@ -459,6 +463,8 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
             league_name: "Premier League",
         }),
         club_id: 7,
+        standard_of_football: MatchStandard::CALIBRATION,
+        penalties_saved: 0,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };
@@ -513,6 +519,8 @@ fn home_appearance_books_to_player_statistics() {
             league_name: "Second Division B2",
         }),
         club_id: 7,
+        standard_of_football: MatchStandard::CALIBRATION,
+        penalties_saved: 0,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };
@@ -4267,6 +4275,8 @@ fn on_recognition_award_records_young_team_of_the_month_event() {
 // ════════════════════════════════════════════════════════════════════
 
 use crate::club::player::events::match_exertion::MatchExertionInputs;
+use crate::club::player::injury::InjurySeverity;
+use crate::r#match::engine::player::injury::InjuryGrade;
 
 /// Helper: build a snapshot for a player who starts at `start_cond`
 /// and finishes the shift at `final_energy` after `minutes`. Uses
@@ -4284,6 +4294,31 @@ fn make_snapshot(
         starting_condition: start_cond,
         final_match_energy: final_energy,
         high_intensity_load_hint: PositionLoad::high_intensity_share(group),
+        injury: None,
+    }
+}
+
+#[test]
+fn the_injury_carried_out_of_a_match_is_the_one_he_got_in_it() {
+    let injured_by = |grade: InjuryGrade| {
+        let mut p = fresh_player(PlayerPositionType::MidfielderCenter);
+        let inputs = MatchExertionInputs {
+            injury: Some(grade),
+            ..make_snapshot(&p, 70.0, 9000, 5000)
+        };
+        p.on_match_exertion(inputs, d(2025, 9, 14), false);
+        p.player_attributes.injury_type
+    };
+
+    // A knock he got up from leaves nothing, and no second roll is made.
+    for _ in 0..50 {
+        assert_eq!(injured_by(InjuryGrade::Knock), None);
+    }
+    let hurt = injured_by(InjuryGrade::Hurt).expect("a hurt is a minor injury");
+    assert_eq!(hurt.severity(), InjurySeverity::Minor);
+    for _ in 0..50 {
+        let serious = injured_by(InjuryGrade::Serious).expect("a serious injury persists");
+        assert_ne!(serious.severity(), InjurySeverity::Minor);
     }
 }
 
@@ -4332,6 +4367,7 @@ fn final_match_energy_snapshot_survives_substitutions_via_engine_path() {
         starting_condition: 9500,
         final_match_energy: 5500,
         high_intensity_load_hint: 0.32,
+        injury: None,
     };
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     let drop = pre - p.player_attributes.condition;
@@ -4414,6 +4450,7 @@ fn twenty_minute_substitute_has_small_condition_drop_and_readiness_gain() {
         starting_condition: 9500,
         final_match_energy: 8000,
         high_intensity_load_hint: 0.32,
+        injury: None,
     };
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     let drop = pre_cond - p.player_attributes.condition;
@@ -4472,6 +4509,7 @@ fn three_matches_in_fourteen_days_increases_congestion_cost() {
                 starting_condition: 9500,
                 final_match_energy: 4000,
                 high_intensity_load_hint: 0.30,
+                injury: None,
             },
             1.05,
             0.30,
@@ -4772,6 +4810,7 @@ fn compute_condition_drop_keeper_90_smaller_than_wingback_90() {
             starting_condition: 9500,
             final_match_energy: 4000,
             high_intensity_load_hint: 0.05,
+            injury: None,
         },
         0.45, // GK position factor
         0.05, // GK HI share
@@ -4787,6 +4826,7 @@ fn compute_condition_drop_keeper_90_smaller_than_wingback_90() {
             starting_condition: 9500,
             final_match_energy: 4000,
             high_intensity_load_hint: 0.20,
+            injury: None,
         },
         1.18, // wingback position factor
         0.20, // defender group HI share
@@ -4812,6 +4852,7 @@ fn compute_condition_drop_friendly_is_about_55pct_of_competitive() {
             starting_condition: 9500,
             final_match_energy: 4000,
             high_intensity_load_hint: 0.30,
+            injury: None,
         },
         1.05,
         0.30,
@@ -4827,6 +4868,7 @@ fn compute_condition_drop_friendly_is_about_55pct_of_competitive() {
             starting_condition: 9500,
             final_match_energy: 4000,
             high_intensity_load_hint: 0.30,
+            injury: None,
         },
         1.05,
         0.30,
@@ -4853,6 +4895,7 @@ fn compute_condition_drop_short_cameo_is_small_share_of_ninety() {
             starting_condition: 9500,
             final_match_energy: 8000,
             high_intensity_load_hint: 0.30,
+            injury: None,
         },
         1.05,
         0.30,
@@ -4868,6 +4911,7 @@ fn compute_condition_drop_short_cameo_is_small_share_of_ninety() {
             starting_condition: 9500,
             final_match_energy: 4000,
             high_intensity_load_hint: 0.30,
+            injury: None,
         },
         1.05,
         0.30,
@@ -4910,6 +4954,7 @@ fn low_starting_condition_is_not_lifted_by_match_exertion() {
         starting_condition: 1_500,
         final_match_energy: 1_500,
         high_intensity_load_hint: 0.30,
+        injury: None,
     };
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     assert!(
@@ -4933,6 +4978,7 @@ fn starting_above_floor_clamps_to_floor_not_below() {
         starting_condition: 9_500,
         final_match_energy: 1_500,
         high_intensity_load_hint: 0.40,
+        injury: None,
     };
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     assert!(
@@ -4954,6 +5000,7 @@ fn no_drop_when_zero_minutes_played() {
         starting_condition: 4_000,
         final_match_energy: 4_000,
         high_intensity_load_hint: 0.30,
+        injury: None,
     };
     p.on_match_exertion(inputs, d(2025, 9, 14), false);
     assert_eq!(p.player_attributes.condition, 4_000);
@@ -6864,4 +6911,101 @@ fn an_overlooked_official_match_moves_the_books_quietly() {
         before,
         "being overlooked is bookkeeping, not a grievance in his diary"
     );
+}
+
+fn remembers(p: &Player, kind: EpisodeKind) -> bool {
+    p.mind.memory().episodes.find(|e| e.kind == kind).is_some()
+}
+
+#[test]
+fn clean_sheets_lift_a_keeper_without_filling_his_memory() {
+    let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
+    for week in 0..20 {
+        let mut o = outcome(
+            &s,
+            6.8,
+            false,
+            false,
+            false,
+            false,
+            1,
+            0,
+            MatchParticipation::Starter,
+        );
+        o.date = d(2026, 9, 1) + chrono::Duration::days(week * 7);
+        p.on_match_played(&o);
+    }
+    assert!(p.mind.competitive.self_belief() > 0.0);
+    assert!(
+        p.mind.census().episodes <= 2,
+        "twenty shut-outs are not twenty memories: {}",
+        p.mind.census().episodes
+    );
+}
+
+#[test]
+fn a_heavy_defeat_without_an_error_is_not_a_costly_error() {
+    let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(4.6, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
+    let o = outcome(&s, 4.6, false, false, false, false, 0, 4, MatchParticipation::Starter);
+    p.on_match_played(&o);
+    assert!(!remembers(&p, EpisodeKind::CostlyError));
+}
+
+#[test]
+fn an_outfield_error_that_costs_a_goal_is_remembered() {
+    let mut p = build_player(PlayerPositionType::DefenderCenter, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let mut s = stats(6.1, 0, 0, 0, PlayerFieldPositionGroup::Defender);
+    s.errors_leading_to_shot = 1;
+    s.errors_leading_to_goal = 1;
+    let o = outcome(&s, 6.1, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    p.on_match_played(&o);
+    assert!(remembers(&p, EpisodeKind::CostlyError));
+    assert!(p.mind.competitive.self_belief() < 0.0);
+}
+
+#[test]
+fn a_penalty_save_is_remembered() {
+    let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(7.0, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
+    let mut o = outcome(&s, 7.0, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    o.penalties_saved = 1;
+    p.on_match_played(&o);
+    assert!(remembers(&p, EpisodeKind::PenaltySaved));
+    assert!(p.mind.competitive.self_belief() > 0.0);
+}
+
+#[test]
+fn career_length_is_invisible_at_kickoff() {
+    let veteran = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    let mut capped = veteran.clone();
+    capped.statistics.played = 300;
+    capped.player_attributes.international_apps = 60;
+    let day = Some(d(2026, 9, 1));
+    assert_eq!(veteran.kickoff_mind(day), capped.kickoff_mind(day));
+}
+
+#[test]
+fn a_match_teaches_the_standard_it_was_played_at() {
+    let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    p.made_senior_debut = true;
+    p.mind.competitive.seed_assurance(0.50);
+    let s = stats(6.8, 0, 0, 0, PlayerFieldPositionGroup::Goalkeeper);
+    let mut o = outcome(&s, 6.8, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    o.standard_of_football = 0.70;
+    p.on_match_played(&o);
+    assert!(p.mind.competitive.assurance() > 0.50);
+}
+
+#[test]
+fn a_synthetic_squad_kicks_off_neutral() {
+    let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
+    p.mind.competitive.seed_assurance(0.40);
+    assert_eq!(p.kickoff_mind(None), KickoffMind::neutral());
+    assert_eq!(p.kickoff_mind(Some(d(2026, 9, 1))).assurance, Some(0.40));
 }

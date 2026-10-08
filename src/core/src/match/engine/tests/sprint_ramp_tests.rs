@@ -87,7 +87,7 @@ fn ticks_to_speed(player: &mut MatchPlayer, fraction: f32) -> u32 {
     let desired = Vector3::new(max, 0.0, 0.0);
     player.velocity = Vector3::zeros();
     for tick in 1..=600 {
-        player.velocity = MovementEffort::sprint_ramp(player, 10, desired, max, max);
+        player.velocity = MovementEffort::sprint_ramp(player, 10, desired, max, max, 1.0);
         if player.velocity.norm() >= fraction * max {
             return tick;
         }
@@ -124,8 +124,8 @@ fn higher_acceleration_reaches_top_speed_sooner() {
         let mq = quick.max_speed_with_condition_cached();
         let ms = slow.max_speed_with_condition_cached();
         quick.velocity =
-            MovementEffort::sprint_ramp(&quick, 10, Vector3::new(mq, 0.0, 0.0), mq, mq);
-        slow.velocity = MovementEffort::sprint_ramp(&slow, 10, Vector3::new(ms, 0.0, 0.0), ms, ms);
+            MovementEffort::sprint_ramp(&quick, 10, Vector3::new(mq, 0.0, 0.0), mq, mq, 1.0);
+        slow.velocity = MovementEffort::sprint_ramp(&slow, 10, Vector3::new(ms, 0.0, 0.0), ms, ms, 1.0);
         // Positions integrate on BOTH sim ticks of each AI tick.
         d_quick += quick.velocity.x * 2.0;
         d_slow += slow.velocity.x * 2.0;
@@ -200,7 +200,7 @@ fn ramp_never_exceeds_athletic_ceiling() {
     let desired = Vector3::new(9.0, 4.0, 0.0);
     p.velocity = Vector3::zeros();
     for _ in 0..300 {
-        p.velocity = MovementEffort::sprint_ramp(&p, 10, desired, max, max);
+        p.velocity = MovementEffort::sprint_ramp(&p, 10, desired, max, max, 1.0);
         assert!(
             p.velocity.norm() <= max * 1.0001,
             "ramp exceeded athletic ceiling: {} > {max}",
@@ -220,7 +220,7 @@ fn sprint_reversal_transits_brake_then_reaccelerates() {
     let mut prev_x = p.velocity.x;
     let mut reversed_at = None;
     for tick in 1..=600 {
-        p.velocity = MovementEffort::sprint_ramp(&p, 10, desired, max, max);
+        p.velocity = MovementEffort::sprint_ramp(&p, 10, desired, max, max, 1.0);
         assert!(
             p.velocity.x < prev_x + 1e-6,
             "reversal must be monotonic in x, tick {tick}"

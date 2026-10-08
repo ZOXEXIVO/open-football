@@ -8,7 +8,7 @@ use crate::r#match::engine::player::strategies::common::{
 };
 use crate::r#match::midfielders::states::MidfielderState;
 
-pub use carry::{LaneAhead, TakeOn, U_PER_M};
+pub use carry::{CarryHeading, LaneAhead, TakeOn, U_PER_M};
 pub use role::{Archetype, MidfieldPlay, MidfieldRole, MidfieldSkillView};
 
 /// Where a midfielder's shape position is, and whether he is far enough
@@ -143,36 +143,34 @@ pub mod onball_diag {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[repr(usize)]
     pub enum Exit {
-        Corner = 0,
-        SnapshotShot = 1,
-        EmergencyClear = 2,
-        ShootClearChance = 3,
-        ShootHelper = 4,
-        ShootLayoff = 5,
-        TempoHold = 6,
-        PatientRecycle = 7,
-        PatientHold = 8,
-        CongestionPass = 9,
-        Carry = 10,
-        Dribble = 11,
-        CounterPass = 12,
-        OneTwo = 13,
-        DrawRelease = 14,
-        Cutback = 15,
-        Cross = 16,
-        Switch = 17,
-        TempoBackPass = 18,
-        ShouldPass = 19,
-        AntiOscillation = 20,
-        NoDecision = 21,
-        ForcedTakeOn = 22,
-        FlankRelease = 23,
-        ThroughBall = 24,
+        SnapshotShot = 0,
+        EmergencyClear = 1,
+        ShootClearChance = 2,
+        ShootHelper = 3,
+        ShootLayoff = 4,
+        TempoHold = 5,
+        PatientRecycle = 6,
+        PatientHold = 7,
+        CongestionPass = 8,
+        Carry = 9,
+        Dribble = 10,
+        CounterPass = 11,
+        OneTwo = 12,
+        DrawRelease = 13,
+        Cutback = 14,
+        Cross = 15,
+        Switch = 16,
+        TempoBackPass = 17,
+        ShouldPass = 18,
+        AntiOscillation = 19,
+        NoDecision = 20,
+        ForcedTakeOn = 21,
+        FlankRelease = 22,
+        ThroughBall = 23,
     }
 
-    pub const EXITS: usize = 25;
+    pub const EXITS: usize = 24;
     pub const NAMES: [&str; EXITS] = [
-        "corner",
         "snapshot-shot",
         "emergency-clear",
         "shoot:clear-chance",
@@ -261,7 +259,6 @@ pub mod onball_diag {
 pub mod onball_diag {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Exit {
-        Corner,
         SnapshotShot,
         EmergencyClear,
         ShootClearChance,

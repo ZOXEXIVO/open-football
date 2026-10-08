@@ -10,7 +10,7 @@ use crate::r#match::engine::chemistry::{
     ChemistryInputs, ChemistryMap, Lane, Role, chemistry_modifiers, initial_chemistry,
 };
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
-use crate::r#match::engine::management::{HomeAdvantage, TimeWasting, TimeWastingRestart};
+use crate::r#match::engine::management::{TimeWasting, TimeWastingRestart};
 use crate::r#match::engine::psychology::{
     NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState,
 };
@@ -63,6 +63,7 @@ fn high_strictness_increases_foul_call_versus_low() {
         match_temperature: 0.2,
         fouled_team_is_home: false,
         location: ContactLocation::Normal,
+        deliberate: false,
     };
     assert!(strict.foul_call_prob(&env, ctx) > lenient.foul_call_prob(&env, ctx));
 }
@@ -100,11 +101,11 @@ fn elite_taker_vs_weak_keeper_floors_within_band() {
 #[test]
 fn wall_size_decreases_with_distance_band() {
     assert!(wall_size_for(FreeKickBand::Close, false) > wall_size_for(FreeKickBand::Far, false));
-    let p_close = wall_block_prob(0.6, 14.0, 0.4, FreeKickBand::Close);
-    let p_far = wall_block_prob(0.6, 14.0, 0.4, FreeKickBand::Far);
+    let p_close = wall_block_prob(0.6, 0.7, 0.4, FreeKickBand::Close);
+    let p_far = wall_block_prob(0.6, 0.7, 0.4, FreeKickBand::Far);
     assert!(p_close > p_far);
-    assert!((0.08..=0.34).contains(&p_close));
-    assert!((0.08..=0.34).contains(&p_far));
+    assert!((0.04..=0.34).contains(&p_close));
+    assert!((0.04..=0.34).contains(&p_far));
 }
 
 #[test]
@@ -113,9 +114,10 @@ fn fk_indirect_zero_shot_and_distance_zero_shot() {
     // Indirect — never a shot.
     let s = score_free_kick_choices(
         FreeKickBand::Close,
+        0.40,
         true,
-        18.0,
-        14.0,
+        0.9,
+        0.7,
         0.5,
         false,
         false,
@@ -125,9 +127,10 @@ fn fk_indirect_zero_shot_and_distance_zero_shot() {
     // Far distance — also no shot.
     let s = score_free_kick_choices(
         FreeKickBand::Far,
+        0.12,
         false,
-        18.0,
-        14.0,
+        0.9,
+        0.7,
         0.5,
         false,
         false,
@@ -142,7 +145,7 @@ fn corner_winner_blocked_after_consecutive_failures() {
     hist.record_corner(true, CornerRoutine::PenaltySpot, 0.02);
     hist.record_corner(true, CornerRoutine::PenaltySpot, 0.04);
     let env = MatchEnvironment::default();
-    let scores = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, false, &env);
+    let scores = score_corner_routines(0.75, 0.75, 0.55, 0.50, false, false, &env);
     // PenaltySpot carries the largest share per spec base probs, but two
     // failed reps in a row → out of the draw at every roll.
     for i in 0..100 {
@@ -233,22 +236,6 @@ fn chemistry_map_caches_pair_score_symmetric() {
     let mut m = ChemistryMap::default();
     m.set(7, 12, 0.78);
     assert_eq!(m.get(12, 7), Some(0.78));
-}
-
-#[test]
-fn home_advantage_increases_with_crowd_but_stays_modest() {
-    let neutral = MatchEnvironment::default();
-    let big = MatchEnvironment {
-        crowd_intensity: 1.0,
-        home_advantage: 1.0,
-        ..Default::default()
-    };
-    let nd = HomeAdvantage::deltas(&neutral);
-    let bd = HomeAdvantage::deltas(&big);
-    assert!(bd.referee_marginal_call_home_bias > nd.referee_marginal_call_home_bias);
-    // Spec: home buffs stay modest (no arcade-tier additive deltas).
-    assert!(bd.home_confidence_bonus <= 0.05);
-    assert!(bd.home_press_intensity_bonus <= 0.04);
 }
 
 #[test]

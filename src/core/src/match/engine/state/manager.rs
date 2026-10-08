@@ -1,7 +1,7 @@
 use crate::r#match::engine::flow::field::ResetReason;
 use crate::r#match::engine::goal::assign_kickoff;
 use crate::r#match::{
-    MatchContext, MatchField, MatchState, PlayMatchStateResult, PlayerSide, Score, TeamsTactics,
+    MatchContext, MatchField, MatchState, Score, TeamsTactics,
 };
 
 pub struct StateManager {
@@ -26,8 +26,8 @@ impl StateManager {
     }
 
     /// Advance to the next state. Needs `score` + `is_knockout` so we can
-    /// decide whether SecondHalf / ExtraTime lead to the End or into the
-    /// tiebreak branch (extra time → shootout).
+    /// decide whether the second half / extra time lead to the end or into
+    /// the tiebreak branch (extra time → shootout).
     pub fn next(&mut self, score: &Score, is_knockout: bool) -> Option<MatchState> {
         let next_state: MatchState = Self::get_next_state(self.current_state, score, is_knockout);
 
@@ -49,12 +49,14 @@ impl StateManager {
                 // League / friendly matches always end here — draws are fine.
                 // Knockout ties that are level after 90 min go to extra time.
                 if is_knockout && score.is_tied() {
-                    MatchState::ExtraTime
+                    MatchState::ExtraTimeFirst
                 } else {
                     MatchState::End
                 }
             }
-            MatchState::ExtraTime => {
+            MatchState::ExtraTimeFirst => MatchState::ExtraTimeInterval,
+            MatchState::ExtraTimeInterval => MatchState::ExtraTimeSecond,
+            MatchState::ExtraTimeSecond => {
                 // Still level after 120 min → penalty shootout.
                 if score.is_tied() {
                     MatchState::PenaltyShootout
@@ -67,11 +69,7 @@ impl StateManager {
         }
     }
 
-    pub fn handle_state_finish(
-        context: &mut MatchContext,
-        field: &mut MatchField,
-        play_result: PlayMatchStateResult,
-    ) {
+    pub fn handle_state_finish(context: &mut MatchContext, field: &mut MatchField) {
         if context.state.match_state.need_swap_squads() {
             field.swap_squads();
             context.tactics = TeamsTactics::from_field(field);
@@ -81,29 +79,23 @@ impl StateManager {
             context.invalidate_skill_aggregates();
         }
 
-        if play_result.additional_time > 0 {
-            context.add_time(play_result.additional_time);
-        }
-
         match context.state.match_state {
-            MatchState::Initial => {}
-            MatchState::FirstHalf => {
-                Self::play_rest_time(field);
+            MatchState::FirstHalf | MatchState::ExtraTimeFirst => {
+                if context.state.match_state == MatchState::FirstHalf {
+                    Self::play_rest_time(field);
+                }
 
-                // ⚠ Overwritten ten milliseconds later by the `HalfTime`
-                // arm below, after `swap_squads`, and never sampled in
-                // between — see [`ResetReason::PeriodDead`].
+                // ⚠ Overwritten ten milliseconds later by the interval arm
+                // below, after `swap_squads`, and never sampled in between —
+                // see [`ResetReason::PeriodDead`].
                 field.reset_players_positions(ResetReason::PeriodDead);
                 field.ball.reset();
             }
-            MatchState::HalfTime => {
-                // Half-time finished - reset time for second half
+            MatchState::HalfTime | MatchState::ExtraTimeInterval => {
                 context.reset_period_time();
                 field.reset_players_positions(ResetReason::Period);
                 field.ball.reset();
-                // Second half kicks off — Away team (now playing Left
-                // after the halftime swap) takes it.
-                assign_kickoff(field, PlayerSide::Left, None);
+                Self::kick_off_period(context, field);
             }
             MatchState::SecondHalf => {
                 // Second half finished. If the tie rolls to extra time the
@@ -111,20 +103,33 @@ impl StateManager {
                 if context.is_knockout && context.score.is_tied() {
                     Self::play_rest_time(field);
                     context.reset_period_time();
+                    context.grant_extra_time_allowance();
                     field.reset_players_positions(ResetReason::Period);
                     field.ball.reset();
-                    // Extra time kicks off — pick Left by convention.
-                    assign_kickoff(field, PlayerSide::Left, None);
+                    Self::kick_off_period(context, field);
                 }
             }
-            MatchState::ExtraTime => {
+            MatchState::ExtraTimeSecond => {
                 // ET complete — positions reset only matters if shootout follows,
                 // but the shootout resolver rebuilds everything it needs.
                 context.reset_period_time();
             }
-            MatchState::PenaltyShootout => {}
-            _ => {}
+            MatchState::Initial | MatchState::PenaltyShootout | MatchState::End => {}
         }
+    }
+
+    /// The home side kicks off the match and the sides take turns after
+    /// that, each period kicked off by the team that did not kick off the
+    /// one before it — which is what the laws' coin toss and change of ends
+    /// come to over a match.
+    pub fn kick_off_period(context: &mut MatchContext, field: &mut MatchField) {
+        let team = match context.period_kickoff_team {
+            Some(last) if last == field.home_team_id => field.away_team_id,
+            _ => field.home_team_id,
+        };
+        context.period_kickoff_team = Some(team);
+        let side = field.side_of(team);
+        assign_kickoff(field, side, None);
     }
 
     fn play_rest_time(field: &mut MatchField) {
@@ -194,7 +199,15 @@ mod tests {
         );
         assert_eq!(
             state_manager.next(&score, true),
-            Some(MatchState::ExtraTime)
+            Some(MatchState::ExtraTimeFirst)
+        );
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::ExtraTimeInterval)
+        );
+        assert_eq!(
+            state_manager.next(&score, true),
+            Some(MatchState::ExtraTimeSecond)
         );
         assert_eq!(
             state_manager.next(&score, true),

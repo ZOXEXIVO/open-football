@@ -93,9 +93,9 @@ impl<'p> ShootingOperationsImpl<'p> {
             has_clear_shot: self.ctx.player().has_clear_shot(),
             gk_distance,
             is_sprinting_or_recent_sprint,
-            // The ball is still on its restart, so a strike now IS that
-            // set piece — same rule the event builder classifies by, so
-            // the pre-shot gate and the in-flight resolution agree.
+            // The man standing over the dead ball is taking that set piece
+            // — same rule the event builder classifies by, so the pre-shot
+            // gate and the in-flight resolution agree.
             //
             // Deliberately never `Header` here. This profile is what the
             // pre-shot GATES read, and `expected_xg(d, true)` at a gate
@@ -106,7 +106,9 @@ impl<'p> ShootingOperationsImpl<'p> {
             // against a real 15-18%), which is not what the strike model
             // is for. The event builder classifies the shot that is
             // actually taken.
-            shot_type: ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart)
+            shot_type: (self.ctx.tick_context.ball.set_piece_kicker == Some(self.ctx.player.id))
+                .then(|| ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart))
+                .flatten()
                 .unwrap_or(ShotType::FootOpenPlay),
             standard_shift: MatchStandard::shift(self.ctx.context),
         };

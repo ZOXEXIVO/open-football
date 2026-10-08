@@ -148,14 +148,14 @@ impl GoalCelebration {
             .iter()
             .find(|p| {
                 p.side == Some(conceding_side)
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         == PlayerFieldPositionGroup::Goalkeeper
             })
             .map(|p| p.id);
 
         let mut cast = Vec::with_capacity(field.players.len());
-        for player in field.players.iter().filter(|p| !p.is_sent_off) {
+        for player in field.players.iter().filter(|p| !p.off_pitch) {
             let is_keeper = player.tactical_position.current_position.position_group()
                 == PlayerFieldPositionGroup::Goalkeeper;
             let role = if Some(player.id) == retriever_id {
@@ -284,7 +284,7 @@ impl GoalCelebration {
         field
             .players
             .iter()
-            .filter(|p| p.side == Some(conceding_side) && !p.is_sent_off)
+            .filter(|p| p.side == Some(conceding_side) && !p.off_pitch)
             .filter(|p| {
                 let is_keeper = p.tactical_position.current_position.position_group()
                     == PlayerFieldPositionGroup::Goalkeeper;

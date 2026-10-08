@@ -33,3 +33,16 @@ For every player who featured in the match, the system SHALL record a physical s
 #### Scenario: Substituted player's stats freeze at the substitution
 - **WHEN** a player is replaced before full time
 - **THEN** that player's recorded minutes played and physical snapshot reflect the moment of substitution rather than the remainder of the match
+
+### Requirement: The match result carries the standard of football
+Every completed match SHALL record, in its result, the standard of football the match read from both sides at kickoff.
+The value SHALL be the same one the match used for the whole of its play. A result produced by a remote match worker
+SHALL carry the same value as a result produced locally for the same fixture, squads and seed.
+
+#### Scenario: A completed match reports its standard
+- **WHEN** a competitive match completes
+- **THEN** its result includes the standard of football read at kickoff
+
+#### Scenario: Local and remote results agree
+- **WHEN** the same fixture, squads and seed are played once locally and once on a remote match worker
+- **THEN** both results report the same standard of football

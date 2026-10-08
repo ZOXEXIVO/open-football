@@ -418,7 +418,7 @@ impl WideBuilder<'_> {
         self.field
             .players
             .iter()
-            .filter(move |p| p.team_id == self.team_id && !p.is_sent_off)
+            .filter(move |p| p.team_id == self.team_id && !p.off_pitch)
             .filter(|p| !p.tactical_position.current_position.is_goalkeeper())
     }
 }

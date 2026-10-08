@@ -94,11 +94,22 @@ A domestic cup's winner-fan-out SHALL award the trophy happiness event and reput
 Loan returns SHALL be scanned only around month boundaries (the 1st, or days 28+). An expiring loan with a stored
 purchase obligation SHALL always execute the buyout.
 
-A borrower SHALL exercise a stored purchase option only when all three hold:
+A borrower SHALL exercise a stored purchase option only when its board approves the purchase. The board SHALL hear the
+option as it hears a negotiated signing:
 
-- it can afford the fee
-- the player made at least 10 appearances
-- his average rating clears a bar, which is lowered when he has expressed a wish to stay
+- the purpose it would be buying the player for, read from the squad role the player held on loan;
+- the fee against the board's own valuation of that purpose, measured against the best of the borrower's own players
+  in that position, loanees not counted;
+- the loan season as its evidence: the more appearances, the surer the board is of what it watched;
+- whether the club can afford the fee.
+
+A player who has recently asked to make the loan permanent SHALL earn the deal more of the board's stretch.
+
+When the board turns the option down:
+
+- the option SHALL lapse;
+- the player SHALL return to the parent club like any other expiring loanee;
+- the decision SHALL be recorded in the player's decision record, attributed to the board.
 
 An exercised option SHALL then need the player's own signature. He SHALL appraise a permanent deal at the borrower as
 he would any personal terms:
@@ -124,9 +135,25 @@ SHALL NOT remember either as being sold against his will.
 - **WHEN** the loan expires, an option (not obligation) is stored, and the borrowing club cannot afford the fee
 - **THEN** the option lapses and the player is returned to the parent club instead of being purchased
 
+#### Scenario: A board does not buy a body for its bench
+- **WHEN** a loanee who spent the season as cover ends the loan with an option whose fee is above what the borrower's
+  board values cover at
+- **THEN** the option lapses, the player returns to the parent club, and the decision record shows the option turned
+  down by the board
+
+#### Scenario: A board buys the starter it cannot replace
+- **WHEN** a loanee who started the season ends the loan with an option priced inside the board's valuation of a
+  starter, at a borrower whose own best player in that position is clearly weaker
+- **THEN** the board approves the purchase and the player is asked to sign
+
+#### Scenario: Appearances are evidence, not a gate
+- **WHEN** two loanees of the same ability, role and option fee end their loans at the same borrower, one after
+  twenty-five appearances and one after eight
+- **THEN** the board values the player it watched less at no more than the one it watched more
+
 #### Scenario: An international declines the option of a third-tier club
-- **WHEN** a fifty-cap international owned by a top-flight giant ends a season of starts at a third-tier borrower,
-  which exercises its option
+- **WHEN** a fifty-cap international owned by a top-flight giant ends a season of starts at a third-tier borrower
+  whose board approves its option
 - **THEN** the option lapses, he returns to the giant, and his decision record shows the declined buyout attributed to
   him
 

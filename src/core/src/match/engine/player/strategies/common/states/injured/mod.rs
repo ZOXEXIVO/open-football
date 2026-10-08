@@ -15,40 +15,22 @@ use crate::r#match::player::strategies::processor::{
 };
 use nalgebra::Vector3;
 
-/// Ticks a player stays down before hobbling back into the game.
+/// A player who has gone down injured.
 ///
-/// The engine's medical pass runs every 6-14 sim-minutes and substitutes
-/// anyone in a critical condition, so this only has to cover the window
-/// between going down and the physio's verdict. A side with no
-/// substitutions left keeps a passenger on the pitch — which is exactly
-/// what happens in a real match.
-const TREATMENT_TICKS: u64 = 400;
-
-/// A player who has just gone down injured.
-///
-/// This state was implemented but had no inbound transition anywhere in
-/// the engine: an in-match injury was modelled purely by crushing the
-/// player's `condition` to a critical value and waiting for the next
-/// substitution pass to notice. The player kept sprinting, pressing and
-/// tackling at full tilt in the meantime, and a side with no subs left
-/// simply played on with eleven fit players.
-///
-/// Now `roll_in_match_injuries` transitions the victim here. They stop,
-/// they recover nothing (a hurt player is not resting), and they are
-/// excluded from the loose-ball redirects and the chase table via
-/// [`PlayerState::is_committed_action`], so play carries on around them.
+/// He stops, recovers nothing (a hurt player is not resting), and is out of
+/// the loose-ball redirects and the chase table via
+/// [`PlayerState::is_committed_action`], so play carries on around him.
+/// He gets up when his treatment is over — a knock quickly, a hurt after
+/// the physio has seen him — and a serious injury does not get up at all:
+/// the medical pass replaces him or he is carried off.
 #[derive(Default, Clone)]
 pub struct CommonInjuredState {}
 
 impl StateProcessingHandler for CommonInjuredState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.in_state_time < TREATMENT_TICKS {
+        if !ctx.player.is_treated(ctx.context.total_match_time) {
             return None;
         }
-
-        // Treated and waved back on — or never came off, because the
-        // bench was empty. Either way they rejoin in their role's default
-        // state, carrying whatever condition the injury left them with.
         Some(StateChangeResult::with(Self::default_state_for(
             ctx.player
                 .tactical_position

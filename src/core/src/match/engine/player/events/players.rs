@@ -8,17 +8,28 @@ use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
-    Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, PlayerReach, PossessionSource,
+    AerialReach, Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GoalOrigin, PlayerReach,
+    PossessionSource,
 };
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
-use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
+use crate::r#match::engine::environment::EnvModifiers;
+use crate::r#match::engine::flow::context::MATCH_TIME_INCREMENT_MS;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::r#match::engine::officiating::management::{
+    CounterAttackThreat, Dissent, ProfessionalFoul,
+};
+use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
+use crate::r#match::engine::player::injury::{InjuryCause, InjuryRisk, InjuryGrade, MatchInjury};
+use crate::r#match::engine::result::DeadTime;
 use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
+use crate::r#match::goalkeepers::states::common::KeeperLapse;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::MatchZone;
-use crate::r#match::events::Event;
+use crate::r#match::engine::zones::Progression;
+use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
@@ -26,9 +37,13 @@ use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::statistics::MatchStatisticType;
-use crate::r#match::player::strategies::passing::CrossType;
+use crate::r#match::player::strategies::passing::{CrossModel, CrossType};
+use crate::r#match::player::strategies::players::HeaderStrike;
 use crate::r#match::player::strategies::players::ShotSkillInputs;
 use crate::r#match::player::strategies::players::ShotSkillProfile;
+use crate::r#match::player::strategies::players::ops::dead_ball_strike::{
+    FreeKickShot, PenaltyKick,
+};
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffSkillCtx, effective_skill,
 };
@@ -543,7 +558,6 @@ struct PassSkills {
     flair: f32,
     long_shots: f32,
     crossing: f32,
-    stamina: f32,
     /// Independent of skill condition — captures fitness*(1-jadedness)
     /// only. Lightly applied to power consistency / miskick rates so
     /// it isn't a second fatigue penalty stacked on top of effective
@@ -568,14 +582,11 @@ impl PassSkills {
         let peer = |v: f32| v - standard_shift;
         let tech = EffSkillCtx::technical(minute);
         let mental = EffSkillCtx::mental(minute);
-        let expl = EffSkillCtx::explosive(minute);
 
         // Floors lowered from 0.10 to 0.02 so the bottom of the 1-20
         // range visibly separates: a skill-1 player now lands at 0.05
         // (raw) rather than being lifted to the same 0.10 as a skill-2.
-        // Stamina keeps a slightly higher floor (0.05) so a wrecked
-        // player can still walk through a possession; flair was
-        // already unfloored.
+        // Flair was already unfloored.
         let passing = (peer(effective_skill(player, player.skills.technical.passing, tech) / 20.0))
             .clamp(0.02, 1.0);
         let technique =
@@ -597,11 +608,6 @@ impl PassSkills {
         let crossing =
             (peer(effective_skill(player, player.skills.technical.crossing, tech) / 20.0))
                 .clamp(0.02, 1.0);
-        // Fitness is deliberately left absolute — it feeds the
-        // availability model rather than a contest.
-        let stamina =
-            (effective_skill(player, player.skills.physical.stamina, expl) / 20.0).clamp(0.05, 1.0);
-
         // Availability factor — independent of `effective_skill`'s
         // condition handling. Captures chronic fitness (long-term shape)
         // and jadedness (cumulative load not yet recovered). Lightly
@@ -620,7 +626,6 @@ impl PassSkills {
             flair,
             long_shots,
             crossing,
-            stamina,
             availability_factor,
         }
     }
@@ -710,6 +715,45 @@ pub enum FoulSeverity {
     Violent,
 }
 
+/// What the offence was, the way a referee's report lists it. Carried on
+/// the foul event so the whistled, booked and sent-off rates can be read
+/// per source rather than as one number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoulSource {
+    Tackle,
+    Holding,
+    KeeperSmother,
+    ProfessionalFoul,
+    Dissent,
+    TimeWasting,
+    Handball,
+}
+
+impl FoulSource {
+    pub const COUNT: usize = 7;
+    pub const NAMES: [&'static str; Self::COUNT] = [
+        "tackle",
+        "holding",
+        "smother",
+        "professional",
+        "dissent",
+        "time-wasting",
+        "handball",
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            FoulSource::Tackle => 0,
+            FoulSource::Holding => 1,
+            FoulSource::KeeperSmother => 2,
+            FoulSource::ProfessionalFoul => 3,
+            FoulSource::Dissent => 4,
+            FoulSource::TimeWasting => 5,
+            FoulSource::Handball => 6,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PlayerEvent {
     Goal(u32, bool),
@@ -756,8 +800,19 @@ pub enum PlayerEvent {
     /// so the rating helper sees the GK's full workload.
     ParriedBall(u32),
     /// Foul committed by (fouler_id, severity). Dispatcher decides cards.
-    CommitFoul(u32, FoulSeverity),
+    CommitFoul(u32, FoulSeverity, FoulSource),
     Offside(u32, Vector3<f32>), // (offside_player_id, position_for_free_kick)
+    /// A booking with no foul behind it — time-wasting, dissent.
+    Caution(u32, FoulSource),
+    /// A keeper kept the ball in his hands past the referee's count.
+    HeldTooLong(u32),
+    /// A shot struck this man's arm; true when it was going in.
+    Handball(u32, bool),
+    /// The ball was just taken off this man by an opponent.
+    Dispossessed(u32),
+    /// A keeper let through a shot he had saved. The shot goes on, and the
+    /// error leading to it is his.
+    Howler(u32),
     RequestHeading(u32, Vector3<f32>),
     RequestShot(u32, Vector3<f32>),
     RequestBallReceive(u32),
@@ -800,6 +855,11 @@ impl PlayerEvent {
             PlayerEvent::RequestShot(..) => 22,
             PlayerEvent::RequestBallReceive(..) => 23,
             PlayerEvent::TakeBall(..) => 24,
+            PlayerEvent::Caution(..) => 25,
+            PlayerEvent::HeldTooLong(..) => 26,
+            PlayerEvent::Handball(..) => 27,
+            PlayerEvent::Dispossessed(..) => 28,
+            PlayerEvent::Howler(..) => 29,
         }
     }
 }
@@ -844,12 +904,14 @@ impl FoulResolver {
             PlayerEventDispatcher::award_restart_for_foul(
                 adv.fouler_id,
                 adv.severity,
+                adv.spot,
                 field,
                 context,
             );
             PlayerEventDispatcher::apply_card_decision(
                 adv.fouler_id,
                 adv.severity,
+                adv.source,
                 adv.yellow_prob,
                 adv.red_prob,
                 field,
@@ -865,6 +927,7 @@ impl FoulResolver {
             PlayerEventDispatcher::apply_card_decision(
                 adv.fouler_id,
                 adv.severity,
+                adv.source,
                 adv.yellow_prob,
                 adv.red_prob,
                 field,
@@ -882,16 +945,19 @@ impl FoulResolver {
     pub fn build_call_context(
         fouler_id: u32,
         severity: FoulSeverity,
+        source: FoulSource,
+        spot: Vector3<f32>,
         field: &MatchField,
         context: &MatchContext,
     ) -> FoulCallContext {
-        let location = if Self::contact_in_a_penalty_box(field) {
+        // A man brought down on purpose is a foul nobody misses, however
+        // light the contact.
+        let location = if Self::contact_in_a_penalty_box(spot, field) {
             ContactLocation::PenaltyBox
+        } else if severity != FoulSeverity::Normal || source == FoulSource::ProfessionalFoul {
+            ContactLocation::ClearFoul
         } else {
-            match severity {
-                FoulSeverity::Normal => ContactLocation::Normal,
-                FoulSeverity::Reckless | FoulSeverity::Violent => ContactLocation::ClearFoul,
-            }
+            ContactLocation::Normal
         };
         let contact_severity = match severity {
             FoulSeverity::Normal => 0.25,
@@ -916,20 +982,21 @@ impl FoulResolver {
             match_temperature,
             fouled_team_is_home,
             location,
+            deliberate: source == FoulSource::ProfessionalFoul,
         }
     }
 
     /// True if the ball is inside either team's penalty area at the
     /// moment of the foul — used by the marginal-call gate to bump
     /// strictness through `ContactLocation::PenaltyBox`.
-    fn contact_in_a_penalty_box(field: &MatchField) -> bool {
+    fn contact_in_a_penalty_box(spot: Vector3<f32>, field: &MatchField) -> bool {
         let field_w = field.size.width as f32;
         let field_h = field.size.height as f32;
         let scale = field_w / 105.0;
         let area_w = 40.32 * scale;
         let area_depth = 16.5 * scale;
-        let y = field.ball.position.y;
-        let x = field.ball.position.x;
+        let y = spot.y;
+        let x = spot.x;
         let in_y = y >= (field_h - area_w) * 0.5 && y <= (field_h + area_w) * 0.5;
         if !in_y {
             return false;
@@ -957,19 +1024,23 @@ impl FoulResolver {
         fouler_team != Some(field.home_team_id)
     }
 
-    /// Roll a wall-block check for a direct free-kick shot. Returns
-    /// true if the wall blocked the ball — caller then deflects /
-    /// loses the shot. The wall lives only within close/mid bands;
-    /// long-range FKs go around it.
+    /// Roll a wall-block check for a direct free-kick shot: the man in the
+    /// wall it hits, if it does. Beyond shooting range there is no wall.
+    /// The wall's corridor from the ball toward goal: 7.5 to 11 m out, and
+    /// within a couple of metres of the line.
+    const WALL_NEAREST: f32 = 60.0;
+    const WALL_FURTHEST: f32 = 90.0;
+    const WALL_HALF_WIDTH: f32 = 20.0;
+
     pub fn wall_blocks_direct_fk(
         shooter_id: u32,
         field: &MatchField,
         context: &MatchContext,
         pre_distance: f32,
-    ) -> bool {
+    ) -> Option<u32> {
         let band = FreeKickBand::from_distance(pre_distance);
         if matches!(band, FreeKickBand::Far) {
-            return false;
+            return None;
         }
         // Wide angle: the goal's narrow visible-width drops as the
         // shooter drifts laterally. Approximate via the y-deviation
@@ -990,27 +1061,41 @@ impl FoulResolver {
         let is_wide_angle = (shooter_y - center_y).abs() > field_h * 0.18;
 
         let wall_size = wall_size_for(band, is_wide_angle).clamp(2, 8);
-        // Wall composition: average bravery + positioning of the n
-        // closest defenders to the ball, excluding the keeper.
-        let mut wall: Vec<&MatchPlayer> = field
+        // The men actually standing on the line between ball and goal at
+        // the restraining distance — not whoever happens to be nearest.
+        let goal_x = match shooter_side {
+            Some(PlayerSide::Left) => context.field_size.width as f32,
+            _ => 0.0,
+        };
+        let goal = Vector3::new(goal_x, center_y, 0.0);
+        let ball = field.ball.position;
+        let to_goal = Vector3::new(goal.x - ball.x, goal.y - ball.y, 0.0);
+        let reach = to_goal.norm();
+        let dir = if reach > 0.0 { to_goal / reach } else { to_goal };
+        let across = |p: &MatchPlayer| {
+            let rel = Vector3::new(p.position.x - ball.x, p.position.y - ball.y, 0.0);
+            let along = rel.dot(&dir);
+            (along, (rel - dir * along).norm())
+        };
+        let wall: Vec<&MatchPlayer> = field
             .players
             .iter()
             .filter(|p| {
                 p.id != shooter_id
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper
                     && p.side != shooter_side
             })
+            .filter(|p| {
+                let (along, off) = across(p);
+                (Self::WALL_NEAREST..=Self::WALL_FURTHEST).contains(&along)
+                    && off <= Self::WALL_HALF_WIDTH
+            })
             .collect();
-        wall.sort_by(|a, b| {
-            let da = (a.position - field.ball.position).magnitude();
-            let db = (b.position - field.ball.position).magnitude();
-            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-        });
         let wall_n = (wall_size as usize).min(wall.len());
         if wall_n == 0 {
-            return false;
+            return None;
         }
         let mut bravery_sum = 0.0;
         let mut positioning_sum = 0.0;
@@ -1018,8 +1103,9 @@ impl FoulResolver {
             bravery_sum += d.skills.mental.bravery;
             positioning_sum += d.skills.mental.positioning;
         }
-        let avg_bravery = bravery_sum / wall_n as f32;
-        let avg_positioning = (positioning_sum / wall_n as f32 / 20.0).clamp(0.0, 1.0);
+        let shift = MatchStandard::shift(context);
+        let avg_bravery = MatchStandard::peer(bravery_sum / wall_n as f32 / 20.0, shift);
+        let avg_positioning = MatchStandard::peer(positioning_sum / wall_n as f32 / 20.0, shift);
 
         // Taker error: 1.0 - finishing skill (proxy — the lower the
         // taker's finishing, the more often they hit the wall).
@@ -1027,11 +1113,17 @@ impl FoulResolver {
             .players
             .iter()
             .find(|p| p.id == shooter_id)
-            .map(|p| 1.0 - (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0))
+            .map(|p| 1.0 - MatchStandard::peer(p.skills.technical.finishing / 20.0, shift))
             .unwrap_or(0.5);
 
         let p = wall_block_prob(avg_positioning, avg_bravery, taker_error, band);
-        context.rng.bernoulli(p)
+        if !context.rng.bernoulli(p) {
+            return None;
+        }
+        wall.iter()
+            .take(wall_n)
+            .min_by(|a, b| across(a).1.total_cmp(&across(b).1))
+            .map(|p| p.id)
     }
 }
 
@@ -1141,6 +1233,30 @@ impl PlayerEventDispatcher {
         out
     }
 
+    /// A man who was offside when a team-mate last played the ball plays
+    /// it now without ever having had it — a header, a volley, a touch on.
+    /// The flag goes up instead of the strike. A man who owns the ball was
+    /// judged when he gained it.
+    fn offside_on_strike(
+        striker_id: u32,
+        field: &mut MatchField,
+        context: &MatchContext,
+        remaining_events: &mut Vec<Event>,
+    ) -> bool {
+        if field.ball.current_owner == Some(striker_id) {
+            return false;
+        }
+        let mut flagged = EventCollection::with_capacity(2);
+        if !field
+            .ball
+            .flag_offside_striker(context, &field.players, striker_id, &mut flagged)
+        {
+            return false;
+        }
+        remaining_events.extend(flagged.drain());
+        true
+    }
+
     /// **The one reach guard every strike goes through.**
     ///
     /// XY within `KICKABLE_DISTANCE`, and the ball no higher than what he
@@ -1216,7 +1332,7 @@ impl PlayerEventDispatcher {
         match_data: &mut ResultMatchPositionData,
         refusal: &mut Option<&'static str>,
     ) -> Vec<Event> {
-        let remaining_events = Vec::new();
+        let mut remaining_events = Vec::new();
 
         if context.logging_enabled {
             match event {
@@ -1356,6 +1472,9 @@ impl PlayerEventDispatcher {
                     *refusal = Some(StrikeKind::Pass.refusal());
                     return remaining_events;
                 }
+                if Self::offside_on_strike(pass_event_model.from_player_id, field, context, &mut remaining_events) {
+                    return remaining_events;
+                }
                 // Build (but don't yet fire) the offside snapshot. The
                 // resolver fires only when the receiver becomes active —
                 // touches the ball, claims, or actively challenges. This
@@ -1367,18 +1486,19 @@ impl PlayerEventDispatcher {
                 // are exempt by rule. Normal goalkeeper open-play passes
                 // are NOT exempt — the previous "exempt all GK passes"
                 // shortcut hid genuine offsides on long GK clearances.
-                let restart_origin = field.ball.pass_origin_restart;
-                let snapshot = if restart_origin.is_offside_exempt() {
-                    None
-                } else {
-                    Self::build_offside_snapshot(
-                        pass_event_model.from_player_id,
-                        pass_event_model.to_player_id,
-                        restart_origin,
-                        field,
-                        context.current_tick(),
-                    )
-                };
+                let snapshot = Self::build_offside_snapshot(
+                    pass_event_model.from_player_id,
+                    field.ball.pass_origin_restart,
+                    field,
+                    context.current_tick(),
+                );
+                Self::note_offside_trap(
+                    pass_event_model.from_player_id,
+                    pass_event_model.to_player_id,
+                    snapshot.as_ref(),
+                    field,
+                    context,
+                );
 
                 if match_data.is_tracking_events() {
                     match_data.add_pass_event(
@@ -1418,7 +1538,7 @@ impl PlayerEventDispatcher {
                 let declared_cross = pass_event_model.cross_type;
                 let was_cross = declared_cross.is_some()
                     || passer_side.is_some_and(|side| {
-                        Self::is_cross_attempt(passer_position, pass_target, side, context)
+                        CrossModel::is_cross(passer_position, pass_target, side, context)
                     });
                 Self::handle_pass_to_event(pass_event_model, field, context, was_cross);
                 // A modelled cross arms the open-play aerial contest: the
@@ -1455,7 +1575,7 @@ impl PlayerEventDispatcher {
                     let minute = sc::minute_from_ticks(context.current_tick());
                     let shift =
                         crate::r#match::engine::teamplay::standard::MatchStandard::shift(context);
-                    let pace = Ball::pass_pace(length);
+                    let pace = Ball::pass_pace(length, &context.conditions);
                     let delivery = field
                         .get_player(passer_id)
                         .map_or(0.5, |p| sc::passing_execution(p, minute));
@@ -1561,6 +1681,9 @@ impl PlayerEventDispatcher {
                     context.current_tick(),
                 ) {
                     *refusal = Some(StrikeKind::Shot.refusal());
+                    return remaining_events;
+                }
+                if Self::offside_on_strike(shoot_event_model.from_player_id, field, context, &mut remaining_events) {
                     return remaining_events;
                 }
                 // Capture field dimensions up-front so the log block
@@ -1718,6 +1841,11 @@ impl PlayerEventDispatcher {
                             giver.statistics.add_error_leading_to_shot();
                         }
                         field.ball.pending_error_to_shot_player_id = Some(giver_id);
+                        context.psychology.record_negative(
+                            giver_id,
+                            NegativeEvent::ErrorLeadingToShot,
+                            now_tick,
+                        );
                     } else {
                         field.ball.pending_error_to_shot_player_id = None;
                     }
@@ -1741,6 +1869,11 @@ impl PlayerEventDispatcher {
                             if let Some(gk) = field.get_player_mut(gk_id) {
                                 gk.statistics.note_gk_failed_claim_to_shot();
                             }
+                            context.psychology.record_negative(
+                                gk_id,
+                                NegativeEvent::ErrorLeadingToShot,
+                                now_tick,
+                            );
                             #[cfg(feature = "match-logs")]
                             gk_claim_diag::FLAP_TO_SHOT.fetch_add(1, Ordering::Relaxed);
                             field.ball.pending_failed_claim_charged = true;
@@ -1772,6 +1905,22 @@ impl PlayerEventDispatcher {
             PlayerEvent::Leap(player_id, apex) => {
                 Self::handle_leap_event(player_id, apex, field);
             }
+            PlayerEvent::Dispossessed(player_id) => {
+                if let Some(player) = field.get_player_mut(player_id) {
+                    player.on_dispossessed(context.current_tick());
+                }
+            }
+            PlayerEvent::Howler(keeper_id) => {
+                if let Some(keeper) = field.get_player_mut(keeper_id) {
+                    keeper.statistics.add_error_leading_to_shot();
+                }
+                field.ball.pending_error_to_shot_player_id = Some(keeper_id);
+                context.psychology.record_negative(
+                    keeper_id,
+                    NegativeEvent::ErrorLeadingToShot,
+                    context.current_tick(),
+                );
+            }
             PlayerEvent::TakeBall(player_id) => {
                 Self::handle_take_ball_event(player_id, field);
             }
@@ -1791,16 +1940,40 @@ impl PlayerEventDispatcher {
                     *refusal = Some(StrikeKind::Clearance.refusal());
                     return remaining_events;
                 }
+                if Self::offside_on_strike(clearer_id, field, context, &mut remaining_events) {
+                    return remaining_events;
+                }
                 Self::handle_clear_ball_event(clearer_id, velocity, field, context);
             }
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field, context);
             }
-            PlayerEvent::CommitFoul(fouler_id, severity) => {
-                Self::handle_commit_foul_event(fouler_id, severity, field, context);
+            PlayerEvent::CommitFoul(fouler_id, severity, source) => {
+                Self::handle_commit_foul_event(fouler_id, severity, source, field, context);
             }
             PlayerEvent::Offside(player_id, _spot) => {
                 Self::handle_offside_event(player_id, field);
+            }
+            PlayerEvent::Handball(player_id, goal_bound) => {
+                Self::whistle_handball(player_id, goal_bound, field, context);
+            }
+            PlayerEvent::HeldTooLong(keeper_id) => {
+                let mut corner = EventCollection::with_capacity(2);
+                field
+                    .ball
+                    .concede_corner_for_holding(keeper_id, context, &field.players, &mut corner);
+                remaining_events.extend(corner.drain());
+            }
+            PlayerEvent::Caution(player_id, source) => {
+                Self::apply_card_decision(
+                    player_id,
+                    FoulSeverity::Normal,
+                    source,
+                    1.0,
+                    0.0,
+                    field,
+                    context,
+                );
             }
             _ => {} // Ignore unsupported events
         }
@@ -1815,6 +1988,10 @@ impl PlayerEventDispatcher {
         context: &mut MatchContext,
     ) {
         let scorer_team_id = field.get_player(player_id).map(|p| p.team_id);
+        let origin = field
+            .ball
+            .in_net
+            .map_or_else(|| field.ball.goal_origin(is_auto_goal), |net| net.origin);
         // Stale scorer id (sent off / subbed between shot and goal
         // resolution) — no goal recorded for the player, but the score
         // line and ball-state cleanup downstream still need to run.
@@ -1824,7 +2001,7 @@ impl PlayerEventDispatcher {
 
         player
             .statistics
-            .add_goal(context.total_match_time, is_auto_goal);
+            .add_goal(context.total_match_time, is_auto_goal, origin);
 
         // Goal stands → credit on-target to the real scorer. Own goals
         // aren't counted as an on-target shot for the defender that
@@ -1878,6 +2055,11 @@ impl PlayerEventDispatcher {
                         giver.statistics.note_error_to_goal_own_box();
                     }
                 }
+                context.psychology.record_negative(
+                    giver_id,
+                    NegativeEvent::ErrorLeadingToGoal,
+                    context.current_tick(),
+                );
             }
             // Promote a pending failed claim into a failed-claim-to-goal.
             // NB deliberately NOT also stamping `errors_leading_to_goal`:
@@ -1890,6 +2072,11 @@ impl PlayerEventDispatcher {
                     .unwrap_or(false);
                 if conceding_side && let Some(gk) = field.get_player_mut(gk_id) {
                     gk.statistics.note_gk_failed_claim_to_goal();
+                    context.psychology.record_negative(
+                        gk_id,
+                        NegativeEvent::ErrorLeadingToGoal,
+                        context.current_tick(),
+                    );
                 }
             }
         }
@@ -1904,8 +2091,8 @@ impl PlayerEventDispatcher {
             stat_type: MatchStatisticType::Goal,
             is_auto_goal,
             time: context.total_match_time,
+            origin,
         });
-        context.record_stoppage_time(30_000);
 
         // Psychology nudges: scorer gains confidence; conceding GK takes
         // a hit. Own goals route the confidence penalty to the auto-
@@ -1968,6 +2155,7 @@ impl PlayerEventDispatcher {
             stat_type: MatchStatisticType::Assist,
             time: context.total_match_time,
             is_auto_goal: false,
+            origin: GoalOrigin::OpenPlay,
         });
 
         player.statistics.add_assist(context.total_match_time);
@@ -1981,7 +2169,11 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_tackling_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+    fn handle_tackling_ball_event(
+        player_id: u32,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
         let ball_pos = field.ball.position;
         // Capture the carrier (= dispossessed player) BEFORE
         // secure_ball_for nulls them out — the tackle handler treats
@@ -2004,15 +2196,41 @@ impl PlayerEventDispatcher {
         {
             p.statistics.add_failed_dribble();
         }
-        Self::secure_ball_for(player_id, field);
-        if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
-            field.ball.note_possession(team_id);
+        let carrier_velocity = dispossessed_id
+            .and_then(|id| field.get_player(id))
+            .map_or(Vector3::zeros(), |p| p.velocity);
+        let minute = sc::minute_from_ms(context.total_match_time);
+        let kept = match field.players.iter().find(|p| p.id == player_id) {
+            Some(tackler) => {
+                let control = sc::defensive_duel(tackler, minute) - MatchStandard::shift(context);
+                field
+                    .ball
+                    .on_tackle_won(tackler, control, carrier_velocity, &context.rng)
+            }
+            None => true,
+        };
+        if kept {
+            Self::secure_ball_for(player_id, field);
+            if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
+                field.ball.note_possession(team_id);
+            }
+            // The one acquisition that never passes through the ball-event
+            // dispatcher, so it labels itself.
+            field
+                .ball
+                .note_possession_source(player_id, PossessionSource::Tackle);
+        } else if let Some(p) = dispossessed_id.and_then(|id| field.get_player_mut(id)) {
+            // Knocked off him all the same — `secure_ball_for` tells the
+            // loser on the kept branch.
+            p.on_dispossessed(context.current_tick());
         }
-        // The one acquisition that never passes through the ball-event
-        // dispatcher, so it labels itself.
-        field
-            .ball
-            .note_possession_source(player_id, PossessionSource::Tackle);
+        // A clean tackle still put a body into him.
+        if let Some(victim) = dispossessed_id
+            && let Some(severity) =
+                MatchInjury::roll_contact(field, context, victim, InjuryRisk::CLEAN_TACKLE_IMPULSE)
+        {
+            MatchInjury::befall(field, context, victim, InjuryCause::Contact, severity);
+        }
     }
 
     fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
@@ -2133,7 +2351,7 @@ impl PlayerEventDispatcher {
             if player.id == passer_id || player.team_id == passer_team {
                 continue;
             }
-            if player.is_sent_off {
+            if player.off_pitch {
                 continue;
             }
             let dx = player.position.x - passer_position.x;
@@ -2191,6 +2409,10 @@ impl PlayerEventDispatcher {
             passer.statistics.passes_completed =
                 passer.statistics.passes_completed.saturating_add(1);
         }
+        #[cfg(feature = "match-logs")]
+        if let (Some(origin), Some(aim)) = (origin, field.ball.pending_pass_aim.or(target)) {
+            FlightDiag::note_pass_completed((aim - origin).xy().norm());
+        }
         // First-touch quality producer: a receiver with weak technique
         // / first_touch can fluff the reception (miscontrol) or kill
         // it with a heavy touch — particularly when defenders are
@@ -2218,11 +2440,25 @@ impl PlayerEventDispatcher {
         field
             .ball
             .record_completed_pass(passer_id, receiver_id, context.current_tick());
+        field.ball.last_completed_pass_cutback = origin
+            .zip(field.get_player(receiver_id))
+            .is_some_and(|(origin, receiver)| Self::is_cutback(origin, receiver, field));
         field.ball.clear_pending_pass_metadata();
         // Pass completed — the pressers at emit time did NOT force a
         // turnover, so don't credit a successful pressure. Clear the
         // snapshot so it can't be reused by an unrelated future event.
         field.ball.pressers_at_pass_count = 0;
+    }
+
+    /// A ball pulled back from the byline: played from within twelve
+    /// metres of the goal line the receiver is attacking, and back toward
+    /// his own half.
+    fn is_cutback(origin: Vector3<f32>, receiver: &MatchPlayer, field: &MatchField) -> bool {
+        const FROM_THE_BYLINE: f32 = 1.0 - 96.0 / 840.0;
+        receiver.side.is_some_and(|side| {
+            side.attacking_progress_x(origin.x, field.size.width as f32) >= FROM_THE_BYLINE
+                && side.forward_delta(origin.x, receiver.position.x) < 0.0
+        })
     }
 
     /// Deterministic first-touch quality roll. When a pass is claimed,
@@ -2333,6 +2569,8 @@ impl PlayerEventDispatcher {
             None => return,
         };
 
+        let minute = sc::minute_from_ms(context.total_match_time);
+        let composite01 = (composite01 + context.conditions.touch(minute)).clamp(0.0, 1.0);
         let bad_touch_prob = Self::first_touch_loss_probability(composite01, pressure_count);
         // ⚠ NO PROBABILITY FLOOR. This used to be
         // `if bad_touch_prob < 0.02 { return; }`, which is not a cheap
@@ -2497,16 +2735,23 @@ impl PlayerEventDispatcher {
         let is_home = passer_side == PlayerSide::Left;
         let opp_box = context.penalty_area(!is_home);
 
-        // Forward progress along the attacking axis.
-        let forward_progress = passer_side.forward_delta(origin.x, target.x);
         let target_in_final_third =
             passer_side.attacking_progress_x(target.x, field_w) >= 2.0 / 3.0;
         let origin_in_final_third =
             passer_side.attacking_progress_x(origin.x, field_w) >= 2.0 / 3.0;
 
-        // Progressive pass: ≥25u outside final third, ≥12u inside.
-        let progressive_threshold = if origin_in_final_third { 12.0 } else { 25.0 };
-        let is_progressive = forward_progress >= progressive_threshold;
+        // Never from the defending 40% of the pitch: a long ball out of
+        // defence moves the ball but is not progression.
+        let passer_team = field.get_player(passer_id).map(|p| p.team_id);
+        let reach = passer_team.and_then(|team| field.ball.pass_reach.furthest(team));
+        let is_progressive = passer_side.attacking_progress_x(origin.x, field_w) >= 0.4
+            && Progression::is_progressive(passer_side, origin, target, reach, field_w, &opp_box);
+        if let Some(team) = passer_team {
+            field
+                .ball
+                .pass_reach
+                .note(team, Progression::depth(passer_side, target, field_w));
+        }
 
         let target_in_box = opp_box.contains(&target);
         let own_box = context.penalty_area(is_home);
@@ -2575,54 +2820,6 @@ impl PlayerEventDispatcher {
         }
     }
 
-    /// Did this pass start in a wide channel and target the
-    /// opposition box? That's the cross-attempt signal — wing-play
-    /// service into the danger area, regardless of whether the
-    /// pass was tagged as a "cross" by the strategy layer.
-    fn is_cross_attempt(
-        passer_position: Vector3<f32>,
-        target: Vector3<f32>,
-        side: PlayerSide,
-        context: &MatchContext,
-    ) -> bool {
-        use crate::r#match::engine::zones::LateralLane;
-        let field_h = context.field_size.height as f32;
-        if !LateralLane::classify(passer_position.y, field_h).is_wide() {
-            return false;
-        }
-        // Pass must travel forward and end in or near the opp box.
-        let opp_box = match side {
-            PlayerSide::Left => context.penalty_area(false),
-            PlayerSide::Right => context.penalty_area(true),
-        };
-        if opp_box.contains(&target) {
-            return true;
-        }
-        // Within ~10u of the box — wide-channel deliveries that
-        // arrive at the edge of the area still count as crosses.
-        let dx = (target.x - opp_box.min.x.max(0.0))
-            .min(opp_box.max.x - target.x)
-            .max(0.0);
-        let dy = (target.y - opp_box.min.y)
-            .min(opp_box.max.y - target.y)
-            .max(0.0);
-        let inside_x = target.x >= opp_box.min.x && target.x <= opp_box.max.x;
-        let inside_y = target.y >= opp_box.min.y && target.y <= opp_box.max.y;
-        if inside_x && inside_y {
-            return true;
-        }
-        // Approximate "within 10u of box edge" using axis distances —
-        // good enough for a binary classification.
-        let edge_dist = if inside_x {
-            dy
-        } else if inside_y {
-            dx
-        } else {
-            (dx * dx + dy * dy).sqrt()
-        };
-        edge_dist <= 10.0
-    }
-
     /// How hard a closing opponent degrades pass execution: an ABSOLUTE
     /// targeting-error addition of `press01 · transmission ·
     /// skill_budget · GAIN` game units, where `skill_budget` is the
@@ -2669,15 +2866,15 @@ impl PlayerEventDispatcher {
     /// Size of the targeting-error budget between the best and worst
     /// passer in the game, in game units before distance scaling.
     ///
-    /// Set for physical honesty, NOT to buy an outcome: 16 lands the
-    /// measured population mean arrival error at 7.0u (0.88 m) across
-    /// every pass including the long and pressured ones. Pushing it
-    /// further does move the skill response, but only by making the
-    /// deliveries unrealistic — 31.6 reads 1.36 m mean and still moves
-    /// team pass accuracy barely 2pp, because the receiver chases the
-    /// ball rather than catching it where it lands. See the curve at
-    /// its use site for why that ceiling exists.
-    const PASS_ERROR_SPREAD: f32 = 16.0;
+    /// Set against completion by length (`dev_match stats`, PASS SHAPE):
+    /// with the error growing on the square of the distance, 28 lands
+    /// short passes in the low 90s, medium in the mid 80s and long balls
+    /// near 70%, against a real ~90 / 80-85 / 50-60. It was 16 on a
+    /// linear distance term, which completed every band over 80% — but
+    /// that was measured while a receiver raced up the ball's path for
+    /// everything played to him, and so collected sprayed deliveries a
+    /// man taking the ball where it was played no longer reaches.
+    const PASS_ERROR_SPREAD: f32 = 28.0;
 
     /// Scales the lead a pass is played in front of its receiver's run.
     /// `OF_PASS_LEAD=0` aims straight at him — the control for asking how
@@ -2689,6 +2886,21 @@ impl PlayerEventDispatcher {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1.0)
+        })
+    }
+
+    /// How far a pass's pace strays from the one it was meant to have,
+    /// either way, for the poorest passer in the game. `OF_PASS_WEIGHT`
+    /// overrides for titration.
+    const PASS_WEIGHT_SPREAD: f32 = 0.35;
+
+    fn pass_weight_spread() -> f32 {
+        static SPREAD: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SPREAD.get_or_init(|| {
+            std::env::var("OF_PASS_WEIGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(Self::PASS_WEIGHT_SPREAD)
         })
     }
 
@@ -2909,10 +3121,12 @@ impl PlayerEventDispatcher {
         let accuracy_factor =
             (overall_quality * (0.70 + 0.30 * skills.concentration)).clamp(0.0, 1.0);
 
-        // Distance-based error: longer passes have more positional error.
-        // Curve steepened so 20u passes are near-perfect for skilled
-        // players, while 200u passes lose significant accuracy.
-        let distance_error_factor = (horizontal_distance / 250.0).clamp(0.1, 1.8);
+        // Distance-based error, with the square of the distance: a long
+        // ball is struck harder and in the air for longer, and real
+        // completion falls away much faster than its length. Linear, a
+        // 40 m ball missed by barely more than a 30 m one and long passes
+        // completed 82% against a real 50-60%.
+        let distance_error_factor = (horizontal_distance / 250.0).powi(2).clamp(0.05, 4.0);
 
         // **The error has to be able to miss.**
         //
@@ -2976,7 +3190,22 @@ impl PlayerEventDispatcher {
         // open-play pass at the same distance, which matches real
         // football where crosses are a notoriously low-percentage skill.
         let max_position_error = if was_cross {
-            let crossing_shortfall = (1.0 - skills.crossing).clamp(0.0, 1.0);
+            // A corner is delivered with the corner-taking composite, read
+            // against the standard of the match like every other pass skill;
+            // `corners` decides who takes them and, here, how well.
+            let delivery = if field.ball.pass_origin_restart == PassOriginRestart::Corner {
+                field
+                    .get_player(event_model.from_player_id)
+                    .map_or(skills.crossing, |taker| {
+                        MatchStandard::peer(
+                            sc::set_piece_delivery(taker, minute),
+                            MatchStandard::shift(context),
+                        )
+                    })
+            } else {
+                skills.crossing
+            };
+            let crossing_shortfall = (1.0 - delivery).clamp(0.0, 1.0);
             // A CORNER is not an open-play cross. It is struck from a
             // stationary ball, unpressured, with the taker free to pick
             // their spot — so it should not inherit the full open-play
@@ -3000,7 +3229,11 @@ impl PlayerEventDispatcher {
                 .cross_type
                 .map(|ct| ct.difficulty())
                 .unwrap_or(1.0);
-            base_max_position_error * cross_multiplier * type_difficulty
+            // …and the wind carries a high ball off its line.
+            base_max_position_error
+                * cross_multiplier
+                * type_difficulty
+                * (1.0 - context.conditions.cross_accuracy)
         } else if event_model.reason == "DEF_COUNTER_ATTACK" {
             // Counter-attack outlet: the passer just won the ball and
             // had a clear moment to look up. Real football's "the
@@ -3076,6 +3309,22 @@ impl PlayerEventDispatcher {
         if rng.random_range(0.0f32..1.0) < miskick_chance {
             target_error_x += rng.random_range(-8.0f32..8.0);
             target_error_y += rng.random_range(-8.0f32..8.0);
+        }
+
+        // A keeper rushed by the press snatches at it. Not the miskick a
+        // poor technician hits anywhere — the one a nervous man hits when
+        // the striker is on him.
+        if let Some(passer) = field.get_player(event_model.from_player_id)
+            && passer.tactical_position.current_position.position_group()
+                == PlayerFieldPositionGroup::Goalkeeper
+        {
+            let press01 = Self::pass_press01(&field.players, passer_team_id, passer_position);
+            let lapse =
+                KeeperLapse::probability(passer, context.psychology.get(passer.id)) * press01;
+            if rng.random_range(0.0f32..1.0) < lapse {
+                target_error_x += rng.random_range(-24.0f32..24.0);
+                target_error_y += rng.random_range(-24.0f32..24.0);
+            }
         }
 
         // The radial the ball will arrive OFF its ideal point — stashed
@@ -3178,19 +3427,16 @@ impl PlayerEventDispatcher {
         let actual_pass_vector = actual_target - pass_origin;
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
 
-        // Calculate pass force with power variation
-        // Bad players hit passes with inconsistent power
-        let power_consistency = 1.0 + (skills.technique * skills.stamina * 0.1);
-        let power_variation_range = (1.0 - overall_quality) * 0.35;
-        let power_variation = rng.jitter(power_consistency, power_variation_range);
-        let adjusted_force = event_model.pass_force * power_variation;
-
         // Rolling delivery speed — the pace a ground pass has to leave the
         // foot at to arrive. The trajectory solver below either uses this
         // as-is (driven / ground balls) or replaces it with a ballistic
         // solution (lofted balls).
         let rolling_velocity =
-            Self::calculate_horizontal_velocity(&actual_pass_vector, adjusted_force);
+            Self::calculate_horizontal_velocity(
+                &actual_pass_vector,
+                event_model.pass_force,
+                &context.conditions,
+            );
 
         // Determine trajectory type based on context, not just distance
         let passer = field.get_player_mut(event_model.from_player_id).unwrap();
@@ -3257,6 +3503,15 @@ impl PlayerEventDispatcher {
                 Ball::launch_speed_for_apex(1.5),
             );
         }
+
+        // **The weight of it.** The error above is where the pass goes; this
+        // is how hard it was hit, and a poor passer over- and under-hits.
+        // It used to be drawn into `pass_force`, which the pace model folds
+        // into a ±10% fine-tune, so it moved the delivery by a percent or
+        // two and every pass in the match arrived perfectly weighted.
+        let weight = rng.jitter(1.0, (1.0 - overall_quality) * Self::pass_weight_spread());
+        final_velocity.x *= weight;
+        final_velocity.y *= weight;
 
         // Safety net only — `calculate_pass_velocity` is budgeted by
         // construction, so this should never bind. It clamps the
@@ -3436,6 +3691,7 @@ impl PlayerEventDispatcher {
     fn calculate_horizontal_velocity(
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
+        conditions: &EnvModifiers,
     ) -> Vector3<f32> {
         let horizontal_direction =
             Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
@@ -3449,7 +3705,7 @@ impl PlayerEventDispatcher {
         // better, normalised to 0.90-1.1 so it never drives the physics.
         let skill_modifier = 0.90 + (pass_force.clamp(0.3, 2.0) - 0.3) * 0.12;
 
-        horizontal_direction * (Ball::pass_pace(distance) * skill_modifier)
+        horizontal_direction * (Ball::pass_pace(distance, conditions) * skill_modifier)
     }
 
     /// How far down the lane a body has to be to count as stood at the
@@ -3674,11 +3930,26 @@ impl PlayerEventDispatcher {
         let weighting = rng.jitter(1.0, (1.0 - execution) * 0.14);
 
         if trajectory_type.is_ballistic() {
-            let apex = Self::target_apex(trajectory_type, distance);
-            let vertical = Ball::launch_speed_for_apex(apex);
-            let hang = Ball::hang_ticks(vertical);
-            if hang > 1.0 {
-                let horizontal = (distance / hang) * weighting;
+            let planned = Self::target_apex(trajectory_type, distance);
+            // A ball the planned arc cannot carry under the pace cap is
+            // struck higher: with the pace capped, height is hang time and
+            // hang time is range. Only the longest balls ever need it.
+            for apex in [planned, planned * 1.5, planned * 2.0] {
+                let vertical = Ball::launch_speed_for_apex(apex);
+                if Ball::hang_ticks(vertical) <= 1.0 {
+                    break;
+                }
+                // Solved against the drag the ball will actually fly
+                // through: `distance / hang` is a drag-free parabola, and
+                // every long ball landed a tenth of its length short. A
+                // cross comes down through head height at its man rather
+                // than landing at his feet: it is a ball to be attacked.
+                let horizontal = match trajectory_type {
+                    TrajectoryType::Cross(_) => {
+                        Ball::launch_for_arrival(distance, vertical, 0.0, AerialReach::ATTACKED)
+                    }
+                    _ => Ball::launch_for_range(distance, vertical, 0.0),
+                } * weighting;
                 if horizontal.is_finite() && horizontal <= Self::MAX_PASS_VELOCITY {
                     return Vector3::new(
                         direction.x * horizontal,
@@ -3688,8 +3959,9 @@ impl PlayerEventDispatcher {
                 }
             }
             // The ball would have to be struck harder than a pass to cover
-            // the ground before it lands — drive it instead. Falls through
-            // rather than launching something that cannot reach.
+            // the ground before it lands, however high — drive it instead.
+            // Falls through rather than launching something that cannot
+            // reach.
         }
 
         // Driven / grounded. `rolling_velocity` is already sized to arrive
@@ -3833,6 +4105,7 @@ impl PlayerEventDispatcher {
             // Allow claim with escalated cooldown
             field.ball.previous_owner = Some(current_owner);
             field.ball.current_owner = Some(player_id);
+            Self::touch_on_taking(player_id, field, context.current_tick());
             field.ball.pass_target_player_id = None;
             field.ball.ownership_duration = 0;
             field.ball.contested_claim_count += 1;
@@ -3852,6 +4125,7 @@ impl PlayerEventDispatcher {
         Self::resolve_pending_pass_on_control(player_id, field, context);
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        Self::touch_on_taking(player_id, field, context.current_tick());
         field.ball.pass_target_player_id = None;
         field.ball.ownership_duration = 0;
         field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
@@ -3869,8 +4143,13 @@ impl PlayerEventDispatcher {
         if !Self::can_take_possession(player_id, field) {
             return;
         }
+        let taking = field.ball.current_owner != Some(player_id);
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        if taking {
+            let tick = field.ball.current_tick_cached;
+            Self::touch_on_taking(player_id, field, tick);
+        }
         // Carrying it, therefore not holding it.
         field.ball.held_in_hands = false;
 
@@ -4003,6 +4282,15 @@ impl PlayerEventDispatcher {
         false
     }
 
+    /// Taking the ball is touching it, and the ball's last touch is what
+    /// the byline reads: a ball a defender won off an attacker and then
+    /// lost over his own line was still the attacker's, a goal kick.
+    fn touch_on_taking(player_id: u32, field: &mut MatchField, tick: u64) {
+        if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
+            field.ball.record_touch(player_id, team_id, tick, true);
+        }
+    }
+
     // Snaps the ball to the winner's feet and zeros velocity — prevents
     // residual velocity from carrying it into the winner's own goal
     // after a tackle/interception/block.
@@ -4111,6 +4399,13 @@ impl PlayerEventDispatcher {
         );
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        Self::touch_on_taking(player_id, field, tick);
+        if let Some(loser) = field.ball.previous_owner.filter(|&id| id != player_id)
+            && let Some(loser) = field.get_player_mut(loser)
+            && Some(loser.team_id) != team_id
+        {
+            loser.on_dispossessed(tick);
+        }
         field.ball.pass_target_player_id = None;
         field.ball.velocity = Vector3::zeros();
         field.ball.flags.in_flight_state = 0;
@@ -4181,6 +4476,19 @@ impl PlayerEventDispatcher {
         (GOAL_MOUTH_HALF_WIDTH * (0.42 + placement_skill * 0.48)).min(safe_reach)
     }
 
+    /// The upward launch of a shot, in metres per tick, that peaks it at
+    /// `apex` metres. A ball struck from above that height — a header, a
+    /// volley off the knee — is aimed DOWN instead, to cross at it: read as
+    /// a climb from wherever the ball was, every header from head height
+    /// rose another metre and sailed over the bar.
+    fn shot_rise(apex: f32, from_height: f32, distance: f32, pace: f32) -> f32 {
+        if apex >= from_height {
+            return Ball::launch_speed_for_apex(apex - from_height);
+        }
+        let ticks = distance / pace.max(0.1);
+        (apex - from_height) / ticks + 0.5 * GRAVITY_PER_TICK * ticks
+    }
+
     fn handle_shoot_event(
         shoot_event_model: ShootingEventContext,
         field: &mut MatchField,
@@ -4242,7 +4550,12 @@ impl PlayerEventDispatcher {
         /// Correcting it, `dev_match stats 400 14 14`: on-target
         /// **30.4% → 33.6%** against a real ~33%, and goals **2.32 →
         /// 2.47** against a real ~2.5.
-        const POPULATION_EXECUTION: f32 = 0.550;
+        ///
+        /// 0.550 → 0.533 once crosses came down to a real volume: fewer
+        /// headers off deliveries and more shots from the box's edge moved
+        /// the blend's mean, and the average shooter was again charged
+        /// the edge (on-target 30.4%).
+        const POPULATION_EXECUTION: f32 = 0.533;
         // How far the forced-miss rolls swing either side of the anchor
         // is `Self::shot_accuracy_spread()` — centred, so widening it
         // cannot move the population's on-target rate, only how far a
@@ -4283,41 +4596,21 @@ impl PlayerEventDispatcher {
         let minute = sc::minute_from_ticks(shoot_event_model.tick);
         let pre_distance = (shoot_event_model.target - field.ball.position).magnitude();
 
-        // Direct free-kick wall block. If the ball came from a
-        // DirectFreeKick origin AND the band is shootable, roll the
-        // wall-block probability. A blocked shot has its trajectory
-        // overwritten with a low-velocity deflection past the wall;
-        // the ball stays live so the loose-ball state machine resumes.
-        if field.ball.pass_origin_restart == PassOriginRestart::DirectFreeKick
-            && FoulResolver::wall_blocks_direct_fk(
+        // A direct free kick the wall stops is struck INTO the wall: aimed
+        // through the man it hits at body height, and the block contest
+        // takes it off him when it gets there. Deflecting it at the taker's
+        // foot looped it on towards goal for the keeper to walk out and
+        // catch.
+        let wall_stopper = if shoot_event_model.shot_type == ShotType::DirectFreeKick {
+            FoulResolver::wall_blocks_direct_fk(
                 shoot_event_model.from_player_id,
                 field,
                 context,
                 pre_distance,
             )
-        {
-            let dir = (shoot_event_model.target - field.ball.position).normalize();
-            // Deflect upward and slightly away — the ball clears the wall
-            // but loses most of its goalward energy. The apex is solved,
-            // not written: the vertical axis is in metres, and the 1.4
-            // this used to carry was 140 m/s — a kilometre straight up.
-            const WALL_DEFLECT_APEX_M: f32 = 4.0;
-            field.ball.velocity = Vector3::new(
-                dir.x * 0.6,
-                dir.y * 0.6,
-                Ball::launch_speed_for_apex(WALL_DEFLECT_APEX_M),
-            );
-            field.ball.flags.in_flight_state = 30;
-            field.ball.previous_owner = Some(shoot_event_model.from_player_id);
-            field.ball.current_owner = None;
-            field.ball.cached_shot_target = None;
-            field.ball.last_shot_xgot = 0.0;
-            field.ball.last_shot_shooter_id = None;
-            // Restart origin is consumed by the wall — return to
-            // open play so the next tick doesn't repeat the block.
-            field.ball.pass_origin_restart = PassOriginRestart::OpenPlay;
-            return;
-        }
+        } else {
+            None
+        };
 
         // Snapshot the bits of state we need from `field` so we can
         // build the profile without juggling overlapping borrows.
@@ -4529,7 +4822,14 @@ impl PlayerEventDispatcher {
         } else {
             0.92
         };
-        let adjusted_accuracy = base_accuracy * distance_penalty;
+        // Wind takes a long shot off its line; it barely touches a short one.
+        const LONG_SHOT: f32 = 144.0;
+        let wind = if horizontal_distance > LONG_SHOT {
+            1.0 + context.conditions.shot_accuracy_long
+        } else {
+            1.0
+        };
+        let adjusted_accuracy = base_accuracy * distance_penalty * wind;
 
         // Base error: scaled by the unified profile's
         // `random_error_scale`, the per-shot pressure / body / condition
@@ -4588,12 +4888,35 @@ impl PlayerEventDispatcher {
         //
         // Resolved AFTER the error budget precisely so it can be bounded
         // by it.
+        let dead_ball = match shoot_event_model.shot_type {
+            ShotType::Penalty => Some(PenaltyKick::strike(execution_skill, rng)),
+            ShotType::DirectFreeKick => Some(FreeKickShot::strike(
+                execution_skill,
+                horizontal_distance,
+                (FreeKickBand::from_distance(horizontal_distance) != FreeKickBand::Far)
+                    .then_some(RestartShape::WALL_DISTANCE),
+                // The line from the ball through the man it hits, carried
+                // on to the goal line.
+                wall_stopper
+                    .and_then(|id| field.get_player(id))
+                    .filter(|man| (man.position.x - field.ball.position.x).abs() > 1.0)
+                    .map(|man| {
+                        let ball = field.ball.position;
+                        let reach = (goal_center.x - ball.x) / (man.position.x - ball.x);
+                        ball.y + (man.position.y - ball.y) * reach - goal_center.y
+                    }),
+                rng,
+            )),
+            _ => None,
+        };
         let central_rate = (0.68 - placement_skill * 0.58).clamp(0.10, 0.68);
         let side_rate = (1.0 - central_rate) * 0.5;
         let target_preference = rng.random_range(0.0..1.0);
         let corner_reach = GOAL_WIDTH * (0.42 + placement_skill * 0.48);
         let _ = max_y_error;
-        let ideal_y_target = if target_preference < side_rate {
+        let ideal_y_target = if let Some(kick) = dead_ball {
+            goal_center.y + kick.offset
+        } else if target_preference < side_rate {
             goal_center.y - corner_reach
         } else if target_preference < side_rate * 2.0 {
             goal_center.y + corner_reach
@@ -4601,8 +4924,12 @@ impl PlayerEventDispatcher {
             goal_center.y + rng.random_range(-GOAL_WIDTH * 0.3..GOAL_WIDTH * 0.3)
         };
 
-        // Add random error to y-coordinate
-        let y_error = rng.random_range(-max_y_error..max_y_error);
+        // A dead ball's placement already carries its own error.
+        let y_error = if dead_ball.is_some() {
+            0.0
+        } else {
+            rng.random_range(-max_y_error..max_y_error)
+        };
         let mut actual_y_target = ideal_y_target + y_error;
 
         // Wide-miss chance now leans on the unified profile so a
@@ -4726,7 +5053,8 @@ impl PlayerEventDispatcher {
         // the real effect and the one worth having.
         let accuracy_edge = ((POPULATION_EXECUTION - execution_skill)
             * Self::shot_accuracy_spread()
-            + low_condition_penalty * CONDITION_DRAG)
+            + low_condition_penalty * CONDITION_DRAG
+            + profile.contact_drag)
             .clamp(-0.40, 0.80);
         let wide_miss_chance = wide_base * (1.0 + accuracy_edge)
             + accuracy_edge * ACCURACY_SCUFF
@@ -4746,7 +5074,7 @@ impl PlayerEventDispatcher {
             );
         }
 
-        if rng.random_range(0.0f32..1.0) < wide_miss_chance {
+        if dead_ball.is_none() && rng.random_range(0.0f32..1.0) < wide_miss_chance {
             #[cfg(feature = "match-logs")]
             shot_accuracy_diag::WIDE_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -4760,7 +5088,7 @@ impl PlayerEventDispatcher {
         // Miskick chance — sourced from the unified profile so it
         // includes the smoothstep poor-penalty contribution rather
         // than a single technique^3 read.
-        if rng.random_range(0.0f32..1.0) < miskick_probability {
+        if dead_ball.is_none() && rng.random_range(0.0f32..1.0) < miskick_probability {
             #[cfg(feature = "match-logs")]
             shot_accuracy_diag::MISKICK_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
@@ -4928,7 +5256,10 @@ impl PlayerEventDispatcher {
         // Add power randomness (better players have more consistent power)
         let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04
         let power_random = rng.random_range(power_consistency - 0.04..power_consistency + 0.04);
-        let horizontal_velocity = horizontal_direction * base_horizontal_velocity * power_random;
+        let horizontal_velocity = match dead_ball.and_then(|kick| kick.pace) {
+            Some(pace) => horizontal_direction * pace,
+            None => horizontal_direction * base_horizontal_velocity * power_random,
+        };
 
         // Calculate z-velocity based on shot style and player skills
         let shot_style: f32 = rng.random_range(0.0..1.0);
@@ -4944,7 +5275,21 @@ impl PlayerEventDispatcher {
         // Restated as apexes they say what they mean, and the ball now
         // FLIES to the target — a 1.5 m apex from 25 m arrives at about
         // waist height, a 2.2 m one at the top corner.
-        let apex_metres = if horizontal_distance > 100.0 {
+        let apex_metres = if HeaderStrike::armed() && shoot_event_model.shot_type.is_header() {
+            // A header is met at head height and steered from there: down
+            // in front of the line, flat at the frame or up under the bar.
+            // It is never rolled along the deck, which is what the foot
+            // bands below aim six in ten close shots at — and headed into
+            // the turf at the goal line, those bounced up into the
+            // keeper's gloves.
+            if shot_style < 0.35 {
+                rng.random_range(0.15..0.50)
+            } else if shot_style < 0.8 {
+                rng.random_range(0.50..1.60)
+            } else {
+                rng.random_range(1.60..2.30)
+            }
+        } else if horizontal_distance > 100.0 {
             // Long-range shot - varied heights (technique matters more)
             if shot_style < 0.4 {
                 rng.random_range(0.15..0.60) * technique_skill // Low driven (40%)
@@ -5006,7 +5351,10 @@ impl PlayerEventDispatcher {
         // technique rather than finishing) could not move the outcome.
         let over_bar_chance =
             over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6;
-        let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
+        let shot_goes_over_bar = match dead_ball {
+            Some(kick) => kick.over,
+            None => rng.random_range(0.0f32..1.0) < over_bar_chance,
+        };
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering as AtomicOrdering;
@@ -5043,14 +5391,23 @@ impl PlayerEventDispatcher {
                 execution_skill,
             );
         }
-        let struck_apex = if shot_goes_over_bar {
+        let struck_apex = if let Some(kick) = dead_ball {
+            kick.apex
+        } else if shot_goes_over_bar {
             // Skied. Peaks well clear of the 2.44 m crossbar whatever the
             // range, so the ball is over it at any plausible crossing time.
             rng.random_range(4.0..12.0)
         } else {
             (apex_metres * height_variation * vertical_spin_variation).clamp(0.0, 4.0)
         };
-        let z_velocity = Ball::launch_speed_for_apex(struck_apex);
+        let z_velocity = Self::shot_rise(
+            struck_apex,
+            field.ball.position.z,
+            horizontal_distance,
+            (horizontal_velocity.x * horizontal_velocity.x
+                + horizontal_velocity.y * horizontal_velocity.y)
+                .sqrt(),
+        );
 
         // Calculate final velocity
         let mut final_velocity =
@@ -5337,6 +5694,26 @@ impl PlayerEventDispatcher {
         // know yet.
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
         field.ball.last_shot_struck_tick = context.current_tick();
+        // His strike is the ball's last touch. A header or a volley is
+        // struck off a ball he never owned, and left on whoever touched it
+        // before — the defender who headed the cross out — a shot he put
+        // wide was given as a corner. Uncontrolled: a strike is not a
+        // possession, and it does not spend a set piece's touches.
+        field.ball.record_touch(
+            shoot_event_model.from_player_id,
+            shooter_team_id,
+            context.current_tick(),
+            false,
+        );
+        // A shot is a team-mate playing the ball: a rebound off the keeper
+        // or the post to a man who was offside when it was struck is
+        // offside.
+        field.ball.offside_snapshot = Self::build_offside_snapshot(
+            shoot_event_model.from_player_id,
+            field.ball.pass_origin_restart,
+            field,
+            context.current_tick(),
+        );
         #[cfg(feature = "match-logs")]
         {
             field.ball.last_shot_struck_dist = horizontal_distance;
@@ -5382,11 +5759,18 @@ impl PlayerEventDispatcher {
                 }
                 // A shot struck to rise is struck with the laces over the
                 // top of the ball. Scaled by how high the strike was
-                // aimed, so a low drive carries none.
-                let rise = (struck_apex - 0.8).max(0.0) / 3.0;
-                if rise > 0.0 {
-                    let dir = Vector3::new(vx / speed, vy / speed, 0.0);
-                    spin += SpinModel::from_strike(dir, 0.0, -rise * 0.55, technique_skill);
+                // aimed, so a low drive carries none — unless the kick has
+                // already decided its topspin, which its flight was solved
+                // with.
+                let dir = Vector3::new(vx / speed, vy / speed, 0.0);
+                match dead_ball.and_then(|kick| kick.dip) {
+                    Some(dip) => spin += SpinModel::from_strike(dir, 0.0, -dip, 1.0),
+                    None => {
+                        let rise = (struck_apex - 0.8).max(0.0) / 3.0;
+                        if rise > 0.0 {
+                            spin += SpinModel::from_strike(dir, 0.0, -rise * 0.55, technique_skill);
+                        }
+                    }
                 }
             }
             // The curl term above is solved by division (`accel_y / vx`),
@@ -5527,7 +5911,7 @@ impl PlayerEventDispatcher {
                         p.side == Some(defending_side)
                             && p.tactical_position.current_position.position_group()
                                 == PlayerFieldPositionGroup::Goalkeeper
-                            && !p.is_sent_off
+                            && !p.off_pitch
                     })
                     .map(|k| {
                         GoalkeeperSkillProfile::from_player(
@@ -5541,8 +5925,25 @@ impl PlayerEventDispatcher {
                         .positioning
                     })
                     .unwrap_or(0.5);
+                // A free kick is hidden behind its wall until it is over it,
+                // so the keeper reads the flight he sees, from the wall on.
+                let to_line = Vector3::new(dx, final_velocity.y * ticks_to_goal, 0.0);
+                let seen_from = match dead_ball {
+                    Some(_)
+                        if shoot_event_model.shot_type == ShotType::DirectFreeKick
+                            && wall_stopper.is_none()
+                            && FreeKickBand::from_distance(horizontal_distance)
+                                != FreeKickBand::Far =>
+                    {
+                        field.ball.position
+                            + to_line.normalize()
+                                * RestartShape::WALL_DISTANCE.min(to_line.norm())
+                    }
+                    _ => field.ball.position,
+                };
+                let hidden = (seen_from - field.ball.position).xy().norm() / vx.abs();
                 let read_error = {
-                    let seen = (ticks_to_goal / 120.0).clamp(0.0, 1.0);
+                    let seen = ((ticks_to_goal - hidden) / 120.0).clamp(0.0, 1.0);
                     KEEPER_PLACEMENT_READ
                         * (1.0 - seen * 0.55)
                         * (1.0 + (GoalkeeperSkillProfile::POPULATION_READ - keeper_read) * 0.60)
@@ -5743,10 +6144,11 @@ impl PlayerEventDispatcher {
                     defending_side,
                     deflected,
                     save_rolled: false,
-                    block_rolled: false,
-                    blocked_by: None,
+                    block_rolled: wall_stopper.is_some(),
+                    blocked_by: wall_stopper.map(|id| (id, rng.unit_f32())),
                     shooter_threat,
                     struck_from: field.ball.position,
+                    seen_from,
                 });
             } else {
                 #[cfg(feature = "match-logs")]
@@ -6028,7 +6430,9 @@ impl PlayerEventDispatcher {
         gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, Ordering::Relaxed);
 
         let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
-        let failure = GkClaimContest::failure_probability(field, player_id, &situation, minute);
+        let failure = (GkClaimContest::failure_probability(field, player_id, &situation, minute)
+            * KeeperLapse::multiplier(context.psychology.get(player_id)))
+        .min(0.95);
         if context.rng.unit_f32() >= failure {
             if let Some(gk) = field.get_player_mut(player_id) {
                 gk.statistics.note_gk_command_action();
@@ -6193,9 +6597,94 @@ impl PlayerEventDispatcher {
         }
     }
 
+    /// A foul is a contact first and an offence second. Whether it hurt
+    /// the man fouled is rolled before the referee decides anything, so the
+    /// referee can see it — he does not play advantage over an injured
+    /// player — and it is applied after the whistle, so the physio holds the
+    /// free kick rather than a drop ball replacing it.
     fn handle_commit_foul_event(
         fouler_id: u32,
         severity: FoulSeverity,
+        source: FoulSource,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let victim = Self::foul_victim(fouler_id, field);
+        // Where the offence was: on the man fouled, which is the ball for a
+        // challenge on the carrier and somewhere else for a shirt pulled
+        // off it.
+        let spot = victim
+            .and_then(|id| field.get_player(id))
+            .map_or(field.ball.position, |p| p.position);
+        let injury = victim.and_then(|victim| {
+            MatchInjury::roll_contact(field, context, victim, InjuryRisk::foul_impulse(severity))
+                .map(|hurt| (victim, hurt))
+        });
+        let stops_play = injury.is_some_and(|(_, hurt)| hurt > InjuryGrade::Knock);
+        Self::whistle_foul(fouler_id, severity, source, spot, stops_play, field, context);
+        if let Some((victim, hurt)) = injury {
+            MatchInjury::befall(field, context, victim, InjuryCause::Contact, hurt);
+        }
+    }
+
+    /// Handball where it happened — a penalty in his own area — and a
+    /// card more likely when the shot was going in. Most blocks off an arm
+    /// are not deliberate and get no card at all.
+    fn whistle_handball(
+        player_id: u32,
+        goal_bound: bool,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        let Some(spot) = field.get_player(player_id).map(|p| p.position) else {
+            return;
+        };
+        Self::award_restart_for_foul(player_id, FoulSeverity::Normal, spot, field, context);
+        let now = context.total_match_time;
+        if let Some(p) = field.get_player_mut(player_id) {
+            p.fouls_committed = p.fouls_committed.saturating_add(1);
+            p.statistics.add_foul(now);
+        }
+        let (yellow, red) = if goal_bound { (0.35, 0.15) } else { (0.15, 0.0) };
+        Self::apply_card_decision(
+            player_id,
+            FoulSeverity::Normal,
+            FoulSource::Handball,
+            yellow,
+            red,
+            field,
+            context,
+        );
+    }
+
+    /// The man the contact was made on: the carrier when the fouler took
+    /// him down on the ball, otherwise the nearest opponent — the runner he
+    /// was holding.
+    fn foul_victim(fouler_id: u32, field: &MatchField) -> Option<u32> {
+        let fouler = field.get_player(fouler_id)?;
+        if let Some(carrier) = field.ball.current_owner.and_then(|id| field.get_player(id))
+            && carrier.team_id != fouler.team_id
+        {
+            return Some(carrier.id);
+        }
+        field
+            .players
+            .iter()
+            .filter(|p| p.team_id != fouler.team_id && !p.off_pitch)
+            .min_by(|a, b| {
+                let da = (a.position - fouler.position).magnitude_squared();
+                let db = (b.position - fouler.position).magnitude_squared();
+                da.total_cmp(&db)
+            })
+            .map(|p| p.id)
+    }
+
+    fn whistle_foul(
+        fouler_id: u32,
+        severity: FoulSeverity,
+        source: FoulSource,
+        spot: Vector3<f32>,
+        injury_stops_play: bool,
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
@@ -6227,7 +6716,8 @@ impl PlayerEventDispatcher {
             FoulCensus::note(f.state.compact_id(), in_box);
         }
 
-        let call_ctx = FoulResolver::build_call_context(fouler_id, severity, field, context);
+        let call_ctx =
+            FoulResolver::build_call_context(fouler_id, severity, source, spot, field, context);
         let call_prob = context
             .referee
             .foul_call_prob(&context.environment, call_ctx);
@@ -6240,16 +6730,35 @@ impl PlayerEventDispatcher {
             return;
         }
 
+        // A foul inside an advantage window ends it: the first offence is
+        // still owed its card, and play is stopped for this one.
+        if let Some(first) = context.pending_advantage.take() {
+            Self::apply_card_decision(
+                first.fouler_id,
+                first.severity,
+                first.source,
+                first.yellow_prob,
+                first.red_prob,
+                field,
+                context,
+            );
+        }
+
         // Compute card probabilities up front — used either to record
         // the card immediately or to stash on a pending advantage.
         let match_second = context.total_match_time;
         let card_modifier = context.referee.card_modifier(&context.environment);
-        let (card_yellow_prob, card_red_prob) =
-            match Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier)
+        let (card_yellow_prob, card_red_prob) = match source {
+            FoulSource::ProfessionalFoul => match Self::professional_foul_cards(fouler_id, spot, field, context) {
+                Some(p) => p,
+                None => return,
+            },
+            _ => match Self::compute_card_probs(fouler_id, severity, field, match_second, card_modifier)
             {
                 Some(p) => p,
                 None => return,
-            };
+            },
+        };
 
         // Advantage: if the fouled team kept possession, the ball is in
         // a good attacking position, and the foul wasn't violent, the
@@ -6264,7 +6773,11 @@ impl PlayerEventDispatcher {
         };
         let (fouled_team_id, attack_value, possession_retained) =
             Self::estimate_advantage_inputs(fouler_id, field);
+        // No advantage over a man who cannot go on: he was hurt, or he was
+        // brought down precisely so that he could not.
         if let Some(fouled_team_id) = fouled_team_id
+            && !injury_stops_play
+            && source != FoulSource::ProfessionalFoul
             && context.referee.should_play_advantage(
                 attack_value,
                 possession_retained,
@@ -6279,6 +6792,8 @@ impl PlayerEventDispatcher {
                 expire_tick: start_tick + window,
                 fouled_team_id,
                 severity,
+                source,
+                spot,
                 yellow_prob: card_yellow_prob,
                 red_prob: card_red_prob,
             });
@@ -6298,7 +6813,7 @@ impl PlayerEventDispatcher {
             field.ball.flags.in_flight_state = 150;
             field.ball.contested_claim_count = 0;
         }
-        Self::award_restart_for_foul(fouler_id, severity, field, context);
+        Self::award_restart_for_foul(fouler_id, severity, spot, field, context);
 
         // Count the foul for the player (advantage path counted it above).
         if let Some(p) = field.get_player_mut(fouler_id) {
@@ -6309,11 +6824,55 @@ impl PlayerEventDispatcher {
         Self::apply_card_decision(
             fouler_id,
             severity,
+            source,
             card_yellow_prob,
             card_red_prob,
             field,
             context,
         );
+
+        // …and he has something to say about it.
+        if let Some(fouler) = field.get_player(fouler_id)
+            && !fouler.off_pitch
+            && context.rng.unit_f32() < Dissent::caution_chance(fouler, &context.referee)
+        {
+            Self::apply_card_decision(
+                fouler_id,
+                FoulSeverity::Normal,
+                FoulSource::Dissent,
+                1.0,
+                0.0,
+                field,
+                context,
+            );
+        }
+    }
+
+    /// A foul that stopped a promising attack is a caution whatever the
+    /// contact; one that denied an obvious goal-scoring opportunity is a
+    /// sending-off, as far as the referee reads it so.
+    fn professional_foul_cards(
+        fouler_id: u32,
+        spot: Vector3<f32>,
+        field: &MatchField,
+        context: &MatchContext,
+    ) -> Option<(f32, f32)> {
+        let fouler = field.get_player(fouler_id)?;
+        let goal = match fouler.side? {
+            PlayerSide::Left => context.goal_positions.left,
+            PlayerSide::Right => context.goal_positions.right,
+        };
+        let threat = CounterAttackThreat::from_positions(
+            spot,
+            goal,
+            fouler.position,
+            field
+                .players
+                .iter()
+                .filter(|p| p.team_id == fouler.team_id && p.id != fouler_id && !p.off_pitch)
+                .map(|p| (p.position, p.tactical_position.current_position.is_goalkeeper())),
+        );
+        Some((1.0, ProfessionalFoul::red_card_prob(threat)))
     }
 
     /// Compute the (yellow_prob, red_prob) pair for the foul. Reads
@@ -6456,6 +7015,7 @@ impl PlayerEventDispatcher {
     pub(crate) fn apply_card_decision(
         fouler_id: u32,
         severity: FoulSeverity,
+        source: FoulSource,
         card_yellow_prob: f32,
         card_red_prob: f32,
         field: &mut MatchField,
@@ -6485,6 +7045,8 @@ impl PlayerEventDispatcher {
             }
         }
 
+        context.tally.note_whistled(source);
+
         if !direct_red && !got_yellow {
             return;
         }
@@ -6501,24 +7063,33 @@ impl PlayerEventDispatcher {
             let temperament = player.attributes.temperament;
             if direct_red {
                 player.statistics.add_red_card(match_second);
-                player.is_sent_off = true;
-                context.record_stoppage_time(45_000);
+                context.tally.note_card(source, true);
                 (false, true, temperament)
             } else {
                 player.yellow_cards = player.yellow_cards.saturating_add(1);
                 player.statistics.add_yellow_card(match_second);
-                context.record_stoppage_time(15_000);
                 let promoted = player.yellow_cards >= 2;
                 #[cfg(feature = "match-logs")]
                 crate::mid_run_diag::CardDiag::note(if promoted { 2 } else { 1 });
+                context.tally.note_card(source, false);
                 if promoted {
+                    context.tally.note_card(source, true);
                     player.statistics.add_red_card(match_second);
-                    player.is_sent_off = true;
-                    context.record_stoppage_time(45_000);
                 }
                 (promoted, promoted, temperament)
             }
         };
+
+        // The name goes in the book before play restarts.
+        let pause_ms = if ends_with_red {
+            RefereeProfile::SENDING_OFF_PAUSE_MS
+        } else {
+            RefereeProfile::BOOKING_PAUSE_MS
+        };
+        let until = context.current_tick() + pause_ms / MATCH_TIME_INCREMENT_MS;
+        if let Some(restart) = field.ball.awaiting_restart.as_mut() {
+            restart.hold_until(DeadTime::Booking, until);
+        }
 
         // Psychology: a yellow raises nervousness (low-temperament
         // players take a bigger hit); both yellow and red drop
@@ -6532,43 +7103,10 @@ impl PlayerEventDispatcher {
             .psychology
             .record_negative(fouler_id, NegativeEvent::YellowCard, psych_tick);
 
-        if ends_with_red {
-            // Transfer ball ownership back to a neutral state so the
-            // opposing side can restart. Zero the fouler's velocity and
-            // park them off the pitch so distance / collision checks stop
-            // treating them as an active participant.
-            if field.ball.current_owner == Some(fouler_id) {
-                field.ball.previous_owner = field.ball.current_owner;
-                field.ball.current_owner = None;
-                field.ball.pass_target_player_id = None;
-            }
-
-            // Capture team id before we stash the player off-pitch so we
-            // can reshape teammates afterwards.
-            let team_id = field.get_player_mut(fouler_id).map(|p| p.team_id);
-
-            if let Some(player) = field.get_player_mut(fouler_id) {
-                player.velocity = Vector3::zeros();
-                // Stash them well beyond the sideline. Physics updates
-                // still run but no one is close enough to interact.
-                #[cfg(feature = "match-logs")]
-                {
-                    use crate::r#match::engine::ball::ball::teleport as tc;
-                    tc::PlayerTeleportCensus::note_firing(tc::PSITE_SENT_OFF);
-                    tc::PlayerTeleportCensus::note(
-                        tc::PSITE_SENT_OFF,
-                        player.position,
-                        Vector3::new(-500.0, -500.0, 0.0),
-                    );
-                }
-                player.position = Vector3::new(-500.0, -500.0, 0.0);
-            }
-
-            // Compact the surviving team's shape — surviving players drop
-            // deeper and narrower to cover the numerical disadvantage.
-            if let Some(tid) = team_id {
-                field.compact_after_dismissal(tid);
-            }
+        if ends_with_red
+            && let Some(team_id) = field.get_player(fouler_id).map(|p| p.team_id)
+        {
+            field.take_off(fouler_id, context.coach_for_team(team_id).spare_line());
             // Roster effectively changed (one fewer active player) —
             // invalidate the cached team skill composites.
             context.invalidate_skill_aggregates();
@@ -6595,84 +7133,77 @@ impl PlayerEventDispatcher {
     /// Build an offside snapshot at pass-kick. The actual offside call
     /// fires later, when the receiver becomes active — see
     /// `evaluate_offside_snapshot`.
+    /// Everybody in an offside position as `passer_id` plays the ball —
+    /// see [`OffsideSnapshot`].
     fn build_offside_snapshot(
         passer_id: u32,
-        receiver_id: u32,
         origin: PassOriginRestart,
         field: &MatchField,
         tick: u64,
     ) -> Option<OffsideSnapshot> {
+        if origin.is_offside_exempt() {
+            return None;
+        }
         let passer = field.players.iter().find(|p| p.id == passer_id)?;
-        let receiver = field.players.iter().find(|p| p.id == receiver_id)?;
         let passer_side = passer.side?;
-        let receiver_side = receiver.side?;
-        // Passes between players on different sides shouldn't happen,
-        // but if it does (substitution race) skip the snapshot.
-        if passer_side != receiver_side {
-            return None;
-        }
-        let half_width = field.size.half_width as f32;
-        let in_opponent_half = match receiver_side {
-            PlayerSide::Left => receiver.position.x > half_width,
-            PlayerSide::Right => receiver.position.x < half_width,
-        };
-        if !in_opponent_half {
-            // Offside can only occur in the opponent half — no snapshot
-            // needed.
-            return None;
-        }
-
-        // The line, through the one helper the PASSER also reads — see
-        // [`OffsideLine`]. A referee and a player working from two
-        // different lines is worse than either alone.
-        let defending = match receiver_side {
+        let defending = match passer_side {
             PlayerSide::Left => PlayerSide::Right,
             PlayerSide::Right => PlayerSide::Left,
         };
-        let second_last = OffsideLine::second_last(
+        let line_x = OffsideLine::second_last(
             field
                 .players
                 .iter()
-                .filter(|p| p.side == Some(defending) && !p.is_sent_off)
+                .filter(|p| p.side == Some(defending) && !p.off_pitch)
                 .map(|p| p.position.x),
-            receiver_side,
+            passer_side,
         )?;
-
-        #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::RestartCensus::note_offside_snapshot();
-        Some(OffsideSnapshot {
+        let snapshot = OffsideSnapshot::at_kick(
             origin,
             passer_id,
             passer_side,
-            receiver_id,
-            ball_x_at_kick: field.ball.position.x,
-            second_last_defender_x: second_last,
-            receiver_x_at_kick: receiver.position.x,
-            receiver_y_at_kick: receiver.position.y,
-            set_tick: tick,
-        })
+            field.ball.position.x,
+            line_x,
+            field.size.half_width as f32,
+            field
+                .players
+                .iter()
+                .filter(|p| p.side == Some(passer_side) && !p.off_pitch)
+                .map(|p| (p.id, p.position.x)),
+            tick,
+        );
+        #[cfg(feature = "match-logs")]
+        if snapshot.is_some() {
+            crate::mid_run_diag::RestartCensus::note_offside_snapshot();
+        }
+        snapshot
     }
 
-    /// Decide whether the snapshot represents an offside position.
-    /// Tolerance 1.5u to absorb foot-vs-shoulder ambiguity. Kept for
-    /// callers that want a free function rather than the snapshot
-    /// method; the snapshot's `is_offside` is the canonical version.
-    #[allow(dead_code)]
-    pub(crate) fn snapshot_is_offside(snap: &OffsideSnapshot) -> bool {
-        const TOLERANCE: f32 = 1.5;
-        match snap.passer_side {
-            PlayerSide::Left => {
-                if snap.receiver_x_at_kick <= snap.ball_x_at_kick + TOLERANCE {
-                    return false;
-                }
-                snap.receiver_x_at_kick > snap.second_last_defender_x + TOLERANCE
-            }
-            PlayerSide::Right => {
-                if snap.receiver_x_at_kick >= snap.ball_x_at_kick - TOLERANCE {
-                    return false;
-                }
-                snap.receiver_x_at_kick < snap.second_last_defender_x - TOLERANCE
-            }
+    /// A ball played to the runner the other side's line had stepped up
+    /// past: the trap sprung if he was left offside, beaten otherwise.
+    fn note_offside_trap(
+        passer_id: u32,
+        receiver_id: u32,
+        snapshot: Option<&OffsideSnapshot>,
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) {
+        let Some(passer_team) = field.get_player(passer_id).map(|p| p.team_id) else {
+            return;
+        };
+        let defending = if passer_team == field.home_team_id {
+            field.away_team_id
+        } else {
+            field.home_team_id
+        };
+        let stepped_past = context
+            .defence_plan_for_team(defending)
+            .line_step
+            .is_some_and(|call| call.runner == receiver_id);
+        if stepped_past {
+            context
+                .tally
+                .note_offside_trap(snapshot.is_some_and(|s| s.flags(receiver_id)));
         }
     }
 
@@ -6832,12 +7363,11 @@ impl PlayerEventDispatcher {
 
     /// Hoof it away, head it on, punch it clear.
     ///
-    /// `clearer_id` is who struck it, and it is used for exactly one
-    /// thing: the reach guard in `dispatch`, which is the whole reason
-    /// [`PlayerEvent::ClearBall`] now carries an id at all. Everything
-    /// BELOW — the clearance credit, the zone, the own-goal safety, the
-    /// release that arms Law 12 — deliberately still reads
-    /// `current_owner`, exactly as it always did.
+    /// `clearer_id` is who struck it. It is used for the reach guard in
+    /// `dispatch` and to book his touch on a ball he did not own, and for
+    /// nothing else: the clearance credit, the zone, the own-goal safety
+    /// and the release that arms Law 12 deliberately still read
+    /// `current_owner`, exactly as they always did.
     ///
     /// That looks inconsistent and is not. Most of this event's emitters
     /// do not own the ball when they strike it: a midfielder's knock-down
@@ -6849,7 +7379,7 @@ impl PlayerEventDispatcher {
     /// a side effect of a reach fix. Whether a flick-on is a clearance is
     /// a real question; it is not this one.
     fn handle_clear_ball_event(
-        _clearer_id: u32,
+        clearer_id: u32,
         velocity: Vector3<f32>,
         field: &mut MatchField,
         context: &MatchContext,
@@ -6861,6 +7391,16 @@ impl PlayerEventDispatcher {
         // parried shots stayed at zero saves regardless of effort.
         let gk_save_id = Self::gk_clearing_shot(field);
         let is_gk_shot_save = gk_save_id.is_some();
+        // A ball cleared out of the air was never his, so nothing else
+        // books the contact: put behind, it is his side that concedes the
+        // corner.
+        if field.ball.current_owner != Some(clearer_id)
+            && let Some(team_id) = field.get_player(clearer_id).map(|p| p.team_id)
+        {
+            field
+                .ball
+                .record_touch(clearer_id, team_id, context.current_tick(), false);
+        }
         if let Some(gk_id) = gk_save_id {
             // Capture shooter BEFORE we mutate the field — the previous
             // owner is the player whose shot the GK is now clearing.
@@ -7032,6 +7572,7 @@ impl PlayerEventDispatcher {
     pub(crate) fn award_restart_for_foul(
         fouler_id: u32,
         _severity: FoulSeverity,
+        foul_pos: Vector3<f32>,
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
@@ -7076,7 +7617,6 @@ impl PlayerEventDispatcher {
             PlayerSide::Left => context.penalty_area(true),
             PlayerSide::Right => context.penalty_area(false),
         };
-        let foul_pos = field.ball.position;
         let in_penalty_area = pa.contains(&foul_pos);
         #[cfg(feature = "match-logs")]
         {
@@ -7229,6 +7769,14 @@ impl PlayerEventDispatcher {
         field
             .ball
             .record_touch(taker_id, team_id, context.current_tick(), true);
+        field.ball.pending_restart_stations = RestartShape::plan(
+            origin,
+            &field.players,
+            taker_id,
+            restart_pos,
+            field.size.width as f32,
+            field.size.height as f32,
+        );
         if !walked {
             // `OF_FOUL_WALK=off`: he is handed the ball and placed on it.
             field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
@@ -7253,6 +7801,7 @@ impl PlayerEventDispatcher {
                 .map(|p| AwaitedRestart::patience_for((p.position - restart_pos).magnitude()))
                 .unwrap_or(AwaitedRestart::PATIENCE_TICKS),
             settled_tick: None,
+            hold: None,
         });
         // No explicit `TakeMe` here, and none is needed: this handler has
         // no `EventCollection`, and `tick_awaited_restart`'s own nudge
@@ -7268,7 +7817,7 @@ impl PlayerEventDispatcher {
             .iter()
             .filter(|p| {
                 p.side == Some(victim_side)
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper
             })
@@ -7302,7 +7851,7 @@ impl PlayerEventDispatcher {
             .iter()
             .filter(|p| {
                 p.side == Some(victim_side)
-                    && !p.is_sent_off
+                    && !p.off_pitch
                     && p.tactical_position.current_position.position_group()
                         != PlayerFieldPositionGroup::Goalkeeper
             })
@@ -7340,6 +7889,7 @@ impl PlayerEventDispatcher {
 mod pass_ballistics_tests {
     use super::{PassSkills, PlayerEventDispatcher, TrajectoryType};
     use crate::r#match::engine::ball::ball::Ball;
+    use crate::r#match::engine::environment::EnvModifiers;
     use crate::r#match::engine::flow::rng::MatchRng;
     use nalgebra::Vector3;
 
@@ -7355,7 +7905,6 @@ mod pass_ballistics_tests {
             flair: 0.8,
             long_shots: 0.8,
             crossing: 0.8,
-            stamina: 0.8,
             availability_factor: 1.0,
         }
     }
@@ -7363,7 +7912,7 @@ mod pass_ballistics_tests {
     /// `calculate_horizontal_velocity`'s output for the same vector — the
     /// rolling delivery the solver is handed.
     fn rolling(vector: &Vector3<f32>) -> Vector3<f32> {
-        PlayerEventDispatcher::calculate_horizontal_velocity(vector, 1.0)
+        PlayerEventDispatcher::calculate_horizontal_velocity(vector, 1.0, &EnvModifiers::default())
     }
 
     fn solve(distance: f32, trajectory: TrajectoryType, seed: u64) -> Vector3<f32> {

@@ -14,6 +14,9 @@ use super::department::{GoalkeepingDepartment, KeeperCoachAuthority};
 use super::plan::KeeperRoomPlan;
 use super::room::{KeeperAgeCurve, KeeperRoom};
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::staff::StaffStub;
+use crate::club::staff::mind::organs::judgements::{CoachMatchObservation, CoachMemoryStore};
+use crate::club::staff::perception::CoachProfile;
 use crate::shared::fullname::FullName;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
@@ -330,6 +333,9 @@ fn the_nomination_beats_a_better_keeper_in_a_dead_rubber_and_never_in_a_decider(
         third: Some(3),
         nominated: Some(4),
         authority: 0.85,
+        nominee_assurance: None,
+        fixture_standard: None,
+        rested: None,
     };
 
     let dead_rubber = brief.selection_adjustment(4, 0.20);
@@ -438,4 +444,133 @@ fn the_keeper_age_curve_peaks_late_and_falls_slowly() {
         KeeperAgeCurve::of(36) > 0.8,
         "a thirty-six-year-old keeper is still a keeper"
     );
+}
+
+fn match_seen(player_id: u32, errors: u16, week: i64) -> CoachMatchObservation {
+    CoachMatchObservation {
+        player_id,
+        effective_rating: 5.8,
+        minutes_played: 90,
+        is_starter: true,
+        match_importance: 0.6,
+        is_cup: false,
+        is_derby: false,
+        is_continental: false,
+        goals: 0,
+        assists: 0,
+        errors_leading_to_goal: errors,
+        errors_leading_to_shot: errors,
+        keeper_claims: 1,
+        standard_of_football: 0.66,
+        yellow_cards: 0,
+        red_cards: 0,
+        team_won: false,
+        was_substituted_early: false,
+        role_fit: 1.0,
+        professionalism_signal: 0.6,
+        date: today() + chrono::Duration::days(week * 7),
+    }
+}
+
+/// Three matches running with an error that cost a goal, seen by a
+/// sharp-eyed goalkeeping coach.
+fn shaken_room(room: &mut KeeperRoom, shaken_id: u32) {
+    let mut lead = StaffStub::build();
+    lead.id = 11;
+    lead.staff_attributes.knowledge.judging_player_ability = 17;
+    let profile = CoachProfile::from_staff(&lead);
+    let mut memory = CoachMemoryStore::new();
+    for week in 0..3 {
+        memory.observe(&match_seen(shaken_id, 1, week), &profile);
+    }
+    room.perceive(&lead, 0.66, |_, player_id| (0.66, memory.get(player_id)), today());
+}
+
+#[test]
+fn a_congested_league_fixture_is_not_a_debut_for_an_unassured_keeper() {
+    let brief = KeeperSelectionBrief {
+        number_one: Some(1),
+        deputy: Some(2),
+        third: Some(3),
+        nominated: Some(4),
+        authority: 0.85,
+        nominee_assurance: Some(0.55),
+        fixture_standard: None,
+        rested: None,
+    };
+    // A league fixture at the first team's full standard in a European
+    // week: 0.6 importance × 0.55 for congestion.
+    let congested = brief.with_fixture_standard(0.69).selection_adjustment(4, 0.33);
+    assert_eq!(congested, 0.0);
+    // An early cup tie against a lower division, close to where he plays.
+    let cup_tie = brief.with_fixture_standard(0.57).selection_adjustment(4, 0.30);
+    assert!(cup_tie > 3.0, "{cup_tie}");
+}
+
+#[test]
+fn a_shaken_number_one_is_taken_out_of_the_firing_line() {
+    let mut room = RoomFixture::new()
+        .senior(1, 29, 140)
+        .senior(2, 27, 128)
+        .assemble();
+    shaken_room(&mut room, 1);
+    let plan = review(&room, &KeeperRoomPlan::new());
+    assert_eq!(plan.rested(), Some(1));
+
+    let brief = KeeperSelectionBrief::from_plan(&plan, today());
+    assert!(
+        brief.selection_adjustment(1, 0.9) < brief.selection_adjustment(2, 0.9),
+        "a big night is the deputy's"
+    );
+    assert!(
+        brief.selection_adjustment(1, 0.4) > brief.selection_adjustment(2, 0.4),
+        "an ordinary one is still his"
+    );
+}
+
+#[test]
+fn no_protection_without_cover() {
+    let mut room = RoomFixture::new().senior(1, 29, 140).assemble();
+    shaken_room(&mut room, 1);
+    let plan = review(&room, &KeeperRoomPlan::new());
+    assert_eq!(plan.rested(), None);
+}
+
+/// Four clean matches at `standard`, seen by a sharp-eyed goalkeeping coach
+/// at a club whose first team plays at 0.70.
+fn read_at(room: &mut KeeperRoom, keeper_id: u32, standard: f32) {
+    let mut lead = StaffStub::build();
+    lead.id = 11;
+    lead.staff_attributes.knowledge.judging_player_ability = 17;
+    let profile = CoachProfile::from_staff(&lead);
+    let mut memory = CoachMemoryStore::new();
+    for week in 0..4 {
+        let mut seen = match_seen(keeper_id, 0, week);
+        seen.standard_of_football = standard;
+        memory.observe(&seen, &profile);
+    }
+    room.perceive(&lead, 0.70, |_, player_id| (standard, memory.get(player_id)), today());
+}
+
+#[test]
+fn a_blocked_twenty_year_old_is_loaned_to_the_level_between() {
+    let fixture = RoomFixture::new()
+        .senior(1, 29, 150)
+        .senior(2, 27, 138)
+        .senior(3, 33, 125)
+        .academy(4, 20, 100);
+    let loan_aim = |plan: &KeeperRoomPlan| {
+        plan.advice_for(4)
+            .find(|r| r.advice == KeeperAdvice::LoanHimOutForMinutes)
+            .expect("three keepers ahead of him")
+            .target_standard
+    };
+
+    let mut room = fixture.assemble();
+    read_at(&mut room, 4, 0.58);
+    let target = loan_aim(&review(&room, &KeeperRoomPlan::new())).expect("he has been read");
+    assert!(target > 0.58 && target < 0.70, "{target}");
+
+    let unread = review(&fixture.assemble(), &KeeperRoomPlan::new());
+    assert_eq!(loan_aim(&unread), None, "an unread boy goes out on the club's ordinary terms");
 }

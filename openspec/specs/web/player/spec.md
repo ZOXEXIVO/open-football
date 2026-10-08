@@ -284,6 +284,17 @@ The system SHALL provide mutating actions, invoked against a specific player id,
 squad and market state: release to free agency, clear unhappy/injury flags, toggle forced match selection, cancel
 an active loan, view/edit contract terms, execute a manual transfer, and execute a manual loan.
 
+A manual transfer SHALL state the move as a fact and complete it through the same signing path the simulation's own
+transfers use. It SHALL NOT be refused for the transfer window, the buying club's budget or squad room, or the route
+between the two countries. An editor's move is a decision already taken, not a request for one.
+
+Only the club that owns a player can sell the player. A manual transfer SHALL therefore be refused for:
+
+- a player who is out on loan, until the loan is cancelled;
+- a move to the club the player is already at.
+
+Neither refusal changes anything.
+
 #### Scenario: Manual release to free agency
 - **WHEN** an editor triggers the release action for a rostered player
 - **THEN** the system SHALL move the player to the global free-agent pool, clear his contract, record a transfer-
@@ -291,10 +302,32 @@ an active loan, view/edit contract terms, execute a manual transfer, and execute
   transfer-list entries, scouting interest and live negotiations referencing him
 
 #### Scenario: Manual transfer
-- **WHEN** an editor submits a transfer action with a destination club id and an optional fee
-- **THEN** the system SHALL move the player to that club's roster (from his current club or the free-agent pool),
-  install a new contract, update his squad status for the new depth chart, and record the deal in transfer
-  history
+- **WHEN** an editor submits a transfer action for a player at another club, with a destination club id and an
+  optional fee
+- **THEN** the system SHALL complete the move as a negotiated permanent transfer completes. That covers:
+  - a new contract carrying the squad role the destination depth chart gives the player;
+  - the buying board's mandate, and a plan made from it;
+  - the fee booked on both clubs: the seller's sale, with its own mandate closed, and the buyer's purchase;
+  - the player's sell-on obligations settled;
+  - the move on the player's decision record.
+- **AND** it SHALL record the deal in transfer history
+
+#### Scenario: Manual signing from the free-agent pool
+- **WHEN** an editor submits a transfer action for a player in the free-agent pool
+- **THEN** the system SHALL complete the signing as a simulated free-agent signing completes. That covers:
+  - a new contract carrying the squad role the destination depth chart gives the player;
+  - the buying board's mandate, and a plan made from it;
+  - the signing on the player's decision record.
+- **AND** it SHALL record the signing in transfer history
+
+#### Scenario: A manual transfer ignores the market's gates
+- **WHEN** an editor moves a player to a club with a shut transfer window, an exhausted budget and a full squad
+- **THEN** the move completes, and the buying club's books show the fee as spent
+
+#### Scenario: A player on loan is sold by the owner, not the borrower
+- **WHEN** an editor submits a transfer action for a player currently out on loan
+- **THEN** the request is refused and nothing changes, and once the loan is cancelled the same transfer completes
+  with the owning club as the seller
 
 #### Scenario: Manual loan
 - **WHEN** an editor submits a loan action with a destination club id and a season count

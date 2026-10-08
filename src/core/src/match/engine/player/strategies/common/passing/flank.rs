@@ -39,7 +39,9 @@
 //! substitution is most of the difference between "he ran inside and lost
 //! it" and "he got to the byline".
 
+use crate::r#match::midfielders::states::common::{LaneAhead, Opportunity};
 use crate::r#match::player::strategies::common::passing::CrossModel;
+use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -117,6 +119,10 @@ impl FlankPlay {
     /// because the drive is what *creates* the delivery position.
     const DRIVE_PROGRESS: f32 = 0.48;
 
+    /// How open the lane inside him has to be before a wide carrier with
+    /// no preference takes it rather than the byline.
+    const INSIDE_LANE_OPEN: f32 = 0.55;
+
     /// A team-mate this much further toward the goal line than the
     /// carrier counts as having gone past him (~5 m). Below it he is
     /// level, and a square ball to a man level with you on the same
@@ -133,6 +139,19 @@ impl FlankPlay {
     /// the off-ball runner to the same patch of grass.
     const BYLINE_DEPTH: f32 = 45.0;
     const BYLINE_LATERAL: f32 = 165.0;
+
+    /// Grass a wide carrier needs in front of him toward the byline to
+    /// keep running rather than cross (~5 m).
+    const RUN_ROOM: f32 = 40.0;
+
+    /// The bar a delivery's appetite has to clear, drawn once per
+    /// possession. Appetite at the decision sits between 0.55 and 0.95;
+    /// with no bar every possession that reached it crossed, 31
+    /// deliveries a team a match against a real 16-18. 0.70-1.00 measured
+    /// 15.7.
+    const DELIVERY_BAR_BASE: f32 = 0.70;
+    const DELIVERY_BAR_SPREAD: f32 = 0.30;
+    const DELIVERY_SALT: u64 = 0x5C2B_77A1_D3E9_0F41;
 
     /// Is this player standing in a wide area at all?
     ///
@@ -186,7 +205,15 @@ impl FlankPlay {
             return None;
         }
         let goal = ctx.player().opponent_goal_position();
-        let needed = if (goal.x - ctx.player.position.x).abs() < Self::BYLINE_DEPTH_GATE {
+        let at_byline = (goal.x - ctx.player.position.x).abs() < Self::BYLINE_DEPTH_GATE;
+        // Short of the byline, a winger with grass in front of him is
+        // still running. Crossing on the first yard of the channel put
+        // two thirds of all deliveries 25 m or more from the goal line;
+        // the early ball is for when the full-back has shut the run.
+        if !at_byline && Self::run_is_on(ctx) {
+            return None;
+        }
+        let needed = if at_byline {
             Self::BOX_BODIES_AT_BYLINE
         } else {
             Self::BOX_BODIES
@@ -219,11 +246,49 @@ impl FlankPlay {
             return None;
         }
 
-        if CrossModel::pick(ctx).is_some() {
-            return Some(FlankAction::Deliver);
-        }
+        // …and the ball has to be worth it to him. Whether he fancies
+        // this one is asked of the possession, not the tick: a fresh
+        // question every tick turns standing in the channel into a
+        // lottery he eventually wins, which is how every possession that
+        // reached here used to end in a cross.
+        let (_, quality) = CrossModel::pick_rated(ctx)?;
+        let appetite = quality * (0.7 + 0.6 * crossing);
+        let bar = Self::DELIVERY_BAR_BASE
+            + Opportunity::draw(ctx, Self::DELIVERY_SALT) * Self::DELIVERY_BAR_SPREAD;
+        (appetite >= bar).then_some(FlankAction::Deliver)
+    }
 
-        None
+    /// Is the run down the outside still on: nobody within
+    /// [`Self::RUN_ROOM`] of him in the channel toward the byline?
+    fn run_is_on(ctx: &StateProcessingContext) -> bool {
+        let Some(byline) = Self::byline_point(ctx) else {
+            return false;
+        };
+        let Some(heading) = (byline - ctx.player.position).try_normalize(f32::EPSILON) else {
+            return false;
+        };
+        LaneAhead::read_along(ctx, heading)
+            .nearest
+            .is_none_or(|distance| distance > Self::RUN_ROOM)
+    }
+
+    /// The patch of grass a byline drive is aimed at, on the carrier's
+    /// own flank.
+    fn byline_point(ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let side = ctx.player.side?;
+        let field_height = ctx.context.field_size.height as f32;
+        let field_width = ctx.context.field_size.width as f32;
+        let goal = ctx.player().opponent_goal_position();
+        let outward = if ctx.player.position.y < field_height * 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        Some(Vector3::new(
+            (goal.x - side.forward_dir_x() * Self::BYLINE_DEPTH).clamp(14.0, field_width - 14.0),
+            (goal.y + outward * Self::BYLINE_LATERAL).clamp(20.0, field_height - 20.0),
+            0.0,
+        ))
     }
 
     /// How near an opponent has to be to make the delivery his (~2.5 m),
@@ -310,25 +375,15 @@ impl FlankPlay {
         }
         // An open inside lane is a better ball than the byline, and the
         // carry model already takes it. Only a carrier being shown
-        // outside goes outside.
-        if lane_openness > 0.55 {
+        // outside goes outside — and how open the inside has to look is
+        // his own: a man who cuts inside takes a tighter lane, one who
+        // hugs the line wants a wide one before he leaves it.
+        let inside_bar =
+            (Self::INSIDE_LANE_OPEN - movement_bias(ctx.player).cut_inside_delta).clamp(0.2, 0.9);
+        if lane_openness > inside_bar {
             return None;
         }
-        let side = ctx.player.side?;
-        let field_height = ctx.context.field_size.height as f32;
-        let field_width = ctx.context.field_size.width as f32;
-        let forward = side.forward_dir_x();
-        let goal = ctx.player().opponent_goal_position();
-        let outward = if ctx.player.position.y < field_height * 0.5 {
-            -1.0
-        } else {
-            1.0
-        };
-        Some(Vector3::new(
-            (goal.x - forward * Self::BYLINE_DEPTH).clamp(14.0, field_width - 14.0),
-            (goal.y + outward * Self::BYLINE_LATERAL).clamp(20.0, field_height - 20.0),
-            0.0,
-        ))
+        Self::byline_point(ctx)
     }
 }
 

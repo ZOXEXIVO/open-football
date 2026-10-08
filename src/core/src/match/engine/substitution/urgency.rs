@@ -443,6 +443,9 @@ impl SubstitutionUrgency {
     /// Minutes a player needs on the pitch before his live rating is read
     /// as a verdict rather than as noise.
     const RATING_SETTLES_BY: u16 = 25;
+    /// A man playing on hurt is the worry that outranks every other: he is
+    /// a passenger now and may make it worse.
+    const HURT_WEIGHT: f32 = 1.0;
     const TROUBLE_GAIN: f32 = 0.30;
 
     // ── temperament ─────────────────────────────────────────────────────
@@ -572,7 +575,8 @@ impl SubstitutionUrgency {
                 .clamp(0.0, 1.0)
                 * settled
                 * Self::COLLAPSE_WEIGHT;
-            worst = worst.max(booking).max(error).max(collapse);
+            let hurt = if p.is_hurt() { Self::HURT_WEIGHT } else { 0.0 };
+            worst = worst.max(booking).max(error).max(collapse).max(hurt);
         }
         worst.min(1.0) * Self::TROUBLE_GAIN
     }

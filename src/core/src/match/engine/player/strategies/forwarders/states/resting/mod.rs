@@ -6,15 +6,15 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-// Lowered from 90% — with the tuned fatigue/recovery rates a forward
-// may never reach 90% mid-match, which left them stuck in Resting
-// indefinitely. 60% matches the second-wind point other roles use and
-// still forces a real recovery before re-engaging.
+/// Condition he rests back up to before rejoining play. Matched to the
+/// second-wind point the other roles use: with the tuned fatigue and
+/// recovery rates a forward may never reach 90% mid-match.
 const STAMINA_RECOVERY_THRESHOLD: f32 = 60.0;
-/// Hard timeout — even below the stamina threshold, after 500 ticks
-/// (5 s) the forward walks. Stops them literally standing still if
-/// condition recovery stalls near the threshold.
-const MAX_REST_TICKS: u64 = 500;
+/// 20 m: a play that comes this close wants him whatever his legs say.
+const DEMAND_RANGE: f32 = 160.0;
+/// Last resort should his condition never recover and the ball never come
+/// near him: 30 s, in AI ticks.
+const STALL_GUARD_TICKS: u64 = 1500;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
 
 #[derive(Default, Clone)]
@@ -44,13 +44,14 @@ impl StateProcessingHandler for ForwardRestingState {
             }
         }
 
-        // 3. Hard timeout — can't rest forever. Previously the "team
-        // under threat" check tried to force an exit but caused
-        // Resting ↔ Pressing flickering. A duration cap is cleaner:
-        // after 5 s you're jogging regardless of stamina, just at
-        // reduced intensity. The fatigue curve will keep penalising
-        // their pace so it's still a meaningful rest.
-        if ctx.in_state_time > MAX_REST_TICKS {
+        // 3. The ball wants him: his side is attacking the half he plays
+        //    in, or the play has come to him.
+        let attack_needs_him = ctx.team().is_control_ball() && !ctx.ball().on_own_side();
+        if attack_needs_him || ctx.ball().distance() < DEMAND_RANGE {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
+        }
+
+        if ctx.in_state_time > STALL_GUARD_TICKS {
             return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
         }
 

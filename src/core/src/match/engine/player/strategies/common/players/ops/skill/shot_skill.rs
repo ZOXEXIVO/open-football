@@ -96,6 +96,10 @@ pub struct ShotSkillProfile {
     pub shooting_condition_mult: f32,
     pub low_condition_penalty: f32,
     pub pressure_penalty: f32,
+    /// How much of the miss axis the strike's contact costs on its own,
+    /// before the man who made it: one-sided, like fatigue. Zero for a
+    /// ball struck with the boot.
+    pub contact_drag: f32,
     /// Carried through from [`ShotSkillInputs::shot_type`] so
     /// [`Self::expected_xg`] can apply the dead-ball conversion band and
     /// the per-type multiplier.
@@ -111,6 +115,14 @@ pub struct ShotSkillProfile {
 pub struct HeaderStrike;
 
 impl HeaderStrike {
+    /// How much of the miss axis a header's contact costs, before the man
+    /// who made it. The head meets a ball arriving across it and cannot
+    /// strike through it as a boot does: executed on the same miss axis
+    /// as a foot shot, three headers in five went on frame against a real
+    /// one in three, with the heading skill still spreading men either
+    /// side of it.
+    pub const CONTACT_DRAG: f32 = 0.5;
+
     #[inline]
     pub fn armed() -> bool {
         static ON: OnceLock<bool> = OnceLock::new();
@@ -249,12 +261,14 @@ impl ShotSkillProfile {
         // specialist action too — and the one the engine was resolving
         // on the striker's instep.
         //
-        // `header_finish` is a weight-1 linear blend of `n(skill)`, so
-        // `peer`-ing it against the standard of football in this match is
-        // exact and is zero at the calibration division — same argument
-        // as `receiving_first_touch`, and required because
-        // `execution_skill` feeds absolute anchors
+        // `header_finish` and `penalty_execution` are weight-1 linear
+        // blends of `n(skill)`, so `peer`-ing them against the standard of
+        // football in this match is exact and is zero at the calibration
+        // division — same argument as `receiving_first_touch`, and
+        // required because `execution_skill` feeds absolute anchors
         // (`0.50 + execution*0.85` and friends) further down.
+        // `dead_ball_strike` is curved, so it peers each attribute before
+        // the curve instead.
         let header = HeaderStrike::armed() && inputs.shot_type.is_header();
         let header_execution = || {
             let skill01 =
@@ -262,8 +276,12 @@ impl ShotSkillProfile {
             pow_curve(skill01, 1.45)
         };
         let execution_skill = match inputs.shot_type {
-            ShotType::Penalty => sc::penalty_execution(player, inputs.minute),
-            ShotType::DirectFreeKick => sc::dead_ball_strike(player, inputs.minute),
+            ShotType::Penalty => (sc::penalty_execution(player, inputs.minute)
+                - inputs.standard_shift)
+                .clamp(0.0, 1.0),
+            ShotType::DirectFreeKick => {
+                sc::dead_ball_strike(player, inputs.minute, inputs.standard_shift)
+            }
             _ if header => header_execution(),
             _ => open_play_execution,
         };
@@ -381,6 +399,11 @@ impl ShotSkillProfile {
             shooting_condition_mult,
             low_condition_penalty,
             pressure_penalty,
+            contact_drag: if header {
+                HeaderStrike::CONTACT_DRAG
+            } else {
+                0.0
+            },
             shot_type: inputs.shot_type,
         }
     }

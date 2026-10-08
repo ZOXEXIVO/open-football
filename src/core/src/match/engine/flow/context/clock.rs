@@ -3,7 +3,11 @@
 //! measures "recently" against.
 
 use super::match_context::MatchContext;
-use crate::r#match::{MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchState, MatchTime, PlayerSide};
+use crate::r#match::engine::result::PlayingTime;
+use crate::r#match::{
+    MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchState, MatchTime,
+    PassOriginRestart, PlayerSide,
+};
 
 /// How much match clock one engine tick is worth, in milliseconds.
 ///
@@ -23,7 +27,9 @@ impl MatchContext {
             MatchState::FirstHalf | MatchState::SecondHalf => {
                 new_time < MATCH_HALF_TIME_MS + self.period_stoppage_time_ms
             }
-            MatchState::ExtraTime => new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms,
+            MatchState::ExtraTimeFirst | MatchState::ExtraTimeSecond => {
+                new_time < MATCH_EXTRA_TIME_MS + self.period_stoppage_time_ms
+            }
             _ => false,
         }
     }
@@ -31,18 +37,34 @@ impl MatchContext {
     pub fn reset_period_time(&mut self) {
         self.time = MatchTime::new();
         self.period_stoppage_time_ms = 0;
+        self.stoppage_credit_ms = 0.0;
+        self.time_wasting.reset_period();
     }
 
-    pub fn add_time(&mut self, time: u64) {
-        self.time.increment(time);
-        self.total_match_time += time;
+    /// **The dead-ball ledger.** Every tick of a timed period is booked
+    /// once, with why the ball was dead if it was, and the referee adds the
+    /// share of it the Laws allow for to this period's stoppage time.
+    pub fn note_tick(&mut self, time: PlayingTime) {
+        self.tally.note_tick(time, MATCH_TIME_INCREMENT_MS);
+        let PlayingTime::Dead(why) = time else {
+            return;
+        };
+        self.stoppage_credit_ms += self.referee.add_back(why) * MATCH_TIME_INCREMENT_MS as f32;
+        let whole = self.stoppage_credit_ms.floor();
+        if whole >= 1.0 {
+            self.stoppage_credit_ms -= whole;
+            self.record_stoppage_time(whole as u64);
+        }
     }
 
-    pub fn record_stoppage_time(&mut self, time: u64) {
-        if !matches!(
-            self.state.match_state,
-            MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
-        ) {
+    /// One tick of the game waiting on `origin` to be played.
+    pub fn note_restart_wait(&mut self, origin: PassOriginRestart) {
+        self.tally
+            .note_restart_wait(origin, MATCH_TIME_INCREMENT_MS);
+    }
+
+    fn record_stoppage_time(&mut self, time: u64) {
+        if !self.state.match_state.is_timed() {
             return;
         }
 
@@ -50,6 +72,12 @@ impl MatchContext {
         let added = time.min(room);
         self.period_stoppage_time_ms += added;
         self.additional_time_ms += added;
+    }
+
+    /// The last third of the match has started. Read off the whole-match
+    /// clock: the period clock restarts at half time and never gets there.
+    pub fn is_running_out(&self) -> bool {
+        self.total_match_time > 2 * MATCH_TIME_MS / 3
     }
 
     pub fn current_tick(&self) -> u64 {

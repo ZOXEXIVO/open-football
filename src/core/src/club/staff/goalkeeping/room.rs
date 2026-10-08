@@ -17,9 +17,13 @@
 
 use chrono::NaiveDate;
 
+use crate::club::staff::mind::organs::judgements::CoachMemory;
 use crate::club::staff::perception::{
-    AbilityEstimator, DevelopmentFormEvidence, PotentialEstimator,
+    AbilityEstimator, DevelopmentFormEvidence, MindsetEstimate, MindsetEstimator,
+    PotentialEstimator, date_to_week,
 };
+use crate::r#match::engine::teamplay::standard::MatchStandard;
+use crate::Staff;
 use crate::club::team::TeamType;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerSquadStatus};
@@ -62,6 +66,9 @@ pub struct RoomKeeper {
     /// from birth years — he is a decision the club already took.
     pub named_heir_to: Option<u32>,
     pub handover: Option<NaiveDate>,
+    /// The department's read of his state of mind — silent until the room
+    /// has been perceived through somebody's eye.
+    pub mindset: MindsetEstimate,
 }
 
 impl RoomKeeper {
@@ -94,6 +101,7 @@ impl RoomKeeper {
             is_pinned: player.is_force_match_selection,
             named_heir_to: player.mandate().and_then(|m| m.incumbent_id()),
             handover: player.mandate().and_then(|m| m.handover()),
+            mindset: MindsetEstimate::silent(MatchStandard::CALIBRATION),
         }
     }
 
@@ -167,6 +175,8 @@ impl KeeperAgeCurve {
 #[derive(Debug, Clone, Default)]
 pub struct KeeperRoom {
     keepers: Vec<RoomKeeper>,
+    /// The standard the first team plays at, as the perceiving eye read it.
+    first_team_standard: Option<f32>,
 }
 
 impl KeeperRoom {
@@ -190,7 +200,32 @@ impl KeeperRoom {
                 .then_with(|| b.age.cmp(&a.age))
                 .then_with(|| a.player_id.cmp(&b.player_id))
         });
-        KeeperRoom { keepers }
+        KeeperRoom {
+            keepers,
+            first_team_standard: None,
+        }
+    }
+
+    /// Read every keeper's head through `lead`'s eye. `seen` gives, for a
+    /// keeper, the standard of the side he belongs to and the dossier his
+    /// own coach keeps on him.
+    pub fn perceive<'a>(
+        &mut self,
+        lead: &Staff,
+        first_team_standard: f32,
+        seen: impl Fn(u32, u32) -> (f32, Option<&'a CoachMemory>),
+        today: NaiveDate,
+    ) {
+        self.first_team_standard = Some(first_team_standard);
+        let week = date_to_week(today);
+        for k in &mut self.keepers {
+            let (team_standard, memory) = seen(k.team_id, k.player_id);
+            k.mindset = MindsetEstimator::estimate(lead, memory, team_standard, k.player_id, week);
+        }
+    }
+
+    pub fn first_team_standard(&self) -> Option<f32> {
+        self.first_team_standard
     }
 
     pub fn is_empty(&self) -> bool {

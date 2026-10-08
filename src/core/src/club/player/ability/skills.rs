@@ -142,6 +142,11 @@ impl PlayerSkills {
         (ability.clamp(1, 200) as f32 + 110.0) / 19.0
     }
 
+    /// What each attribute is worth in this position's CA, in registry order.
+    pub fn ability_weights(position: PlayerPositionType) -> &'static [f32; 50] {
+        AbilityWeights::for_position(position)
+    }
+
     /// Level `L` at which the profile `L × shape` (registry order) scores
     /// `ability` for this position. Development shapes skills by role, CA
     /// prices them by measured cost; sized by the flat level alone, a role

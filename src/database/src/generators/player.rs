@@ -5,6 +5,7 @@ use crate::loaders::{
     CountryLoader, OdbAttrs, OdbHistoryItem, OdbPlayer, OdbPlayerAttrs, OdbPosition,
 };
 use chrono::{Datelike, NaiveDate, Utc};
+use core::club::player::maturation::{MaturationGroup, SkillMaturation};
 use core::league::Season;
 use core::next_player_id;
 use core::shared::FullName;
@@ -21,6 +22,10 @@ use std::cmp::Reverse;
 
 #[cfg(test)]
 mod audit;
+
+mod role_ages;
+
+pub use role_ages::RoleAgeTable;
 
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
@@ -741,6 +746,27 @@ impl AbilityTarget {
         ((target_ca as i32) + headroom).clamp(target_ca as i32, 200) as u8
     }
 
+    /// The target for the position he plays. [`Self::age_factor`] is written
+    /// for outfielders; a position whose families mature off that curve
+    /// holds the share of ability they hold at his age against the outfield
+    /// roles', up to the role's full value. Potential is where he finishes,
+    /// so it stays: a young keeper simply trails it further.
+    pub fn matured_for(self, position: PlayerPositionType, age: u32) -> AbilityTarget {
+        let scale = Self::position_factor(age, position) / Self::age_factor(age);
+        let current = (self.current as f32 * scale).round().clamp(15.0, 195.0) as u8;
+        AbilityTarget {
+            current,
+            potential: self.potential.max(current),
+        }
+    }
+
+    fn position_factor(age: u32, position: PlayerPositionType) -> f32 {
+        let mid_year = age as f32 + 0.5;
+        let held = SkillMaturation::ability_share(mid_year, position)
+            / SkillMaturation::outfield_ability_share(mid_year);
+        (Self::age_factor(age) * held).min(1.0)
+    }
+
     /// Age curve applied to target CA. Skills don't fully bloom until the
     /// mid-twenties; older players retain most CA but slowly decline.
     fn age_factor(age: u32) -> f32 {
@@ -768,11 +794,13 @@ impl PlayerGenerator {
     /// Senior-team player generation. League-aware, role-aware, exact-position
     /// driven. The pipeline is:
     ///   1. Rep-blend → 0..1 reputation factor (team/league/country).
-    ///   2. Age picked uniformly inside [min_age, max_age].
+    ///   2. Age drawn from the real seasons his role stands for, inside
+    ///      [min_age, max_age].
     ///   3. Target CA from rep + role + age curve.
     ///   4. PA = CA + role-and-age-aware headroom.
     ///   5. Pick exact `PlayerPositionType` matching `bucket` (and bias
-    ///      towards modern roles for higher-PA players).
+    ///      towards modern roles for higher-PA players), and target CA moved
+    ///      by how far that position's families have matured at his age.
     ///   6. Skills generated to target CA via per-exact-position weights and
     ///      rescaled until `calculate_ability_for_position` lands on target.
     pub fn generate(
@@ -787,6 +815,7 @@ impl PlayerGenerator {
         role: SquadRole,
         min_age: i32,
         max_age: i32,
+        ages: &RoleAgeTable,
     ) -> Player {
         let now = Utc::now();
         let mut rng = HydrationRng::from_entropy();
@@ -794,9 +823,9 @@ impl PlayerGenerator {
         let rep_factor =
             AbilityTarget::rep_blend(team_reputation, league_reputation, country_reputation);
 
-        // random() is [min, max): +1 keeps min_age reachable, and months
-        // run 1..=12 (the old (1, 12) bound skipped December entirely).
-        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age + 1) as u32;
+        let keeper = matches!(bucket, PositionType::Goalkeeper);
+        let year = (now.year() - ages.draw(keeper, role, min_age, max_age, &mut rng)) as u32;
+        // Months run 1..=12: random() is [min, max).
         let month = IntegerUtils::random(1, 13) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
         let age = (now.year() as u32).saturating_sub(year);
@@ -810,8 +839,6 @@ impl PlayerGenerator {
 
         // CA before PA: target CA is the anchor of skill generation.
         let ability = AbilityTarget::for_role(rep_factor, age, role, &mut rng);
-        let target_ca = ability.current;
-        let potential_ability = ability.potential;
 
         // Pick the exact playing position before generating skills so the
         // attribute distribution matches the role (DC vs WBL vs AMC etc.).
@@ -819,7 +846,10 @@ impl PlayerGenerator {
         // distribution toward modern/specialist roles for top-tier squads
         // and toward traditional roles for lower tiers.
         let primary_position =
-            Self::pick_exact_position(bucket, potential_ability, team_type, role);
+            Self::pick_exact_position(bucket, ability.potential, team_type, role);
+        let ability = ability.matured_for(primary_position, age);
+        let target_ca = ability.current;
+        let potential_ability = ability.potential;
         let positions = Self::generate_positions_from_primary(primary_position, potential_ability);
 
         let country_code = CountryLoader::code_for_id(country_id);
@@ -1110,6 +1140,13 @@ impl PlayerGenerator {
         result
     }
 
+    /// The goalkeeping family's maturity at the middle of his age year — the
+    /// curve a keeper's development ceilings read, so a generated keeper is
+    /// as far into his craft as the ceilings say a keeper his age can be.
+    fn goalkeeping_maturity(age: u32) -> f32 {
+        SkillMaturation::ratio(age as f32 + 0.5, MaturationGroup::Goalkeeping)
+    }
+
     /// Generate Goalkeeping-specific skills anchored on the *current* CA
     /// target — same anchoring as outfield skills. PA is not the input here:
     /// it only governs future development through the development pipeline,
@@ -1125,18 +1162,7 @@ impl PlayerGenerator {
         roll: f32,
         rng: &mut HydrationRng,
     ) -> Goalkeeping {
-        // GK skills develop like mental — peak in late 20s/early 30s (experience matters)
-        let gk_age_ratio = match age {
-            0..=17 => 0.60,
-            18..=19 => 0.70,
-            20..=22 => 0.80,
-            23..=26 => 0.90,
-            27..=29 => 0.97,
-            30..=34 => 1.0,
-            _ => 0.95,
-        };
-
-        let gk_mean = ca_skill_target * gk_age_ratio;
+        let gk_mean = ca_skill_target * Self::goalkeeping_maturity(age);
         let spread = (ca_skill_target * 0.45).max(2.0);
         let noise = 1.5;
 
@@ -2881,9 +2907,62 @@ mod generator_validation_tests {
                     role,
                     min_age,
                     max_age,
+                    &RoleAgeTable::default(),
                 )
             })
             .collect()
+    }
+
+    /// Generated first-choice keepers of Main teams are mostly in their
+    /// mid-twenties, as the database's regular keepers are; their backups
+    /// are younger.
+    #[test]
+    fn generated_keeper_ages_follow_their_role() {
+        let g = make_gen();
+        let odb = crate::loaders::PlayersOdb::load().expect("embedded players");
+        let ages = RoleAgeTable::from_records(odb.records());
+        let keeper_ages = |role| {
+            let mut years: Vec<u32> = (0..1500)
+                .map(|_| {
+                    let p = g.generate(
+                        1,
+                        1,
+                        PositionType::Goalkeeper,
+                        6000,
+                        6000,
+                        5000,
+                        TeamType::Main,
+                        role,
+                        17,
+                        35,
+                        &ages,
+                    );
+                    (Utc::now().year() - p.birth_date.year()) as u32
+                })
+                .collect();
+            years.sort_unstable();
+            years
+        };
+        let starters = keeper_ages(SquadRole::Starter);
+        let backups = keeper_ages(SquadRole::Backup);
+        let median = |v: &[u32]| v[v.len() / 2];
+        let young = starters.iter().filter(|&&a| a <= 20).count() as f32 / starters.len() as f32;
+        assert!(
+            (24..=28).contains(&median(&starters)),
+            "Starter keepers' median age is {}",
+            median(&starters)
+        );
+        assert!(
+            young <= 0.15,
+            "{:.1}% of Starter keepers are 20 or younger",
+            young * 100.0
+        );
+        assert!(
+            median(&backups) < median(&starters),
+            "Backup keepers' median age {} against Starters' {}",
+            median(&backups),
+            median(&starters)
+        );
     }
 
     fn mean(xs: &[u8]) -> f32 {
@@ -3316,6 +3395,133 @@ mod generator_validation_tests {
         );
     }
 
+    /// Keepers come into their ability later and keep it longer: of the
+    /// same role, team and age, generated keepers hold less of their role's
+    /// full ability than strikers at 22 and more of it at 34.
+    #[test]
+    fn generated_keepers_mature_later_and_last_longer_than_strikers() {
+        let g = make_gen();
+        let mean_ca = |bucket, age| {
+            let players = sample(
+                &g,
+                300,
+                bucket,
+                6000,
+                6000,
+                5000,
+                TeamType::Main,
+                SquadRole::Starter,
+                age,
+                age,
+            );
+            let cas: Vec<u8> = players
+                .iter()
+                .map(|p| p.player_attributes.current_ability)
+                .collect();
+            mean(&cas)
+        };
+        let (keeper_22, striker_22) = (
+            mean_ca(PositionType::Goalkeeper, 22),
+            mean_ca(PositionType::Striker, 22),
+        );
+        assert!(
+            keeper_22 < striker_22,
+            "at 22 keepers average CA {keeper_22:.1}, strikers {striker_22:.1}"
+        );
+        let (keeper_34, striker_34) = (
+            mean_ca(PositionType::Goalkeeper, 34),
+            mean_ca(PositionType::Striker, 34),
+        );
+        assert!(
+            keeper_34 > striker_34,
+            "at 34 keepers average CA {keeper_34:.1}, strikers {striker_34:.1}"
+        );
+    }
+
+    /// Outfield generation barely moves: for every outfield role the
+    /// generator picks and every age, the factor stays within 0.03 of the
+    /// outfield curve it was written on.
+    #[test]
+    fn outfield_ability_by_age_barely_moves() {
+        use PlayerPositionType::*;
+        for position in [
+            DefenderCenter,
+            DefenderLeft,
+            DefenderRight,
+            WingbackLeft,
+            WingbackRight,
+            DefensiveMidfielder,
+            MidfielderCenter,
+            MidfielderLeft,
+            MidfielderRight,
+            AttackingMidfielderCenter,
+            ForwardLeft,
+            ForwardRight,
+            ForwardCenter,
+            Striker,
+        ] {
+            for age in 17..=36 {
+                let (before, after) = (
+                    AbilityTarget::age_factor(age),
+                    AbilityTarget::position_factor(age, position),
+                );
+                assert!(
+                    (after - before).abs() <= 0.03,
+                    "{position:?} at {age}: factor {after:.3}, the outfield curve {before:.3}"
+                );
+            }
+        }
+    }
+
+    /// A keeper generated at 20 is shaped with the goalkeeping maturity his
+    /// development ceilings read at 20.5: against a keeper of the same
+    /// target ability at 30, his goalkeeping stands in the curve's ratio.
+    #[test]
+    fn generated_keepers_follow_the_goalkeeping_maturity_curve() {
+        assert_eq!(
+            PlayerGenerator::goalkeeping_maturity(20),
+            SkillMaturation::ratio(20.5, MaturationGroup::Goalkeeping)
+        );
+        let target = PlayerSkills::ability_skill_level(130);
+        let mut rng = HydrationRng::from_seed(20);
+        let mut mean = |age: u32| {
+            let n = 4000;
+            let total: f32 = (0..n)
+                .map(|_| {
+                    let roll = rng.f32();
+                    let g = PlayerGenerator::generate_gk_skills(target, age, roll, &mut rng);
+                    [
+                        g.aerial_reach,
+                        g.command_of_area,
+                        g.communication,
+                        g.eccentricity,
+                        g.first_touch,
+                        g.handling,
+                        g.kicking,
+                        g.one_on_ones,
+                        g.passing,
+                        g.punching,
+                        g.reflexes,
+                        g.rushing_out,
+                        g.throwing,
+                    ]
+                    .iter()
+                    .sum::<f32>()
+                        / 13.0
+                })
+                .sum();
+            total / n as f32
+        };
+        let generated = mean(20) / mean(30);
+        let maturity = SkillMaturation::ratio(20.5, MaturationGroup::Goalkeeping)
+            / SkillMaturation::ratio(30.5, MaturationGroup::Goalkeeping);
+        assert!(
+            (generated - maturity).abs() <= 0.03,
+            "20-year-old keepers hold {generated:.3} of 30-year-olds' goalkeeping; \
+             the maturity curve says {maturity:.3}"
+        );
+    }
+
     #[test]
     fn country_code_casing_matches_consumers() {
         // The country_bias / language / PhysicalProfile lookups all match
@@ -3589,6 +3795,7 @@ mod generator_validation_tests {
                     SquadRole::Starter,
                     17,
                     35,
+                    &RoleAgeTable::default(),
                 ));
             }
             for _ in 0..IntegerUtils::random(6, 9) {
@@ -3603,6 +3810,7 @@ mod generator_validation_tests {
                     SquadRole::Starter,
                     17,
                     35,
+                    &RoleAgeTable::default(),
                 ));
             }
             for _ in 0..IntegerUtils::random(7, 10) {
@@ -3617,6 +3825,7 @@ mod generator_validation_tests {
                     SquadRole::Starter,
                     17,
                     35,
+                    &RoleAgeTable::default(),
                 ));
             }
             for _ in 0..IntegerUtils::random(5, 8) {
@@ -3631,6 +3840,7 @@ mod generator_validation_tests {
                     SquadRole::Starter,
                     17,
                     35,
+                    &RoleAgeTable::default(),
                 ));
             }
 
@@ -3874,6 +4084,7 @@ mod odb_hydration_tests {
             history_club_names: std::collections::HashMap::new(),
             players_odb: None,
             index: std::sync::OnceLock::new(),
+            role_ages: std::sync::OnceLock::new(),
         }
     }
 

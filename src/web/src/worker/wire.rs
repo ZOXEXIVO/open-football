@@ -10,8 +10,9 @@
 //! serde-derive directly in core, so they cross the wire without a
 //! parallel DTO.
 
+use core::club::player::mind::KickoffMind;
 use core::club::player::traits::PlayerTrait;
-use core::r#match::{Match, MatchPlayer, MatchSquad, OmittedPlayer, PlayerSide};
+use core::r#match::{FixtureContext, Match, MatchPlayer, MatchSquad, OmittedPlayer, PlayerSide};
 use core::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills, Tactics};
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,9 @@ pub struct PlayerWire {
     /// Derived club-side (it needs the matchday calendar and the
     /// persisted `Player`), so it crosses the wire as a plain value.
     pub matchday_form: f32,
+    /// Kickoff state of mind — assurance, belief, morale — read club-side
+    /// from the persisted `Player`, so it crosses the wire as a value.
+    pub kickoff_mind: KickoffMind,
     pub use_extended_state_logging: bool,
 }
 
@@ -73,8 +77,7 @@ pub struct LeagueMatchWire {
     pub id: String,
     pub league_id: u32,
     pub league_slug: String,
-    pub is_friendly: bool,
-    pub is_knockout: bool,
+    pub fixture: FixtureContext,
     pub home: SquadWire,
     pub away: SquadWire,
 }
@@ -83,7 +86,7 @@ pub struct LeagueMatchWire {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SquadFixtureWire {
     pub idx: usize,
-    pub is_knockout: bool,
+    pub fixture: FixtureContext,
     pub home: SquadWire,
     pub away: SquadWire,
 }
@@ -109,6 +112,7 @@ impl PlayerWire {
             starting_recovery_debt: p.starting_recovery_debt,
             settledness: p.settledness,
             matchday_form: p.matchday_form,
+            kickoff_mind: p.kickoff_mind,
             use_extended_state_logging: p.use_extended_state_logging,
         }
     }
@@ -131,6 +135,7 @@ impl PlayerWire {
             starting_recovery_debt,
             settledness,
             matchday_form,
+            kickoff_mind,
             use_extended_state_logging,
         } = self;
         MatchPlayer::from_inputs(
@@ -150,6 +155,7 @@ impl PlayerWire {
             starting_recovery_debt,
             settledness,
             matchday_form,
+            kickoff_mind,
             use_extended_state_logging,
         )
     }
@@ -228,8 +234,7 @@ impl LeagueMatchWire {
             id: m.id().to_string(),
             league_id: m.league_id(),
             league_slug: m.league_slug().to_string(),
-            is_friendly: m.is_friendly,
-            is_knockout: m.is_knockout,
+            fixture: m.fixture,
             home: SquadWire::from_squad(&m.home_squad),
             away: SquadWire::from_squad(&m.away_squad),
         }
@@ -240,23 +245,17 @@ impl LeagueMatchWire {
             id,
             league_id,
             league_slug,
-            is_friendly,
-            is_knockout,
+            fixture,
             home,
             away,
         } = self;
-        let home = home.into_squad();
-        let away = away.into_squad();
-        if is_knockout {
-            Match::make_knockout(id, league_id, &league_slug, home, away)
-        } else {
-            let mut m = Match::make(id, league_id, &league_slug, home, away, is_friendly);
-            // `Match::make` always sets is_knockout = false; respect the
-            // value we got over the wire even when is_friendly is true
-            // (defensive — shouldn't happen, but keeps round-tripping
-            // semantically exact).
-            m.is_knockout = is_knockout;
-            m
-        }
+        Match::make(
+            id,
+            league_id,
+            &league_slug,
+            home.into_squad(),
+            away.into_squad(),
+            fixture,
+        )
     }
 }

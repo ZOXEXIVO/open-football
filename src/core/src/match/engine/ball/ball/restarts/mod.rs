@@ -18,6 +18,9 @@ pub mod offside;
 mod restart;
 pub mod stall;
 
-pub use awaited::{AwaitedRestart, GoalKickRunUp, PassOriginRestart, RunUpPhase};
+pub use awaited::{
+    AwaitedRestart, GoalKickRunUp, GoalOrigin, PassOriginRestart, PhaseOrigin, RestartHold,
+    RunUpPhase,
+};
 pub use offside::{OffsideLine, OffsideSnapshot};
 pub use restart::{CornerWalk, DeadBall, FoulWalk, ThrowIn};

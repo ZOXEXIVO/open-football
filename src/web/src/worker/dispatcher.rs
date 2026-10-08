@@ -45,7 +45,8 @@ use crate::worker::transport::Frame;
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
 use core::r#match::{
-    Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts, Score,
+    Match, MatchDispatcher, MatchResult, MatchResultRaw, RecordingArtifacts, Score,
+    SquadFixture,
 };
 use log::{debug, info, warn};
 use std::collections::{HashMap, VecDeque};
@@ -124,8 +125,8 @@ impl MatchDispatcher for DistributedDispatcher {
 
     fn dispatch_squads(
         &self,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
-    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<(usize, MatchSquad, MatchSquad, bool)>> {
+        matches: Vec<SquadFixture>,
+    ) -> Result<Vec<(usize, MatchResultRaw)>, Vec<SquadFixture>> {
         let registry = self.registry.clone();
         let local_threads = self.local_threads;
         self.run_blocking(async move {
@@ -482,7 +483,7 @@ impl DistributedDispatcher {
     }
 
     async fn execute_squads(
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
+        matches: Vec<SquadFixture>,
         slots: Vec<Slot>,
         registry: WorkerRegistry,
     ) -> Vec<(usize, MatchResultRaw)> {
@@ -527,7 +528,7 @@ impl DistributedDispatcher {
                 "dispatch squads: {} matches unprocessed after worker failures — running locally",
                 missing.len()
             );
-            let chunk: Vec<(usize, MatchSquad, MatchSquad, bool)> =
+            let chunk: Vec<SquadFixture> =
                 missing.iter().map(|&p| matches[p].clone()).collect();
             let local = tokio::task::spawn_blocking(move || {
                 MatchRuntime::engine_pool().play_squads_local(chunk)
@@ -542,7 +543,7 @@ impl DistributedDispatcher {
 
     async fn run_squad_slot(
         slot: Slot,
-        matches: Arc<Vec<(usize, MatchSquad, MatchSquad, bool)>>,
+        matches: Arc<Vec<SquadFixture>>,
         pending: Arc<Mutex<VecDeque<usize>>>,
         registry: WorkerRegistry,
     ) -> Vec<(usize, (usize, MatchResultRaw))> {
@@ -556,7 +557,7 @@ impl DistributedDispatcher {
                 break;
             }
             let count = indices.len();
-            let chunk: Vec<(usize, MatchSquad, MatchSquad, bool)> =
+            let chunk: Vec<SquadFixture> =
                 indices.iter().map(|&i| matches[i].clone()).collect();
             match &slot.target {
                 Target::Local => {
@@ -602,15 +603,15 @@ impl DistributedDispatcher {
     async fn play_remote_squads(
         worker: &ReadyWorker,
         registry: &WorkerRegistry,
-        matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
+        matches: Vec<SquadFixture>,
     ) -> Result<Vec<(usize, MatchResultRaw)>, ()> {
         let count = matches.len();
         let envelopes: Vec<MatchEnvelope> = matches
             .iter()
-            .map(|(idx, h, a, ko)| {
+            .map(|(idx, h, a, fixture)| {
                 MatchEnvelope::Squad(SquadFixtureWire {
                     idx: *idx,
-                    is_knockout: *ko,
+                    fixture: *fixture,
                     home: SquadWire::from_squad(h),
                     away: SquadWire::from_squad(a),
                 })

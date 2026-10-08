@@ -25,9 +25,14 @@ family's match-only share in proportion to how little football he is getting. A 
 
 ### Requirement: Matches open the last share of each age
 
-Each maturation family SHALL have a match-only share of its maturity: mental 0.15, goalkeeping 0.12, technical 0.08,
-strength and stamina 0.03, speed 0. A player with no recent match exposure SHALL be held below his age's full share by
-that fraction. A player with full exposure SHALL reach the full share.
+Each maturation family SHALL have a match-only share of its maturity, and speed SHALL have none. The shares SHALL be
+fitted against the shipped database:
+- a regular starter SHALL reach his position kind's real ability-by-age spread (see "Careers track the real
+  ability-by-age spread");
+- a player who never plays SHALL be held below it by his families' shares.
+
+A player SHALL be held below his age's full share by that fraction, in proportion to how little football he has
+absorbed, as his match exposure measures it. A player with full exposure SHALL reach the full share.
 
 #### Scenario: A regular starter against a squad player who only trains
 - **WHEN** two otherwise identical players develop from 17 to 21, one starting every week and one never playing
@@ -36,6 +41,15 @@ that fraction. A player with full exposure SHALL reach the full share.
 #### Scenario: A regular who loses his place
 - **WHEN** a player whose attributes sit on his regular's ceilings stops playing
 - **THEN** his ceilings fall, but none of his attributes is reduced
+
+#### Scenario: A month on the bench does not undo two seasons
+- **WHEN** a player who has started every week for two seasons plays no minutes for 30 days
+- **THEN** his ceilings fall by less than a tenth of the gap between a regular's ceilings and a never-played player's
+
+#### Scenario: A keeper needs football more than an outfielder
+- **WHEN** a keeper and a central midfielder of the same PA each develop from 19 to 23, once as weekly starters and
+  once never playing
+- **THEN** at 23 the keeper's gap in CA/PA between the starter and the unused career is larger than the midfielder's
 
 ### Requirement: Ceilings gate growth and never cut
 
@@ -94,14 +108,44 @@ Seeded whole-career simulations, run through the full daily pipeline, SHALL sati
 
 - a career is a pure function of its inputs
 - CA never exceeds PA, and attributes stay on the 1..20 scale for twenty seasons
-- a regular starter of median character at a mid-table club ends every season from 21 to 29 above the database's lower
-  quartile for his age and below its top decile
+- a regular starter of median character at a mid-table club ends every season above his position kind's database
+  lower quartile for his age and below its top decile: keepers against the database's keeper spread from 22 to 30,
+  outfielders against the database's outfield spread from 21 to 29
 - growth slows season by season without stalling
 - the best environment and character reach the top of the real spread, and the worst reach its weakest tenth
 - outfielders peak in their late twenties and keepers later
-- veterans decline close to the world generator's age curve
+- veterans decline close to the world generator's age curve for their position
 - keepers outlast outfielders, and more professional players age better
 
 #### Scenario: A typical career at 24
-- **WHEN** a PA 150 regular starter of median character at an average club reaches 24
-- **THEN** his CA/PA sits between the database's 25th and 90th percentiles for 24-year-olds
+- **WHEN** a PA 150 outfield regular starter of median character at an average club reaches 24
+- **THEN** his CA/PA sits between the database's outfield 25th and 90th percentiles for 24-year-olds
+
+#### Scenario: A typical keeper career at 24
+- **WHEN** a PA 150 regular starting keeper of median character at an average club reaches 24
+- **THEN** his CA/PA sits between the database's keeper 25th and 90th percentiles for 24-year-olds (0.767 and 0.883)
+
+#### Scenario: A young regular keeper is not ahead of the real ones
+- **WHEN** a PA 150 regular starting keeper of median character at an average club reaches 22
+- **THEN** his CA/PA sits below the database's keeper 90th percentile for 22-year-olds (0.819)
+
+### Requirement: A world's keepers break through on the real timetable
+
+A seeded multi-season world run SHALL satisfy the following from its third season on:
+
+- keeper seasons with 30 or more league appearances SHALL have a median age between 24 and 28 (database: 26)
+- no more than 15% of them SHALL belong to keepers aged 20 or younger (database: 11.2%)
+- between 15% and 32% of them SHALL belong to keepers aged 22 or younger (database: 23.9%)
+- outfield seasons with 30 or more league appearances SHALL keep a median age between 23 and 26 (database: 24)
+
+Among keepers aged 17 or younger when the world starts who reach a 30-appearance league season within ten seasons,
+the median age of the first such season SHALL be between 21 and 24 (database: 22).
+
+#### Scenario: Regular keepers are mostly in their mid-twenties
+- **WHEN** a world is run for five seasons and its keeper seasons with 30 or more league appearances are counted from
+  the third season on
+- **THEN** their median age is between 24 and 28 and no more than 15% belong to keepers aged 20 or younger
+
+#### Scenario: A young keeper's first full season comes in his early twenties
+- **WHEN** a world is run for ten seasons and every keeper aged 17 or younger at its start is followed
+- **THEN** among those who reach a 30-appearance league season, the median age of the first one is between 21 and 24

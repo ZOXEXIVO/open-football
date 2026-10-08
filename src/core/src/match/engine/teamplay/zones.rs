@@ -21,6 +21,40 @@ pub enum LateralLane {
     WideRight,
 }
 
+/// What match data counts as a progressive action: the ball at least ten
+/// metres nearer the opponents' goal than the furthest point the side's
+/// last six passes reached, or into their box from outside it. The engine
+/// counted 25u and 12u from the start of the action — three metres and a
+/// metre and a half, written as if a unit were a metre — so every forward
+/// nudge was one.
+pub struct Progression;
+
+impl Progression {
+    /// Ten metres, in units.
+    pub const DISTANCE: f32 = 80.0;
+
+    /// How far `position` is from `side`'s own goal line, in units.
+    pub fn depth(side: PlayerSide, position: Vector3<f32>, field_width: f32) -> f32 {
+        side.attacking_progress_x(position.x, field_width) * field_width
+    }
+
+    /// `reach` is how far the side's last six passes took the ball
+    /// ([`Self::depth`]), when it has made any.
+    pub fn is_progressive(
+        side: PlayerSide,
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        reach: Option<f32>,
+        field_width: f32,
+        opp_box: &PenaltyArea,
+    ) -> bool {
+        let start = Self::depth(side, from, field_width);
+        let start = reach.map_or(start, |reach| reach.max(start));
+        Self::depth(side, to, field_width) - start >= Self::DISTANCE
+            || (!opp_box.contains(&from) && opp_box.contains(&to))
+    }
+}
+
 impl MatchZone {
     /// Classify a pitch position from the `side`'s point of view.
     /// Box variants take priority over third bands so an opponent-box

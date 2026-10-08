@@ -153,7 +153,7 @@ impl KnockChain {
     fn under_pressure(keeper: &MatchPlayer, players: &[MatchPlayer]) -> bool {
         players.iter().any(|p| {
             p.team_id != keeper.team_id
-                && !p.is_sent_off
+                && !p.off_pitch
                 && (p.position.x - keeper.position.x).hypot(p.position.y - keeper.position.y)
                     <= Self::PRESSED
         })
@@ -407,7 +407,7 @@ impl Ball {
         let (id, position, team_id) = (keeper.id, keeper.position, keeper.team_id);
         let pressed = players.iter().any(|p| {
             p.team_id != team_id
-                && !p.is_sent_off
+                && !p.off_pitch
                 && (p.position.x - position.x).hypot(p.position.y - position.y)
                     <= KnockChain::PRESSED
         });

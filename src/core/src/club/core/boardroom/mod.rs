@@ -4,5 +4,6 @@
 mod budget;
 mod context;
 mod manager;
+mod option;
 
 pub use manager::LeagueStanding;
