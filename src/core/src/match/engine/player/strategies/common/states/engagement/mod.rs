@@ -7,6 +7,9 @@
 //!   state whose give-up condition overlaps its own entry condition is a
 //!   two-cycle, and the engine has burned millions of state entries on
 //!   exactly that defect.
+//! * [`closing`] — where he stands while he closes. [`ClosingPoint`]
+//!   puts every closer across the carrier's line to the danger in the
+//!   box, leaning toward the run only as far as the run is a threat.
 //! * [`duel`] — what he does once engaged. [`TackleDecision`] (does he
 //!   commit this second, or keep containing), [`RecoveryChallenge`]
 //!   (the poke, the stretch and the slide across — the challenge a man
@@ -17,8 +20,10 @@
 //!   the referee's question in the referee's terms — the BALL's
 //!   position, not the fouler's.
 
+pub mod closing;
 pub mod distances;
 pub mod duel;
 
+pub use closing::*;
 pub use distances::*;
 pub use duel::*;

@@ -453,22 +453,8 @@ impl CrossModel {
         if MatchContext::charge_down_off() {
             return 1.0;
         }
-        let Some(side) = ctx.player.side else {
+        let Some(line) = Self::strike_line(ctx, cross_type, aim_point, delivery) else {
             return 1.0;
-        };
-        let from = ctx.player.position;
-        let across = Vector3::new(aim_point.x - from.x, aim_point.y - from.y, 0.0);
-        let Some(direction) = across.try_normalize(1.0e-4) else {
-            return 1.0;
-        };
-        let (pace, lift) = cross_type.launch(across.norm(), &ctx.context.conditions);
-        let line = StrikeLine {
-            from,
-            direction,
-            pace,
-            lift,
-            delivery,
-            defending_side: side.opposite(),
         };
         let field_width = ctx.context.field_size.width as f32;
         ctx.players()
@@ -481,6 +467,28 @@ impl CrossModel {
                     .map(|record| PassBlock::priced(&line, &opponent, record, minute, field_width))
             })
             .fold(1.0, |past, blocked| past * (1.0 - blocked))
+    }
+
+    /// The ball this delivery will be, as the block rule reads it.
+    pub(crate) fn strike_line(
+        ctx: &StateProcessingContext<'_>,
+        cross_type: CrossType,
+        aim_point: Vector3<f32>,
+        delivery: f32,
+    ) -> Option<StrikeLine> {
+        let side = ctx.player.side?;
+        let from = ctx.player.position;
+        let across = Vector3::new(aim_point.x - from.x, aim_point.y - from.y, 0.0);
+        let direction = across.try_normalize(1.0e-4)?;
+        let (pace, lift) = cross_type.launch(across.norm(), &ctx.context.conditions);
+        Some(StrikeLine {
+            from,
+            direction,
+            pace,
+            lift,
+            delivery,
+            defending_side: side.opposite(),
+        })
     }
 
     /// A corner delivered as the routine called it: aimed at the runner the

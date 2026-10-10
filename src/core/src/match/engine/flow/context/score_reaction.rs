@@ -84,6 +84,18 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_CHARGE_DOWN_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_CROSS_LINE_OFF` set, every man closing
+    /// the ball carrier steers for the point he did before
+    /// `ClosingPoint` — on the carrier's line to the goal centre, with
+    /// each state's old stand-off. The A/B control for the closer's
+    /// position on the crossing line. Read once per process — debug
+    /// infrastructure, do not remove.
+    pub fn cross_line_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CROSS_LINE_OFF").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_BLOCK_CONTACT_FLAT` set, both block
     /// channels resolve their deferred contact the way they did before
     /// 2026-09-06 — on the distance across the grass alone, with no

@@ -8845,6 +8845,51 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 struck as f64 / n_matches as f64,
                 struck_pressed as f64 * 100.0 / struck.max(1) as f64,
             );
+            // WHERE THE MAN CLOSING THE CROSSER STOOD.
+            let closers = CrossPriceCensus::closers();
+            let (asked_all, struck_all) = closers
+                .iter()
+                .fold((0, 0), |(a, s), (ca, cs)| (a + ca, s + cs));
+            let closer_row = |pick: fn(&(u64, u64)) -> u64, total: u64| {
+                CrossPriceCensus::CLOSERS
+                    .iter()
+                    .zip(closers.iter())
+                    .map(|(label, c)| {
+                        format!(
+                            "{label} {:.0}%",
+                            pick(c) as f64 * 100.0 / total.max(1) as f64
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            };
+            println!(
+                "    closer (nearest within 5 m) on the questions: {}",
+                closer_row(|c| c.0, asked_all)
+            );
+            println!(
+                "    closer on the deliveries struck: {}",
+                closer_row(|c| c.1, struck_all)
+            );
+            let states = CrossPriceCensus::closer_states();
+            let strikes: u64 = states.iter().map(|(_, off, on)| off + on).sum();
+            println!(
+                "    open-play crosses struck {:.1}/match, by the closer's state (share, of it on the line):",
+                strikes as f64 / n_matches as f64,
+            );
+            for (state, off, on) in states.iter().take(8) {
+                let name = if *state == CrossPriceCensus::NO_CLOSER {
+                    "nobody within 5 m".to_string()
+                } else {
+                    StateNames::of(*state as u16)
+                };
+                println!(
+                    "      {:<32} {:>5.1}%  {:>5.1}%",
+                    name,
+                    (off + on) as f64 * 100.0 / strikes.max(1) as f64,
+                    *on as f64 * 100.0 / (off + on).max(1) as f64,
+                );
+            }
             let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
                 if opp == 0 {

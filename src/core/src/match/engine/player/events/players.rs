@@ -1549,6 +1549,59 @@ impl PlayerEventDispatcher {
                 field.ball.cross_contest_resolved =
                     !declared_cross.map(|ct| ct.is_lofted()).unwrap_or(false);
                 field.ball.pending_cross_type = declared_cross;
+                // Who closed the crosser, in which state, and whether he
+                // stood on the delivery's line — `CrossPriceCensus`.
+                #[cfg(feature = "match-logs")]
+                if let Some(cross_type) = declared_cross
+                    && field.ball.pass_origin_restart == PassOriginRestart::OpenPlay
+                    && let Some(passer) = field.get_player(passer_id)
+                    && let Some(side) = passer.side
+                {
+                    use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
+                    use crate::r#match::engine::ball::ball::contest::pass_block::{
+                        PassBlock, StrikeLine,
+                    };
+                    let minute = sc::minute_from_ticks(context.current_tick());
+                    let across = Vector3::new(
+                        pass_target.x - passer_position.x,
+                        pass_target.y - passer_position.y,
+                        0.0,
+                    );
+                    if let Some(direction) = across.try_normalize(1.0e-4) {
+                        let (pace, lift) = cross_type.launch(across.norm(), &context.conditions);
+                        let line = StrikeLine {
+                            from: passer_position,
+                            direction,
+                            pace,
+                            lift,
+                            delivery: PassBlock::technique(passer, minute, true),
+                            defending_side: side.opposite(),
+                        };
+                        let field_width = context.field_size.width as f32;
+                        let closer = field
+                            .players
+                            .iter()
+                            .filter(|p| {
+                                p.team_id != passer_team
+                                    && !p.tactical_position.current_position.is_goalkeeper()
+                            })
+                            .map(|p| (p, (p.position - passer_position).magnitude()))
+                            .filter(|(_, gap)| *gap < CrossPriceCensus::CLOSER_RADIUS)
+                            .min_by(|a, b| a.1.total_cmp(&b.1));
+                        match closer {
+                            Some((p, _)) => {
+                                let on_line = PassBlock::reaches(&line, p.position, field_width);
+                                CrossPriceCensus::note_strike(
+                                    p.state.compact_id() as usize,
+                                    on_line,
+                                );
+                            }
+                            None => {
+                                CrossPriceCensus::note_strike(CrossPriceCensus::NO_CLOSER, false)
+                            }
+                        }
+                    }
+                }
                 // Tag the ball with the passer for pass-accuracy
                 // accounting. Lives for a short window (150 ticks)
                 // and is cleared on opponent touch — see ball.rs

@@ -621,18 +621,6 @@ impl TackleDecision {
         })
     }
 
-    /// Where a containing defender stands: goal-side of the carrier, a
-    /// stride off him. This is the jockey — he is between his man and the
-    /// goal, close enough to challenge the moment the touch is loose, and
-    /// NOT running through him.
-    pub fn contain_position(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> Vector3<f32> {
-        let own_goal = ctx.ball().direction_to_own_goal();
-        let to_goal = (own_goal - carrier)
-            .try_normalize(0.01)
-            .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
-        carrier + to_goal * TackleEngagement::CONTACT * 0.8
-    }
-
     /// How dangerous the man on the ball is, on the same absolute
     /// composite scale as [`sc::defensive_duel`] — so a duel scored as
     /// the difference of the two is level for equal quality at every
@@ -684,8 +672,8 @@ impl TackleOutcome {
 /// (1.25 m). Every defender who was not in front of the carrier had
 /// nothing at all to do about him.
 ///
-/// [`TackleDecision::contain_position`] sends him at
-/// `carrier + toward_own_goal x 1 m`, and for a man who is LEVEL WITH or
+/// The jockey ([`ClosingPoint`](super::ClosingPoint)) sends him a metre
+/// goal-side of the carrier, and for a man who is LEVEL WITH or
 /// BEHIND the carrier that point is *past the carrier*: reaching it means
 /// overtaking, and a defender's speed edge over a man on the ball is
 /// about two per cent. So he runs at a point he can never arrive at, on a

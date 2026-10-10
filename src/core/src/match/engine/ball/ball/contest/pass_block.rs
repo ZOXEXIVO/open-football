@@ -399,6 +399,14 @@ impl PassBlock {
         }
     }
 
+    /// Can the block rule reach this ball for a man at `blocker` at all:
+    /// his body on its line below his reach, or a leg inside the lunge
+    /// corridor near his own goal. Position only — no skill, no price.
+    #[cfg(feature = "match-logs")]
+    pub(crate) fn reaches(line: &StrikeLine, blocker: Vector3<f32>, field_width: f32) -> bool {
+        BlockGeometry::at_strike(line, blocker, field_width).is_some_and(|g| g.is_live())
+    }
+
     /// The chance for one man. Skill enters as a duel
     /// ([`InterceptionDuel`]) for both kinds: an absolute skill term would
     /// walk straight up the pyramid, while the duel resolves to parity at

@@ -588,15 +588,42 @@ static CROSS_STRUCK: AtomicU64 = AtomicU64::new(0);
 static CROSS_STRUCK_PRESSED: AtomicU64 = AtomicU64::new(0);
 /// The chance of getting past, x10000, summed over the pressed ticks.
 static CROSS_PAST_X10000: AtomicU64 = AtomicU64::new(0);
+/// Where the man nearest the carrier stood ([`CrossPriceCensus::CLOSERS`]),
+/// on the ticks asked and on the deliveries struck. "On the line" is
+/// position only: the block rule can reach the delivery from where he is.
+static CLOSER_ASKED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static CLOSER_STRUCK: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// Open-play crosses struck, by the closer's state at the strike
+/// (`PlayerState::compact_id`, [`CrossPriceCensus::NO_CLOSER`] for
+/// nobody near), off and on the delivery's line.
+static CLOSER_STATE: [[AtomicU64; 2]; 501] = [const { [const { AtomicU64::new(0) }; 2] }; 501];
 
 pub struct CrossPriceCensus;
 
 impl CrossPriceCensus {
+    /// How near the carrier the closer has to be (~5 m) — the grass the
+    /// crosser reads for his run (`FlankPlay::RUN_ROOM`).
+    pub const CLOSER_RADIUS: f32 = 40.0;
+    pub const CLOSERS: [&'static str; 5] = [
+        "on the line",
+        "on the run",
+        "goal-side elsewhere",
+        "beaten",
+        "nobody",
+    ];
+    pub const ON_THE_LINE: usize = 0;
+    pub const ON_THE_RUN: usize = 1;
+    pub const GOAL_SIDE: usize = 2;
+    pub const BEATEN: usize = 3;
+    pub const NOBODY: usize = 4;
+    pub const NO_CLOSER: usize = 500;
+
     /// One delivery question: `past` is the chosen delivery's chance of
-    /// getting past, `priced` the appetite with it and `bar` the
-    /// possession's bar.
-    pub fn note(past: f32, priced: f32, bar: f32) {
+    /// getting past, `priced` the appetite with it, `bar` the
+    /// possession's bar and `closer` where the nearest man stood.
+    pub fn note(past: f32, priced: f32, bar: f32, closer: usize) {
         CROSS_ASKED.fetch_add(1, Ordering::Relaxed);
+        CLOSER_ASKED[closer].fetch_add(1, Ordering::Relaxed);
         let pressed = past < 0.95;
         if pressed {
             CROSS_PRESSED.fetch_add(1, Ordering::Relaxed);
@@ -607,6 +634,7 @@ impl CrossPriceCensus {
         }
         if priced >= bar {
             CROSS_STRUCK.fetch_add(1, Ordering::Relaxed);
+            CLOSER_STRUCK[closer].fetch_add(1, Ordering::Relaxed);
             if pressed {
                 CROSS_STRUCK_PRESSED.fetch_add(1, Ordering::Relaxed);
             }
@@ -627,7 +655,48 @@ impl CrossPriceCensus {
         )
     }
 
+    /// One open-play cross struck, with the closer's state and whether
+    /// he was on its line.
+    pub fn note_strike(state: usize, on_line: bool) {
+        CLOSER_STATE[state.min(Self::NO_CLOSER)][usize::from(on_line)]
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `(asked, struck)` per closer class.
+    pub fn closers() -> [(u64, u64); 5] {
+        std::array::from_fn(|c| {
+            (
+                CLOSER_ASKED[c].load(Ordering::Relaxed),
+                CLOSER_STRUCK[c].load(Ordering::Relaxed),
+            )
+        })
+    }
+
+    /// `(state, off the line, on the line)`, most strikes first.
+    pub fn closer_states() -> Vec<(usize, u64, u64)> {
+        let mut rows: Vec<(usize, u64, u64)> = (0..CLOSER_STATE.len())
+            .map(|s| {
+                (
+                    s,
+                    CLOSER_STATE[s][0].load(Ordering::Relaxed),
+                    CLOSER_STATE[s][1].load(Ordering::Relaxed),
+                )
+            })
+            .filter(|(_, off, on)| off + on > 0)
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.1 + row.2));
+        rows
+    }
+
     fn reset() {
+        for c in CLOSER_ASKED.iter().chain(CLOSER_STRUCK.iter()) {
+            c.store(0, Ordering::Relaxed);
+        }
+        for bank in &CLOSER_STATE {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
         for c in [
             &CROSS_ASKED,
             &CROSS_PRESSED,

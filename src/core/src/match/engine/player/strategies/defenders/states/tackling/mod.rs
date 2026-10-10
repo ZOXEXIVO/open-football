@@ -6,12 +6,12 @@ use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::states::{
-    RecoveryChallenge, TackleDecision, TackleOutcome, TacticalFoul,
+    ClosingPoint, RecoveryChallenge, TackleDecision, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
@@ -274,7 +274,10 @@ impl DefenderTacklingState {
         if let Some(carrier) = ctx.players().opponents().with_ball().next() {
             let gap = (carrier.position - player_position).magnitude();
             if gap <= TackleEngagement::DISENGAGE {
-                return TackleDecision::contain_position(ctx, carrier.position);
+                if MatchContext::cross_line_off() {
+                    return ClosingPoint::goal_side(ctx, carrier.position, ClosingPoint::STAND_OFF);
+                }
+                return ClosingPoint::for_carrier(ctx, &carrier);
             }
         }
 

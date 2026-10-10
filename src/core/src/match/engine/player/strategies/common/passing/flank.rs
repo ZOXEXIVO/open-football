@@ -44,6 +44,8 @@ use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::contest::pass_block::PassBlock;
 use crate::r#match::midfielders::states::common::{LaneAhead, Opportunity};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::common::passing::CrossDecision;
 use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 #[cfg(feature = "match-logs")]
@@ -85,7 +87,7 @@ impl FlankPlay {
     /// How near the goal a team-mate has to be to count as being IN the
     /// box for the purposes of aiming at him. 170u ≈ 21 m — the penalty
     /// area and the yard or two of approach a runner arrives from.
-    const BOX_RANGE: f32 = 170.0;
+    pub(crate) const BOX_RANGE: f32 = 170.0;
 
     /// …and how many of them there have to be.
     ///
@@ -255,18 +257,61 @@ impl FlankPlay {
         #[cfg(feature = "match-logs")]
         {
             let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let delivery = PassBlock::technique(ctx.player, minute, true);
             let past = CrossModel::gets_past(
                 ctx,
                 decision.cross_type,
                 decision.aim_point,
-                PassBlock::technique(ctx.player, minute, true),
+                delivery,
                 minute,
             );
-            CrossPriceCensus::note(past, appetite, bar);
+            let closer = Self::closer_class(ctx, &decision, delivery);
+            CrossPriceCensus::note(past, appetite, bar, closer);
         }
         #[cfg(not(feature = "match-logs"))]
         let _ = decision;
         (appetite >= bar).then_some(FlankAction::Deliver)
+    }
+
+    /// Where the man nearest the carrier stands against this delivery —
+    /// see [`CrossPriceCensus::CLOSERS`].
+    #[cfg(feature = "match-logs")]
+    fn closer_class(
+        ctx: &StateProcessingContext,
+        decision: &CrossDecision,
+        delivery: f32,
+    ) -> usize {
+        let me = ctx.player.position;
+        let Some(closer) = ctx
+            .players()
+            .opponents()
+            .nearby(CrossPriceCensus::CLOSER_RADIUS)
+            .filter(|o| !o.tactical_positions.is_goalkeeper())
+            .min_by(|a, b| a.distance(ctx).total_cmp(&b.distance(ctx)))
+        else {
+            return CrossPriceCensus::NOBODY;
+        };
+        let field_width = ctx.context.field_size.width as f32;
+        let on_line =
+            CrossModel::strike_line(ctx, decision.cross_type, decision.aim_point, delivery)
+                .is_some_and(|line| PassBlock::reaches(&line, closer.position, field_width));
+        if on_line {
+            return CrossPriceCensus::ON_THE_LINE;
+        }
+        let on_run = Self::byline_point(ctx)
+            .and_then(|byline| (byline - me).try_normalize(f32::EPSILON))
+            .is_some_and(|heading| {
+                LaneAhead::read_along(ctx, heading).nearest_id == Some(closer.id)
+            });
+        if on_run {
+            return CrossPriceCensus::ON_THE_RUN;
+        }
+        let goal = ctx.player().opponent_goal_position();
+        if (goal - closer.position).magnitude() < (goal - me).magnitude() {
+            CrossPriceCensus::GOAL_SIDE
+        } else {
+            CrossPriceCensus::BEATEN
+        }
     }
 
     /// Is the run down the outside still on: nobody within

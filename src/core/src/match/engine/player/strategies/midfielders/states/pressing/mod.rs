@@ -4,10 +4,10 @@ use crate::r#match::midfielders::states::common::{
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -209,47 +209,19 @@ impl StateProcessingHandler for MidfielderPressingState {
         {
             let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
 
-            // Predictive pursuit — lead the carrier based on their
-            // current velocity. Aiming at their present position means
-            // arriving several ticks behind a running attacker. Same
-            // fix applied to defender pressing: estimate how long we'd
-            // take to close the gap at our own pace, project the
-            // carrier along their velocity by that many ticks, then bias
-            // the aim point slightly toward our own goal to close the
-            // shooting lane rather than just touch their back.
+            // The carrier's velocity leads the aim point, so a running
+            // attacker is met where he is going rather than chased.
             let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
             let opp_speed = opp_velocity.magnitude();
 
-            // Goal-side bias: close the shooting lane rather than just
-            // touch the carrier's back. The interception itself is left to
-            // `SteeringBehavior::Pursuit`.
-            //
-            // The lead time used to be hand-rolled here as
-            // `distance / pace`, mixing units: `pace` is a 1-20 SKILL,
-            // while distance is in field units and the answer was used as
-            // ticks. At pace 15 that put a carrier 50u away only ~3 ticks
-            // ahead when closing him actually takes ~100 — the prediction
-            // was ~30x short and moved erratically as the distance
-            // changed. `Pursuit` computes the same thing from the
-            // player's real u/tick speed.
-            // Goal-side bias only; the interception maths belongs to
-            // `SteeringBehavior::Pursuit` below, which derives the lead
-            // from the player's real u/tick speed.
-            //
-            // The lead time used to be hand-rolled here as
-            // `distance / pace`, mixing units: `pace` is a 1-20 SKILL,
-            // while distance is in field units and the result was used as
-            // a tick count. At pace 15 that put a carrier 50u away only
-            // ~3 ticks ahead when closing him actually takes ~100 — the
-            // prediction was ~30x short and lurched as the gap changed,
-            // which moved the aim point (and the presser's heading) tick
-            // to tick.
-            let predicted = opponent.position;
-
-            let own_goal = ctx.ball().direction_to_own_goal();
-            let to_own_goal = (own_goal - predicted).normalize();
-            let goalside_bias = if opp_speed > 0.1 { 2.0 } else { 0.0 };
-            let intercept_target = predicted + to_own_goal * goalside_bias;
+            // A stride off the carrier, across his line to our box —
+            // the same point every closer takes (`ClosingPoint`).
+            let intercept_target = if MatchContext::cross_line_off() {
+                let goalside_bias = if opp_speed > 0.1 { 2.0 } else { 0.0 };
+                ClosingPoint::goal_side(ctx, opponent.position, goalside_bias)
+            } else {
+                ClosingPoint::for_carrier(ctx, &opponent)
+            };
 
             // Steer, don't teleport. `direction * pace` assigned an
             // absolute velocity of up to 20 u/tick against a ~0.63 u/tick

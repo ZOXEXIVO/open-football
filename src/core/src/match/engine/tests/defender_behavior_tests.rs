@@ -1,7 +1,7 @@
 //! Defenders must react to the carrier while maintaining coordinated marks.
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::common_states::TackleEngagement;
+use crate::r#match::common_states::{ClosingPoint, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::defenders::states::covering::DefenderCoveringState;
@@ -239,5 +239,62 @@ fn defender_with_better_field_reading_leads_a_crossing_run_further() {
             angles[1] > angles[0],
             "better {attribute} should help cut across the run: {angles:?}"
         );
+    }
+}
+
+/// A winger running at the home side's goal line, a stride from it, with
+/// two team-mates in the box and the home right-back stood between him
+/// and the byline.
+fn winger_at_the_byline() -> (MatchField, MatchContext) {
+    let (mut field, context) = setup(PlayerSide::Left);
+    let carrier = Vector3::new(24.0, 460.0, 0.0);
+    let winger = field.get_player_mut(209).unwrap();
+    winger.position = carrier;
+    winger.velocity = Vector3::new(-0.5, 0.0, 0.0);
+    field.get_player_mut(210).unwrap().position = Vector3::new(60.0, 262.0, 0.0);
+    field.get_player_mut(208).unwrap().position = Vector3::new(40.0, 290.0, 0.0);
+    field.get_player_mut(104).unwrap().position = Vector3::new(6.0, 462.0, 0.0);
+    field.ball.position = carrier;
+    field.ball.velocity = Vector3::new(-0.5, 0.0, 0.0);
+    (field, context)
+}
+
+#[test]
+fn a_pressing_defender_closes_a_byline_winger_from_the_inside() {
+    let (field, context) = winger_at_the_byline();
+    let tick = GameTickContext::new(&field, &context.players);
+    let situation = ctx(&field, &context, &tick, 104);
+    let carrier = situation.players().opponents().with_ball().next().unwrap();
+    let point = ClosingPoint::for_carrier(&situation, &carrier);
+    assert!(
+        point.y < carrier.position.y - ClosingPoint::STAND_OFF * 0.5,
+        "the closing point is not inside the winger: {point:?} vs {:?}",
+        carrier.position
+    );
+    let velocity = DefenderPressingState::default()
+        .velocity(&situation)
+        .unwrap();
+    let to_point = point - situation.player.position;
+    let cosine = velocity.dot(&to_point) / (velocity.norm() * to_point.norm());
+    assert!(
+        cosine > 0.9,
+        "the presser does not steer for the inside of the winger: {velocity:?} toward {to_point:?}"
+    );
+}
+
+#[test]
+fn closers_of_the_same_pace_take_the_same_point_whatever_their_role() {
+    let (field, context) = winger_at_the_byline();
+    let tick = GameTickContext::new(&field, &context.players);
+    let points: Vec<_> = [104, 108, 110]
+        .into_iter()
+        .map(|id| {
+            let situation = ctx(&field, &context, &tick, id);
+            let carrier = situation.players().opponents().with_ball().next().unwrap();
+            ClosingPoint::for_carrier(&situation, &carrier)
+        })
+        .collect();
+    for point in &points[1..] {
+        assert!((point - points[0]).norm() < 1.0e-4, "{points:?}");
     }
 }

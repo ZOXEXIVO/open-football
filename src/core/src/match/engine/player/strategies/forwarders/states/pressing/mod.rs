@@ -1,9 +1,9 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -117,11 +117,18 @@ impl StateProcessingHandler for ForwardPressingState {
         let loose_reach = if nominated { f32::INFINITY } else { 80.0 };
 
         // Only pursue if opponent has the ball and it's within pressing range
-        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             if ball_distance < carrier_reach {
+                // A stride off the carrier, across his line to our box —
+                // the same point every closer takes (`ClosingPoint`).
+                let target = if MatchContext::cross_line_off() {
+                    ctx.tick_context.positions.ball.position
+                } else {
+                    ClosingPoint::for_carrier(ctx, &opponent)
+                };
                 return Some(
                     SteeringBehavior::Pursuit {
-                        target: ctx.tick_context.positions.ball.position,
+                        target,
                         target_velocity: ctx.tick_context.positions.ball.velocity,
                     }
                     .calculate(ctx.player)
