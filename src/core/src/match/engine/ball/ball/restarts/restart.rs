@@ -12,6 +12,8 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{
     AwaitedRestart, Ball, GoalKickRunUp, PhaseOrigin, RestartHold, RunOff, RunUpPhase,
@@ -145,6 +147,9 @@ impl Ball {
                 .map(|p| (p.position - throw_pos).magnitude())
                 .unwrap_or(0.0);
             RestartCensus::note_throw_in(disagree, since_last, walk);
+            if let Some(census) = self.pass_block_census.take() {
+                census.close(PassBlockCensus::TOUCH);
+            }
         }
 
         // **The ball is NOT written onto the spot.** It has just crossed

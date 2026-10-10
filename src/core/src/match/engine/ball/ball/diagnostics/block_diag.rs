@@ -346,6 +346,9 @@ impl BlockDiag {
         for c in &CONTACT_HEIGHT_BANDS {
             c.store(0, Ordering::Relaxed);
         }
+        PassBlockCensus::reset();
+        StrikeOrigin::reset();
+        CrossPriceCensus::reset();
     }
 
     /// `(shots_seen, too_high, candidates, fired)`
@@ -375,5 +378,265 @@ impl BlockDiag {
             in_window,
             mean_perp,
         )
+    }
+}
+
+// ── Where a blocked pass goes ───────────────────────────────────
+//
+// A pass block decides a loose ball, and what that ball then does is
+// the whole of what the block is worth: a corner, a throw-in, a
+// scramble, or the blocker's own ball. Booked once per block, by the
+// strike it stopped and how far from that strike the blocker stood.
+/// Pass blocks resolved, by strike ([`PassBlockCensus::STRIKES`]) and
+/// outcome ([`PassBlockCensus::OUTCOMES`]).
+static PASS_BLOCK_OUTCOMES: [[AtomicU64; 4]; 2] = [const { [const { AtomicU64::new(0) }; 4] }; 2];
+/// …by strike and the blocker's distance from the strike point
+/// ([`PassBlockCensus::GAP_BANDS`]).
+static PASS_BLOCK_GAPS: [[AtomicU64; 5]; 2] = [const { [const { AtomicU64::new(0) }; 5] }; 2];
+/// …by strike and kind ([`PassBlockCensus::KINDS`]): a lunge, or a
+/// charge-down the man had no time to react to.
+static PASS_BLOCK_KINDS: [[AtomicU64; 2]; 2] = [const { [const { AtomicU64::new(0) }; 2] }; 2];
+
+/// One block whose loose ball has not yet ended. The ball carries it
+/// until the next touch, the ball going out, or a restart.
+#[derive(Clone, Copy, Debug)]
+pub struct PassBlockCensus {
+    strike: usize,
+}
+
+impl PassBlockCensus {
+    pub const STRIKES: [&'static str; 2] = ["pass", "cross"];
+    pub const OUTCOMES: [&'static str; 4] = ["behind", "touch", "loose", "kept"];
+    pub const GAP_BANDS: [&'static str; 5] = ["<1m", "1-2m", "2-3m", "3-5m", "5m+"];
+    pub const KINDS: [&'static str; 2] = ["lunge", "charge-down"];
+
+    pub const BEHIND: usize = 0;
+    pub const TOUCH: usize = 1;
+    pub const LOOSE: usize = 2;
+    pub const KEPT: usize = 3;
+
+    /// Book the block itself. `gap_u` is the blocker's distance from
+    /// the strike point in units, `None` when the strike point is gone.
+    pub fn open(cross: bool, gap_u: Option<f32>, charge_down: bool) -> Self {
+        let strike = usize::from(cross);
+        PASS_BLOCK_KINDS[strike][usize::from(charge_down)].fetch_add(1, Ordering::Relaxed);
+        if let Some(gap) = gap_u {
+            let metres = gap / 8.0;
+            let band = if metres < 1.0 {
+                0
+            } else if metres < 2.0 {
+                1
+            } else if metres < 3.0 {
+                2
+            } else if metres < 5.0 {
+                3
+            } else {
+                4
+            };
+            PASS_BLOCK_GAPS[strike][band].fetch_add(1, Ordering::Relaxed);
+        }
+        PassBlockCensus { strike }
+    }
+
+    pub fn close(self, outcome: usize) {
+        PASS_BLOCK_OUTCOMES[self.strike][outcome].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `(outcomes, gaps, kinds)` per strike, in [`Self::STRIKES`] order.
+    pub fn snapshot() -> [([u64; 4], [u64; 5], [u64; 2]); 2] {
+        std::array::from_fn(|s| {
+            (
+                std::array::from_fn(|o| PASS_BLOCK_OUTCOMES[s][o].load(Ordering::Relaxed)),
+                std::array::from_fn(|g| PASS_BLOCK_GAPS[s][g].load(Ordering::Relaxed)),
+                std::array::from_fn(|k| PASS_BLOCK_KINDS[s][k].load(Ordering::Relaxed)),
+            )
+        })
+    }
+
+    fn reset() {
+        for bank in &PASS_BLOCK_OUTCOMES {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for bank in &PASS_BLOCK_GAPS {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for bank in &PASS_BLOCK_KINDS {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+}
+
+// ── Who struck a blocked ball, and what he priced ───────────────
+//
+// A charge-down lands on a ball struck into a body. Whether that is a
+// striker who never priced the man, or one who priced him and played it
+// anyway, are opposite fixes — so every strike carries where it came
+// from until the next one.
+/// Blocks by the striker's state at the strike (`PlayerState::compact_id`,
+/// with [`StrikeOrigin::CLEARANCE`] for a clearance), split by kind
+/// ([`PassBlockCensus::KINDS`]).
+static BLOCKS_BY_STATE: [[AtomicU64; 2]; 501] = [const { [const { AtomicU64::new(0) }; 2] }; 501];
+/// Passes struck, by the block price the striker's lane price put on that
+/// exact pass at the strike ([`StrikeOrigin::PRICE_BANDS`]).
+static STRUCK_BY_PRICE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+/// …and of those, the ones then charged down.
+static CHARGED_BY_PRICE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+/// Where the ball in flight was struck from — see the section note.
+#[derive(Clone, Copy, Debug)]
+pub struct StrikeOrigin {
+    state: usize,
+    price_band: Option<usize>,
+}
+
+impl StrikeOrigin {
+    pub const CLEARANCE: usize = 500;
+    pub const PRICE_BANDS: [&'static str; 5] = ["<2%", "2-5%", "5-10%", "10-20%", "20%+"];
+
+    /// A pass, struck from `state` with the block priced at `price`.
+    pub fn pass(state: usize, price: f32) -> Self {
+        let band = if price < 0.02 {
+            0
+        } else if price < 0.05 {
+            1
+        } else if price < 0.10 {
+            2
+        } else if price < 0.20 {
+            3
+        } else {
+            4
+        };
+        STRUCK_BY_PRICE[band].fetch_add(1, Ordering::Relaxed);
+        StrikeOrigin {
+            state: state.min(Self::CLEARANCE - 1),
+            price_band: Some(band),
+        }
+    }
+
+    pub fn clearance() -> Self {
+        StrikeOrigin {
+            state: Self::CLEARANCE,
+            price_band: None,
+        }
+    }
+
+    /// Book a block of the ball this strike put in flight.
+    pub fn note_block(&self, charge_down: bool) {
+        BLOCKS_BY_STATE[self.state][usize::from(charge_down)].fetch_add(1, Ordering::Relaxed);
+        if charge_down && let Some(band) = self.price_band {
+            CHARGED_BY_PRICE[band].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// `(state, lunges, charge-downs)`, most charge-downs first.
+    pub fn by_state() -> Vec<(usize, u64, u64)> {
+        let mut rows: Vec<(usize, u64, u64)> = (0..BLOCKS_BY_STATE.len())
+            .map(|s| {
+                (
+                    s,
+                    BLOCKS_BY_STATE[s][0].load(Ordering::Relaxed),
+                    BLOCKS_BY_STATE[s][1].load(Ordering::Relaxed),
+                )
+            })
+            .filter(|(_, lunges, charges)| lunges + charges > 0)
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.2));
+        rows
+    }
+
+    /// `(struck, charged down)` per price band.
+    pub fn by_price() -> [(u64, u64); 5] {
+        std::array::from_fn(|b| {
+            (
+                STRUCK_BY_PRICE[b].load(Ordering::Relaxed),
+                CHARGED_BY_PRICE[b].load(Ordering::Relaxed),
+            )
+        })
+    }
+
+    fn reset() {
+        for bank in &BLOCKS_BY_STATE {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for c in STRUCK_BY_PRICE.iter().chain(CHARGED_BY_PRICE.iter()) {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+// ── What the price does to the crosser ──────────────────────────
+//
+// Counted per tick a wide carrier reaches the delivery question, so the
+// shares are of ticks, not of possessions.
+/// Ticks the delivery was asked about.
+static CROSS_ASKED: AtomicU64 = AtomicU64::new(0);
+/// …with the best delivery's chance of getting past under 95%: a man on
+/// its line.
+static CROSS_PRESSED: AtomicU64 = AtomicU64::new(0);
+/// …of those, the ones the price alone took under the bar.
+static CROSS_PRICED_OUT: AtomicU64 = AtomicU64::new(0);
+/// Deliveries struck, and the ones struck with a man on the line.
+static CROSS_STRUCK: AtomicU64 = AtomicU64::new(0);
+static CROSS_STRUCK_PRESSED: AtomicU64 = AtomicU64::new(0);
+/// The chance of getting past, x10000, summed over the pressed ticks.
+static CROSS_PAST_X10000: AtomicU64 = AtomicU64::new(0);
+
+pub struct CrossPriceCensus;
+
+impl CrossPriceCensus {
+    /// One delivery question: `past` is the chosen delivery's chance of
+    /// getting past, `priced` the appetite with it and `bar` the
+    /// possession's bar.
+    pub fn note(past: f32, priced: f32, bar: f32) {
+        CROSS_ASKED.fetch_add(1, Ordering::Relaxed);
+        let pressed = past < 0.95;
+        if pressed {
+            CROSS_PRESSED.fetch_add(1, Ordering::Relaxed);
+            CROSS_PAST_X10000.fetch_add((past * 10_000.0) as u64, Ordering::Relaxed);
+            if priced < bar && priced / past.max(1.0e-3) >= bar {
+                CROSS_PRICED_OUT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        if priced >= bar {
+            CROSS_STRUCK.fetch_add(1, Ordering::Relaxed);
+            if pressed {
+                CROSS_STRUCK_PRESSED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// `(asked, pressed, priced out, struck, struck pressed, mean past
+    /// when pressed)`
+    pub fn snapshot() -> (u64, u64, u64, u64, u64, f32) {
+        let pressed = CROSS_PRESSED.load(Ordering::Relaxed);
+        (
+            CROSS_ASKED.load(Ordering::Relaxed),
+            pressed,
+            CROSS_PRICED_OUT.load(Ordering::Relaxed),
+            CROSS_STRUCK.load(Ordering::Relaxed),
+            CROSS_STRUCK_PRESSED.load(Ordering::Relaxed),
+            CROSS_PAST_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / pressed.max(1) as f32,
+        )
+    }
+
+    fn reset() {
+        for c in [
+            &CROSS_ASKED,
+            &CROSS_PRESSED,
+            &CROSS_PRICED_OUT,
+            &CROSS_STRUCK,
+            &CROSS_STRUCK_PRESSED,
+            &CROSS_PAST_X10000,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
     }
 }

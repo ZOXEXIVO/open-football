@@ -6,7 +6,7 @@ Owns individual player behavior on the pitch: passing and shooting decisions, ta
 ## Requirements
 
 ### Requirement: Ball possession and passing decisions
-A player in possession SHALL evaluate candidate passes using a combination of distance, passing angle, pressure on the passer, the receiver's positioning and ability, the passer's own ability, and the tactical value of the resulting position, and SHALL weigh the risk that the pass is intercepted before choosing whether and where to pass.
+A player in possession SHALL evaluate candidate passes using a combination of distance, passing angle, pressure on the passer, the receiver's positioning and ability, the passer's own ability, and the tactical value of the resulting position, and SHALL weigh the risk that the pass is intercepted or blocked before choosing whether and where to pass. The risk of a block SHALL be the same chance the block contest rolls for that pass from the same positions.
 
 #### Scenario: Pass success probability responds to pressure
 - **WHEN** the passer is under close defensive pressure at the moment of the pass
@@ -15,6 +15,10 @@ A player in possession SHALL evaluate candidate passes using a combination of di
 #### Scenario: Adverse weather reduces pass accuracy
 - **WHEN** the match environment carries adverse weather (rain or wind) modifiers
 - **THEN** evaluated pass success probability is reduced accordingly, with long passes affected further by wind
+
+#### Scenario: A pass through a man at point blank is priced
+- **WHEN** a candidate pass's line runs through an opponent a stride from the passer, below that opponent's standing reach
+- **THEN** the evaluated risk of that pass includes the chance of it being charged down, and is higher than for the same pass with him off the line
 
 ### Requirement: Shot decision and shot type classification
 An attacking player in possession within shooting range SHALL decide whether to shoot based on their position, angle to goal, pressure, and the tactical situation, and every shot taken SHALL be classified into a shot type (e.g. open-play foot strike, header, volley, one-on-one, cutback, rebound, penalty, direct free kick) that determines its baseline conversion quality independently of shot geometry.
@@ -180,3 +184,18 @@ keeper is never measured against himself and never made better or worse by the k
 - **WHEN** a keeper whose goalkeeping attributes sit well below his division's typical keeper plays a season in that
   division
 - **THEN** the standard his shot-stopping is measured against in each match does not move with his own attributes
+
+### Requirement: The crosser prices the men in front of the delivery
+A wide player SHALL NOT refuse to cross only because an opponent stands in front of him. He SHALL weigh each candidate delivery by its chance of getting past the men on its line, and that chance SHALL be the one the block contest rolls for that delivery. The type of delivery SHALL count: a ball that passes over a man's reach is not priced as blockable by him.
+
+#### Scenario: A cross past a closer is still possible
+- **WHEN** a crosser with a strong delivery on offer has a defender a stride in front of him on the delivery's line
+- **THEN** he may still cross, with less appetite for it than he would have with nobody in front
+
+#### Scenario: The ball over him is preferred to the ball through him
+- **WHEN** two candidate deliveries are otherwise equal, but one passes over the closer's reach and the other runs through him
+- **THEN** the delivery over him is valued higher
+
+#### Scenario: The crosser reads the same chance the contest rolls
+- **WHEN** a crosser weighs a delivery with opponents on its line
+- **THEN** the chance of it being blocked that he weighs is the chance the block contest would roll for that delivery from the same positions

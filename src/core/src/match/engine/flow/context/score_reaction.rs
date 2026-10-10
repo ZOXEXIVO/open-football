@@ -70,6 +70,20 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_BOX_DEFENCE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_CHARGE_DOWN_OFF` set, a pass block is a
+    /// lunge only — no man is ever too late to react
+    /// (`BlockGeometry::reaction` reads zero) — and a wide man refuses to
+    /// cross past a man stood in front of him, as he did before the
+    /// crosser priced the block. The A/B control for the charge-down, one
+    /// switch for both halves because the striker's price and the
+    /// contest's roll are one model. Read once per process — debug
+    /// infrastructure, do not remove.
+    pub fn charge_down_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_CHARGE_DOWN_OFF").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_BLOCK_CONTACT_FLAT` set, both block
     /// channels resolve their deferred contact the way they did before
     /// 2026-09-06 — on the distance across the grass alone, with no

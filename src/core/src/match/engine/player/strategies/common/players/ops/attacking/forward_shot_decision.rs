@@ -101,6 +101,9 @@ pub mod mid_run_diag {
     /// tagged corner source; everything not tagged is ordinary play
     /// putting the ball over the byline off a defender.
     pub static HEADED_BEHIND_FIRED: AtomicU64 = AtomicU64::new(0);
+    /// Corners from a blocked PASS going over the blocker's own byline,
+    /// whether it glanced there or was cleared there.
+    pub static PASS_BLOCK_BEHIND_FIRED: AtomicU64 = AtomicU64::new(0);
     /// Penalties awarded (box foul whistled → spot kick restart).
     /// Real football ≈ 0.25-0.30 per match.
     pub static PENALTY_AWARDED: AtomicU64 = AtomicU64::new(0);
@@ -4254,13 +4257,14 @@ pub mod mid_run_diag {
             &BLOCK_CORNER_FIRED,
             &SAVE_PARRY_FIRED,
             &HEADED_BEHIND_FIRED,
+            &PASS_BLOCK_BEHIND_FIRED,
             &PENALTY_AWARDED,
             &DIRECT_FK_AWARDED,
         ] {
             c.store(0, Ordering::Relaxed);
         }
     }
-    pub fn snapshot() -> [u64; 17] {
+    pub fn snapshot() -> [u64; 18] {
         [
             RUNNER_BOX_TICKS.load(Ordering::Relaxed),
             FWD_CUTBACK.load(Ordering::Relaxed),
@@ -4279,6 +4283,7 @@ pub mod mid_run_diag {
             BLOCK_CORNER_FIRED.load(Ordering::Relaxed),
             SAVE_PARRY_FIRED.load(Ordering::Relaxed),
             HEADED_BEHIND_FIRED.load(Ordering::Relaxed),
+            PASS_BLOCK_BEHIND_FIRED.load(Ordering::Relaxed),
         ]
     }
 

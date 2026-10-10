@@ -449,6 +449,9 @@ impl Ball {
                 // He heads it over his own byline. The grant belongs to
                 // nobody now — this is a clearance, not a chance, and it is
                 // booked as one: see [`BallEvent::HeadedClear`].
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::HEADED_BEHIND_FIRED
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 self.aerial_contest_winner = None;
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();

@@ -4,6 +4,7 @@ use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
+use crate::r#match::engine::ball::ball::contest::pass_block::{PassBlock, StrikeLine};
 use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE, OffsideLine, ThrowIn};
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
@@ -1116,9 +1117,11 @@ impl PassEvaluator {
         Self::lane_risk(ctx, passer, receiver.position)
     }
 
-    /// The chance a ground ball from `passer` to `target` is cut out on
-    /// the way — the price every pass decision reads, through
-    /// `PlayerOps::has_clear_pass` or this evaluator's own scoring.
+    /// The chance a ground ball from `passer` to `target` is cut out or
+    /// blocked on the way — the price every pass decision reads, through
+    /// `PlayerOps::has_clear_pass` or this evaluator's own scoring. Both
+    /// are the contests' own rules ([`InterceptionContest`],
+    /// [`PassBlock`]), not a picture of them.
     ///
     /// The best-placed man's chance, not a product over everybody near
     /// the line: the defence sends ONE man for a pass in flight
@@ -1139,6 +1142,16 @@ impl PassEvaluator {
         let delivery = sc::passing_execution(passer, minute);
         let shift = MatchStandard::shift(ctx.context);
 
+        let field_width = ctx.context.field_size.width as f32;
+        let line = passer.side.map(|side| StrikeLine {
+            from: passer.position,
+            direction,
+            pace,
+            lift: 0.0,
+            delivery,
+            defending_side: side.opposite(),
+        });
+
         let store = &ctx.tick_context.positions.players;
         // The last stride and a half is the receiver's — pressure on his
         // first touch is `receiver_positioning`'s term, not this one's.
@@ -1150,33 +1163,41 @@ impl PassEvaluator {
             if along <= 0.0 || along >= contested {
                 continue;
             }
-            let Some(man) = store.get(opponent.id) else {
-                continue;
-            };
-            let arrives = along / pace;
-            let miss = InterceptionContest::closing_miss(
-                (to_opponent - direction * along).norm(),
-                arrives,
-                man.read,
-                man.max_speed,
-                shift,
-            );
-            if miss >= InterceptionContest::REACH {
-                continue;
-            }
             // He was priced from where he stands NOW, which is where he
             // stood at the strike — the passer is deciding before it.
             let perp = (to_opponent - direction * along).norm();
-            risk = risk.max(InterceptionContest::chance(
-                miss,
-                pace,
-                arrives,
-                1.0,
-                man.read,
-                delivery,
-                shift,
-                InterceptionContest::is_set_for_it(perp),
-            ));
+            let arrives = along / pace;
+            let take = store.get(opponent.id).map_or(0.0, |man| {
+                let miss = InterceptionContest::closing_miss(
+                    perp,
+                    arrives,
+                    man.read,
+                    man.max_speed,
+                    shift,
+                );
+                if miss >= InterceptionContest::REACH {
+                    return 0.0;
+                }
+                InterceptionContest::chance(
+                    miss,
+                    pace,
+                    arrives,
+                    1.0,
+                    man.read,
+                    delivery,
+                    shift,
+                    InterceptionContest::is_set_for_it(perp),
+                )
+            });
+            // The same man can get a leg to it instead of taking it, and
+            // the ball runs both contests: he is worth whichever stops it.
+            let block = match (&line, ctx.context.players.by_id(opponent.id)) {
+                (Some(line), Some(record)) => {
+                    PassBlock::priced(line, &opponent, record, minute, field_width)
+                }
+                _ => 0.0,
+            };
+            risk = risk.max(1.0 - (1.0 - take) * (1.0 - block));
         }
         risk
     }

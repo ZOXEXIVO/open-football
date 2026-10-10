@@ -5,6 +5,8 @@
 
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RunOff};
 use crate::r#match::engine::corner_shape::{CornerDeadline, CornerShape, CornerShapeHold};
@@ -1115,6 +1117,13 @@ impl Ball {
                 .map(|p| p.state.compact_id())
                 .unwrap_or(0);
             EndlineCensus::note(is_corner, last_state);
+            if let Some(census) = self.pass_block_census.take() {
+                census.close(PassBlockCensus::BEHIND);
+                if is_corner {
+                    crate::mid_run_diag::PASS_BLOCK_BEHIND_FIRED
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             // …and when it is a goal kick, how far did the ball run after
             // the last man touched it, and what was he doing? A pass
             // struck too hard and a clearance hammered out are the same

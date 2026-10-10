@@ -27,7 +27,10 @@
 //!   state machine happened to run first.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::ball::ball::contest::pass_block::{PassBlock, StrikeLine};
+use crate::r#match::engine::ball::ball::{AerialReach, Ball, GRAVITY_PER_TICK};
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::LateralLane;
@@ -119,6 +122,37 @@ impl CrossType {
             CrossType::WhippedNearPost => 1.25,
             CrossType::FloatedFarPost => 1.15,
         }
+    }
+
+    /// How much harder than a pass to feet a ball along the deck is
+    /// struck. The danger of a driven cross is that nobody has time on it;
+    /// a cutback is a firm pass to a man arriving.
+    pub fn ground_pace_scale(self) -> f32 {
+        match self {
+            CrossType::DrivenLowCross => 1.40,
+            CrossType::Cutback => 1.15,
+            _ => 1.0,
+        }
+    }
+
+    /// The ball the crosser expects to strike over `distance_units`: its
+    /// pace across the grass (u/tick) and its lift (m/tick), before his
+    /// weighting error. A lofted ball is solved drag-free to come down
+    /// through head height — it prices the first metres of the flight,
+    /// where the man in front of him stands and drag has not yet told.
+    pub fn launch(self, distance_units: f32, conditions: &EnvModifiers) -> (f32, f32) {
+        let lift = Ball::launch_speed_for_apex(self.apex_metres(distance_units));
+        if !self.is_lofted() {
+            return (
+                Ball::pass_pace(distance_units, conditions) * self.ground_pace_scale(),
+                lift,
+            );
+        }
+        let falling = (lift * lift - 2.0 * GRAVITY_PER_TICK * AerialReach::ATTACKED)
+            .max(0.0)
+            .sqrt();
+        let ticks = ((lift + falling) / GRAVITY_PER_TICK).max(1.0);
+        (distance_units / ticks, lift)
     }
 
     /// Stable index for diagnostics bucketing. Kept next to the variants
@@ -270,6 +304,8 @@ impl CrossModel {
             .goalkeeper()
             .next()
             .map(|gk| gk.position);
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let delivery = PassBlock::technique(ctx.player, minute, true);
 
         let mut best: Option<(CrossDecision, f32)> = None;
 
@@ -377,13 +413,15 @@ impl CrossModel {
                 finishing * 0.45 + composure * 0.30 + anticipation * 0.25
             };
 
-            let score = attack_ability * 0.34
+            let score = (attack_ability * 0.34
                 + off_the_ball * 0.20
                 + anticipation * 0.08
                 + reachability * 0.16
                 + separation * 0.14
                 + depth_bonus * 0.08
-                - gk_claim_risk * 0.22;
+                - gk_claim_risk * 0.22)
+                .max(0.0)
+                * Self::gets_past(ctx, cross_type, aim_point, delivery, minute);
 
             let candidate = CrossDecision {
                 cross_type,
@@ -397,6 +435,52 @@ impl CrossModel {
         }
 
         best
+    }
+
+    /// The chance a delivery gets past the men on its line: for each of
+    /// them, the block contest's own chance ([`PassBlock::priced`]) on the
+    /// ball this delivery will be. A floated ball is over the full-back's
+    /// reach and a whipped one goes through him, which is how the crosser
+    /// picks the ball that beats the man in front instead of refusing to
+    /// cross past him.
+    pub(crate) fn gets_past(
+        ctx: &StateProcessingContext<'_>,
+        cross_type: CrossType,
+        aim_point: Vector3<f32>,
+        delivery: f32,
+        minute: u32,
+    ) -> f32 {
+        if MatchContext::charge_down_off() {
+            return 1.0;
+        }
+        let Some(side) = ctx.player.side else {
+            return 1.0;
+        };
+        let from = ctx.player.position;
+        let across = Vector3::new(aim_point.x - from.x, aim_point.y - from.y, 0.0);
+        let Some(direction) = across.try_normalize(1.0e-4) else {
+            return 1.0;
+        };
+        let (pace, lift) = cross_type.launch(across.norm(), &ctx.context.conditions);
+        let line = StrikeLine {
+            from,
+            direction,
+            pace,
+            lift,
+            delivery,
+            defending_side: side.opposite(),
+        };
+        let field_width = ctx.context.field_size.width as f32;
+        ctx.players()
+            .opponents()
+            .all()
+            .filter_map(|opponent| {
+                ctx.context
+                    .players
+                    .by_id(opponent.id)
+                    .map(|record| PassBlock::priced(&line, &opponent, record, minute, field_width))
+            })
+            .fold(1.0, |past, blocked| past * (1.0 - blocked))
     }
 
     /// A corner delivered as the routine called it: aimed at the runner the

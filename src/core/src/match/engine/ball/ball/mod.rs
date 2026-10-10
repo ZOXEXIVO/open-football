@@ -31,6 +31,7 @@ pub mod tick;
 // decides how far off the pitch a restart taker may go, and the two must
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
+use contest::pass_block::PassBlockCommit;
 pub use contest::{
     BlockContact, ContactInPlace, PassChainEntry, PassReach, PlayerReach, PossessionSource, block,
     contact, interception, ownership, possession, reach, save,
@@ -165,6 +166,14 @@ pub struct Ball {
     /// it passes — see [`lane_diag`]. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub lane_census: Option<lane_diag::LaneCensus>,
+    /// A blocked pass whose loose ball has not yet ended — see
+    /// [`block_diag::PassBlockCensus`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub pass_block_census: Option<block_diag::PassBlockCensus>,
+    /// Where the ball in flight was struck from — see
+    /// [`block_diag::StrikeOrigin`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub strike_origin: Option<block_diag::StrikeOrigin>,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -225,11 +234,11 @@ pub struct Ball {
     /// carrier's time in our own area 1 411 → 2 240 ticks a match.
     pub pass_block_rolled: u64,
     /// A pass-block that has been won, waiting for the ball to reach the
-    /// man who won it: `(blocker, outcome roll)`. The mirror of
+    /// man who won it — see [`PassBlockCommit`]. The mirror of
     /// `ShotTarget::blocked_by`, and it exists for the same reason — the
     /// read happens where the defender sees the pass, the contact has to
     /// happen where his body is.
-    pub pass_blocked_by: Option<(u32, f32)>,
+    pub pass_blocked_by: Option<PassBlockCommit>,
     /// The lofted delivery in flight has had its aerial duel — see
     /// [`contest::aerial_duel`]. Reset when the ball is next struck.
     pub aerial_duel_resolved: bool,
@@ -912,6 +921,10 @@ impl Ball {
             knock_seen_touch: 0,
             #[cfg(feature = "match-logs")]
             lane_census: None,
+            #[cfg(feature = "match-logs")]
+            pass_block_census: None,
+            #[cfg(feature = "match-logs")]
+            strike_origin: None,
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -1460,6 +1473,9 @@ impl Ball {
             if let Some(census) = self.lane_census.take() {
                 census.close(team_id);
             }
+            if let Some(census) = self.pass_block_census.take() {
+                census.close(block_diag::PassBlockCensus::LOOSE);
+            }
             // A lofted delivery that somebody touches before the aerial
             // contest resolves it never gets contested at all — the ball
             // was reserved for one named receiver rather than fought for
@@ -1820,6 +1836,8 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         {
             self.lane_census = None;
+            self.pass_block_census = None;
+            self.strike_origin = None;
         }
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;

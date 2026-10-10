@@ -1621,6 +1621,43 @@ impl PlayerEventDispatcher {
                         census.note_at_strike(id, perp);
                     }
                     field.ball.lane_census = Some(census);
+                    // The block price the striker's lane price puts on this
+                    // exact pass, and the state he struck it from.
+                    if let Some(passer) = field.get_player(passer_id)
+                        && let Some(side) = passer.side
+                    {
+                        use crate::r#match::MatchPlayerLite;
+                        use crate::r#match::engine::ball::ball::block_diag::StrikeOrigin;
+                        use crate::r#match::engine::ball::ball::contest::pass_block::{
+                            PassBlock, StrikeLine,
+                        };
+                        let line = StrikeLine {
+                            from: passer_position,
+                            direction: Vector3::new(dx, dy, 0.0),
+                            pace,
+                            lift: 0.0,
+                            delivery: PassBlock::technique(passer, minute, was_cross),
+                            defending_side: side.opposite(),
+                        };
+                        let field_width = context.field_size.width as f32;
+                        let price = field
+                            .players
+                            .iter()
+                            .filter(|p| p.team_id != passer_team)
+                            .map(|p| {
+                                let lite = MatchPlayerLite {
+                                    id: p.id,
+                                    position: p.position,
+                                    tactical_positions: p.tactical_position.current_position,
+                                };
+                                PassBlock::priced(&line, &lite, p, minute, field_width)
+                            })
+                            .fold(0.0_f32, f32::max);
+                        field.ball.strike_origin = Some(StrikeOrigin::pass(
+                            passer.state.compact_id() as usize,
+                            price,
+                        ));
+                    }
                 }
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
@@ -3986,8 +4023,7 @@ impl PlayerEventDispatcher {
         // danger of a driven cross is precisely that nobody has time on
         // it. Bounded by the same horizontal cap every pass respects.
         let pace = match trajectory_type {
-            TrajectoryType::Cross(CrossType::DrivenLowCross) => 1.40,
-            TrajectoryType::Cross(CrossType::Cutback) => 1.15,
+            TrajectoryType::Cross(ct) => ct.ground_pace_scale(),
             _ => 1.0,
         };
         let driven = Vector3::new(rolling_velocity.x * pace, rolling_velocity.y * pace, 0.0);
@@ -7485,6 +7521,11 @@ impl PlayerEventDispatcher {
             field
                 .ball
                 .note_release(clearer_id, from, context.current_tick());
+            #[cfg(feature = "match-logs")]
+            {
+                field.ball.strike_origin =
+                    Some(crate::r#match::engine::ball::ball::block_diag::StrikeOrigin::clearance());
+            }
         }
 
         // Clearance credit. A GK who just deflected a real shot away

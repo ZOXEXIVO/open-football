@@ -39,10 +39,16 @@
 //! substitution is most of the difference between "he ran inside and lost
 //! it" and "he got to the byline".
 
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::block_diag::CrossPriceCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::contest::pass_block::PassBlock;
 use crate::r#match::midfielders::states::common::{LaneAhead, Opportunity};
 use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
-use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::{MatchContext, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// What the wide area is offering the carrier.
@@ -228,21 +234,10 @@ impl FlankPlay {
             return None;
         }
 
-        // …and he needs the yard to strike it.
-        //
-        // A cross with a defender stood in front of you is a blocked
-        // cross, and a footballer knows that before he swings his leg:
-        // he takes a touch, goes outside, or comes back inside. The
-        // engine has no such instinct — reaching the channel was
-        // sufficient reason to deliver — and the result was **32.8
-        // deliveries a team a match against a real 16-18**, with the
-        // surplus arriving as tame balls into a keeper who claimed them
-        // (his gathers ran 35 a match against a real 8-12).
-        //
-        // "In front of" is measured toward the near post rather than
-        // toward the goal centre, because that is the line the ball
-        // actually takes off a wide foot.
-        if Self::lane_is_blocked(ctx) {
+        // The control arm of `OF_CHARGE_DOWN_OFF`: the old refusal to
+        // cross past a man stood in front, kept so the priced crosser can
+        // be judged against it in one build.
+        if MatchContext::charge_down_off() && Self::lane_is_blocked(ctx) {
             return None;
         }
 
@@ -250,11 +245,27 @@ impl FlankPlay {
         // this one is asked of the possession, not the tick: a fresh
         // question every tick turns standing in the channel into a
         // lottery he eventually wins, which is how every possession that
-        // reached here used to end in a cross.
-        let (_, quality) = CrossModel::pick_rated(ctx)?;
+        // reached here used to end in a cross. A man stood in front of him
+        // is in the quality already — `CrossModel::pick_rated` prices each
+        // delivery by its chance of getting past him.
+        let (decision, quality) = CrossModel::pick_rated(ctx)?;
         let appetite = quality * (0.7 + 0.6 * crossing);
         let bar = Self::DELIVERY_BAR_BASE
             + Opportunity::draw(ctx, Self::DELIVERY_SALT) * Self::DELIVERY_BAR_SPREAD;
+        #[cfg(feature = "match-logs")]
+        {
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let past = CrossModel::gets_past(
+                ctx,
+                decision.cross_type,
+                decision.aim_point,
+                PassBlock::technique(ctx.player, minute, true),
+                minute,
+            );
+            CrossPriceCensus::note(past, appetite, bar);
+        }
+        #[cfg(not(feature = "match-logs"))]
+        let _ = decision;
         (appetite >= bar).then_some(FlankAction::Deliver)
     }
 
@@ -296,7 +307,9 @@ impl FlankPlay {
     const BLOCK_RADIUS: f32 = 20.0;
     const BLOCK_ALIGNMENT: f32 = 0.4;
 
-    /// Is somebody stood in the way of the delivery?
+    /// Is somebody stood in the way of the delivery? Read only by the
+    /// `OF_CHARGE_DOWN_OFF` control arm. "In front of" is measured toward
+    /// the near post, the line the ball takes off a wide foot.
     fn lane_is_blocked(ctx: &StateProcessingContext) -> bool {
         let me = ctx.player.position;
         let goal = ctx.player().opponent_goal_position();

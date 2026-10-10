@@ -1,6 +1,6 @@
 use axum::response::IntoResponse;
 use core::PlayerFieldPositionGroup;
-use core::block_diag::BlockDiag;
+use core::block_diag::{BlockDiag, CrossPriceCensus, PassBlockCensus, StrikeOrigin};
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
@@ -8774,6 +8774,77 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     .join(" | ");
                 println!("    height of the ball at the block: {row}");
             }
+            // WHERE A BLOCKED PASS GOES. The corner a blocked cross is
+            // worth only exists if the deflection reaches the byline, so
+            // the count of blocks says nothing on its own.
+            for (strike, (outcomes, gaps, kinds)) in PassBlockCensus::snapshot().iter().enumerate() {
+                let total: u64 = outcomes.iter().sum();
+                let share = |v: u64| v as f32 * 100.0 / total.max(1) as f32;
+                let outcome_row = PassBlockCensus::OUTCOMES
+                    .iter()
+                    .zip(outcomes.iter())
+                    .map(|(label, v)| format!("{label} {:.0}%", share(*v)))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                let gap_row = PassBlockCensus::GAP_BANDS
+                    .iter()
+                    .zip(gaps.iter())
+                    .map(|(label, v)| format!("{label} {:.0}%", share(*v)))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                let kind_row = PassBlockCensus::KINDS
+                    .iter()
+                    .zip(kinds.iter())
+                    .map(|(label, v)| format!("{label} {:.0}%", share(*v)))
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                println!(
+                    "  {} blocks: {:.2}/match — {kind_row} — went {outcome_row}   blocker from the strike: {gap_row}",
+                    PassBlockCensus::STRIKES[strike],
+                    total as f64 / n_matches as f64,
+                );
+            }
+            // WHO STRUCK THE BALL THAT WAS CHARGED DOWN, AND WHAT HE PRICED.
+            println!("    blocks by the striker's state at the strike (lunge / charge-down per match):");
+            for (state, lunges, charges) in StrikeOrigin::by_state().iter().take(8) {
+                let name = if *state == StrikeOrigin::CLEARANCE {
+                    "clearance".to_string()
+                } else {
+                    StateNames::of(*state as u16)
+                };
+                println!(
+                    "      {:<32} {:>5.2} / {:>5.2}",
+                    name,
+                    *lunges as f64 / n_matches as f64,
+                    *charges as f64 / n_matches as f64,
+                );
+            }
+            let price_row = StrikeOrigin::PRICE_BANDS
+                .iter()
+                .zip(StrikeOrigin::by_price().iter())
+                .map(|(label, (struck, charged))| {
+                    format!(
+                        "{label} {:.0}/match ({:.1}% charged down)",
+                        *struck as f64 / n_matches as f64,
+                        *charged as f64 * 100.0 / (*struck).max(1) as f64
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ");
+            println!("    passes by the block price at the strike: {price_row}");
+            let (asked, pressed, priced_out, struck, struck_pressed, past) =
+                CrossPriceCensus::snapshot();
+            println!(
+                "    crosser: delivery asked on {:.0} ticks/match — a man on the line {:.0}% \
+                 (mean chance past {:.2}), the price alone under the bar on {:.0}% of those; \
+                 struck {:.1}/match, {:.0}% with a man on the line",
+                asked as f64 / n_matches as f64,
+                pressed as f64 * 100.0 / asked.max(1) as f64,
+                past,
+                priced_out as f64 * 100.0 / pressed.max(1) as f64,
+                struck as f64 / n_matches as f64,
+                struck_pressed as f64 * 100.0 / struck.max(1) as f64,
+            );
             let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
                 if opp == 0 {
@@ -9021,7 +9092,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     );
     // ── WHERE CORNERS COME FROM ────────────────────────────────────────
     //
-    // Three tagged suppliers plus a remainder. Corner SUPPLY is the one
+    // Four tagged suppliers plus a remainder. Corner SUPPLY is the one
     // number nothing else in this file can explain: it is not a rate you
     // can read off shots or crosses, it is the sum of four independent
     // mechanisms, and a shortfall in any one of them looks identical in
@@ -9029,17 +9100,20 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     {
         let per = |v: u64| v as f64 / n as f64;
         let total = mr[6].max(1);
-        let tagged = mr[14] + mr[15] + mr[16];
+        let tagged = mr[14] + mr[15] + mr[16] + mr[17];
         let share = |v: u64| v as f64 * 100.0 / total as f64;
         println!(
             "  corner sources /match: shot BLOCKED wide {:.2} ({:.0}%)   keeper PARRIED wide \
-             {:.2} ({:.0}%)   delivery HOOKED behind {:.2} ({:.0}%)   ordinary play {:.2} ({:.0}%)",
+             {:.2} ({:.0}%)   delivery HOOKED behind {:.2} ({:.0}%)   pass BLOCKED behind \
+             {:.2} ({:.0}%)   ordinary play {:.2} ({:.0}%)",
             per(mr[14]),
             share(mr[14]),
             per(mr[15]),
             share(mr[15]),
             per(mr[16]),
             share(mr[16]),
+            per(mr[17]),
+            share(mr[17]),
             per(mr[6].saturating_sub(tagged)),
             share(mr[6].saturating_sub(tagged)),
         );

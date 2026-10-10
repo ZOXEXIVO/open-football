@@ -466,11 +466,21 @@ impl<'p> PlayerOperationsImpl<'p> {
     /// better-placed-team-mate deferral, the emergency outlet and both
     /// safe-pass searches, so every one of them reads the same lane.
     pub fn has_clear_pass(&self, player_id: u32) -> bool {
-        self.lane_risk(player_id) < Self::CLEAR_LANE
+        self.lane_risk(player_id) < Self::clear_lane()
     }
 
     /// A lane he would lose one ball in four on is not clear.
-    const CLEAR_LANE: f32 = 0.25;
+    /// `OF_CLEAR_LANE` overrides for titration.
+    fn clear_lane() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_CLEAR_LANE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.25)
+        })
+    }
 
     /// The chance a ground ball to this team-mate is cut out on the way.
     pub fn lane_risk(&self, player_id: u32) -> f32 {

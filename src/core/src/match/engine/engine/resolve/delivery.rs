@@ -267,6 +267,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         attacked_goal,
                         field_height,
                     } => {
+                        #[cfg(feature = "match-logs")]
+                        crate::mid_run_diag::HEADED_BEHIND_FIRED.fetch_add(1, Ordering::Relaxed);
                         b.velocity =
                             Ball::hook_behind_velocity(b.position, attacked_goal, field_height);
                         FlightProtection::for_launch(b.velocity, b.position.z)

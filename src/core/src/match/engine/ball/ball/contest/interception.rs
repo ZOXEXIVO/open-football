@@ -141,7 +141,7 @@ impl InterceptionContest {
     /// rather than with a fixed 0-20 scale; see [`Self::read_delay`].
     const TYPICAL_READ: f32 = 0.66;
     /// Scale. **Measured, not chosen** — the same argument
-    /// [`Ball::BLOCK_GAIN`] carries: the population interception rate is
+    /// [`PassBlock::GAIN`] carries: the population interception rate is
     /// calibrated and the GEOMETRY was what was wrong, so the rate is
     /// held where it was while the rolls move to where the ball actually
     /// passes a man.

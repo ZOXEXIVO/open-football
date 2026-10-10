@@ -119,3 +119,52 @@ delivery's deadline passes, or when another player touches the ball.
 #### Scenario: A winner who never arrives leaves the ball to anybody
 - **WHEN** the winner of a held delivery does not get within reach before its deadline
 - **THEN** the hold ends at the deadline, the award with it, and any player may claim the ball
+
+### Requirement: A pass in flight can be blocked by the men it passes
+Every opponent a pass, cross included, passes on its way SHALL have one chance per flight to block it. The chance SHALL be one rule that changes continuously with the blocker's time to react, the time the ball takes to reach him:
+
+- With almost no time, the block is a **charge-down**. It is decided by his body: how near the ball's line he stands, and whether the ball is below his standing reach when it gets to him. It SHALL NOT depend on where on the pitch the pass is played.
+- With time to read the pass, the block is a **lunge**. It is decided by how well he reads it and how far he must stretch, below the height of a leg. It SHALL apply only toward his own goal, rising as the ball gets nearer to it.
+
+Skill SHALL enter as a duel between the blocker and the striker's technique for that strike: crossing for a cross, passing otherwise. A blocker and a striker of equal standing SHALL produce the same block rate at every level of football.
+
+A block SHALL turn the ball loose, not hand it to the blocker, except when it was struck into his feet and he controls it. The block SHALL count as his touch.
+
+#### Scenario: A ball struck into a man a stride away is charged down
+- **WHEN** a pass is struck along a line through an opponent a stride from the striker, and the ball is below his standing reach as it reaches him
+- **THEN** he has a chance of blocking it that does not depend on having read the pass, and it is greatest when he is square on the line
+
+#### Scenario: The charge-down applies anywhere on the pitch
+- **WHEN** the same pass, struck into a man a stride away, is played once on the halfway line and once in front of the blocker's own goal
+- **THEN** the charge-down chance is the same in both places
+
+#### Scenario: A ball over him is not charged down
+- **WHEN** a lofted delivery is already above an opponent's standing reach as it passes him a stride from the striker
+- **THEN** he cannot block it
+
+#### Scenario: No lunge far from his own goal
+- **WHEN** a pass passes within leg's reach of an opponent who had time to read it, in the half his team attacks
+- **THEN** he does not lunge at it, and only the charge-down, which fades with his time to react, can block it
+
+#### Scenario: One chance per man per flight
+- **WHEN** a pass passes the same opponent on one flight
+- **THEN** that opponent has at most one chance to block it on that flight
+
+#### Scenario: The rate does not walk with the level
+- **WHEN** blockers and strikers of equal standing meet in the same situations at a low and at a high level of football
+- **THEN** the share of passes blocked is the same at both levels
+
+### Requirement: A block's deflection follows the blocker's time to react
+Where a blocked ball goes SHALL follow the same time to react that decides the block. The less time the blocker had, the more of the ball's own line and pace the deflection SHALL keep. The more time he had, the more it SHALL be directed away from his own goal. A blocked ball that crosses the blocker's own goal line wide of the posts SHALL restart with a corner.
+
+#### Scenario: A cross charged down near the goal line goes behind
+- **WHEN** a cross struck from near the goal line toward the box is charged down a stride from the crosser
+- **THEN** the deflection keeps much of the cross's line, and it can carry over the goal line for a corner
+
+#### Scenario: A read block is directed away from goal
+- **WHEN** a defender who had time to read a pass blocks it in front of his own goal
+- **THEN** the deflection is sent away from his goal rather than along the pass's line
+
+#### Scenario: A block over his own line is a corner
+- **WHEN** a blocked ball crosses the blocker's own goal line wide of the posts
+- **THEN** play restarts with a corner to the passing side
