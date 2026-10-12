@@ -31,7 +31,8 @@ use serde::{Deserialize, Serialize};
 /// v7: every player carries his kickoff state of mind, and every result
 /// the standard of football it was played at, its in-play penalty saves and
 /// its tally of time spent waiting on each kind of restart.
-pub const PROTOCOL_VERSION: u32 = 7;
+/// v8: every result names the takers of its in-play penalties that missed.
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// What the coordinator wants recorded, sent once per connection.
 ///

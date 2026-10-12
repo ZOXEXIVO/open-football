@@ -1930,6 +1930,7 @@ struct LeagueMatch {
     away_goals: u8,
     per_player: Vec<PlayerRow>,
     keepers: Vec<GkRow>,
+    outfield: Vec<OutfieldErrorRow>,
     /// `(position_group, raw performance value)` per played player —
     /// the input side of the rating model, before standardising. This
     /// is what `PerformanceScale`'s mean / sd constants are derived
@@ -2016,6 +2017,35 @@ fn keeper_rows(
     rows
 }
 
+/// One outfielder's error lines from one match, for the outfield season
+/// ladder: errors are quoted per player-season for regulars.
+#[derive(Clone, Copy)]
+struct OutfieldErrorRow {
+    id: u32,
+    group: u8,
+    started: bool,
+    errors_to_goal: u16,
+    errors_to_shot: u16,
+}
+
+fn outfield_error_rows(result: &core::r#match::MatchResultRaw) -> Vec<OutfieldErrorRow> {
+    let starters = |id: &u32| {
+        result.left_team_players.main.contains(id) || result.right_team_players.main.contains(id)
+    };
+    result
+        .player_stats
+        .iter()
+        .filter(|(id, s)| pos_group_of(**id) != 0 && s.minutes_played > 0)
+        .map(|(id, s)| OutfieldErrorRow {
+            id: *id,
+            group: pos_group_of(*id),
+            started: starters(id),
+            errors_to_goal: s.errors_leading_to_goal,
+            errors_to_shot: s.errors_leading_to_shot,
+        })
+        .collect()
+}
+
 #[derive(Clone, Default)]
 struct TableRow {
     played: u32,
@@ -2087,6 +2117,7 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
                 away_goals: ag,
                 per_player: per_player_rows(&result),
                 keepers: keeper_rows(&result, hg, ag),
+                outfield: outfield_error_rows(&result),
                 perf: perf_rows(&result, hg, ag),
             }
         })
@@ -2274,6 +2305,7 @@ fn run_league(n_teams: usize, rounds: usize, min_lvl: u8, max_lvl: u8) {
     }
     print_performance_scale(&played);
     print_keeper_season_ladder(&played, &teams);
+    print_outfield_error_ladder(&played, apps_per_player);
 
     println!("\n  (Gls = full-season tally; includes penalties / set-pieces the engine produced.)");
 }
@@ -2487,6 +2519,68 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
             to_shot as f32 / apps.max(1) as f32
         );
     }
+}
+
+/// Outfield errors per player-season, for the players who started at least
+/// half of their side's matches — the unit the outfield spec quotes.
+fn print_outfield_error_ladder(played: &[LeagueMatch], side_matches: u32) {
+    #[derive(Default, Clone, Copy)]
+    struct Season {
+        group: u8,
+        starts: u32,
+        apps: u32,
+        to_goal: u32,
+        to_shot: u32,
+    }
+    let mut by_player: std::collections::HashMap<u32, Season> = std::collections::HashMap::new();
+    for m in played {
+        for r in &m.outfield {
+            let e = by_player.entry(r.id).or_insert(Season {
+                group: r.group,
+                ..Default::default()
+            });
+            e.apps += 1;
+            e.starts += r.started as u32;
+            e.to_goal += r.errors_to_goal as u32;
+            e.to_shot += r.errors_to_shot as u32;
+        }
+    }
+    let regulars: Vec<Season> = by_player
+        .into_values()
+        .filter(|s| s.starts * 2 >= side_matches)
+        .collect();
+    println!(
+        "\n--- OUTFIELD ERRORS PER PLAYER-SEASON (regulars: started ≥ half of {} matches) ---",
+        side_matches
+    );
+    println!(
+        "  {:<5} {:>5} {:>7} {:>7} {:>5} {:>9}",
+        "group", "n", "mean", "median", "p90", "→shot/m"
+    );
+    for (label, group) in [("all", None), ("DEF", Some(1)), ("MID", Some(2)), ("FWD", Some(3))] {
+        let rows: Vec<&Season> = regulars
+            .iter()
+            .filter(|s| group.is_none_or(|g| s.group == g))
+            .collect();
+        if rows.is_empty() {
+            continue;
+        }
+        let mut errs: Vec<f32> = rows.iter().map(|s| s.to_goal as f32).collect();
+        errs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let q = |f: f32| errs[(((errs.len() - 1) as f32) * f).round() as usize];
+        let apps: u32 = rows.iter().map(|s| s.apps).sum();
+        let to_shot: u32 = rows.iter().map(|s| s.to_shot).sum();
+        println!(
+            "  {:<5} {:>5} {:>7.2} {:>7.0} {:>5.0} {:>9.3}",
+            label,
+            rows.len(),
+            errs.iter().sum::<f32>() / errs.len() as f32,
+            q(0.5),
+            q(0.9),
+            to_shot as f32 / apps.max(1) as f32
+        );
+    }
+    println!("  spec: regulars mean 0.2-0.7 errors leading to a goal per season, p90 at most 3");
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -2706,6 +2800,11 @@ struct SpotlightAgg {
     def_actions: u32,
     goals: u32,
     assists: u32,
+    xg: f32,
+    fouls: u32,
+    tackles: u32,
+    penalties_conceded: u32,
+    own_goals: u32,
 }
 
 impl SpotlightAgg {
@@ -2735,6 +2834,11 @@ impl SpotlightAgg {
             (s.tackles + s.interceptions + s.blocks + s.clearances + s.successful_pressures) as u32;
         self.goals += s.goals as u32;
         self.assists += s.assists as u32;
+        self.xg += s.xg;
+        self.fouls += s.fouls as u32;
+        self.tackles += s.tackles as u32;
+        self.penalties_conceded += z.penalty_fouls_conceded as u32;
+        self.own_goals += s.own_goals as u32;
     }
 
     fn merge(&mut self, o: SpotlightAgg) {
@@ -2758,6 +2862,11 @@ impl SpotlightAgg {
         self.def_actions += o.def_actions;
         self.goals += o.goals;
         self.assists += o.assists;
+        self.xg += o.xg;
+        self.fouls += o.fouls;
+        self.tackles += o.tackles;
+        self.penalties_conceded += o.penalties_conceded;
+        self.own_goals += o.own_goals;
     }
 
     fn apps(&self) -> f32 {
@@ -3123,14 +3232,14 @@ impl MixedQualityHarness {
     }
 }
 
-// ── assurance: the keeper's state of mind, A/B ────────────────────────
+// ── assurance: a state of mind, A/B ──────────────────────────────────
 //
 // Two IDENTICAL level-`level` elevens, keepers included, and one thing
-// between them: the state of mind Team 2's keeper brings to kickoff.
-// Default arm: Team 1's keeper is assured at the standard of the match,
-// Team 2's sits a full step below it. `confident` arm: Team 1 settled,
-// Team 2 over-confident. Home and away alternate so the crowd cancels.
-// Everyone else kicks off neutral.
+// between them: the state of mind Team 2's keeper — or, with `outfield`,
+// Team 2's ten outfielders — brings to kickoff. Default arm: Team 1 is
+// assured at the standard of the match, Team 2 sits a full step below it.
+// `confident` arm: Team 1 settled, Team 2 over-confident. Home and away
+// alternate so the crowd cancels. Everyone else kicks off assured.
 struct AssuranceHarness;
 
 impl AssuranceHarness {
@@ -3138,7 +3247,7 @@ impl AssuranceHarness {
     const STEP: f32 = 0.15;
     const DRAWS: usize = 24;
 
-    fn run(n_matches: usize, level: u8, confident: bool) {
+    fn run(n_matches: usize, level: u8, confident: bool, outfield: bool) {
         use core::club::player::mind::KickoffMind;
         use core::r#match::engine::teamplay::standard::MatchStandard;
         use core::r#match::engine::teamplay::tactical::TeamSkillAggregates;
@@ -3150,19 +3259,24 @@ impl AssuranceHarness {
         } else {
             ("assured", "unsure")
         };
+        let who = if outfield { "outfielders" } else { "keeper" };
         println!(
-            "Keeper state of mind A/B: {} matches ({} draws x {}), both XIs level {}, \
-             Team 1 keeper {} vs Team 2 keeper {}",
+            "State of mind A/B: {} matches ({} draws x {}), both XIs level {}, \
+             Team 1 {} {} vs Team 2 {} {}",
             per_draw * Self::DRAWS,
             Self::DRAWS,
             per_draw,
             level,
+            who,
             label_a,
+            who,
             label_b
         );
 
         let mut a_gk = SpotlightAgg::default();
         let mut b_gk = SpotlightAgg::default();
+        let mut a_out = SpotlightAgg::default();
+        let mut b_out = SpotlightAgg::default();
         let mut drawn = Vec::with_capacity(Self::DRAWS);
         for _ in 0..Self::DRAWS {
             let mut team_a: Vec<MatchPlayer> = POSITIONS_442
@@ -3212,11 +3326,11 @@ impl AssuranceHarness {
                     },
                 )
             };
-            team_a[0].kickoff_mind = mind_a;
-            team_b[0].kickoff_mind = mind_b;
+            Self::stamp(&mut team_a, mind_a, mind_a, outfield);
+            Self::stamp(&mut team_b, mind_a, mind_b, outfield);
             drawn.push((team_a.clone(), team_b.clone(), mind_a, mind_b));
 
-            let rows: Vec<(SpotlightAgg, SpotlightAgg)> = (0..per_draw)
+            let rows: Vec<[SpotlightAgg; 4]> = (0..per_draw)
                 .into_par_iter()
                 .map(|i| {
                     let a = MixedQualityHarness::squad(&team_a, 1);
@@ -3227,21 +3341,30 @@ impl AssuranceHarness {
                     let score = result.score.as_ref().unwrap();
                     let (hg, ag) = (score.home_team.get() as u32, score.away_team.get() as u32);
                     let (a_conceded, b_conceded) = if a_home { (ag, hg) } else { (hg, ag) };
-                    let mut ra = SpotlightAgg::default();
-                    let mut rb = SpotlightAgg::default();
-                    if let Some(s) = result.player_stats.get(&100) {
-                        ra.add(s, a_conceded);
+                    let mut out: [SpotlightAgg; 4] = Default::default();
+                    for (id, s) in result.player_stats.iter() {
+                        let (slot, conceded) = match (id / 100, id % 100) {
+                            (1, 0) => (0, a_conceded),
+                            (2, 0) => (1, b_conceded),
+                            (1, _) => (2, a_conceded),
+                            _ => (3, b_conceded),
+                        };
+                        out[slot].add(s, conceded);
                     }
-                    if let Some(s) = result.player_stats.get(&200) {
-                        rb.add(s, b_conceded);
-                    }
-                    (ra, rb)
+                    out
                 })
                 .collect();
-            for (ra, rb) in rows {
+            for [ra, rb, oa, ob] in rows {
                 a_gk.merge(ra);
                 b_gk.merge(rb);
+                a_out.merge(oa);
+                b_out.merge(ob);
             }
+        }
+        if outfield {
+            Self::print_outfield(label_a, label_b, &a_out, &b_out, &a_gk, &b_gk);
+            Self::lapse_census(&drawn, per_draw, label_a, label_b);
+            return;
         }
 
         println!();
@@ -3318,6 +3441,170 @@ impl AssuranceHarness {
             census[0].1,
         );
     }
+
+    /// The stat sheet only sees a lapse an opponent punished. The lapse
+    /// counters see every one but not whose it was, so each arm is played
+    /// again with both outfields in its state of mind.
+    fn lapse_census(
+        drawn: &[(
+            Vec<MatchPlayer>,
+            Vec<MatchPlayer>,
+            core::club::player::mind::KickoffMind,
+            core::club::player::mind::KickoffMind,
+        )],
+        per_draw: usize,
+        label_a: &str,
+        label_b: &str,
+    ) {
+        use core::r#match::engine::psychology::LapseFamily;
+        let census_per_draw = (per_draw / 2).max(2);
+        let arms: Vec<(Vec<(u64, u64, u64, u64)>, [u64; core::lapse_diag::PHASES])> = [false, true]
+            .into_iter()
+            .map(|second| {
+                core::lapse_diag::reset();
+                for (a, b, mind_a, mind_b) in drawn {
+                    let mind = if second { *mind_b } else { *mind_a };
+                    let (mut a, mut b) = (a.clone(), b.clone());
+                    Self::stamp(&mut a, *mind_a, mind, true);
+                    Self::stamp(&mut b, *mind_a, mind, true);
+                    (0..census_per_draw).into_par_iter().for_each(|i| {
+                        let home = MixedQualityHarness::squad(&a, 1);
+                        let away = MixedQualityHarness::squad(&b, 2);
+                        let (home, away) = if i % 2 == 0 { (home, away) } else { (away, home) };
+                        FootballEngine::<840, 545>::play(home, away, false, false, false);
+                    });
+                }
+                (
+                    LapseFamily::ALL
+                        .iter()
+                        .map(|f| core::lapse_diag::snapshot(*f))
+                        .collect(),
+                    core::lapse_diag::errors_by_phase(),
+                )
+            })
+            .collect();
+        let matches = (census_per_draw * drawn.len()) as f32;
+        println!();
+        println!(
+            "  lapse census ({} matches an arm, both outfields alike) — per match: \
+             opportunities, failure %, giveaways stamped, charged",
+            matches
+        );
+        println!(
+            "  {:<10} {:>9} {:>7} {:>7} {:>7}   {:>9} {:>7} {:>7} {:>7}",
+            "family", label_a, "fail%", "stamp", "charge", label_b, "fail%", "stamp", "charge"
+        );
+        for (i, family) in LapseFamily::ALL.iter().enumerate() {
+            let row = |(opp, fail, stamped, charged): (u64, u64, u64, u64)| {
+                (
+                    opp as f32 / matches,
+                    fail as f32 / opp.max(1) as f32 * 100.0,
+                    stamped as f32 / matches,
+                    charged as f32 / matches,
+                )
+            };
+            let a = row(arms[0].0[i]);
+            let b = row(arms[1].0[i]);
+            println!(
+                "  {:<10} {:>9.1} {:>6.2}% {:>7.2} {:>7.3}   {:>9.1} {:>6.2}% {:>7.2} {:>7.3}",
+                family.label(),
+                a.0,
+                a.1,
+                a.2,
+                a.3,
+                b.0,
+                b.1,
+                b.2,
+                b.3
+            );
+        }
+        let phases = |p: &[u64; core::lapse_diag::PHASES]| {
+            p.iter()
+                .map(|n| format!("{:.3}", *n as f32 / matches))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        println!(
+            "  errors leading to a shot by 15-minute phase (0-15 … 75-90, 90+), per match: \
+             {} [{}]  {} [{}]",
+            label_a,
+            phases(&arms[0].1),
+            label_b,
+            phases(&arms[1].1)
+        );
+    }
+
+    /// Kickoff minds for one side: under `outfield` the keeper is assured
+    /// and the ten outfielders take `tested`; otherwise the keeper takes
+    /// `tested` and the outfielders are assured.
+    fn stamp(
+        team: &mut [MatchPlayer],
+        assured: core::club::player::mind::KickoffMind,
+        tested: core::club::player::mind::KickoffMind,
+        outfield: bool,
+    ) {
+        for (i, p) in team.iter_mut().enumerate() {
+            p.kickoff_mind = if (i == 0) != outfield { tested } else { assured };
+        }
+    }
+
+    fn print_outfield(
+        label_a: &str,
+        label_b: &str,
+        a: &SpotlightAgg,
+        b: &SpotlightAgg,
+        a_gk: &SpotlightAgg,
+        b_gk: &SpotlightAgg,
+    ) {
+        println!();
+        println!(
+            "  {:<8} {:>7} {:>6} {:>7} {:>7} {:>9} {:>7} {:>7} {:>9} {:>9} {:>6} {:>7}",
+            "outfield",
+            "rating",
+            "pass%",
+            "misc/m",
+            "fouls/m",
+            "foul/chal",
+            "pen/m",
+            "og/m",
+            "err>shot",
+            "err>goal",
+            "G/xG",
+            "conc/m"
+        );
+        let foul_share = |g: &SpotlightAgg| g.fouls as f32 / (g.fouls + g.tackles).max(1) as f32;
+        let finishing = |g: &SpotlightAgg| g.goals as f32 / g.xg.max(1e-3);
+        for (label, g, gk) in [(label_a, a, a_gk), (label_b, b, b_gk)] {
+            let apps = g.apps();
+            println!(
+                "  {:<8} {:>7.2} {:>5.1}% {:>7.3} {:>7.3} {:>8.1}% {:>7.4} {:>7.4} {:>9.4} {:>9.4} {:>6.2} {:>7.2}",
+                label,
+                g.rating_dist().0,
+                g.pass_pct(),
+                g.miscontrols as f32 / apps,
+                g.fouls as f32 / apps,
+                foul_share(g) * 100.0,
+                g.penalties_conceded as f32 / apps,
+                g.own_goals as f32 / apps,
+                g.errors_to_shot as f32 / apps,
+                g.errors_to_goal as f32 / apps,
+                finishing(g),
+                gk.conceded as f32 / gk.apps(),
+            );
+        }
+        let err = |g: &SpotlightAgg| g.errors_to_shot as f32 / g.apps();
+        println!(
+            "  per outfielder-match. errors leading to a shot, {} / {}: {:.2}x   \
+             fouls per challenge {:.1}% / {:.1}%   goals per xG {:.2} / {:.2}",
+            label_b,
+            label_a,
+            err(b) / err(a).max(1e-6),
+            foul_share(b) * 100.0,
+            foul_share(a) * 100.0,
+            finishing(b),
+            finishing(a),
+        );
+    }
 }
 
 fn print_usage() {
@@ -3383,6 +3670,12 @@ fn print_usage() {
     );
     eprintln!(
         "                                      per match, and how much of the recording each holds"
+    );
+    eprintln!(
+        "  dev_match assurance [N] [level] [confident] [outfield]  state-of-mind A/B: identical XIs,"
+    );
+    eprintln!(
+        "                                      Team 2 keeper (or outfielders) unsure or over-confident"
     );
     eprintln!(
         "  dev_match gap [N] [level] [slot]  mixed-quality diagnostic: identical XIs except one slot"
@@ -4052,17 +4345,19 @@ fn main() {
             let bench_gap: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3);
             SubstitutionCensus::run(n, level, bench_gap);
         }
+        // State-of-mind A/B: two identical XIs, Team 2's keeper (or, with
+        // `outfield`, its ten outfielders) a full step below the standard.
+        "assurance" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            let flag = |f: &str| args.iter().skip(4).any(|s| s == f);
+            AssuranceHarness::run(n, level, flag("confident"), flag("outfield"));
+        }
         // Mixed-quality diagnostic: two identical XIs except one slot,
         // where Team 1 fields a senior-quality player and Team 2 a
         // youth-quality one. The only harness mode that can see whether
         // player QUALITY reaches the stat line (and therefore the
         // rating) — `stats` only ever plays equal-quality squads.
-        "assurance" => {
-            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
-            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
-            let confident = args.get(4).is_some_and(|s| s == "confident");
-            AssuranceHarness::run(n, level, confident);
-        }
         "gap" | "stats-gap" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(200);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);

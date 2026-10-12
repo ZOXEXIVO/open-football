@@ -59,12 +59,25 @@ a player playing above it.
 ### Requirement: Self-belief is moved by goalkeeping evidence and by real errors
 A player's self-belief SHALL be moved by what actually happened to him in a match:
 - **Penalty save:** a penalty saved in a competitive match SHALL raise a goalkeeper's self-belief.
-- **Match-saving display:** goals prevented beyond what an average keeper would have saved, in a competitive match his
-  side did not lose, SHALL raise a goalkeeper's self-belief.
-- **Clean sheet:** a clean sheet in a competitive match SHALL raise a goalkeeper's self-belief by a small amount. A run
-  of clean sheets SHALL NOT fill the player's memory of significant moments.
-- **Costly error:** an error leading to a goal in a competitive match SHALL lower any player's self-belief and be
-  remembered as a costly error.
+- **Match-saving display:** in a competitive match his side did not lose, preventing more goals than an average
+  keeper would have prevented SHALL raise a goalkeeper's self-belief.
+- **Clean sheet:** a clean sheet in a competitive match SHALL raise by a small amount the self-belief of each player
+  who started it. The rise SHALL be in proportion to how much of his role is keeping goals out:
+  - a goalkeeper SHALL get the full rise;
+  - a defender SHALL get nearly as much;
+  - a midfielder SHALL get a little;
+  - a forward SHALL get nothing.
+
+  A run of clean sheets SHALL NOT fill the player's memory of significant moments.
+- **Costly error:** an error leading to a goal or an own goal in a competitive match SHALL lower any player's
+  self-belief and be remembered as a costly error.
+- **Missed decisive penalty:** each of the following SHALL lower his self-belief and be remembered as a missed
+  decisive penalty:
+  - a penalty he missed in a competitive match his side failed to win;
+  - a kick he missed in a shoot-out his side lost.
+- **Heavy defeat:** a competitive defeat by three goals or more SHALL lower the self-belief of each player who played
+  in it and be remembered as a heavy defeat. It SHALL lower his self-belief by less than a costly error of his own
+  would.
 - **Rating alone:** a low match rating with no error behind it SHALL NOT be remembered as a costly error.
 
 #### Scenario: A penalty save lifts a keeper
@@ -75,10 +88,28 @@ A player's self-belief SHALL be moved by what actually happened to him in a matc
 - **WHEN** a keeper concedes four goals in a competitive match, makes no error leading to a shot or goal, and receives
   a match rating below 5.5
 - **THEN** no costly-error memory is filed for him
+- **AND** a heavy-defeat memory is filed for him
 
 #### Scenario: An outfield error is remembered too
 - **WHEN** a defender gives the ball away and the opponent scores from it within the error window
 - **THEN** a costly-error memory is filed for the defender and his self-belief falls
+
+#### Scenario: An own goal is a costly error
+- **WHEN** a defender scores an own goal in a competitive match
+- **THEN** a costly-error memory is filed for him and his self-belief falls
+
+#### Scenario: A missed penalty in a lost shoot-out is remembered
+- **WHEN** a forward misses his kick in a shoot-out his side loses
+- **THEN** a missed-decisive-penalty memory is filed for him and his self-belief falls
+
+#### Scenario: A missed penalty in a comfortable win is not decisive
+- **WHEN** a forward misses an in-play penalty in a competitive match his side wins
+- **THEN** no missed-decisive-penalty memory is filed for him
+
+#### Scenario: A clean sheet lifts a defender but not a forward
+- **WHEN** a centre-back and a centre-forward both start a competitive match their side wins without conceding
+- **THEN** the centre-back's self-belief rises
+- **AND** the centre-forward's self-belief does not rise from the clean sheet
 
 ### Requirement: Assurance is seeded from the real career when a world is built
 When a world is constructed, each player's assurance SHALL be seeded once. The seed SHALL be the assurance the growth

@@ -61,6 +61,8 @@ pub use diagnostics::{
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::officiating::restart_shape::RestartStation;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::player::strategies::passing::CrossType;
@@ -623,23 +625,31 @@ pub struct Ball {
     /// cap (2) still rules out machine-gun scrambles. 0 = no rebound.
     pub last_rebound_tick: u64,
 
-    /// Last meaningful giveaway: the player who lost possession via a
-    /// misplaced pass that was intercepted by an opponent. Read by the
+    /// Last meaningful giveaway: the player whose own failed execution
+    /// lost the ball — a pass that ended with an opponent, a touch that
+    /// got away, a miscued clearance, a keeper's spill. Read by the
     /// "errors leading to shot/goal" linker — when an opponent shoots
     /// within the response window after this is stamped, the giver is
-    /// charged with the error.
+    /// charged with the error. Lives for the attack it gave away: closed
+    /// when his side has the ball again, at a dead ball, or by a goal.
     pub last_giveaway_player_id: Option<u32>,
     pub last_giveaway_team_id: Option<u32>,
     pub last_giveaway_tick: u64,
+    /// Set once the giveaway has been charged as an error leading to a
+    /// shot: a second shot in the same attack must not bill him twice,
+    /// while a goal from it still promotes the one error.
+    pub giveaway_charged: bool,
+    #[cfg(feature = "match-logs")]
+    pub last_giveaway_family: Option<LapseFamily>,
     /// Defensive zone the giveaway happened in (from the giver's
     /// perspective). Lets the goal handler credit
     /// `errors_to_goal_own_box` when an opponent converts a giveaway
     /// from inside the giver's own box.
     pub last_giveaway_was_own_box: bool,
-    /// Player charged with `errors_leading_to_shot` for the shot
-    /// currently in flight. Held from shoot-time until the shot
-    /// resolves; if the shot becomes a goal we also bump
-    /// `errors_leading_to_goal` on this player.
+    /// Player charged with `errors_leading_to_shot` in the attack under
+    /// way. Held until the attack ends with the giveaway; if it ends in a
+    /// goal — a rebound included — we also bump `errors_leading_to_goal`
+    /// on this player.
     pub pending_error_to_shot_player_id: Option<u32>,
     /// Goalkeeper who has just flapped a claim — dropped a cross, punched
     /// it back into the box, missed the ball entirely. Held until the
@@ -1027,6 +1037,9 @@ impl Ball {
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
             last_giveaway_tick: 0,
+            giveaway_charged: false,
+            #[cfg(feature = "match-logs")]
+            last_giveaway_family: None,
             last_giveaway_was_own_box: false,
             pending_error_to_shot_player_id: None,
             pending_failed_claim_gk_id: None,
@@ -1341,6 +1354,21 @@ impl Ball {
         Vector3::new(dir.x * speed, dir.y * speed, vz)
     }
 
+    /// `velocity` turned `turn` radians in the horizontal plane — a
+    /// clearance skewed off the line it was meant to take. Zero leaves it
+    /// alone.
+    pub fn skew(velocity: Vector3<f32>, turn: f32) -> Vector3<f32> {
+        if turn == 0.0 {
+            return velocity;
+        }
+        let (sin, cos) = turn.sin_cos();
+        Vector3::new(
+            velocity.x * cos - velocity.y * sin,
+            velocity.x * sin + velocity.y * cos,
+            velocity.z,
+        )
+    }
+
     /// **Somebody is on the ball: settle the throw-in in progress.**
     ///
     /// The throw belongs to its thrower until another player plays it
@@ -1550,6 +1578,11 @@ impl Ball {
         // A foot or a chest kills the rotation. Whatever the ball was
         // doing in the air, the next kick decides what it does now.
         self.spin = Vector3::zeros();
+        // His side has the ball again: whatever the giveaway set going is
+        // over, and a later goal is not his error.
+        if controlled && self.last_giveaway_team_id == Some(team_id) {
+            self.close_giveaway();
+        }
         self.last_touch_player_id = Some(player_id);
         self.last_touch_team_id = Some(team_id);
         self.last_touch_tick = tick;
@@ -1589,7 +1622,7 @@ impl Ball {
         self.offside_snapshot = None;
         // ⚠ `pending_save_credit` is NOT cleared here — it is EARNED, not
         // in-flight. See `clear_for_dead_ball` for the full note.
-        self.pending_error_to_shot_player_id = None;
+        self.close_giveaway();
         self.pending_failed_claim_gk_id = None;
         self.pending_failed_claim_charged = false;
         self.last_shot_xgot = 0.0;

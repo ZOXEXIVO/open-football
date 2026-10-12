@@ -124,10 +124,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             DeliveryIntent::Cleared {
                 range,
                 apex: clear_apex,
+                turn,
             } => AerialOutcome::Cleared {
                 attacked_goal,
                 range,
                 apex: clear_apex,
+                turn,
             },
         };
 
@@ -280,12 +282,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         attacked_goal,
                         range,
                         apex: clear_apex,
+                        turn,
                     } => {
-                        b.velocity = Ball::headed_clear_velocity(
-                            b.position,
-                            attacked_goal,
-                            range,
-                            clear_apex,
+                        b.velocity = Ball::skew(
+                            Ball::headed_clear_velocity(b.position, attacked_goal, range, clear_apex),
+                            turn,
                         );
                         FlightProtection::for_launch(b.velocity, b.position.z)
                     }

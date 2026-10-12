@@ -20,9 +20,10 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::common_states::{
-    EngagementClock, TackleDecision, TackleEngagement, TackleOutcome,
+    ContactFoul, EngagementClock, TackleDecision, TackleEngagement, TackleOutcome,
 };
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::state::PlayerState;
@@ -199,6 +200,47 @@ fn a_challenge_has_exactly_one_outcome() {
     assert_eq!(
         TackleOutcome::of(false, false, FoulSeverity::Normal),
         TackleOutcome::Missed
+    );
+}
+
+/// A nervous marker grabs more of the same men, and a settled head leaves
+/// the contact model exactly where his temperament puts it.
+#[test]
+fn nerves_cost_contact_fouls() {
+    let (field, mut context) = pitch();
+    let defender = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+        .expect("a home defender")
+        .clone();
+    let foul = |context: &MatchContext| {
+        let tick_context = GameTickContext::new(&field, &context.players);
+        let ctx = StateProcessingContext {
+            in_state_time: 0,
+            player: &defender,
+            context,
+            tick_context: &tick_context,
+        };
+        ContactFoul::probability(&ctx, 6.0, true)
+    };
+    let unseeded = foul(&context);
+    context.psychology.players.insert(defender.id, PsychState::default());
+    let settled = foul(&context);
+    context.psychology.players.insert(
+        defender.id,
+        PsychState {
+            nervousness: 0.5,
+            ..PsychState::default()
+        },
+    );
+    let nervous = foul(&context);
+    assert_eq!(settled, unseeded);
+    // A challenge is mostly the skill and the situation, so his head moves
+    // it by a share of the lapse factor, not all of it.
+    assert!(
+        nervous > settled * 1.3 && nervous < settled * 2.0,
+        "{nervous} against {settled}"
     );
 }
 

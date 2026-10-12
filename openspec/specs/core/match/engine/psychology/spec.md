@@ -72,18 +72,100 @@ The changed confidence SHALL stay in force for the rest of his time on the pitch
 - **THEN** his confidence afterwards is higher than before the save
 
 ### Requirement: Every player carries the same psychology, with bounded outfield effects
-Kickoff seeding and in-match updates SHALL apply to every player on the pitch, not only to goalkeepers:
-- nerves SHALL raise an outfield player's miscontrol, rushed-clearance and foul risks;
-- confidence SHALL raise his willingness to attempt actions.
+Kickoff seeding and in-match updates SHALL apply to every player on the pitch, not only to goalkeepers. A player's
+state of mind SHALL reach his play through two channels, and both SHALL work the same way for every player:
+- **Reliability:** nerves and low confidence SHALL raise how often his actions fail, through one factor shared by
+  every player.
+  - Each kind of action SHALL feel that factor in proportion to how much of its failure is a lapse rather than a
+    matter of skill. A fluffed touch or a miscued clearance SHALL feel it fully; a missed shot or a mistimed
+    challenge SHALL feel only a share of it.
+  - A failure that is already common SHALL grow toward certainty without reaching it.
+  - A goalkeeper and an outfield player with the same confidence and nerves SHALL see the same kind of action's
+    failure rate rise by the same factor over a settled state.
+- **Initiative:** confidence SHALL raise his willingness to attempt actions, and nerves SHALL lower it.
 
-These outfield effects SHALL be bounded so that population pass accuracy, miscontrol rate and goals per match stay
-within their calibration bands.
+How steady a player is SHALL scale how often his actions fail, separately from his state of mind. Steadiness comes
+from his concentration, composure, decisions and consistency.
+
+A neutral head SHALL leave every failure rate where his steadiness and the situation put it.
+
+These effects SHALL be bounded so that each of the following stays within its calibration band:
+- population pass accuracy;
+- fouls and penalties per match;
+- goals per match.
+
+The miscontrol rate SHALL NOT rise above its baseline beyond run-to-run noise.
 
 #### Scenario: A nervous outfielder miscontrols more
 - **WHEN** two outfield players of identical attributes play the same matches, one starting nervous and the other
   calm
 - **THEN** the nervous player's miscontrol rate over those matches is higher
 
+#### Scenario: Keeper and outfielder share one reliability factor
+- **WHEN** a goalkeeper and an outfield player carry the same confidence and nerves
+- **THEN** the factor by which each one's failure rate for the same kind of action rises over his settled rate is
+  the same
+
+#### Scenario: A skill-heavy action feels less of his head
+- **WHEN** a nervous player shoots and receives passes whose settled failure rates are the same
+- **THEN** his rate of fluffed touches rises by more than his rate of missed shots
+
+#### Scenario: A steady player fails less with the same state of mind
+- **WHEN** two outfield players with the same state of mind make the same kind of action in the same situation, one
+  with high concentration, composure, decisions and consistency and the other with low
+- **THEN** the steadier player's action fails less often
+
 #### Scenario: Population calibration holds
-- **WHEN** the seeded realism batch is run with kickoff seeding in force
-- **THEN** pass accuracy, miscontrol rate and goals per match each stay within their calibration bands
+- **WHEN** the seeded realism batch is run with every player's reliability lane in force
+- **THEN** pass accuracy, fouls, penalties and goals per match each stay within their calibration bands
+- **AND** miscontrols per match do not rise above the baseline beyond run-to-run noise
+
+### Requirement: Nerves settle as a player plays himself in
+The nerves a player brings to kickoff SHALL ease with his time on the pitch:
+- **Pace:** a composed player SHALL settle faster than an anxious one.
+- **Floor:** the easing SHALL stop at a residual share of his kickoff nerves for the rest of that match, so a big
+  step up is still felt at the final whistle.
+- **Substitutes:** a substitute SHALL settle from the moment he enters.
+- **Other sources:** nerves from other causes, such as a booking or the closing stage of a close match, SHALL NOT be
+  eased by this settling.
+
+#### Scenario: A debutant settles but does not become a veteran
+- **WHEN** a player starts a match well above his assurance
+- **THEN** his nerves an hour in are lower than at kickoff
+- **AND** they remain higher than those of a player assured at that standard
+
+#### Scenario: A composed player settles faster
+- **WHEN** two players start the same match with the same kickoff nerves, one composed and the other anxious
+- **THEN** half an hour in, the composed player's nerves are lower
+
+#### Scenario: A substitute settles from his entry
+- **WHEN** a nervous substitute enters in the 70th minute
+- **THEN** his nerves on entry are his full kickoff nerves and ease from that point on
+
+### Requirement: A close match presses harder as it nears its end
+In the closing stage of a match whose score is level or separated by one goal, every player on the pitch SHALL carry
+added nerves that grow toward the final whistle:
+- **Temperament:** a player strong at handling pressure SHALL feel less of it.
+- **Leadership:** a commanding leader of his own side on the pitch SHALL damp it.
+- **Stakes:** it SHALL weigh more in a fixture with more at stake.
+- **Margin:** it SHALL NOT apply while the margin is two goals or more.
+- **Duration:** it SHALL fall away as soon as the margin grows.
+
+The added nerves SHALL act through the same reliability and initiative channels as any other nerves.
+
+#### Scenario: The last minutes of a level match are tenser than the first
+- **WHEN** the same player is on the pitch at 1–1 in the 10th minute and at 1–1 in the 85th minute
+- **THEN** his nerves are higher in the 85th minute
+
+#### Scenario: Temperament answers the moment
+- **WHEN** two players with identical kickoff states are on the pitch in the 85th minute of a level match, one strong
+  and one weak at handling pressure
+- **THEN** the player weak at handling pressure carries more nerves
+
+#### Scenario: A leader on the pitch calms his side
+- **WHEN** the same side is level in the 85th minute, once with a commanding leader on the pitch and once without one
+- **THEN** its players carry fewer added nerves when the leader is on the pitch
+
+#### Scenario: A comfortable lead is calm
+- **WHEN** a side leads by three goals in the 85th minute
+- **THEN** no player on the pitch carries nerves from the closing stage

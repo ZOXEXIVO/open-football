@@ -2,6 +2,7 @@ use super::distances::TackleEngagement;
 use crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::context::PenaltyArea;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::engine::officiating::management::{CounterAttackThreat, ProfessionalFoul};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
@@ -1121,14 +1122,19 @@ impl ContactFoul {
             1.0
         };
 
-        (Self::BASE
-            * temperament
-            * desperation
-            * closeness
-            * box_restraint
-            * TackleDecision::booked_caution(ctx)
-            * TackleDecision::trait_temper(ctx))
-        .clamp(0.0, 0.30)
+        // His head scales what is left: a nervous marker grabs more.
+        ActionLapse::scaled(
+            LapseFamily::Challenge,
+            (Self::BASE
+                * temperament
+                * desperation
+                * closeness
+                * box_restraint
+                * TackleDecision::booked_caution(ctx)
+                * TackleDecision::trait_temper(ctx))
+            .clamp(0.0, 0.30),
+            ctx.context.psychology.get(ctx.player.id),
+        )
     }
 
     /// Severity of a non-tackle foul. These are overwhelmingly cynical

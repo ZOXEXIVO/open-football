@@ -19,12 +19,13 @@ default = []
 #              blowout profile, per-tick ball decisions). Sites go
 #              through the `match_log_*!` macros in `match_logs.rs`
 #              which compile to no-ops when off.
-# match-stub : replaces the real simulation with a 0-0 result that
-#              returns immediately — for profiling the surrounding
-#              pipeline (squad selection, league progression,
-#              post-match processing) without paying the engine's CPU
-#              cost. NEVER enable for production runs: every match
-#              ends 0-0 with empty player stats.
+# match-stub : replaces the real simulation with a result drawn from
+#              the two squads (goals from the elevens' ability gap and
+#              the home edge; scorers, substitutions, minutes and
+#              ratings to match) that returns immediately — for
+#              profiling and long world censuses of the surrounding
+#              pipeline without paying the engine's CPU cost. NEVER
+#              enable for production runs: no match is played.
 match = ["match-logs", "match-stub"]
 match-logs = []
 match-stub = []

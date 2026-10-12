@@ -352,6 +352,7 @@ mod tests {
             pitch: Default::default(),
             standard_of_football: 0.6630,
             penalty_saves: Vec::new(),
+            penalty_misses: Vec::new(),
         };
         MatchResult {
             id: "test".to_string(),

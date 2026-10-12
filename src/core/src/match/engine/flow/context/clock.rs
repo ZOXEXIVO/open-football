@@ -84,6 +84,18 @@ impl MatchContext {
         self.total_match_time / 10
     }
 
+    /// How far into the closing stage of the match the clock is, 0..1:
+    /// the last third of the second half, and the last two thirds of the
+    /// second period of extra time. Zero everywhere else.
+    pub fn closing_stage(&self) -> f32 {
+        let (start, span) = match self.state.match_state {
+            MatchState::SecondHalf => (2 * MATCH_HALF_TIME_MS / 3, MATCH_HALF_TIME_MS / 3),
+            MatchState::ExtraTimeSecond => (MATCH_EXTRA_TIME_MS / 3, 2 * MATCH_EXTRA_TIME_MS / 3),
+            _ => return 0.0,
+        };
+        (self.time.time.saturating_sub(start) as f32 / span as f32).clamp(0.0, 1.0)
+    }
+
     pub fn can_shoot_after_goal(&self) -> bool {
         true
     }

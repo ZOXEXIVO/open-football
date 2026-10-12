@@ -8,7 +8,8 @@
 //! shared-state locking in the way.
 //!
 //! Build it with the `match-stub` feature (on by default) so the match
-//! engine collapses to a 0-0 result: the trace then shows the graph that
+//! engine is replaced by a result drawn from the squads: the trace then
+//! shows the graph that
 //! WRAPS the engine — squad/roster maintenance, transfers and the
 //! free-agent market, awards, index rebuilds, career-history snapshots,
 //! and the national/global competition passes — instead of the AI hot
@@ -78,8 +79,8 @@ const MIN_CENSUS_MATCHES: u32 = 30;
 /// that walks with the league's strength is the engine responding to
 /// PLAYER QUALITY, which is exactly the reported symptom.
 ///
-/// Only meaningful with the real engine: under the default `match-stub`
-/// feature every result is 0-0 and the table prints zeros.
+/// Under the default `match-stub` feature the table reads the stub's
+/// own goal model, not the engine's.
 #[derive(Default)]
 struct LeagueGoalCensus {
     rows: HashMap<String, CensusRow>,
@@ -195,7 +196,7 @@ impl SimHarness {
     /// the first poll. So a no-op-waker `block_on` completes it in a single
     /// step; no tokio runtime, no dispatcher registration. With no
     /// `MatchDispatcherRegistry` installed, the engine pool falls back to
-    /// the local rayon path, which under `match-stub` returns 0-0 stubs.
+    /// the local rayon path, which under `match-stub` returns drawn results.
     fn tick(&mut self) -> SimulationResult {
         Self::block_on(FootballSimulator::simulate(&mut self.data))
     }
@@ -282,12 +283,6 @@ fn main() {
     // lines that would swamp the per-day timing); raise with RUST_LOG.
     env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
 
-    // The breakthrough census needs the stub to credit who played. Set
-    // before world generation starts the first worker thread.
-    if std::env::args().nth(1).is_some_and(|a| a == "keeper-breakthrough") {
-        unsafe { std::env::set_var("OF_STUB_MINUTES", "1") };
-    }
-
     // Accept `dev_simulate [days]` or `dev_simulate bench [days]`: take the
     // first argument that parses as a day count so both spellings work.
     let days = std::env::args()
@@ -370,6 +365,32 @@ fn main() {
             }
         }
         census.print(&harness.data);
+        return;
+    }
+
+    // `dev_simulate history-leagues [seasons]` — every player's career-row
+    // division against the division the club actually played that season
+    // in; see `HistoryLeagueCensus`.
+    if args.first().map(|a| a == "history-leagues").unwrap_or(false) {
+        let seasons = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(2);
+        let opening_season = core::league::Season::from_date(harness.data.date.date()).start_year;
+        let run = Instant::now();
+        for day in 1..=seasons * 365 + 7 {
+            harness.tick();
+            if day % 365 == 0 {
+                eprintln!(
+                    "season {} done — {} after {:.1} min",
+                    day / 365,
+                    harness.data.date.date(),
+                    run.elapsed().as_secs_f64() / 60.0
+                );
+            }
+        }
+        HistoryLeagueCensus::take(&harness.data, opening_season).print();
         return;
     }
 
@@ -1691,9 +1712,8 @@ impl StarCensus {
 }
 
 /// `dev_simulate keeper-breakthrough [seasons]` — when a world's keepers
-/// break through. Runs the shipped world for `seasons` seasons with
-/// `OF_STUB_MINUTES=1`, so the stubbed matches credit every starter, and
-/// reads league appearances from each player's folded season history:
+/// break through. Runs the shipped world for `seasons` seasons, the
+/// stubbed matches crediting everyone who took the pitch, and reads league appearances from each player's folded season history:
 ///
 /// * the age profile of 30-plus-appearance seasons from the third season
 ///   on, keepers against outfielders;
@@ -1849,5 +1869,183 @@ impl KeeperBreakthroughCensus {
                 .copied()
                 .unwrap_or(0),
         );
+    }
+}
+
+/// Career league rows checked against the division the club actually
+/// played that season in: the club's own `league_history`, recorded at
+/// every season-end snapshot. An open spell belongs to the season not yet
+/// snapshotted, so it is checked against the pre-swap division while the
+/// swap's hand-off is still pending, else the current one. Only seasons
+/// this world simulated are checked; older rows come from the database,
+/// which the club record does not reach.
+struct HistoryLeagueCensus {
+    opening_season: u16,
+    frozen: LeagueRowTally,
+    open: LeagueRowTally,
+    examples: BTreeMap<&'static str, Vec<String>>,
+}
+
+#[derive(Default)]
+struct LeagueRowTally {
+    checked: u32,
+    matched: u32,
+    empty: u32,
+    /// Wrong, at a club whose division that season differs from today's.
+    moved_club: u32,
+    other: u32,
+    /// Wrong or empty rows that carry appearances, so the history page
+    /// shows them rather than collapsing them away.
+    wrong_with_apps: u32,
+}
+
+impl LeagueRowTally {
+    fn add(&mut self, row: &str, truth: Option<&str>, moved: bool, apps: u16) -> Option<&'static str> {
+        self.checked += 1;
+        let kind = if row.is_empty() {
+            self.empty += 1;
+            "empty"
+        } else if Some(row) == truth {
+            self.matched += 1;
+            return None;
+        } else if moved {
+            self.moved_club += 1;
+            "moved-club"
+        } else {
+            self.other += 1;
+            "other"
+        };
+        if apps > 0 {
+            self.wrong_with_apps += 1;
+        }
+        Some(kind)
+    }
+
+    fn line(&self, label: &str) -> String {
+        format!(
+            "{label:<14}{:>9}{:>9}{:>9}{:>12}{:>9}{:>12}",
+            self.checked, self.matched, self.empty, self.moved_club, self.other, self.wrong_with_apps
+        )
+    }
+}
+
+impl HistoryLeagueCensus {
+    const EXAMPLES: usize = 6;
+
+    fn take(data: &SimulatorData, opening_season: u16) -> Self {
+        let mut league_slugs: Vec<HashMap<u32, &str>> = Vec::new();
+        let mut teams: HashMap<&str, (&core::Team, usize)> = HashMap::new();
+        for country in data.continents.iter().flat_map(|c| &c.countries) {
+            league_slugs.push(
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .map(|l| (l.id, l.slug.as_str()))
+                    .collect(),
+            );
+            for team in country.clubs.iter().flat_map(|c| &c.teams.teams) {
+                teams.insert(team.slug.as_str(), (team, league_slugs.len() - 1));
+            }
+        }
+
+        let mut census = HistoryLeagueCensus {
+            opening_season,
+            frozen: LeagueRowTally::default(),
+            open: LeagueRowTally::default(),
+            examples: BTreeMap::new(),
+        };
+        for player in KeeperBreakthroughCensus::players(data) {
+            let history = &player.statistics_history;
+            for row in history.season_ledger.iter().filter(|e| {
+                e.competition_kind == core::PlayerStatCompetitionKind::League
+                    && e.season_start_year >= opening_season
+            }) {
+                let Some((team, country)) = teams.get(row.team_slug.as_str()) else {
+                    continue;
+                };
+                let played = team.league_for_season(row.season_start_year);
+                let truth = played.and_then(|id| league_slugs[*country].get(&id).copied());
+                let now = team
+                    .league_id
+                    .and_then(|id| league_slugs[*country].get(&id).copied());
+                let apps = row.statistics.total_games();
+                if let Some(kind) =
+                    census
+                        .frozen
+                        .add(&row.league_slug, truth, played != team.league_id, apps)
+                {
+                    census.example(
+                        if kind == "empty" { "frozen empty" } else if kind == "moved-club" { "frozen moved-club" } else { "frozen other" },
+                        format!(
+                            "player {:>10} {}/{:<28} {:<6} {:<6} apps={:<3} cover={:<5} row={:<34} played={:<34} now={}",
+                            player.id,
+                            row.season_start_year,
+                            row.team_slug,
+                            if row.is_loan { "loan" } else { "" },
+                            format!("{:?}", team.team_type),
+                            apps,
+                            row.coverage_days.map(|d| d.to_string()).unwrap_or("-".into()),
+                            row.league_slug,
+                            truth.unwrap_or("?"),
+                            now.unwrap_or("?")
+                        ),
+                    );
+                }
+            }
+            for spell in history.current.iter().filter(|e| e.departed_date.is_none()) {
+                let Some((team, country)) = teams.get(spell.team_slug.as_str()) else {
+                    continue;
+                };
+                let truth = team
+                    .previous_league_id
+                    .or(team.league_id)
+                    .and_then(|id| league_slugs[*country].get(&id).copied());
+                let apps = spell.statistics.total_games();
+                if let Some(kind) = census.open.add(&spell.league_slug, truth, false, apps) {
+                    census.example(
+                        if kind == "empty" { "open empty" } else { "open other" },
+                        format!(
+                            "player {:>10} {:<33} {:<6} {:<6} joined={} row={:<34} plays={}",
+                            player.id,
+                            spell.team_slug,
+                            if spell.is_loan { "loan" } else { "" },
+                            format!("{:?}", team.team_type),
+                            spell.joined_date,
+                            spell.league_slug,
+                            truth.unwrap_or("?")
+                        ),
+                    );
+                }
+            }
+        }
+        census
+    }
+
+    fn example(&mut self, kind: &'static str, line: String) {
+        let lines = self.examples.entry(kind).or_default();
+        if lines.len() < Self::EXAMPLES {
+            lines.push(line);
+        }
+    }
+
+    fn print(&self) {
+        println!(
+            "HISTORY LEAGUES  (seasons from {}/{:02})",
+            self.opening_season,
+            (self.opening_season + 1) % 100
+        );
+        println!(
+            "{:<14}{:>9}{:>9}{:>9}{:>12}{:>9}{:>12}",
+            "", "checked", "match", "empty", "moved-club", "other", "wrong+apps"
+        );
+        println!("{}", self.frozen.line("frozen rows"));
+        println!("{}", self.open.line("open spells"));
+        for (kind, lines) in &self.examples {
+            println!("{kind}:");
+            for line in lines {
+                println!("  {line}");
+            }
+        }
     }
 }

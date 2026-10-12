@@ -62,6 +62,13 @@ impl Club {
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| self.name.clone());
 
+            // Career history files youth squads under the main team.
+            let career_home = self
+                .teams
+                .main()
+                .unwrap_or(&self.teams.teams[idx])
+                .history_info();
+
             let youth_team_type = self.teams.teams[idx].team_type;
             let mut graduated = self.academy.graduate_to_youth(date, to_graduate);
             // Loan-ready-age safety net: also pull up prospects within a
@@ -95,6 +102,7 @@ impl Club {
                     // a pathway, and his starts here.
                     let group = player.position().position_group();
                     player.assign_pathway(club_id, PlayerPlan::from_graduation(group, date), date);
+                    player.on_academy_graduation(&career_home, date);
 
                     transfers.push(
                         CompletedTransfer::new(

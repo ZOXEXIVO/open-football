@@ -176,6 +176,9 @@ pub enum AerialOutcome {
         range: f32,
         /// How high it goes over the strike, in metres.
         apex: f32,
+        /// Radians a miscued clearance is skewed off its line; zero for a
+        /// clean one.
+        turn: f32,
     },
 }
 
@@ -195,8 +198,9 @@ pub enum DeliveryIntent {
     Header,
     /// He hooks it over his own byline and concedes the corner.
     HookedBehind,
-    /// He heads it away upfield — `range` units at `apex` metres.
-    Cleared { range: f32, apex: f32 },
+    /// He heads it away upfield — `range` units at `apex` metres, skewed
+    /// `turn` radians off its line when he miscues it.
+    Cleared { range: f32, apex: f32, turn: f32 },
 }
 
 /// A delivery whose aerial contest is already decided, in the air on its
@@ -462,6 +466,7 @@ impl Ball {
                 attacked_goal,
                 range,
                 apex,
+                turn,
             } => {
                 // His to clear, not his to attack — the same disarming the
                 // hooked branch does, and for the same reason: this is a
@@ -471,7 +476,10 @@ impl Ball {
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();
                 events.add_ball_event(BallEvent::HeadedClear(delivery.winner_id, self.position));
-                Self::headed_clear_velocity(self.position, attacked_goal, range, apex)
+                Self::skew(
+                    Self::headed_clear_velocity(self.position, attacked_goal, range, apex),
+                    turn,
+                )
             }
         };
         self.aerial_delivery = None;

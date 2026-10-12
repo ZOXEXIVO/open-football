@@ -25,6 +25,7 @@
 use crate::PlayerSkills;
 use crate::club::player::builder::PlayerBuilder;
 use crate::r#match::MatchPlayer;
+use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::player::events::PlayerEventDispatcher;
 use crate::shared::fullname::FullName;
 use crate::{
@@ -131,4 +132,22 @@ fn composure_leads_the_resistance() {
         rattled > 0.0 && composed > 0.0,
         "a full press always transmits something: {rattled} / {composed}"
     );
+}
+
+/// A nervous passer snatches more of the passes he plays under the press,
+/// and nobody snatches a pass nobody is pressing.
+#[test]
+fn nerves_snatch_more_pressed_passes() {
+    let passer = opponent_at(1, 1, 300.0, 270.0);
+    let settled = PsychState::default();
+    let nervous = PsychState {
+        nervousness: 0.5,
+        ..PsychState::default()
+    };
+    let chance = |state: &PsychState, press01: f32| {
+        PlayerEventDispatcher::pressed_snatch_chance(&passer, Some(state), press01)
+    };
+    assert!(chance(&nervous, 1.0) > chance(&settled, 1.0) * 2.0);
+    assert!(chance(&settled, 1.0) > chance(&settled, 0.3));
+    assert_eq!(chance(&nervous, 0.0), 0.0);
 }

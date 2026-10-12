@@ -443,6 +443,8 @@ pub use crate::r#match::engine::ball::ball::teleport;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::psychology::lapse::lapse_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::key_pass_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::save_accounting_stats;

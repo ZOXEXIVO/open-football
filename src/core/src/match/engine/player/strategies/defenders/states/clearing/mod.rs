@@ -2,6 +2,9 @@ use crate::PlayerSkills;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::engine::ball::ball::{Ball, KICKABLE_DISTANCE};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::player::PlayerSide;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
@@ -64,7 +67,14 @@ impl StateProcessingHandler for DefenderClearingState {
         // halfway-line target.
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let rng = &ctx.context.rng;
-        let poor_clearance = rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
+        let poor_clearance = rng.random::<f32>()
+            < ActionLapse::scaled(
+                LapseFamily::Clearance,
+                def_profile.poor_clearance_chance.min(0.95),
+                ctx.context.psychology.get(ctx.player.id),
+            );
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note(LapseFamily::Clearance, poor_clearance);
 
         // NB "hook it behind for a corner" — the largest real-world
         // corner source — was implemented here and REMOVED, because this
@@ -138,9 +148,11 @@ impl StateProcessingHandler for DefenderClearingState {
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 
-        state
-            .events
-            .add_player_event(PlayerEvent::ClearBall(ctx.player.id, ball_velocity));
+        state.events.add_player_event(if poor_clearance {
+            PlayerEvent::MiscuedClearance(ctx.player.id, ball_velocity)
+        } else {
+            PlayerEvent::ClearBall(ctx.player.id, ball_velocity)
+        });
 
         Some(state)
     }

@@ -7,8 +7,8 @@ edition = "2024"
 # The whole point of this harness: profile `FootballSimulator::simulate`
 # — the *simulator graph* (transfers, awards, indexes, free agents,
 # snapshots, national/global competitions) that wraps the match engine —
-# without the web server or HTTP in the way. `match-stub` compiles the
-# engine down to a 0-0 result so the trace shows everything AROUND it
+# without the web server or HTTP in the way. `match-stub` swaps the
+# engine for a result drawn from the squads so the trace shows everything AROUND it
 # instead of drowning in the AI hot path. Feature unification means the
 # `core` pulled in transitively by `database` is stubbed too, so there is
 # exactly one engine in the build and it is the stub. Drop the stub with

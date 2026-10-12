@@ -14,7 +14,7 @@ use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
 use crate::r#match::engine::player::events::players::{FoulSeverity, FoulSource};
 use nalgebra::Vector3;
-use crate::r#match::engine::psychology::{Psychology, PsychologyState};
+use crate::r#match::engine::psychology::{PressureMoment, Psychology, PsychologyState};
 use crate::r#match::engine::officiating::management::{
     TimeWasting, TimeWastingLedger, TimeWastingRestart,
 };
@@ -77,6 +77,9 @@ pub struct MatchContext {
     pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
     /// Keepers who kept out a penalty during play, one entry per save.
     pub penalty_saves: Vec<u32>,
+    /// Takers of the penalties struck during play that have not gone in
+    /// as penalties — pushed at the strike, taken off at a penalty goal.
+    pub penalty_misses: Vec<u32>,
 
     /// Every strike that was worth calling a chance, in the order they were
     /// taken — candidates, not the shortlist. `HighlightSelector::select`
@@ -326,7 +329,32 @@ impl MatchContext {
     pub fn seed_psychology(&mut self, player: &MatchPlayer) {
         if let Some(reading) = self.standard {
             let occasion = Psychology::occasion(&self.environment, self.is_knockout);
-            self.psychology.seed(player, reading.outfield, occasion);
+            let tick = self.current_tick();
+            self.psychology.seed(player, reading.outfield, occasion, tick);
+        }
+    }
+
+    /// What the moment weighs on each side right now: the closing stage
+    /// of a close match, answered by the side's loudest leader on the
+    /// pitch.
+    pub fn pressure_moment(&self) -> PressureMoment {
+        let closing = self.closing_stage();
+        let margin = self.lead(self.field_home_team_id).unsigned_abs();
+        let occasion = Psychology::occasion(&self.environment, self.is_knockout);
+        PressureMoment {
+            home_team_id: self.field_home_team_id,
+            home: Psychology::moment_pressure(
+                closing,
+                margin,
+                occasion,
+                self.home_skill_aggregates.top_leadership,
+            ),
+            away: Psychology::moment_pressure(
+                closing,
+                margin,
+                occasion,
+                self.away_skill_aggregates.top_leadership,
+            ),
         }
     }
 
@@ -413,6 +441,7 @@ impl MatchContext {
             period_kickoff_team: None,
             penalty_shootout_kicks: Vec::new(),
             penalty_saves: Vec::new(),
+            penalty_misses: Vec::new(),
             chances: Vec::new(),
             #[cfg(feature = "match-logs")]
             box_episode: Default::default(),

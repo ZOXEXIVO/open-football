@@ -1,5 +1,8 @@
 use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::defenders::states::DefenderState;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
@@ -464,9 +467,17 @@ impl DefenderTacklingState {
         if ctx.player.yellow_cards > 0 {
             base_foul *= 0.70;
         }
-        let foul_chance = base_foul.clamp(0.006, 0.60);
+        // His head scales what is left: a nervous defender mistimes more of
+        // the same challenges, the box included.
+        let foul_chance = ActionLapse::scaled(
+            LapseFamily::Challenge,
+            base_foul.clamp(0.006, 0.60),
+            ctx.context.psychology.get(ctx.player.id),
+        );
 
         let committed_foul = rng.random::<f32>() < foul_chance;
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note(LapseFamily::Challenge, committed_foul);
 
         // Severity classification stays driven by aggression — discipline
         // already gates whether a foul fires at all, so we don't need to

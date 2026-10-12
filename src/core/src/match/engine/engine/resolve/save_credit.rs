@@ -152,9 +152,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             context.penalty_saves.push(keeper_id);
         }
         // Shot has resolved (saved). Drop the metadata so any
-        // subsequent goal / save event can't double-credit.
+        // subsequent goal / save event can't double-credit. The giveaway
+        // ledger stays open: a rebound goal is still the giver's error.
         field.ball.clear_shot_metadata();
-        field.ball.pending_error_to_shot_player_id = None;
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;

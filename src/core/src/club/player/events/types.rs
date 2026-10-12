@@ -66,6 +66,9 @@ pub struct MatchOutcome<'a> {
     pub team_won: bool,
     /// Did this player's team lose the match?
     pub team_lost: bool,
+    /// Did his team win the tie — a shoot-out included? `team_won` reads
+    /// the scoreline alone, which a shoot-out leaves level.
+    pub won_tie: bool,
     /// True when this is a continental competition match (UCL, UEL,
     /// Conference, Libertadores). Lets the events feed promote a
     /// regular cup tie into a "knockout" headline only when continental.
@@ -105,6 +108,9 @@ pub struct MatchOutcome<'a> {
     pub standard_of_football: f32,
     /// Penalties he kept out, in play and in a shoot-out.
     pub penalties_saved: u8,
+    /// Spot-kicks he failed to score, in play and in a shoot-out — see
+    /// `MatchResultRaw::penalties_missed_by`.
+    pub penalties_missed: u8,
 }
 
 impl<'a> MatchOutcome<'a> {

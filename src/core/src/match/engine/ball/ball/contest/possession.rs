@@ -1,5 +1,8 @@
 use crate::r#match::engine::ball::ball::{ASSIST_WINDOW_TICKS, Ball};
 use crate::r#match::engine::ball::events::BallEvent;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::events::EventCollection;
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::passing::CrossType;
@@ -310,27 +313,59 @@ impl Ball {
         }
     }
 
-    /// Stamp the giveaway tracker for the player who just lost the ball
-    /// via a misplaced pass / lost tackle / dispossession. Subsequent
-    /// shot / goal events from the opposing team within the response
-    /// window will be charged back as an error to this player. The
-    /// `was_own_box` flag is read later by the goal handler to layer the
-    /// own-box-extra penalty on top of `errors_leading_to_goal`.
+    /// Stamp the giveaway tracker for the player whose own failed
+    /// execution just lost the ball (`family` says which kind of action
+    /// failed). Subsequent shot / goal events from the opposing team
+    /// within the response window will be charged back as an error to
+    /// this player. The `was_own_box` flag is read later by the goal
+    /// handler to layer the own-box-extra penalty on top of
+    /// `errors_leading_to_goal`.
     #[inline]
-    pub fn stamp_giveaway(&mut self, player_id: u32, team_id: u32, tick: u64, was_own_box: bool) {
+    pub fn stamp_giveaway(
+        &mut self,
+        player_id: u32,
+        team_id: u32,
+        tick: u64,
+        was_own_box: bool,
+        family: LapseFamily,
+    ) {
         self.last_giveaway_player_id = Some(player_id);
         self.last_giveaway_team_id = Some(team_id);
         self.last_giveaway_tick = tick;
         self.last_giveaway_was_own_box = was_own_box;
+        self.giveaway_charged = false;
+        self.pending_error_to_shot_player_id = None;
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_giveaway_family = Some(family);
+            lapse_diag::note_stamp(family);
+        }
+        #[cfg(not(feature = "match-logs"))]
+        let _ = family;
     }
 
-    /// Drop the giveaway tracker — the response window has expired or
-    /// the giver's team has recovered the ball.
+    /// How far off its ideal point a pass has to arrive to have gone
+    /// astray, in units: 2 m, about twice an ordinary pass's arrival error.
+    const ASTRAY_ERROR: f32 = 16.0;
+
+    /// Did the pass in flight go astray — snatched, miskicked or off its
+    /// target? A pass that ends with an opponent is the passer's giveaway
+    /// only then; one going where it was meant to that an opponent reads
+    /// and cuts out is the opponent's doing.
     #[inline]
-    pub fn clear_giveaway(&mut self) {
+    pub fn pass_went_astray(&self) -> bool {
+        self.pending_pass_error >= Self::ASTRAY_ERROR
+    }
+
+    /// Close the giveaway ledger — the attack it gave away is over: his
+    /// side has the ball again, the ball is dead, or it has gone in.
+    #[inline]
+    pub fn close_giveaway(&mut self) {
         self.last_giveaway_player_id = None;
         self.last_giveaway_team_id = None;
         self.last_giveaway_was_own_box = false;
+        self.giveaway_charged = false;
+        self.pending_error_to_shot_player_id = None;
     }
 
     /// Detect and resolve carry transitions. Called once per tick from

@@ -80,6 +80,12 @@ impl Club {
                 continue;
             }
             budget = budget.saturating_sub(called_up.len());
+            // Career history files youth squads under the main team.
+            let career_home = self
+                .teams
+                .main()
+                .unwrap_or(&self.teams.teams[idx])
+                .history_info();
 
             debug!(
                 "academy {}: {} emergency call-ups into {:?} (squad was {})",
@@ -89,7 +95,8 @@ impl Club {
                 squad
             );
 
-            for player in called_up {
+            for mut player in called_up {
+                player.on_academy_graduation(&career_home, date);
                 transfers.push(
                     CompletedTransfer::new(
                         player.id,
@@ -261,6 +268,32 @@ mod tests {
             12,
             "a U20 that can already field a team is left alone"
         );
+    }
+
+    #[test]
+    fn a_called_up_boy_starts_his_career_under_the_main_team() {
+        let date = Fixture::date();
+        let mut club = Fixture::club(0, 12, &[15; 40]);
+
+        club.process_youth_emergency_callups(date);
+
+        let u18 = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.team_type == TeamType::U18)
+            .unwrap();
+        assert!(!u18.players.players.is_empty());
+        for player in &u18.players.players {
+            let spell = player
+                .statistics_history
+                .current
+                .iter()
+                .find(|e| e.departed_date.is_none())
+                .expect("a called-up boy must have an open career spell");
+            assert_eq!(spell.team_slug, "main");
+            assert_eq!(spell.joined_date, date);
+        }
     }
 
     #[test]

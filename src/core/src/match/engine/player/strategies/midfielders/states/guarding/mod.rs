@@ -4,6 +4,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
 use crate::r#match::player::events::{FoulSource, PlayerEvent};
+use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{
     ContactFoul, MarkEngagement, TackleEngagement,
@@ -206,6 +207,11 @@ impl StateProcessingHandler for MidfielderGuardingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if let Some(opponent) = self.find_guard_target(ctx) {
+            // Switched off for a moment as his man goes — see the marking
+            // state.
+            if DefenderSkillProfile::from_ctx(ctx).late_to_the_run(ctx, &opponent) {
+                return Some(ctx.player.velocity);
+            }
             let opponent_velocity = opponent.velocity(ctx);
             let own_goal = ctx.ball().direction_to_own_goal();
 

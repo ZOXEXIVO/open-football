@@ -23,8 +23,11 @@ use crate::r#match::engine::officiating::management::{
 use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext, RefereeProfile};
 use crate::r#match::engine::player::injury::{InjuryCause, InjuryRisk, InjuryGrade, MatchInjury};
 use crate::r#match::engine::result::DeadTime;
-use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
-use crate::r#match::goalkeepers::states::common::KeeperLapse;
+use crate::r#match::engine::psychology::{
+    ActionLapse, LapseFamily, NegativeEvent, PositiveEvent, PsychState,
+};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::MatchZone;
@@ -771,6 +774,9 @@ pub enum PlayerEvent {
     /// refused out of reach exactly as `PassTo` is — see
     /// [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach).
     ClearBall(u32, Vector3<f32>),
+    /// `(clearer_id, velocity)` — a clearance he miscued: struck as hit,
+    /// wherever that is, and his giveaway if an opponent gets to it.
+    MiscuedClearance(u32, Vector3<f32>),
     RushOut(u32),
     Shoot(ShootingEventContext),
     MovePlayer(u32, Vector3<f32>),
@@ -836,7 +842,7 @@ impl PlayerEvent {
             PlayerEvent::TacklingBall(..) => 3,
             PlayerEvent::BallOwnerChange(..) => 4,
             PlayerEvent::PassTo(..) => 5,
-            PlayerEvent::ClearBall(..) => 6,
+            PlayerEvent::ClearBall(..) | PlayerEvent::MiscuedClearance(..) => 6,
             PlayerEvent::RushOut(..) => 7,
             PlayerEvent::Shoot(..) => 8,
             PlayerEvent::MovePlayer(..) => 9,
@@ -1363,6 +1369,7 @@ impl PlayerEventDispatcher {
                 PlayerEvent::PassTo(_)
                     | PlayerEvent::Shoot(_)
                     | PlayerEvent::ClearBall(_, _)
+                    | PlayerEvent::MiscuedClearance(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
@@ -1404,6 +1411,7 @@ impl PlayerEventDispatcher {
                 PlayerEvent::PassTo(_)
                     | PlayerEvent::Shoot(_)
                     | PlayerEvent::ClearBall(_, _)
+                    | PlayerEvent::MiscuedClearance(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
@@ -1910,38 +1918,7 @@ impl PlayerEventDispatcher {
                         field.ball.last_completed_pass_receiver_id = None;
                     }
                 }
-                // ── Error leading to shot/goal ────────────────────────
-                // If an opponent gave the ball away within the response
-                // window and the shooter is on the opposite team, the
-                // giver is charged with the error. Persist to
-                // `pending_error_to_shot_player_id` so the goal handler
-                // can also charge `errors_leading_to_goal` if the shot
-                // converts.
-                const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
-                let shooter_team = field.get_player(shooter_id).map(|p| p.team_id);
-                if let (Some(giver_id), Some(giver_team), shooter_team) = (
-                    field.ball.last_giveaway_player_id,
-                    field.ball.last_giveaway_team_id,
-                    shooter_team,
-                ) {
-                    let in_window = now_tick.saturating_sub(field.ball.last_giveaway_tick)
-                        <= ERROR_TO_SHOT_WINDOW_TICKS;
-                    if in_window && Some(giver_team) != shooter_team {
-                        if let Some(giver) = field.get_player_mut(giver_id) {
-                            giver.statistics.add_error_leading_to_shot();
-                        }
-                        field.ball.pending_error_to_shot_player_id = Some(giver_id);
-                        context.psychology.record_negative(
-                            giver_id,
-                            NegativeEvent::ErrorLeadingToShot,
-                            now_tick,
-                        );
-                    } else {
-                        field.ball.pending_error_to_shot_player_id = None;
-                    }
-                } else {
-                    field.ball.pending_error_to_shot_player_id = None;
-                }
+                Self::charge_giveaway_on_shot(shooter_team, now_tick, field, context);
                 // ── Failed claim leading to shot ──────────────────────
                 // A keeper who has just flapped a cross is charged the
                 // moment the attacking side gets a shot away from it.
@@ -2001,10 +1978,22 @@ impl PlayerEventDispatcher {
                 }
             }
             PlayerEvent::Howler(keeper_id) => {
-                if let Some(keeper) = field.get_player_mut(keeper_id) {
+                let Some(keeper_team) = field.get_player_mut(keeper_id).map(|keeper| {
                     keeper.statistics.add_error_leading_to_shot();
-                }
+                    keeper.team_id
+                }) else {
+                    return remaining_events;
+                };
+                // The shot goes on through him: a giveaway already charged,
+                // so the ledger closes on the same terms as any other.
+                let tick = context.current_tick();
+                field
+                    .ball
+                    .stamp_giveaway(keeper_id, keeper_team, tick, true, LapseFamily::Save);
+                field.ball.giveaway_charged = true;
                 field.ball.pending_error_to_shot_player_id = Some(keeper_id);
+                #[cfg(feature = "match-logs")]
+                lapse_diag::note_charge(LapseFamily::Save, (tick / 6_000) as u32);
                 context.psychology.record_negative(
                     keeper_id,
                     NegativeEvent::ErrorLeadingToShot,
@@ -2015,25 +2004,26 @@ impl PlayerEventDispatcher {
                 Self::handle_take_ball_event(player_id, field);
             }
             PlayerEvent::ClearBall(clearer_id, velocity) => {
-                // Refused from out of reach exactly as `PassTo` is. This
-                // is the handler that used to carry no player id and
-                // check nothing at all, and it is how a defender in a
-                // tackling state hooked a clearance out of a ball 6.6 m
-                // over his head.
-                if !Self::strike_in_reach(
-                    StrikeKind::Clearance,
+                Self::strike_clearance(
                     clearer_id,
+                    velocity,
                     false,
                     field,
-                    context.current_tick(),
-                ) {
-                    *refusal = Some(StrikeKind::Clearance.refusal());
-                    return remaining_events;
-                }
-                if Self::offside_on_strike(clearer_id, field, context, &mut remaining_events) {
-                    return remaining_events;
-                }
-                Self::handle_clear_ball_event(clearer_id, velocity, field, context);
+                    context,
+                    refusal,
+                    &mut remaining_events,
+                );
+            }
+            PlayerEvent::MiscuedClearance(clearer_id, velocity) => {
+                Self::strike_clearance(
+                    clearer_id,
+                    velocity,
+                    true,
+                    field,
+                    context,
+                    refusal,
+                    &mut remaining_events,
+                );
             }
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field, context);
@@ -2082,6 +2072,11 @@ impl PlayerEventDispatcher {
             .ball
             .in_net
             .map_or_else(|| field.ball.goal_origin(is_auto_goal), |net| net.origin);
+        if origin == GoalOrigin::Penalty
+            && let Some(kick) = context.penalty_misses.iter().position(|&t| t == player_id)
+        {
+            context.penalty_misses.swap_remove(kick);
+        }
         // Stale scorer id (sent off / subbed between shot and goal
         // resolution) — no goal recorded for the player, but the score
         // line and ball-state cleanup downstream still need to run.
@@ -2137,7 +2132,11 @@ impl PlayerEventDispatcher {
             // giveaway happened inside the giver's own box — the rating
             // helper applies an extra penalty on top of the base
             // errors_leading_to_goal hit.
-            if let Some(giver_id) = field.ball.pending_error_to_shot_player_id {
+            let giver_conceded =
+                (scorer_team_id == field.ball.last_giveaway_team_id) == is_auto_goal;
+            if let Some(giver_id) = field.ball.pending_error_to_shot_player_id
+                && giver_conceded
+            {
                 let was_own_box = field.ball.last_giveaway_was_own_box;
                 if let Some(giver) = field.get_player_mut(giver_id) {
                     giver.statistics.add_error_leading_to_goal();
@@ -2171,10 +2170,9 @@ impl PlayerEventDispatcher {
             }
         }
         field.ball.clear_shot_metadata();
-        field.ball.pending_error_to_shot_player_id = None;
         field.ball.pending_failed_claim_gk_id = None;
         field.ball.pending_failed_claim_charged = false;
-        field.ball.clear_giveaway();
+        field.ball.close_giveaway();
 
         context.score.add_goal_detail(GoalDetail {
             player_id,
@@ -2503,14 +2501,6 @@ impl PlayerEventDispatcher {
         if let (Some(origin), Some(aim)) = (origin, field.ball.pending_pass_aim.or(target)) {
             FlightDiag::note_pass_completed((aim - origin).xy().norm());
         }
-        // First-touch quality producer: a receiver with weak technique
-        // / first_touch can fluff the reception (miscontrol) or kill
-        // it with a heavy touch — particularly when defenders are
-        // close. The carrier keeps the ball here, so this records a
-        // stat-only signal; the rating helper drags accordingly via
-        // `touch_quality`. High-skill receivers under no pressure
-        // virtually never trip this.
-        Self::maybe_record_first_touch_loss(receiver_id, field, context);
         if let (Some(origin), Some(target)) = (origin, target) {
             Self::classify_completed_pass(
                 passer_id,
@@ -2591,6 +2581,13 @@ impl PlayerEventDispatcher {
         })
     }
 
+    /// First-touch quality producer for a reception the live first-touch
+    /// roll let through clean: a receiver with weak technique /
+    /// first_touch can still fluff it (miscontrol) or kill it with a heavy
+    /// touch — particularly when defenders are close. The carrier keeps
+    /// the ball here, so this records a stat-only signal; the rating
+    /// helper drags accordingly via `touch_quality`. A reception the live
+    /// roll already failed is not rolled again.
     pub(crate) fn maybe_record_first_touch_loss(
         receiver_id: u32,
         field: &mut MatchField,
@@ -3094,6 +3091,21 @@ impl PlayerEventDispatcher {
     /// essentially every strike. The defender who ARRIVES during the
     /// backswing-plus-first-metres is the pressure a real passer feels,
     /// and at closing speed that is a 4-5 m starting distance.
+    /// How far a snatched pass is thrown off its target on each axis, in
+    /// units: up to 5 m, far enough that the man pressing him is as likely
+    /// to get it as the man it was meant for.
+    const SNATCH_THROW: f32 = 40.0;
+
+    /// Chance a pass played with the press at `press01` is snatched off
+    /// its target: his lapse rate for a pass, as hard as he is pressed.
+    pub(crate) fn pressed_snatch_chance(
+        passer: &MatchPlayer,
+        state: Option<&PsychState>,
+        press01: f32,
+    ) -> f32 {
+        ActionLapse::probability(LapseFamily::Pass, passer, state) * press01
+    }
+
     pub(crate) fn pass_press01(
         players: &[MatchPlayer],
         passer_team_id: u32,
@@ -3378,8 +3390,14 @@ impl PlayerEventDispatcher {
                             passer_position,
                             minute,
                         ));
+                // The press is beaten in the head first, so his head
+                // decides how much of it reaches the strike too.
                 let transmission =
-                    Self::press_transmission(skills.composure, skills.technique, skills.passing);
+                    Self::press_transmission(skills.composure, skills.technique, skills.passing)
+                        * ActionLapse::factor(
+                            LapseFamily::Press,
+                            context.psychology.get(event_model.from_player_id),
+                        );
                 max_position_error + press01 * transmission * skill_budget * Self::pass_press_gain()
             } else {
                 max_position_error
@@ -3401,19 +3419,22 @@ impl PlayerEventDispatcher {
             target_error_y += rng.random_range(-8.0f32..8.0);
         }
 
-        // A keeper rushed by the press snatches at it. Not the miskick a
+        // A passer rushed by the press snatches at it. Not the miskick a
         // poor technician hits anywhere — the one a nervous man hits when
-        // the striker is on him.
-        if let Some(passer) = field.get_player(event_model.from_player_id)
-            && passer.tactical_position.current_position.position_group()
-                == PlayerFieldPositionGroup::Goalkeeper
-        {
+        // the man is on him. The draw is taken whatever the switch says,
+        // so the seeded stream stays aligned between the A/B arms.
+        if let Some(passer) = field.get_player(event_model.from_player_id) {
             let press01 = Self::pass_press01(&field.players, passer_team_id, passer_position);
             let lapse =
-                KeeperLapse::probability(passer, context.psychology.get(passer.id)) * press01;
-            if rng.random_range(0.0f32..1.0) < lapse {
-                target_error_x += rng.random_range(-24.0f32..24.0);
-                target_error_y += rng.random_range(-24.0f32..24.0);
+                Self::pressed_snatch_chance(passer, context.psychology.get(passer.id), press01);
+            let snatched = rng.random_range(0.0f32..1.0) < lapse;
+            #[cfg(feature = "match-logs")]
+            if press01 > 0.0 {
+                lapse_diag::note(LapseFamily::Pass, snatched);
+            }
+            if snatched {
+                target_error_x += rng.random_range(-Self::SNATCH_THROW..Self::SNATCH_THROW);
+                target_error_y += rng.random_range(-Self::SNATCH_THROW..Self::SNATCH_THROW);
             }
         }
 
@@ -4303,12 +4324,106 @@ impl PlayerEventDispatcher {
             crate::r#match::engine::ball::ball::ownership::reception_diag::CREDIT_CONTROL
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Self::credit_completed_pass(player_id, passer_id, field, context);
+            Self::maybe_record_first_touch_loss(player_id, field, context);
             field
                 .ball
                 .note_possession_source(player_id, PossessionSource::PassReception);
         } else {
-            // Opponent won the pass — accuracy window ends.
+            // Opponent won the pass — accuracy window ends. A pass that went
+            // astray is the passer's giveaway; one he read and collected is
+            // still a turnover.
+            let astray = field.ball.pass_went_astray();
             field.ball.clear_pending_pass_metadata();
+            if astray {
+                Self::lose_ball(passer_id, LapseFamily::Pass, field, context);
+            } else {
+                Self::note_turnover(passer_id, field, context);
+            }
+        }
+    }
+
+    /// The first shot an opponent gets away within the response window
+    /// of a giveaway charges the giver, once. The charge is held on
+    /// `pending_error_to_shot_player_id` so the goal handler can promote it
+    /// if the attack converts — off this shot or a rebound.
+    pub(crate) fn charge_giveaway_on_shot(
+        shooter_team: Option<u32>,
+        now_tick: u64,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        const ERROR_TO_SHOT_WINDOW_TICKS: u64 = 600; // ~6s
+        let (Some(giver_id), Some(giver_team)) =
+            (field.ball.last_giveaway_player_id, field.ball.last_giveaway_team_id)
+        else {
+            return;
+        };
+        let in_window =
+            now_tick.saturating_sub(field.ball.last_giveaway_tick) <= ERROR_TO_SHOT_WINDOW_TICKS;
+        if !in_window || field.ball.giveaway_charged || Some(giver_team) == shooter_team {
+            return;
+        }
+        if let Some(giver) = field.get_player_mut(giver_id) {
+            giver.statistics.add_error_leading_to_shot();
+        }
+        field.ball.giveaway_charged = true;
+        field.ball.pending_error_to_shot_player_id = Some(giver_id);
+        #[cfg(feature = "match-logs")]
+        if let Some(family) = field.ball.last_giveaway_family {
+            lapse_diag::note_charge(family, (now_tick / 6_000) as u32);
+        }
+        context
+            .psychology
+            .record_negative(giver_id, NegativeEvent::ErrorLeadingToShot, now_tick);
+    }
+
+    /// Stamp `giver_id` as having given the ball away through his own
+    /// failed execution — see `Ball::stamp_giveaway`. Returns the zone he
+    /// lost it in.
+    pub(crate) fn give_away(
+        giver_id: u32,
+        family: LapseFamily,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) -> Option<MatchZone> {
+        let ball_pos = field.ball.position;
+        let (team, zone) = field
+            .get_player(giver_id)
+            .map(|p| (p.team_id, Self::zone_for_player(p, ball_pos, context)))?;
+        field.ball.stamp_giveaway(
+            giver_id,
+            team,
+            context.current_tick(),
+            zone.is_some_and(|z| z.is_own_box()),
+            family,
+        );
+        zone
+    }
+
+    /// A giveaway the opposition already has hold of: stamped, and booked
+    /// as a turnover.
+    pub(crate) fn lose_ball(
+        giver_id: u32,
+        family: LapseFamily,
+        field: &mut MatchField,
+        context: &MatchContext,
+    ) {
+        Self::give_away(giver_id, family, field, context);
+        Self::note_turnover(giver_id, field, context);
+    }
+
+    /// The ball has gone to the other side off `giver_id`: booked as a
+    /// dangerous turnover when it was in his own third, so the rating docks
+    /// it even if no shot follows.
+    pub(crate) fn note_turnover(giver_id: u32, field: &mut MatchField, context: &MatchContext) {
+        let ball_pos = field.ball.position;
+        if let Some(zone) = field
+            .get_player(giver_id)
+            .and_then(|p| Self::zone_for_player(p, ball_pos, context))
+            && (zone.is_own_box() || zone.is_own_third())
+            && let Some(giver) = field.get_player_mut(giver_id)
+        {
+            giver.statistics.note_dangerous_turnover(zone);
         }
     }
 
@@ -4977,6 +5092,11 @@ impl PlayerEventDispatcher {
         //
         // Resolved AFTER the error budget precisely so it can be bounded
         // by it.
+        // A penalty is a miss until it goes in as one — the goal handler
+        // takes it off again.
+        if shoot_event_model.shot_type == ShotType::Penalty {
+            context.penalty_misses.push(shoot_event_model.from_player_id);
+        }
         let dead_ball = match shoot_event_model.shot_type {
             ShotType::Penalty => Some(PenaltyKick::strike(execution_skill, rng)),
             ShotType::DirectFreeKick => Some(FreeKickShot::strike(
@@ -5145,10 +5265,18 @@ impl PlayerEventDispatcher {
             + low_condition_penalty * CONDITION_DRAG
             + profile.contact_drag)
             .clamp(-0.40, 0.80);
-        let wide_miss_chance = wide_base * (1.0 + accuracy_edge)
-            + accuracy_edge * ACCURACY_SCUFF
-            + pressure_penalty * 0.04
-            + desperation * 0.08;
+        // His head scales the forced misses, not the aim: a nervous
+        // finisher snatches more of the same chances, and the chance's own
+        // xG reading is untouched.
+        let finisher_head = context.psychology.get(shoot_event_model.from_player_id).copied();
+        let wide_miss_chance = ActionLapse::scaled(
+            LapseFamily::Finish,
+            wide_base * (1.0 + accuracy_edge)
+                + accuracy_edge * ACCURACY_SCUFF
+                + pressure_penalty * 0.04
+                + desperation * 0.08,
+            finisher_head.as_ref(),
+        );
         #[cfg(feature = "match-logs")]
         {
             shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5163,7 +5291,8 @@ impl PlayerEventDispatcher {
             );
         }
 
-        if dead_ball.is_none() && rng.random_range(0.0f32..1.0) < wide_miss_chance {
+        let forced_wide = dead_ball.is_none() && rng.random_range(0.0f32..1.0) < wide_miss_chance;
+        if forced_wide {
             #[cfg(feature = "match-logs")]
             shot_accuracy_diag::WIDE_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -5177,7 +5306,14 @@ impl PlayerEventDispatcher {
         // Miskick chance — sourced from the unified profile so it
         // includes the smoothstep poor-penalty contribution rather
         // than a single technique^3 read.
-        if dead_ball.is_none() && rng.random_range(0.0f32..1.0) < miskick_probability {
+        let miskicked = dead_ball.is_none()
+            && rng.random_range(0.0f32..1.0)
+                < ActionLapse::scaled(
+                    LapseFamily::Finish,
+                    miskick_probability,
+                    finisher_head.as_ref(),
+                );
+        if miskicked {
             #[cfg(feature = "match-logs")]
             shot_accuracy_diag::MISKICK_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
@@ -5438,12 +5574,19 @@ impl PlayerEventDispatcher {
         // axis for both rolls rather than two half-axes, and the same
         // reason the additive pair it replaces (0.025 + 0.025, reading
         // technique rather than finishing) could not move the outcome.
-        let over_bar_chance =
-            over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6;
+        let over_bar_chance = ActionLapse::scaled(
+            LapseFamily::Finish,
+            over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6,
+            finisher_head.as_ref(),
+        );
         let shot_goes_over_bar = match dead_ball {
             Some(kick) => kick.over,
             None => rng.random_range(0.0f32..1.0) < over_bar_chance,
         };
+        #[cfg(feature = "match-logs")]
+        if dead_ball.is_none() {
+            lapse_diag::note(LapseFamily::Finish, forced_wide || miskicked || shot_goes_over_bar);
+        }
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering as AtomicOrdering;
@@ -6296,7 +6439,6 @@ impl PlayerEventDispatcher {
             gk.statistics.note_shot_faced(shot_xg, true);
         }
         field.ball.clear_shot_metadata();
-        field.ball.pending_error_to_shot_player_id = None;
         // Credit on-target to the shooter — a parry IS the keeper
         // touching a shot that reached the goal frame. Without this,
         // saves > on-target shots, an impossible ratio.
@@ -6443,7 +6585,6 @@ impl PlayerEventDispatcher {
                 Self::dbg_save_credit(1, shooter_id.is_some(), shooter_id.is_none(), shooter_found);
                 let _ = shooter_found;
                 field.ball.clear_shot_metadata();
-                field.ball.pending_error_to_shot_player_id = None;
             } else if Self::handle_gk_claim(player_id, field, context) {
                 // Claim flapped — the keeper does NOT get the ball. The
                 // spill is already staged on the ball, so fall through
@@ -6519,8 +6660,11 @@ impl PlayerEventDispatcher {
         gk_claim_diag::COMMAND_MOMENTS.fetch_add(1, Ordering::Relaxed);
 
         let minute = sc::minute_from_ticks(field.ball.current_tick_cached);
-        let failure = (GkClaimContest::failure_probability(field, player_id, &situation, minute)
-            * KeeperLapse::multiplier(context.psychology.get(player_id)))
+        let failure = ActionLapse::scaled(
+            LapseFamily::Claim,
+            GkClaimContest::failure_probability(field, player_id, &situation, minute),
+            context.psychology.get(player_id),
+        )
         .min(0.95);
         if context.rng.unit_f32() >= failure {
             if let Some(gk) = field.get_player_mut(player_id) {
@@ -6623,6 +6767,7 @@ impl PlayerEventDispatcher {
             PlayerEvent::PassTo(pass) => Some(pass.from_player_id),
             PlayerEvent::Shoot(shot) => Some(shot.from_player_id),
             PlayerEvent::ClearBall(id, _)
+            | PlayerEvent::MiscuedClearance(id, _)
             | PlayerEvent::BallCollision(id)
             | PlayerEvent::TacklingBall(id)
             | PlayerEvent::BallOwnerChange(id)
@@ -7467,9 +7612,39 @@ impl PlayerEventDispatcher {
     /// (`RatingMath::sat(clearances, 6.0)`), so it would move ratings as
     /// a side effect of a reach fix. Whether a flick-on is a clearance is
     /// a real question; it is not this one.
+    /// Refused from out of reach exactly as `PassTo` is. This is the
+    /// handler that used to carry no player id and check nothing at all,
+    /// and it is how a defender in a tackling state hooked a clearance out
+    /// of a ball 6.6 m over his head.
+    fn strike_clearance(
+        clearer_id: u32,
+        velocity: Vector3<f32>,
+        miscued: bool,
+        field: &mut MatchField,
+        context: &MatchContext,
+        refusal: &mut Option<&'static str>,
+        remaining_events: &mut Vec<Event>,
+    ) {
+        if !Self::strike_in_reach(
+            StrikeKind::Clearance,
+            clearer_id,
+            false,
+            field,
+            context.current_tick(),
+        ) {
+            *refusal = Some(StrikeKind::Clearance.refusal());
+            return;
+        }
+        if Self::offside_on_strike(clearer_id, field, context, remaining_events) {
+            return;
+        }
+        Self::handle_clear_ball_event(clearer_id, velocity, miscued, field, context);
+    }
+
     fn handle_clear_ball_event(
         clearer_id: u32,
         velocity: Vector3<f32>,
+        miscued: bool,
         field: &mut MatchField,
         context: &MatchContext,
     ) {
@@ -7528,9 +7703,14 @@ impl PlayerEventDispatcher {
             velocity
         };
 
+        if miscued {
+            Self::give_away(clearer_id, LapseFamily::Clearance, field, context);
+        }
+
         // SAFETY: Prevent clearances from going toward own goal
         // A clearance should always go AWAY from own goal, never toward it
-        {
+        // — unless he miscued it, which is the one that can.
+        if !miscued {
             use crate::r#match::PlayerSide;
             if let Some(clearer_id) = field.ball.current_owner
                 && let Some(clearer) = field.get_player(clearer_id)
@@ -7847,6 +8027,9 @@ impl PlayerEventDispatcher {
         ball.recent_passers.clear();
         ball.cached_shot_target = None;
         ball.offside_snapshot = None;
+        // Play has stopped: whatever giveaway set this attack going is
+        // over, and a goal from the set piece is not its error.
+        ball.close_giveaway();
         let origin = if in_penalty_area {
             PassOriginRestart::Penalty
         } else {

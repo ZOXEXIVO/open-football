@@ -128,8 +128,11 @@ impl CountryResult {
         // that swap fires on the 1st of the month after the last league
         // finishes and this snapshot fires weeks later on the season-start
         // regen. `previous_league_id` is the hand-off the swap leaves
-        // behind; without it every player row for the season just played
-        // would be filed under the division the club is moving INTO.
+        // behind. The side's own league record and the youth friendly
+        // label take it; the `TeamInfo` handed to players carries the
+        // side's current division instead, because it seeds the season
+        // that is starting, while the closing season keeps the league its
+        // spell was stamped with.
         let ended_league_of =
             |team: &crate::Team| -> Option<u32> { team.previous_league_id.or(team.league_id) };
 
@@ -141,7 +144,8 @@ impl CountryResult {
             // non-owning teams never appear under their own slug, but
             // the player still belongs to the parent club's main team.
             let main_team_info: Option<TeamInfo> = club.teams.main().map(|t| {
-                let (league_name, league_slug) = ended_league_of(t)
+                let (league_name, league_slug) = t
+                    .league_id
                     .and_then(|lid| league_lookup.get(&lid))
                     .cloned()
                     .unwrap_or_default();
@@ -214,7 +218,8 @@ impl CountryResult {
                     continue;
                 }
 
-                let (league_name, league_slug) = ended_league_id
+                let (league_name, league_slug) = team
+                    .league_id
                     .and_then(|lid| league_lookup.get(&lid))
                     .cloned()
                     .unwrap_or_default();
@@ -1287,7 +1292,21 @@ mod tests {
     /// INTO — the reported "history shows the current club league" case.
     #[test]
     fn a_promoted_clubs_closing_season_is_filed_under_the_division_it_played_in() {
-        let player = make_player(1, 30, 5);
+        let mut player = make_player(1, 30, 5);
+        // The spell the closing season was played in, opened while the
+        // side was still in tier 2 — as world bootstrap or the previous
+        // season-end seed leaves it.
+        player.statistics_history.seed_initial_team(
+            &TeamInfo {
+                name: "Palermo".to_string(),
+                slug: "palermo".to_string(),
+                reputation: 100,
+                league_name: "Serie B".to_string(),
+                league_slug: "serie-b".to_string(),
+            },
+            make_date(2028, 8, 1),
+            false,
+        );
         let mut main_team = make_team(
             10,
             100,
@@ -1338,6 +1357,33 @@ mod tests {
             row.league_slug, "serie-b",
             "the season played in Serie B must not be labelled Serie A"
         );
+
+        // The season now starting is played in Serie A, so its open spell
+        // must say so — not the division the club just left.
+        let open = player
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "palermo" && e.departed_date.is_none())
+            .expect("2029 Palermo spell missing");
+        assert_eq!(
+            open.league_slug, "serie-a",
+            "the promotion season must open under the division the club moved into"
+        );
+
+        // And it freezes under Serie A a year later, with 2028 untouched.
+        CountryResult::snapshot_country(&mut country, make_date(2030, 7, 1));
+        let ledger = &country.clubs[0].teams.teams[0].players.players[0]
+            .statistics_history
+            .season_ledger;
+        let league_of = |year: u16| {
+            ledger
+                .iter()
+                .find(|e| e.season_start_year == year && e.team_slug == "palermo")
+                .map(|e| e.league_slug.as_str())
+        };
+        assert_eq!(league_of(2028), Some("serie-b"));
+        assert_eq!(league_of(2029), Some("serie-a"));
     }
 
     /// The counterpart: a club that never moves keeps one record entry and
@@ -1371,5 +1417,62 @@ mod tests {
         );
         assert_eq!(team.league_for_season(2028), Some(1));
         assert_eq!(team.league_for_season(2029), Some(1));
+    }
+
+    /// Graduation runs on the club's season-start day, ahead of that day's
+    /// snapshot. A graduate who joined with nothing recorded used to get a
+    /// row for the season just closed — one he never played — labelled with
+    /// the division his club had just moved into.
+    #[test]
+    fn a_graduate_starts_his_history_in_the_season_he_joined_for() {
+        let date = make_date(2029, 8, 1);
+        let mut main_team = make_team(
+            10,
+            100,
+            "Palermo",
+            "palermo",
+            TeamType::Main,
+            Some(2),
+            Vec::new(),
+        );
+        let mut graduate = make_player(2, 0, 0);
+        graduate.on_academy_graduation(&main_team.history_info(), date);
+        let youth_team = make_team(
+            11,
+            100,
+            "Palermo U19",
+            "palermo-u19",
+            TeamType::U19,
+            None,
+            vec![graduate],
+        );
+        main_team.move_to_league(1);
+
+        let club = make_club(100, "Palermo", vec![main_team, youth_team]);
+        let mut country = make_country(
+            vec![club],
+            vec![
+                make_league(1, "Serie A", "serie-a", false),
+                make_league(2, "Serie B", "serie-b", false),
+            ],
+        );
+
+        CountryResult::snapshot_country(&mut country, date);
+
+        let history = &country.clubs[0].teams.teams[1].players.players[0].statistics_history;
+        assert!(
+            !history
+                .season_ledger
+                .iter()
+                .any(|e| e.season_start_year == 2028),
+            "no row for the season the club played before he joined"
+        );
+        assert!(!history.items.iter().any(|i| i.season.start_year == 2028));
+        let open = history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "palermo" && e.departed_date.is_none())
+            .expect("2029 Palermo spell missing");
+        assert_eq!(open.league_slug, "serie-a");
     }
 }

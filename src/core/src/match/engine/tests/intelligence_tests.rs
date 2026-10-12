@@ -14,6 +14,8 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::engine::coach::{
     CoachInstruction, MatchCoach, RollingTeamMetrics, TacticalNeed,
 };
+use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::sub_scoring::SubScoring;
 use crate::r#match::player::strategies::players::ops::dribble_duel::{
     DribbleDuelResolver, DuelContext,
@@ -100,6 +102,23 @@ fn full_skills(value: f32) -> PlayerSkills {
 /// parallel reception resolver with no match callers at all, so it was
 /// pinning behaviour the engine never executed. Deleted with it — the
 /// property is real, so it is now asserted where the football happens.
+/// The live first-touch roll reads his head: a nervous receiver spills
+/// more of the same balls, and a settled one spills exactly what his touch
+/// and the ball say.
+#[test]
+fn a_nervous_receiver_spills_more_of_the_same_balls() {
+    let settled = PsychState::default();
+    let nervous = PsychState {
+        nervousness: 0.5,
+        ..PsychState::default()
+    };
+    let (mis_calm, heavy_calm) = Ball::first_touch_chances(0.4, 0.55, Some(&settled));
+    let (mis_edgy, heavy_edgy) = Ball::first_touch_chances(0.4, 0.55, Some(&nervous));
+    assert!(mis_edgy > mis_calm * 2.0, "{mis_edgy} against {mis_calm}");
+    assert!(heavy_edgy > heavy_calm);
+    assert_eq!(Ball::first_touch_chances(0.4, 0.55, None), (mis_calm, heavy_calm));
+}
+
 #[test]
 fn elite_first_touch_controls_better_than_poor() {
     let elite = build(

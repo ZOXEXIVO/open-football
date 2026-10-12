@@ -135,7 +135,7 @@ fn kickoff() -> (MatchField, MatchContext) {
 
 /// Drive the ball into the LEFT-hand goal as a shot from the Right side's
 /// forward, and run the goal through the same path the engine does.
-fn score_at_the_home_end(field: &mut MatchField, context: &mut MatchContext) -> u32 {
+pub(super) fn score_at_the_home_end(field: &mut MatchField, context: &mut MatchContext) -> u32 {
     let shooter = field
         .players
         .iter()

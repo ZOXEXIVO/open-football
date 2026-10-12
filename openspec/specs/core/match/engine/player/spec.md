@@ -199,3 +199,90 @@ A wide player SHALL NOT refuse to cross only because an opponent stands in front
 #### Scenario: The crosser reads the same chance the contest rolls
 - **WHEN** a crosser weighs a delivery with opponents on its line
 - **THEN** the chance of it being blocked that he weighs is the chance the block contest would roll for that delivery from the same positions
+
+### Requirement: An outfield player's state of mind shapes his reliability
+An outfield player's confidence and nerves SHALL change how often these actions fail:
+- **Passing under the press:** a pass played with an opponent close SHALL more often be snatched off its target.
+- **Receiving:** a touch SHALL more often get away from him.
+- **Clearing:** a clearance, headed or kicked, SHALL more often be miscued. A miscued clearance falls short or
+  sideways, and can go toward his own goal.
+- **Challenging:** a challenge SHALL more often be mistimed into a foul. In his own penalty area, a mistimed
+  challenge SHALL more often concede a penalty.
+- **Finishing:** a shot at a good chance SHALL more often be snatched.
+- **Marking:** when the man he is marking starts a run, he SHALL more often react late.
+
+**Base rate.** With a neutral head, each of these actions SHALL still fail at a base rate. That rate is set by the
+player's steadiness and the situation, so a settled veteran also makes occasional mistakes.
+
+**Population.** Over a seeded batch of matches between sides of equal level:
+- errors leading to a goal SHALL be between 0.10 and 0.35 per match;
+- errors leading to a shot SHALL stay within their calibration band.
+
+**Season ladder.** Over a seeded season ladder, among outfield players who start most of their side's matches:
+- the mean number of errors leading to a goal per player-season SHALL be between 0.2 and 0.7;
+- the 90th percentile SHALL be at most 3.
+
+#### Scenario: An unassured outfield side makes more errors at equal attributes
+- **WHEN** two sides with identical attributes play the same set of matches at the same standard, one side's
+  outfield players assured at that standard and the other's well below it
+- **THEN** the unassured outfield players are charged with at least one and a half times as many errors leading to
+  a shot
+
+#### Scenario: Nerves cost fouls
+- **WHEN** the same defenders make the same challenges once nervous and once settled
+- **THEN** a larger share of their challenges are fouls when they are nervous
+
+#### Scenario: Nerves cost finishing
+- **WHEN** the same forwards take shots at chances of the same quality once nervous and once settled
+- **THEN** they score a smaller share of those chances when they are nervous
+
+#### Scenario: A settled veteran still makes mistakes
+- **WHEN** the seeded realism batch is run with every player settled
+- **THEN** errors leading to a goal are at least 0.10 per match
+
+### Requirement: A mistake is charged to the man whose execution failed
+**Marking a giveaway.**
+- A player SHALL be marked as having given the ball away when he loses it through his own failed execution:
+  - a pass that went astray (snatched, miskicked or arriving well off its target) and ends with an opponent,
+    whether picked off in flight or collected loose;
+  - a miscontrol or heavy touch that an opponent collects;
+  - a miscued clearance that an opponent collects.
+- A player SHALL NOT be marked when his own execution did not fail:
+  - an opponent's tackle or duel wins the ball from him;
+  - an opponent reads and cuts out a pass that was going where it was meant to.
+
+**Charging it.**
+- The giver SHALL be charged one error leading to a shot when the opposition shoots both:
+  - within the error window of the giveaway;
+  - before his side regains the ball or play stops.
+- Further shots in the same attack SHALL NOT charge him again.
+- If that attack ends in a goal, the error SHALL be promoted to an error leading to a goal. This includes a goal from
+  a rebound.
+- The giveaway SHALL lapse when his side regains the ball or when play stops. A goal from a later phase SHALL NOT be
+  charged to it.
+
+**Goalkeepers.** A goalkeeper's spills and howlers SHALL be charged by the same rules.
+
+#### Scenario: A rebound is charged once and promoted
+- **WHEN** a defender's misplaced pass is collected by an opponent, whose shot is saved and the rebound scored within
+  the error window
+- **THEN** the defender is charged exactly one error leading to a shot and one error leading to a goal
+
+#### Scenario: A misplaced pass collected loose is an error
+- **WHEN** a midfielder's pass in his own half goes well off its target, an opponent collects it and shoots within
+  the error window
+- **THEN** the midfielder is charged with an error leading to a shot
+
+#### Scenario: A pass read and cut out is not an error
+- **WHEN** a pass arriving close to where it was aimed is cut out by an opponent, who shoots within the error window
+- **THEN** the passer is not charged with an error
+
+#### Scenario: A clean tackle is not an error
+- **WHEN** a carrier who has made no failed touch or pass is tackled cleanly and the opponent shoots within the error
+  window
+- **THEN** the carrier is not charged with an error
+
+#### Scenario: Regaining the ball clears the charge
+- **WHEN** a player gives the ball away, his side wins it back, and then loses it to a clean tackle from which the
+  opponent shoots within the original error window
+- **THEN** the original giver is not charged with an error leading to a shot

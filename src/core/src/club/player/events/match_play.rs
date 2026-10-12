@@ -78,6 +78,9 @@ impl Player {
     /// Goals prevented beyond an average keeper's, in a match his side did
     /// not lose, that make a display he remembers as having kept them in it.
     const MATCH_SAVING_XG: f32 = 1.0;
+    /// A defeat by this many goals or more is a heavy one — the news desk's
+    /// line too.
+    const HEAVY_DEFEAT_MARGIN: u8 = 3;
 
     /// Hand the match to the competitive mind before its episodes are
     /// filed, so the step he took up to play it is staged for them.
@@ -87,9 +90,11 @@ impl Player {
             standard: o.standard_of_football,
             minutes: o.stats.minutes_played as f32,
             competitive: !o.is_friendly,
-            kept_clean_sheet: self.position().is_goalkeeper()
-                && started
-                && o.team_goals_against == 0,
+            clean_sheet_share: if started && o.team_goals_against == 0 {
+                CompetitiveMind::defensive_share(self.position().position_group())
+            } else {
+                0.0
+            },
         };
         let pace = CompetitiveMind::settling_pace(
             self.skills.mental.composure,
@@ -383,11 +388,22 @@ impl Player {
             self.remember_match(EpisodeKind::SentOff, ActorRef::NONE, o);
         }
 
-        // What the match itself says about him. A costly error is an error
-        // that cost a goal — a flapped cross included — never a low rating
-        // with the defence to blame.
-        if o.stats.errors_leading_to_goal > 0 || o.stats.zone_stats.gk_failed_claims_to_goal > 0 {
+        // What the match itself says about him. A costly error is a goal
+        // his own failure gave away — an error that led to one, a flapped
+        // cross, an own goal — never a low rating with the defence to blame.
+        if o.stats.errors_leading_to_goal > 0
+            || o.stats.zone_stats.gk_failed_claims_to_goal > 0
+            || o.stats.own_goals > 0
+        {
             self.remember_match(EpisodeKind::CostlyError, ActorRef::NONE, o);
+        }
+        // A penalty he did not score in a tie his side did not win — in play
+        // or in the shoot-out that settled it.
+        if o.penalties_missed > 0 && !o.won_tie {
+            self.remember_match(EpisodeKind::MissedDecisivePenalty, ActorRef::NONE, o);
+        }
+        if o.team_goals_against >= o.team_goals_for.saturating_add(Self::HEAVY_DEFEAT_MARGIN) {
+            self.remember_match(EpisodeKind::HeavyDefeat, ActorRef::NONE, o);
         }
         if o.penalties_saved > 0 {
             self.remember_match(EpisodeKind::PenaltySaved, ActorRef::NONE, o);

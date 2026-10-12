@@ -348,6 +348,15 @@ impl Player {
         self.sold_from = None;
     }
 
+    /// Promoted out of the academy into one of the club's squads. Opens his
+    /// first career spell, so his first season end freezes the spell he had
+    /// instead of inventing one from whichever division the club is in
+    /// that day.
+    pub fn on_academy_graduation(&mut self, club_team: &TeamInfo, date: NaiveDate) {
+        self.statistics_history
+            .record_academy_graduation(club_team, date);
+    }
+
     /// Record a loan move (called by loan execution).
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         let season_year = self.spell_season_anchor(&from.slug, date);
@@ -3928,13 +3937,23 @@ mod tests {
             "Juve 2026/27 fee wrong.\n{desc}"
         );
 
-        // Napoli: should have the 12M fee (was in current when guard fired)
-        let napoli_entry = history
-            .iter()
-            .find(|e| e.team_slug == "napoli" && e.transfer_fee == Some(12_000_000.0));
+        // Napoli: signed on 22 Aug, after 2026/27's matches and before the
+        // second snapshot — a 2027/28 move. Its 12M fee survives the
+        // duplicate season guard on the spell it opened, not on a 2026/27
+        // row it never played in.
         assert!(
-            napoli_entry.is_some(),
-            "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}"
+            !history.iter().any(|e| e.team_slug == "napoli"),
+            "Napoli must not freeze into 2026/27.\n{desc}"
+        );
+        let napoli_spell = player
+            .statistics_history
+            .current
+            .iter()
+            .find(|e| e.team_slug == "napoli" && e.departed_date.is_none());
+        assert_eq!(
+            napoli_spell.and_then(|e| e.transfer_fee),
+            Some(12_000_000.0),
+            "Napoli's 12M fee must survive the duplicate season guard.\n{desc}"
         );
     }
 

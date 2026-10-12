@@ -195,10 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_result_keeps_its_standard_and_penalty_saves() {
+    fn a_remote_result_keeps_its_standard_and_penalty_record() {
         let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
         result.standard_of_football = 0.712;
         result.penalty_saves = vec![101];
+        result.penalty_misses = vec![209];
         let reply = Response::PlayBatch {
             items: vec![MatchOutcome::Squad { idx: 0, result }],
         };
@@ -208,6 +209,7 @@ mod tests {
                 [MatchOutcome::Squad { result, .. }] => {
                     assert_eq!(result.standard_of_football, 0.712);
                     assert_eq!(result.penalty_saves, vec![101]);
+                    assert_eq!(result.penalty_misses, vec![209]);
                 }
                 other => panic!("decoded {:?}", other.len()),
             },

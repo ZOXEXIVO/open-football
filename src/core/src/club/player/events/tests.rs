@@ -142,6 +142,8 @@ fn outcome<'a>(
         club_id: 7,
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
+        penalties_missed: 0,
+        won_tie: won,
         match_season_year: 0,
         date: d(2026, 9, 1),
     }
@@ -465,6 +467,8 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
         club_id: 7,
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
+        penalties_missed: 0,
+        won_tie: false,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };
@@ -521,6 +525,8 @@ fn home_appearance_books_to_player_statistics() {
         club_id: 7,
         standard_of_football: MatchStandard::CALIBRATION,
         penalties_saved: 0,
+        penalties_missed: 0,
+        won_tie: false,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };
@@ -6945,6 +6951,28 @@ fn clean_sheets_lift_a_keeper_without_filling_his_memory() {
     );
 }
 
+/// A clean sheet is the back line's as well as the keeper's, and not the
+/// centre-forward's.
+#[test]
+fn a_clean_sheet_lifts_a_defender_but_not_a_forward() {
+    let belief_after_shut_out = |position: PlayerPositionType, group: PlayerFieldPositionGroup| {
+        let mut p = build_player(position, PersonAttributes::default());
+        p.made_senior_debut = true;
+        let s = stats(6.8, 0, 0, 0, group);
+        let o = outcome(&s, 6.8, false, false, false, false, 1, 0, MatchParticipation::Starter);
+        p.on_match_played(&o);
+        p.mind.competitive.self_belief()
+    };
+    assert!(
+        belief_after_shut_out(PlayerPositionType::DefenderCenter, PlayerFieldPositionGroup::Defender)
+            > 0.0
+    );
+    assert_eq!(
+        belief_after_shut_out(PlayerPositionType::Striker, PlayerFieldPositionGroup::Forward),
+        0.0
+    );
+}
+
 #[test]
 fn a_heavy_defeat_without_an_error_is_not_a_costly_error() {
     let mut p = build_player(PlayerPositionType::Goalkeeper, PersonAttributes::default());
@@ -6953,6 +6981,52 @@ fn a_heavy_defeat_without_an_error_is_not_a_costly_error() {
     let o = outcome(&s, 4.6, false, false, false, false, 0, 4, MatchParticipation::Starter);
     p.on_match_played(&o);
     assert!(!remembers(&p, EpisodeKind::CostlyError));
+    assert!(remembers(&p, EpisodeKind::HeavyDefeat));
+}
+
+#[test]
+fn an_own_goal_is_a_costly_error() {
+    let mut p = build_player(PlayerPositionType::DefenderCenter, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let mut s = stats(5.8, 0, 0, 0, PlayerFieldPositionGroup::Defender);
+    s.own_goals = 1;
+    let o = outcome(&s, 5.8, false, false, false, false, 1, 1, MatchParticipation::Starter);
+    p.on_match_played(&o);
+    assert!(remembers(&p, EpisodeKind::CostlyError));
+    assert!(p.mind.competitive.self_belief() < 0.0);
+}
+
+/// `(drawn on the night, won the tie)` → is a missed penalty decisive.
+fn missed_penalty_is_decisive(team_for: u8, team_against: u8, won_tie: bool) -> bool {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(6.2, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let mut o = outcome(
+        &s,
+        6.2,
+        false,
+        true,
+        false,
+        false,
+        team_for,
+        team_against,
+        MatchParticipation::Starter,
+    );
+    o.penalties_missed = 1;
+    o.won_tie = won_tie;
+    p.on_match_played(&o);
+    remembers(&p, EpisodeKind::MissedDecisivePenalty)
+}
+
+#[test]
+fn a_missed_kick_in_a_lost_shootout_is_remembered() {
+    assert!(missed_penalty_is_decisive(1, 1, false));
+}
+
+#[test]
+fn a_missed_penalty_in_a_win_is_not_decisive() {
+    assert!(!missed_penalty_is_decisive(3, 1, true));
+    assert!(!missed_penalty_is_decisive(1, 1, true), "his side won the shoot-out");
 }
 
 #[test]

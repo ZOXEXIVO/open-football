@@ -1,4 +1,5 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
+use crate::r#match::engine::psychology::LapseFamily;
 use crate::r#match::engine::ball::ball::frame::FramePart;
 use crate::r#match::engine::player::events::players::{FoulSource, PlayerEventDispatcher};
 use crate::r#match::engine::zones::Progression;
@@ -242,6 +243,7 @@ impl BallEventDispatcher {
                     field,
                     context,
                 );
+                PlayerEventDispatcher::maybe_record_first_touch_loss(receiver_id, field, context);
                 remaining_events.add(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
             }
             BallEvent::Intercepted(interceptor_id, passer_id, was_live_shot) => {
@@ -249,6 +251,7 @@ impl BallEventDispatcher {
                 // window — accuracy was NOT earned.
                 let ball_pos = field.ball.position;
                 let pending_passer = field.ball.pending_pass_passer;
+                let astray = field.ball.pass_went_astray();
                 field.ball.clear_pending_pass_metadata();
 
                 // Stamp the giveaway tracker only for genuine pass
@@ -258,31 +261,10 @@ impl BallEventDispatcher {
                 // pending pass and shouldn't charge the shooter as
                 // having "given the ball away".
                 if let Some(passer) = pending_passer {
-                    let giver_meta = field.get_player(passer).map(|p| {
-                        (
-                            p.team_id,
-                            PlayerEventDispatcher::zone_for_player(p, ball_pos, context),
-                        )
-                    });
-                    if let Some((team, zone)) = giver_meta {
-                        let was_own_box = zone.is_some_and(|z| z.is_own_box());
-                        let was_dangerous_zone =
-                            zone.is_some_and(|z| z.is_own_box() || z.is_own_third());
-                        field.ball.stamp_giveaway(
-                            passer,
-                            team,
-                            context.current_tick(),
-                            was_own_box,
-                        );
-                        // Note the dangerous turnover on the giver's
-                        // stats so the rating helper can dock the
-                        // own-third / own-box penalty even if no shot
-                        // converts within the response window.
-                        if was_dangerous_zone
-                            && let (Some(zone), Some(giver)) = (zone, field.get_player_mut(passer))
-                        {
-                            giver.statistics.note_dangerous_turnover(zone);
-                        }
+                    if astray {
+                        PlayerEventDispatcher::lose_ball(passer, LapseFamily::Pass, field, context);
+                    } else {
+                        PlayerEventDispatcher::note_turnover(passer, field, context);
                     }
                     // Successful pressure: opponents who were within
                     // the pressing radius at pass-emit time get
@@ -393,38 +375,22 @@ impl BallEventDispatcher {
                     field,
                     context,
                 );
-                let ball_pos = field.ball.position;
                 if is_miscontrol {
                     // A genuine loss of control: stamp the giveaway
                     // tracker on the RECEIVER so the error-to-shot /
                     // error-to-goal pipeline charges the right player
                     // if the opposition converts the loose ball.
-                    let meta = field.get_player(receiver_id).map(|p| {
-                        (
-                            p.team_id,
-                            PlayerEventDispatcher::zone_for_player(p, ball_pos, context),
-                        )
-                    });
-                    if let Some((team, zone)) = meta {
-                        let was_own_box = zone.is_some_and(|z| z.is_own_box());
-                        field.ball.stamp_giveaway(
-                            receiver_id,
-                            team,
-                            context.current_tick(),
-                            was_own_box,
-                        );
-                        if let Some(zone) = zone
-                            && (zone.is_own_box() || zone.is_own_third())
-                            && let Some(receiver) = field.get_player_mut(receiver_id)
-                        {
-                            receiver.statistics.note_dangerous_turnover(zone);
-                        }
-                    }
+                    PlayerEventDispatcher::lose_ball(receiver_id, LapseFamily::Touch, field, context);
                     if let Some(receiver) = field.get_player_mut(receiver_id) {
                         receiver.statistics.add_miscontrol();
                     }
-                } else if let Some(receiver) = field.get_player_mut(receiver_id) {
-                    receiver.statistics.add_heavy_touch();
+                } else {
+                    // Knocked too far: his if he gets back to it first,
+                    // the giver's error if an opponent does and scores.
+                    PlayerEventDispatcher::give_away(receiver_id, LapseFamily::Touch, field, context);
+                    if let Some(receiver) = field.get_player_mut(receiver_id) {
+                        receiver.statistics.add_heavy_touch();
+                    }
                 }
             }
             BallEvent::HitFrame(..) => {

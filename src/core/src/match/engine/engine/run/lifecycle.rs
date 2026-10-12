@@ -5,6 +5,8 @@
 use crate::r#match::CompetitionKind;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::phase_prof::PhaseProf;
+#[cfg(feature = "match-stub")]
+use crate::r#match::engine::engine::run::stub::StubMatch;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::result::{DeadTime, PeriodKind, PlayingTime};
 
@@ -78,10 +80,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         right_squad: MatchSquad,
         config: MatchEngineConfig,
     ) -> MatchResultRaw {
-        // Profiling shortcut — see the `match-stub` feature in
-        // `core/Cargo.toml`. Skips the simulation entirely and returns
-        // a 0-0 result with just enough metadata (team IDs, player
-        // IDs) for the surrounding pipeline to run.
+        // Skip the simulation and draw the result from the squads — see
+        // the `match-stub` feature in `core/Cargo.toml`.
         #[cfg(feature = "match-stub")]
         {
             return Self::play_stub(left_squad, right_squad, &config);
@@ -268,48 +268,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result
     }
 
-    /// Stub match: skips the whole simulation and returns a 0-0
-    /// scoreline with the minimum data downstream consumers expect
-    /// (team IDs in `Score`, player IDs in the field squads). Gated
-    /// on the `match-stub` Cargo feature; intended for profiling the
-    /// pipeline around the engine.
+    /// Stub match: the full-time result drawn from the two squads with no
+    /// simulation behind it. See [`StubMatch`].
     #[cfg(feature = "match-stub")]
-    pub(in crate::r#match::engine::engine) fn play_stub(
+    pub(in crate::r#match::engine) fn play_stub(
         left_squad: MatchSquad,
         right_squad: MatchSquad,
         config: &MatchEngineConfig,
     ) -> MatchResultRaw {
-        Self::stub_result(left_squad, right_squad, config, StubMinutes::armed())
-    }
-
-    /// With `records_minutes`, every starter is credited a full match at a
-    /// neutral rating and the named substitutes stay unused, so a stubbed
-    /// world still builds appearances, minutes and careers.
-    #[cfg(feature = "match-stub")]
-    pub(in crate::r#match::engine) fn stub_result(
-        left_squad: MatchSquad,
-        right_squad: MatchSquad,
-        config: &MatchEngineConfig,
-        records_minutes: bool,
-    ) -> MatchResultRaw {
-        use crate::r#match::engine::result::{FieldSquad, PlayerMatchEndStats};
-
-        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
-        result.score = Some(Score::new(left_squad.team_id, right_squad.team_id));
-        result.left_team_players = FieldSquad::from_team(&left_squad);
-        result.right_team_players = FieldSquad::from_team(&right_squad);
-        result.weather = config.environment.weather;
-        result.pitch = config.environment.pitch;
-        if records_minutes {
-            for player in left_squad.main_squad.iter().chain(&right_squad.main_squad) {
-                let group = player.tactical_position.current_position.position_group();
-                result.player_stats.insert(
-                    player.id,
-                    PlayerMatchEndStats::neutral(group, 90, StubMinutes::RATING),
-                );
-            }
-        }
-        result
+        StubMatch::new(&left_squad, &right_squad, config).play()
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -759,23 +726,5 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // half-processed goal or a substitute standing in the run-off.
         finish_goal_celebration(field, context);
         finish_substitution_break(field, context);
-    }
-}
-
-/// `OF_STUB_MINUTES=1` makes the `match-stub` result credit every starter
-/// a full match. Read once per process. A world census of careers needs to
-/// know who played; the bare stub that profiling runs use records nobody.
-#[cfg(feature = "match-stub")]
-struct StubMinutes;
-
-#[cfg(feature = "match-stub")]
-impl StubMinutes {
-    /// The rating staff perception reads as no evidence either way.
-    const RATING: f32 = 6.6;
-
-    fn armed() -> bool {
-        use std::sync::OnceLock;
-        static ARMED: OnceLock<bool> = OnceLock::new();
-        *ARMED.get_or_init(|| std::env::var("OF_STUB_MINUTES").is_ok_and(|v| v == "1"))
     }
 }

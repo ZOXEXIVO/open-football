@@ -1,5 +1,7 @@
-use crate::r#match::MatchPlayer;
-use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::psychology::ActionLapse;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::{LapseFamily, lapse::lapse_diag};
+use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     SkillBands, SkillCategory,
@@ -128,6 +130,47 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 }
 
 impl DefenderSkillProfile {
+    /// The share of his lost-runner chance that turns into a late reaction
+    /// when his man goes.
+    const MARK_SHARE: f32 = 0.5;
+    /// Goalward speed at which a man is making a run, u/tick (~3.75 m/s).
+    const RUN_SPEED: f32 = 0.30;
+    /// How long a run lasts, ticks: the span his per-run chance is spread
+    /// over.
+    const RUN_TICKS: f32 = 150.0;
+
+    /// Is he a moment late to the run of `man` right now — watching the
+    /// ball while his man goes? His lost-runner chance, as his head scales
+    /// it, is spread over the reaction windows of a run, and each window is
+    /// rolled with a deterministic draw on (marker, man, window), so the
+    /// match RNG is untouched and every read inside one window agrees.
+    /// Never under `OF_MIND_OFF`.
+    pub fn late_to_the_run(&self, ctx: &StateProcessingContext, man: &MatchPlayerLite) -> bool {
+        let to_goal = (ctx.ball().direction_to_own_goal() - man.position)
+            .try_normalize(0.01)
+            .unwrap_or_default();
+        if man.velocity(ctx).dot(&to_goal) < Self::RUN_SPEED {
+            return false;
+        }
+        let per_run = ActionLapse::drawn(
+            self.lost_runner_chance * Self::MARK_SHARE,
+            ctx.context.psychology.get(ctx.player.id),
+        );
+        let window = self.reaction_delay_ticks.max(4.0) as u64;
+        let per_window = 1.0 - (1.0 - per_run).powf(window as f32 / Self::RUN_TICKS);
+        let tick = ctx.current_tick();
+        let seed = (ctx.player.id as u64).wrapping_mul(0x9E3779B97F4A7C15)
+            ^ (man.id as u64).wrapping_mul(0xBF58476D1CE4E5B9)
+            ^ (tick / window).wrapping_mul(0x94D049BB133111EB);
+        let roll = ((seed >> 11) & 0xFFFFFF) as f32 / 16_777_215.0;
+        let late = roll < per_window;
+        #[cfg(feature = "match-logs")]
+        if tick.is_multiple_of(window) {
+            lapse_diag::note(LapseFamily::Mark, late);
+        }
+        late
+    }
+
     /// Memoized per (player, tick, vitals) — a defender's state machine
     /// reaches this from both `velocity()` and `process()` within one tick,
     /// and the ~26 banded skill reads + ~40 `powf` curves are the single

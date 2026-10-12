@@ -5,6 +5,10 @@
 //! All probability/skill modifiers are clamped at the consumer side; the
 //! helpers here just produce the deltas. RNG belongs at event resolution.
 
+pub mod lapse;
+
+pub use lapse::{ActionLapse, LapseFamily};
+
 use std::collections::HashMap;
 
 use crate::club::player::mind::{KickoffMind, MindSwitch};
@@ -20,9 +24,17 @@ pub struct PsychState {
     /// -1..+1 — strong negative after errors, positive after good
     /// involvement. Initial value derives from morale + personality.
     pub confidence: f32,
-    /// 0..1 — dampened by composure/pressure attributes; raised by
-    /// recent errors and yellow cards (for low-temperament players).
+    /// 0..1 — what he feels now: what is left of his kickoff nerves, what
+    /// the match has added, and the closing stage of a close match.
+    /// Recomputed on the aggregate pass (`PsychologyState::refresh`).
     pub nervousness: f32,
+    /// The nerves he brought to kickoff, or to his entry. Eased as he
+    /// plays himself in.
+    pub kickoff_nerves: f32,
+    /// Nerves the match has added — a booking. Settling does not ease them.
+    pub event_nerves: f32,
+    /// The tick he was seeded at: kickoff, or his entry.
+    pub seeded_tick: u64,
     /// -0.5..+0.5 — short-lived swing after goal/error/red card.
     pub momentum_boost: f32,
     /// Tick of the last error leading to a shot/goal — drives short-
@@ -38,6 +50,9 @@ impl Default for PsychState {
         PsychState {
             confidence: 0.0,
             nervousness: 0.0,
+            kickoff_nerves: 0.0,
+            event_nerves: 0.0,
+            seeded_tick: 0,
             momentum_boost: 0.0,
             mistake_memory_tick: None,
             goal_involvement_tick: None,
@@ -49,41 +64,27 @@ impl PsychState {
     pub fn clamp(&mut self) {
         self.confidence = self.confidence.clamp(-1.0, 1.0);
         self.nervousness = self.nervousness.clamp(0.0, 1.0);
+        self.event_nerves = self.event_nerves.clamp(0.0, 1.0);
         self.momentum_boost = self.momentum_boost.clamp(-0.5, 0.5);
     }
 }
 
-/// Multiplicative/additive modifiers a player's psychology applies to
-/// specific skills/probabilities. Caller applies these on top of the
-/// player's normalised skill values.
+/// Multipliers a player's psychology applies to the skills a pass is
+/// judged on. How often his actions fail is the lapse lane's business
+/// ([`ActionLapse`]); these move only what he expects of himself.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SkillModifiers {
     /// Multiplier applied to composure (1.0 = no change).
     pub composure_mul: f32,
-    /// Multiplier applied to decisions.
-    pub decisions_mul: f32,
-    /// Multiplier applied to flair.
-    pub flair_mul: f32,
     /// Multiplier applied to first_touch.
     pub first_touch_mul: f32,
-    /// Additive bump to miscontrol probability (0..1).
-    pub miscontrol_add: f32,
-    /// Additive bump to rushed-clearance probability.
-    pub rushed_clearance_add: f32,
-    /// Additive bump to foul risk.
-    pub foul_risk_add: f32,
 }
 
 impl SkillModifiers {
     pub fn neutral() -> Self {
         SkillModifiers {
             composure_mul: 1.0,
-            decisions_mul: 1.0,
-            flair_mul: 1.0,
             first_touch_mul: 1.0,
-            miscontrol_add: 0.0,
-            rushed_clearance_add: 0.0,
-            foul_risk_add: 0.0,
         }
     }
 }
@@ -144,73 +145,77 @@ impl Psychology {
     }
 
     /// His psychology at kickoff, read off the state of mind he brought and
-    /// the match he walked into.
-    pub fn kickoff_state(player: &MatchPlayer, standard: f32, occasion: f32) -> PsychState {
+    /// the match he walked into, seeded at `tick`.
+    pub fn kickoff_state(player: &MatchPlayer, standard: f32, occasion: f32, tick: u64) -> PsychState {
         let mind = &player.kickoff_mind;
         let step_up = mind.assurance.map_or(0.0, |a| (standard - a).max(0.0));
+        let nerves = Self::initial_nervousness(
+            mind,
+            step_up,
+            occasion,
+            player.attributes.pressure,
+            player.attributes.important_matches,
+            player.skills.mental.composure,
+        );
         PsychState {
             confidence: Self::initial_confidence(mind, player.attributes.important_matches, occasion),
-            nervousness: Self::initial_nervousness(
-                mind,
-                step_up,
-                occasion,
-                player.attributes.pressure,
-                player.attributes.important_matches,
-                player.skills.mental.composure,
-            ),
+            nervousness: nerves,
+            kickoff_nerves: nerves,
+            seeded_tick: tick,
             ..PsychState::default()
         }
     }
 
-    /// Match-pressure load formula from spec.
-    ///
-    /// `pressure_load = match_importance*0.30 + derby*0.18 + late_close*0.22
-    /// + crowd*0.10 + recent_mistake*0.12 - leadership_support*0.10`
-    ///
-    /// All inputs in 0..1.
-    ///
-    /// TODO(matchday-leadership): pure + unit-tested, not yet wired into the
-    /// live match loop. To use it, feed `leadership_support` from the on-pitch
-    /// captain's leadership (resolved via `MatchdayLeadership`) and consume the
-    /// load in the in-match psychology / decision path. Deferred to avoid
-    /// shifting match outcomes until that change can be calibrated.
-    pub fn pressure_load(
-        env: &MatchEnvironment,
-        late_close_score: f32,
-        recent_mistake: f32,
-        leadership_support: f32,
-    ) -> f32 {
-        let raw = env.match_importance * 0.30
-            + env.derby_intensity * 0.18
-            + late_close_score.clamp(0.0, 1.0) * 0.22
-            + env.crowd_intensity * 0.10
-            + recent_mistake.clamp(0.0, 1.0) * 0.12
-            - leadership_support.clamp(0.0, 1.0) * 0.10;
-        raw.clamp(0.0, 1.0)
+    /// Share of his kickoff nerves still with him after `minutes` on the
+    /// pitch. A big step up is still felt at the final whistle.
+    const SETTLE_RESIDUAL: f32 = 0.4;
+    /// Time constant of settling, minutes: a composed player's, then an
+    /// anxious one's.
+    const SETTLE_FAST: f32 = 10.0;
+    const SETTLE_SLOW: f32 = 30.0;
+
+    pub fn settled_share(minutes: f32, composure_0_20: f32) -> f32 {
+        let composure = (composure_0_20 / 20.0).clamp(0.0, 1.0);
+        let tau = Self::SETTLE_SLOW + (Self::SETTLE_FAST - Self::SETTLE_SLOW) * composure;
+        Self::SETTLE_RESIDUAL + (1.0 - Self::SETTLE_RESIDUAL) * (-minutes.max(0.0) / tau).exp()
+    }
+
+    /// Nerves the closing stage of a close match lays on a side at the
+    /// height of it.
+    const MOMENT_NERVES: f32 = 0.25;
+    /// How much of the moment a commanding leader on the pitch takes off
+    /// his side.
+    const LEADER_DAMP: f32 = 0.5;
+
+    /// What the moment weighs on a side, 0..1: how far into the closing
+    /// stage the match is, while the margin is a goal or less, heavier on a
+    /// night with more at stake and lighter with a leader on the pitch.
+    pub fn moment_pressure(closing01: f32, margin: u32, occasion: f32, leadership01: f32) -> f32 {
+        if margin >= 2 {
+            return 0.0;
+        }
+        Self::MOMENT_NERVES
+            * closing01.clamp(0.0, 1.0)
+            * (0.5 + occasion.clamp(0.0, 1.0))
+            * (1.0 - Self::LEADER_DAMP * leadership01.clamp(0.0, 1.0))
+    }
+
+    /// The share of his side's moment a player feels, answered by how he
+    /// copes with pressure.
+    pub fn felt_pressure(moment: f32, pressure_0_20: f32) -> f32 {
+        moment * (1.0 - 0.7 * (pressure_0_20 / 20.0).clamp(0.0, 1.0))
     }
 
     /// Compute the skill modifiers a `PsychState` applies. Pure function —
-    /// driven entirely by the state's confidence + nervousness.
+    /// driven entirely by the state's confidence.
     pub fn skill_modifiers(state: &PsychState) -> SkillModifiers {
         let up = state.confidence.clamp(0.0, 1.0);
         let down = (-state.confidence).clamp(0.0, 1.0);
-        let nerves = state.nervousness.clamp(0.0, 1.0) * Self::OUTFIELD_SHARE;
         SkillModifiers {
             composure_mul: 1.0 + 0.03 * up - 0.05 * down,
-            decisions_mul: 1.0 + 0.02 * up - 0.04 * down,
-            flair_mul: 1.0 + 0.03 * up,
             first_touch_mul: 1.0 - 0.04 * down,
-            miscontrol_add: 0.06 * nerves,
-            rushed_clearance_add: 0.08 * nerves,
-            foul_risk_add: 0.04 * nerves,
         }
     }
-
-    /// Share of the nerve-driven execution risks an outfield action carries.
-    /// Every player's psychology is seeded now, so these reach every
-    /// touch; a keeper's nerves have their own channel. Fitted against the
-    /// realism bands.
-    const OUTFIELD_SHARE: f32 = 0.5;
 
     /// Multiplier a player's head applies to any "do I take this on?"
     /// decision — pulling the trigger from distance, running at a
@@ -399,6 +404,25 @@ impl TeamMomentum {
     }
 }
 
+/// What the moment weighs on each side — `Psychology::moment_pressure`,
+/// read once per aggregate pass.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PressureMoment {
+    pub home_team_id: u32,
+    pub home: f32,
+    pub away: f32,
+}
+
+impl PressureMoment {
+    pub fn for_team(&self, team_id: u32) -> f32 {
+        if team_id == self.home_team_id {
+            self.home
+        } else {
+            self.away
+        }
+    }
+}
+
 /// Container held on `MatchContext`.
 #[derive(Debug, Clone, Default)]
 pub struct PsychologyState {
@@ -418,13 +442,35 @@ impl PsychologyState {
 
     /// Seed a player's afternoon from the state of mind he brought, once
     /// the standard of the match is known. Nothing under `OF_MIND_OFF`.
-    pub fn seed(&mut self, player: &MatchPlayer, standard: f32, occasion: f32) {
+    pub fn seed(&mut self, player: &MatchPlayer, standard: f32, occasion: f32, tick: u64) {
         if !MindSwitch::armed() {
             return;
         }
         self.players
-            .insert(player.id, Psychology::kickoff_state(player, standard, occasion));
+            .insert(player.id, Psychology::kickoff_state(player, standard, occasion, tick));
     }
+
+    /// Recompute every seeded player's nerves: what is left of his kickoff
+    /// nerves after his time on the pitch, what the match has added, and
+    /// his share of the moment. Nothing under `OF_MIND_OFF`.
+    pub fn refresh(&mut self, players: &[MatchPlayer], tick: u64, moment: &PressureMoment) {
+        if !MindSwitch::armed() {
+            return;
+        }
+        for player in players {
+            let Some(s) = self.players.get_mut(&player.id) else {
+                continue;
+            };
+            let minutes = tick.saturating_sub(s.seeded_tick) as f32 / Self::TICKS_PER_MINUTE;
+            let settled = Psychology::settled_share(minutes, player.skills.mental.composure);
+            let moment =
+                Psychology::felt_pressure(moment.for_team(player.team_id), player.attributes.pressure);
+            s.nervousness = s.kickoff_nerves * settled + s.event_nerves + moment;
+            s.clamp();
+        }
+    }
+
+    const TICKS_PER_MINUTE: f32 = 6_000.0;
 
     pub fn record_positive(&mut self, player_id: u32, event: PositiveEvent, tick: u64) {
         let s = self.get_or_default(player_id);
@@ -446,7 +492,9 @@ impl PsychologyState {
         let s = self.get_or_default(player_id);
         let temperament = (temperament_0_20 / 20.0).clamp(0.0, 1.0);
         // Low-temperament players rattled more.
-        s.nervousness += 0.10 + (1.0 - temperament) * 0.12;
+        let rattled = 0.10 + (1.0 - temperament) * 0.12;
+        s.event_nerves += rattled;
+        s.nervousness += rattled;
         s.clamp();
     }
 
@@ -475,16 +523,26 @@ mod tests {
     }
 
     fn keeper(kickoff_mind: KickoffMind, pressure: f32) -> MatchPlayer {
+        player(1, 1, kickoff_mind, pressure, 10.0)
+    }
+
+    fn player(
+        id: u32,
+        team: u32,
+        kickoff_mind: KickoffMind,
+        pressure: f32,
+        composure: f32,
+    ) -> MatchPlayer {
         let attributes = PersonAttributes {
             pressure,
             important_matches: 10.0,
             ..PersonAttributes::default()
         };
         let mut skills = PlayerSkills::default();
-        skills.mental.composure = 10.0;
+        skills.mental.composure = composure;
         MatchPlayer::from_inputs(
-            1,
-            1,
+            id,
+            team,
             [0.0; 3],
             [0.0; 3],
             attributes,
@@ -537,22 +595,22 @@ mod tests {
     #[test]
     fn a_reserve_keepers_first_senior_start_is_nervous() {
         let reserve = keeper(mind(0.55), 10.0);
-        let first_team = Psychology::kickoff_state(&reserve, 0.67, league(0.45, 0.5));
-        let reserves = Psychology::kickoff_state(&reserve, 0.55, league(0.1, 0.1));
+        let first_team = Psychology::kickoff_state(&reserve, 0.67, league(0.45, 0.5), 0);
+        let reserves = Psychology::kickoff_state(&reserve, 0.55, league(0.1, 0.1), 0);
         assert!(first_team.nervousness > reserves.nervousness + 0.3);
     }
 
     #[test]
     fn a_veteran_at_his_usual_standard_is_calm() {
         let veteran = keeper(mind(0.67), 10.0);
-        let state = Psychology::kickoff_state(&veteran, 0.67, league(0.45, 0.5));
+        let state = Psychology::kickoff_state(&veteran, 0.67, league(0.45, 0.5), 0);
         assert!(state.nervousness < 0.05, "{}", state.nervousness);
     }
 
     #[test]
     fn the_occasion_raises_nerves_on_its_own() {
         let veteran = keeper(mind(0.67), 10.0);
-        let ordinary = Psychology::kickoff_state(&veteran, 0.67, league(0.45, 0.5));
+        let ordinary = Psychology::kickoff_state(&veteran, 0.67, league(0.45, 0.5), 0);
         let final_night = Psychology::kickoff_state(
             &veteran,
             0.67,
@@ -564,6 +622,7 @@ mod tests {
                 },
                 true,
             ),
+            0,
         );
         assert!(final_night.nervousness > ordinary.nervousness);
     }
@@ -571,41 +630,117 @@ mod tests {
     #[test]
     fn temperament_answers_the_occasion() {
         let big_night = league(0.95, 1.0);
-        let cool = Psychology::kickoff_state(&keeper(mind(0.67), 18.0), 0.67, big_night);
-        let rattled = Psychology::kickoff_state(&keeper(mind(0.67), 3.0), 0.67, big_night);
+        let cool = Psychology::kickoff_state(&keeper(mind(0.67), 18.0), 0.67, big_night, 0);
+        let rattled = Psychology::kickoff_state(&keeper(mind(0.67), 3.0), 0.67, big_night, 0);
         assert!(cool.nervousness < rattled.nervousness);
     }
 
     #[test]
     fn a_player_with_no_history_is_at_home_at_any_standard() {
         let synthetic = keeper(KickoffMind::neutral(), 10.0);
-        let state = Psychology::kickoff_state(&synthetic, 0.84, league(0.45, 0.5));
+        let state = Psychology::kickoff_state(&synthetic, 0.84, league(0.45, 0.5), 0);
         assert!(state.nervousness < 0.05);
     }
 
-    #[test]
-    fn pressure_load_clamped_unit() {
-        let env = MatchEnvironment {
-            match_importance: 1.0,
-            derby_intensity: 1.0,
-            crowd_intensity: 1.0,
-            ..Default::default()
-        };
-        let load = Psychology::pressure_load(&env, 1.0, 1.0, 0.0);
-        assert!((0.0..=1.0).contains(&load));
-        assert!(load > 0.5);
+    const MINUTE: u64 = 6_000;
+    const CALM: PressureMoment = PressureMoment {
+        home_team_id: 1,
+        home: 0.0,
+        away: 0.0,
+    };
+
+    fn nerves_after(p: &mut PsychologyState, player: &MatchPlayer, tick: u64, moment: &PressureMoment) -> f32 {
+        p.refresh(std::slice::from_ref(player), tick, moment);
+        p.get(player.id).unwrap().nervousness
     }
 
     #[test]
-    fn leadership_support_dampens_pressure() {
-        let env = MatchEnvironment {
-            match_importance: 0.7,
-            derby_intensity: 0.5,
-            ..Default::default()
+    fn a_debutant_settles_but_does_not_become_a_veteran() {
+        let mut p = PsychologyState::default();
+        let debutant = player(1, 1, mind(0.55), 10.0, 10.0);
+        let veteran = player(2, 1, mind(0.67), 10.0, 10.0);
+        p.seed(&debutant, 0.67, league(0.45, 0.5), 0);
+        p.seed(&veteran, 0.67, league(0.45, 0.5), 0);
+        let kickoff = p.get(1).unwrap().nervousness;
+        let hour = nerves_after(&mut p, &debutant, 60 * MINUTE, &CALM);
+        assert!(hour < kickoff, "{hour} against {kickoff}");
+        assert!(hour > nerves_after(&mut p, &veteran, 60 * MINUTE, &CALM) + 0.1);
+    }
+
+    #[test]
+    fn a_composed_player_settles_faster() {
+        let mut p = PsychologyState::default();
+        let composed = player(1, 1, KickoffMind::neutral(), 10.0, 18.0);
+        let anxious = player(2, 1, KickoffMind::neutral(), 10.0, 4.0);
+        for id in [1, 2] {
+            p.players.insert(
+                id,
+                PsychState {
+                    kickoff_nerves: 0.5,
+                    nervousness: 0.5,
+                    ..PsychState::default()
+                },
+            );
+        }
+        let calm = nerves_after(&mut p, &composed, 30 * MINUTE, &CALM);
+        let edgy = nerves_after(&mut p, &anxious, 30 * MINUTE, &CALM);
+        assert!(calm < edgy, "{calm} against {edgy}");
+    }
+
+    #[test]
+    fn a_substitute_settles_from_his_entry() {
+        let mut p = PsychologyState::default();
+        let sub = player(1, 1, mind(0.55), 10.0, 10.0);
+        let entry = 70 * MINUTE;
+        p.seed(&sub, 0.67, league(0.45, 0.5), entry);
+        let on = p.get(1).unwrap().kickoff_nerves;
+        assert_eq!(nerves_after(&mut p, &sub, entry, &CALM), on);
+        assert!(nerves_after(&mut p, &sub, entry + 15 * MINUTE, &CALM) < on);
+    }
+
+    #[test]
+    fn the_last_minutes_of_a_level_match_are_tenser_than_the_first() {
+        let mut p = PsychologyState::default();
+        let man = player(1, 1, mind(0.67), 10.0, 10.0);
+        p.seed(&man, 0.67, league(0.45, 0.5), 0);
+        let at = |closing: f32| PressureMoment {
+            home_team_id: 1,
+            home: Psychology::moment_pressure(closing, 0, 0.5, 0.4),
+            away: 0.0,
         };
-        let no_lead = Psychology::pressure_load(&env, 0.5, 0.3, 0.0);
-        let strong_lead = Psychology::pressure_load(&env, 0.5, 0.3, 1.0);
-        assert!(strong_lead < no_lead);
+        let early = nerves_after(&mut p, &man, 10 * MINUTE, &at(0.0));
+        let late = nerves_after(&mut p, &man, 85 * MINUTE, &at(0.67));
+        assert!(late > early + 0.05, "{late} against {early}");
+    }
+
+    #[test]
+    fn temperament_answers_the_moment() {
+        let moment = Psychology::moment_pressure(0.67, 0, 0.5, 0.4);
+        assert!(Psychology::felt_pressure(moment, 3.0) > Psychology::felt_pressure(moment, 18.0));
+    }
+
+    #[test]
+    fn a_leader_on_the_pitch_calms_his_side() {
+        let led = Psychology::moment_pressure(0.67, 1, 0.5, 0.9);
+        let leaderless = Psychology::moment_pressure(0.67, 1, 0.5, 0.1);
+        assert!(led < leaderless);
+    }
+
+    #[test]
+    fn a_comfortable_lead_is_calm() {
+        assert_eq!(Psychology::moment_pressure(0.67, 3, 0.9, 0.0), 0.0);
+        assert_eq!(Psychology::moment_pressure(0.67, 2, 0.9, 0.0), 0.0);
+        assert!(Psychology::moment_pressure(0.67, 1, 0.9, 0.0) > 0.0);
+    }
+
+    #[test]
+    fn a_booking_is_not_settled_away() {
+        let mut p = PsychologyState::default();
+        let man = player(1, 1, mind(0.67), 10.0, 10.0);
+        p.seed(&man, 0.67, league(0.45, 0.5), 0);
+        p.apply_yellow_card(1, 6.0);
+        let booked = p.get(1).unwrap().event_nerves;
+        assert!(nerves_after(&mut p, &man, 80 * MINUTE, &CALM) >= booked);
     }
 
     #[test]
@@ -617,8 +752,6 @@ mod tests {
         };
         let m = Psychology::skill_modifiers(&s);
         assert!(m.composure_mul > 1.0);
-        assert!(m.decisions_mul > 1.0);
-        assert!(m.flair_mul > 1.0);
     }
 
     #[test]
@@ -631,18 +764,6 @@ mod tests {
         let m = Psychology::skill_modifiers(&s);
         assert!(m.composure_mul < 1.0);
         assert!(m.first_touch_mul < 1.0);
-    }
-
-    #[test]
-    fn high_nervousness_increases_miscontrol_and_foul_risk() {
-        let s = PsychState {
-            confidence: 0.0,
-            nervousness: 0.8,
-            ..Default::default()
-        };
-        let m = Psychology::skill_modifiers(&s);
-        assert!(m.miscontrol_add > 0.0);
-        assert!(m.foul_risk_add > 0.0);
     }
 
     #[test]
@@ -659,9 +780,7 @@ mod tests {
             let a = at(c, c.abs() * 0.5);
             let b = at(c + 0.01, (c + 0.01).abs() * 0.5);
             assert!((a.composure_mul - b.composure_mul).abs() < 0.002);
-            assert!((a.decisions_mul - b.decisions_mul).abs() < 0.002);
             assert!((a.first_touch_mul - b.first_touch_mul).abs() < 0.002);
-            assert!((a.miscontrol_add - b.miscontrol_add).abs() < 0.002);
             c += 0.01;
         }
     }
@@ -675,15 +794,14 @@ mod tests {
                 ..Default::default()
             });
             assert!((0.94..=1.04).contains(&m.composure_mul));
-            assert!((0.95..=1.03).contains(&m.decisions_mul));
-            assert!((0.0..=0.06).contains(&m.miscontrol_add));
+            assert!((0.95..=1.0).contains(&m.first_touch_mul));
         }
     }
 
     #[test]
     fn an_early_error_colours_the_rest_of_a_keepers_match() {
         let mut p = PsychologyState::default();
-        p.seed(&keeper(mind(0.67), 10.0), 0.67, league(0.45, 0.5));
+        p.seed(&keeper(mind(0.67), 10.0), 0.67, league(0.45, 0.5), 0);
         let settled = p.get(1).unwrap().confidence;
         p.record_negative(1, NegativeEvent::ErrorLeadingToGoal, 60_000);
         let after = p.get(1).unwrap().confidence;
@@ -703,7 +821,7 @@ mod tests {
     #[test]
     fn a_big_save_lifts_a_keeper() {
         let mut p = PsychologyState::default();
-        p.seed(&keeper(mind(0.67), 10.0), 0.67, league(0.45, 0.5));
+        p.seed(&keeper(mind(0.67), 10.0), 0.67, league(0.45, 0.5), 0);
         let before = p.get(1).unwrap().confidence;
         p.record_positive(1, PositiveEvent::BigSave, 30_000);
         assert!(p.get(1).unwrap().confidence > before);

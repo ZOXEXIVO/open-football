@@ -15,7 +15,8 @@ use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::engine::psychology::Psychology;
-use crate::r#match::goalkeepers::states::common::{KeeperAppetite, KeeperLapse, KeeperShotReaction};
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
+use crate::r#match::goalkeepers::states::common::{KeeperAppetite, KeeperShotReaction};
 #[cfg(feature = "match-logs")]
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -215,7 +216,7 @@ impl SaveModel {
     ///
     /// # 2026-10-09 — 0.45 → 0.46, because the keeper makes mistakes now
     ///
-    /// A lapse on a granted save is, `KeeperLapse::HOWLER_SHARE` of the
+    /// A lapse on a granted save is, `ActionLapse::HOWLER_SHARE` of the
     /// time, a howler: the shot goes on through him. Three `dev_match
     /// stats 300 14 14` runs an arm took the population from 68.0% saves
     /// and 3.10 goals under `OF_MIND_OFF` to 66.4% and 3.31 with the
@@ -1637,8 +1638,9 @@ impl Ball {
         // stream stays aligned between the A/B arms.
         let psych = context.psychology.get(keeper.id);
         let appetite = psych.map_or(0.0, Psychology::keeper_appetite);
-        let lapsed = context.rng.unit_f32() < KeeperLapse::probability(keeper, psych);
-        let howled = context.rng.unit_f32() < KeeperLapse::HOWLER_SHARE;
+        let lapsed =
+            context.rng.unit_f32() < ActionLapse::probability(LapseFamily::Save, keeper, psych);
+        let howled = context.rng.unit_f32() < ActionLapse::HOWLER_SHARE;
         // The one he should have saved and did not: the shot goes on,
         // through him, and the error is his.
         if lapsed && howled {
@@ -2080,7 +2082,7 @@ impl Ball {
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
         if lapsed {
-            self.stamp_giveaway(keeper_id, keeper_team, tick, true);
+            self.stamp_giveaway(keeper_id, keeper_team, tick, true, LapseFamily::Save);
         }
         // The spill is the classic first link of a knock-chain: it comes
         // off his gloves at a metre a second and lands in his own six-yard

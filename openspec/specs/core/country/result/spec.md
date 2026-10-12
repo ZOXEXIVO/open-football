@@ -257,3 +257,52 @@ When the swap is between ranked groups of the same tier, no club's parachute ent
 #### Scenario: Dropping out of the tier
 - **WHEN** a Silver first team in tier 3 is relegated into a tier-4 zone
 - **THEN** its club starts a parachute entitlement from tier 3 at season zero
+
+### Requirement: The season-end statistics snapshot separates the season played from the season opening
+
+When a country's new season starts, the system SHALL freeze every player's closing season into their career history and
+open their next-season spell. Two divisions apply to each team the player is rostered at:
+- the closing season SHALL be filed under the division the team played it in, even when the season-end swap has
+  already moved the team
+- the next-season spell SHALL open under the division the team plays the coming season in
+
+A player on a youth or reserve squad SHALL have both rows filed under the club's first team, using the first team's
+division for the closing season and the first team's division for the coming season.
+
+When the snapshot catches up on seasons whose snapshot was missed, every season except the most recent SHALL open its
+successor in the same division it was filed under. Only the most recent season's successor SHALL open in the division
+the team moved into.
+
+#### Scenario: A promoted club's players open the new season in the higher division
+- **WHEN** a club plays the 2029/30 season in Serie C/C, the season-end swap promotes it to Serie B, and the 2030/31
+  snapshot then runs
+- **THEN** each of its players' 2029/30 rows SHALL be filed under Serie C/C
+- **AND** each player's open 2030/31 spell at the club SHALL be labelled Serie B
+
+#### Scenario: A relegated club's players open the new season in the lower division
+- **WHEN** a club plays a season in tier 1 and the swap relegates it to tier 2 before the snapshot runs
+- **THEN** its players' closing-season rows SHALL be filed under tier 1 and their new-season spells SHALL open under tier 2
+
+#### Scenario: The promotion year freezes under the division it was played in
+- **WHEN** the promoted club stays in Serie B for the whole of 2030/31 and the 2031/32 snapshot runs
+- **THEN** each player's frozen 2030/31 row at the club SHALL be filed under Serie B
+
+#### Scenario: A loanee at a promoted club
+- **WHEN** a player on loan at a club that has just been promoted is snapshotted with the loan continuing into the new
+  season
+- **THEN** the new-season loan spell SHALL open under the club's new division and keep its loan flag
+
+#### Scenario: A youth player whose club's first team changed division
+- **WHEN** a player on a club's under-19 squad is snapshotted after the first team was relegated
+- **THEN** the closing season SHALL be filed under the first team with the first team's old division, and the new
+  season SHALL open under the first team with its new division
+
+#### Scenario: An academy graduate starts in the season he joined for
+- **WHEN** a club's academy graduates a player on its season-start day, after the closing season's matches and before
+  that day's snapshot
+- **THEN** the player SHALL have no row for the closing season, and his first row SHALL be the season now starting,
+  under the club's first team
+
+#### Scenario: An unmoved club
+- **WHEN** a club stays in the same division across the season-end swap
+- **THEN** its players' closing-season rows and new-season spells SHALL both carry that division

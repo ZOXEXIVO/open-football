@@ -68,6 +68,15 @@ impl Score {
             MatchResultOutcome::Draw
         }
     }
+
+    /// Did `team_id` win the tie — a shoot-out included?
+    pub fn won_by(&self, team_id: u32) -> bool {
+        match self.outcome() {
+            MatchResultOutcome::HomeWin => self.home_team.team_id == team_id,
+            MatchResultOutcome::AwayWin => self.away_team.team_id == team_id,
+            MatchResultOutcome::Draw => false,
+        }
+    }
 }
 
 #[derive(Debug)]

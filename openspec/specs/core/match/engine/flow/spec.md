@@ -46,3 +46,20 @@ SHALL carry the same value as a result produced locally for the same fixture, sq
 #### Scenario: Local and remote results agree
 - **WHEN** the same fixture, squads and seed are played once locally and once on a remote match worker
 - **THEN** both results report the same standard of football
+
+### Requirement: The match result records missed penalties
+Every completed match SHALL record, in its result, each in-play penalty that was not scored and who took it. This sits
+beside the record of which keeper saved each penalty. A result produced by a remote match worker SHALL carry the same
+record as a result produced locally for the same fixture, squads and seed.
+
+#### Scenario: A missed penalty is recorded against its taker
+- **WHEN** a player's in-play penalty is saved or goes wide during a match
+- **THEN** the match result records that he missed a penalty
+
+#### Scenario: A scored penalty is not a miss
+- **WHEN** a player scores an in-play penalty
+- **THEN** the match result records no missed penalty for him
+
+#### Scenario: Local and remote results agree on misses
+- **WHEN** the same fixture, squads and seed are played once locally and once on a remote match worker
+- **THEN** both results record the same missed penalties

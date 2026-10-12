@@ -25,6 +25,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result.pitch = context.environment.pitch;
         result.penalty_shootout = context.penalty_shootout_kicks.clone();
         result.penalty_saves = context.penalty_saves.clone();
+        result.penalty_misses = context.penalty_misses.clone();
         result.standard_of_football = context
             .standard
             .map(|r| r.outfield)

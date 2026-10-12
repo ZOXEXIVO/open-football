@@ -281,6 +281,11 @@ impl StateProcessingHandler for DefenderMarkingState {
         // poor marker stays at arm's length and gets shrugged off runs.
         if let Some(opponent_to_mark) = self.find_best_marking_target(ctx) {
             let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            // Switched off for a moment as his man goes: he carries on as
+            // he was rather than following the run.
+            if def_profile.late_to_the_run(ctx, &opponent_to_mark) {
+                return Some(ctx.player.velocity);
+            }
             let own_goal = ctx.ball().direction_to_own_goal();
             let opponent_velocity = opponent_to_mark.velocity(ctx);
 

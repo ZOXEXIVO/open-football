@@ -183,6 +183,13 @@ per-competition breakdown, and season totals) plus career-aggregate totals.
   historical season (not the club's current division), a competition breakdown (league/cups/friendly) per row,
   and aggregate career totals across every season
 
+#### Scenario: Season in progress after a division change
+- **WHEN** a player's club was promoted or relegated at the last season end and the user requests the history page
+  during the new season
+- **THEN** the in-progress season's row SHALL name the division the club is playing that season in, the same division
+  the club's own page and fixtures show, and SHALL NOT name the division the club left
+- **AND** the season just closed SHALL still name the division the club played it in
+
 #### Scenario: Retired or free-agent player
 - **WHEN** the player has no current team
 - **THEN** the system SHALL still return the full season history and career totals, with team-scoped page chrome

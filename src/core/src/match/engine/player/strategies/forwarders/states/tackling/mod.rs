@@ -1,5 +1,8 @@
 use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
@@ -311,8 +314,15 @@ impl ForwardTacklingState {
         } else {
             foul_chance
         };
-        let foul_chance = foul_chance.clamp(0.0, 0.4); // Cap maximum foul chance
+        // Cap, then his head scales what is left — see defenders/tackling.
+        let foul_chance = ActionLapse::scaled(
+            LapseFamily::Challenge,
+            foul_chance.clamp(0.0, 0.4),
+            ctx.context.psychology.get(ctx.player.id),
+        );
         let committed_foul = rng.random::<f32>() < foul_chance;
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note(LapseFamily::Challenge, committed_foul);
 
         // Forwards rarely go studs-up; tackling-from-behind (low angle factor)
         // or desperation-late-in-match pushes severity up.

@@ -9,7 +9,9 @@ use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{
     AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
 };
-use crate::r#match::engine::psychology::Psychology;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
@@ -655,8 +657,8 @@ impl Ball {
     /// `receiving_first_touch` composite (first_touch / technique /
     /// composure / anticipation / balance / agility, fatigue-aware via
     /// `effective_skill`), the arrival difficulty (hot passes, aerial
-    /// drops, a closing defender) and in-match nervousness
-    /// (`SkillModifiers::miscontrol_add` — its first live consumer).
+    /// drops, a closing defender) and his state of mind, which scales the
+    /// result through the lapse lane (`ActionLapse::scaled`).
     /// All terms are continuous curves; no skill cliffs.
     ///
     /// Calibration: an average receiver (~0.5 composite) on a routine
@@ -744,29 +746,16 @@ impl Ball {
             }
         }
 
-        // Nervousness bump — high-pressure psych state spills more
-        // first touches (the modifier is additive probability already).
-        let psych_add = context
-            .psychology
-            .get(receiver.id)
-            .map(|s| Psychology::skill_modifiers(s).miscontrol_add)
-            .unwrap_or(0.0);
-
-        // First dev_match pass (300 matches) measured 2.6 miscontrols +
-        // 7.1 heavy touches/team — below the real ~8-15 band, expected
-        // since this producer only fires at targeted-pass receptions
-        // (dribble losses are booked by the dribble-duel system).
-        // Coefficients lifted to land receptions at ~4-5 + ~10/team,
-        // the reception share of the real band.
-        let p_miscontrol = ((0.006 + difficulty * 0.060) * (1.15 - quality).powf(1.6)
-            + psych_add * 0.25)
-            .clamp(0.0005, 0.15);
-        let p_heavy = (p_miscontrol * 2.2).min(0.25);
+        let (p_miscontrol, p_heavy) =
+            Self::first_touch_chances(difficulty, quality, context.psychology.get(receiver.id));
 
         let roll = context.rng.unit_f32();
         #[cfg(feature = "match-logs")]
-        if roll < p_miscontrol + p_heavy {
-            reception_diag::TOUCH_SPILLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            if roll < p_miscontrol + p_heavy {
+                reception_diag::TOUCH_SPILLED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            lapse_diag::note(LapseFamily::Touch, roll < p_miscontrol + p_heavy);
         }
         if roll < p_miscontrol {
             FirstTouchOutcome::Miscontrol
@@ -775,6 +764,29 @@ impl Ball {
         } else {
             FirstTouchOutcome::Clean
         }
+    }
+
+    /// `(miscontrol, heavy touch)` chances of a reception of `difficulty`
+    /// by a receiver of touch `quality`, as his head scales them: a nervous
+    /// receiver spills more of the same balls, a settled one exactly what
+    /// his touch and the ball say.
+    ///
+    /// First dev_match pass (300 matches) measured 2.6 miscontrols + 7.1
+    /// heavy touches/team — below the real ~8-15 band, expected since this
+    /// producer only fires at targeted-pass receptions (dribble losses are
+    /// booked by the dribble-duel system). Coefficients lifted to land
+    /// receptions at ~4-5 + ~10/team, the reception share of the real band.
+    pub(crate) fn first_touch_chances(
+        difficulty: f32,
+        quality: f32,
+        state: Option<&PsychState>,
+    ) -> (f32, f32) {
+        let settled =
+            ((0.006 + difficulty * 0.060) * (1.15 - quality).powf(1.6)).clamp(0.0005, 0.15);
+        (
+            ActionLapse::scaled(LapseFamily::Touch, settled, state),
+            ActionLapse::scaled(LapseFamily::Touch, settled * 2.2, state).min(0.25),
+        )
     }
 
     /// Apply a failed first touch: the receiver gets a touch (last-

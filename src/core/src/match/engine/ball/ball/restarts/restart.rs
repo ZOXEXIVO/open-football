@@ -328,6 +328,7 @@ impl Ball {
             0.0,
         );
         self.clear_for_dead_ball();
+        self.close_giveaway();
         self.velocity = Vector3::zeros();
         self.awaiting_restart = Some(AwaitedRestart {
             taker_id,

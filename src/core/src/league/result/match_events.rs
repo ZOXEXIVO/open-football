@@ -2287,6 +2287,10 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 is_derby,
                 team_won,
                 team_lost,
+                won_tie: details
+                    .score
+                    .as_ref()
+                    .is_some_and(|score| score.won_by(side.team_id)),
                 is_continental,
                 opponent_team_id,
                 opponent_club_id,
@@ -2304,6 +2308,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 club_id: player_club_id,
                 standard_of_football: details.standard_of_football,
                 penalties_saved: details.penalties_saved_by(pid),
+                penalties_missed: details.penalties_missed_by(pid),
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2342,8 +2347,8 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     // pulled early in a big match, or repeatedly hooked across recent
     // weeks. Critical-injury and youth-protection passes are filtered
     // out via the `reason` field stamped on the SubstitutionInfo.
-    // `player_stats` is only empty for stubbed results (match-stub feature),
-    // which also record no substitutions — skip instead of panicking.
+    // `player_stats` is empty only for a result with nobody recorded on it,
+    // which also has no substitutions — skip instead of panicking.
     if !is_friendly && let Some(any_player_stats) = details.player_stats.values().next() {
         let big_match_kind = MatchOutcome {
             stats: any_player_stats,
@@ -2360,6 +2365,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             is_derby,
             team_won,
             team_lost,
+            won_tie: team_won,
             is_continental,
             opponent_team_id,
             opponent_club_id: None,
@@ -2369,6 +2375,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             club_id: player_club_id,
             standard_of_football: details.standard_of_football,
             penalties_saved: 0,
+            penalties_missed: 0,
         }
         .big_match_kind();
 
@@ -2955,6 +2962,7 @@ mod canonical_rating_tests {
                 pitch: Default::default(),
                 standard_of_football: 0.6630,
                 penalty_saves: Vec::new(),
+                penalty_misses: Vec::new(),
             }
         }
     }

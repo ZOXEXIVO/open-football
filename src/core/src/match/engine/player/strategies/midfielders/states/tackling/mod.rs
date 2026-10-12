@@ -1,5 +1,8 @@
 use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::events::Event;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
@@ -226,9 +229,17 @@ impl MidfielderTacklingState {
         if ctx.player.yellow_cards > 0 {
             base_foul *= 0.70;
         }
-        let foul_chance = base_foul.max(0.005);
+        // His head scales what is left — see defenders/tackling.
+        let foul_chance =
+            ActionLapse::scaled(
+                LapseFamily::Challenge,
+                base_foul.max(0.005),
+                ctx.context.psychology.get(ctx.player.id),
+            );
 
         let committed_foul = rng.random::<f32>() < foul_chance;
+        #[cfg(feature = "match-logs")]
+        lapse_diag::note(LapseFamily::Challenge, committed_foul);
 
         // Violent 0.10 → 0.02, Reckless gated at 0.35 — most failed
         // contact is a plain foul, not a card-worthy lunge.

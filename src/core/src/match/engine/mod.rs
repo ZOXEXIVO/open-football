@@ -70,8 +70,8 @@ pub use substitution::{sub_scoring, substitutions, urgency};
 
 // rating + psychology — direct children of the engine module.
 pub use psychology::{
-    NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState, SkillModifiers,
-    TeamMomentum,
+    ActionLapse, LapseFamily, NegativeEvent, PositiveEvent, PsychState, Psychology,
+    PsychologyState, SkillModifiers, TeamMomentum,
 };
 pub use rating::*;
 

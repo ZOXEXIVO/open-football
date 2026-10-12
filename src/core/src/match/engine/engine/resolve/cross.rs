@@ -15,6 +15,10 @@ use crate::r#match::engine::ball::ball::{Ball, DeliveryIntent, PlayerReach};
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::events::EventCollection;
+use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::psychology::lapse::lapse_diag;
+use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
@@ -107,6 +111,54 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0.28)
         })
+    }
+
+    /// Share of its range a miscued header travels: it drops around the
+    /// penalty spot rather than at the edge of the box.
+    const MISCUE_RANGE: f32 = 0.40;
+    /// How far off its line a miscued header goes, radians: from a header
+    /// skewed off the side of his head (40°) to one glanced back toward his
+    /// own goal (137°).
+    const MISCUE_TURN: (f32, f32) = (0.7, 2.4);
+
+    /// Does the man heading this cross clear miscue it? His lapse rate for
+    /// a clearance, as contested as the header was (a dominant header is
+    /// not a pressured one). A miscue drops short and skewed, and the ball
+    /// is his giveaway if an opponent gets to it. Returns the range and
+    /// turn to strike the clearance with. The draws are taken whatever the
+    /// switch says, so the seeded stream stays aligned between the A/B arms.
+    fn miscue(
+        field: &mut MatchField,
+        context: &MatchContext,
+        heading_it: Option<usize>,
+        margin: f32,
+        clear_range: f32,
+    ) -> (f32, f32) {
+        let lapse = heading_it.map_or(0.0, |d| {
+            let clearer = &field.players[d];
+            ActionLapse::probability(
+                LapseFamily::Clearance,
+                clearer,
+                context.psychology.get(clearer.id),
+            ) * (1.0 - margin / 0.55)
+        });
+        let miscued = context.rng.bernoulli(lapse);
+        let side = if context.rng.bernoulli(0.5) { 1.0 } else { -1.0 };
+        let swing = context.rng.unit_f32();
+        #[cfg(feature = "match-logs")]
+        if heading_it.is_some() {
+            lapse_diag::note(LapseFamily::Clearance, miscued);
+        }
+        let Some(d) = heading_it.filter(|_| miscued) else {
+            return (clear_range, 0.0);
+        };
+        let clearer_id = field.players[d].id;
+        PlayerEventDispatcher::give_away(clearer_id, LapseFamily::Clearance, field, context);
+        let (least, most) = Self::MISCUE_TURN;
+        (
+            clear_range * Self::MISCUE_RANGE,
+            side * (least + (most - least) * swing),
+        )
     }
 
     /// Base travel of a contested headed clear, in game units (16 m).
@@ -622,6 +674,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // quantity, and `deferred` is the share that no longer turn
             // the ball here at all.
             let clearer = Self::cross_clearer(field, best_def);
+            let heading_it = match clearer {
+                CrossClearer::OnIt => best_def,
+                CrossClearer::Coming(d) => Some(d),
+                CrossClearer::Nobody => None,
+            };
+            let (clear_range, turn) =
+                Self::miscue(field, context, heading_it, margin, clear_range);
             #[cfg(feature = "match-logs")]
             BlockDiag::note_contact(
                 2,
@@ -649,11 +708,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     // `[CONTEST_FLOOR, CONTEST_CEILING]` and already
                     // coming down, so it is at heading height by
                     // construction. He heads it from where it is.
-                    b.velocity = Ball::headed_clear_velocity(
-                        ball_pos,
-                        attacked_goal,
-                        clear_range,
-                        CLEAR_APEX_METRES,
+                    b.velocity = Ball::skew(
+                        Ball::headed_clear_velocity(
+                            ball_pos,
+                            attacked_goal,
+                            clear_range,
+                            CLEAR_APEX_METRES,
+                        ),
+                        turn,
                     );
                     b.current_owner = None;
                     b.flags.in_flight_state = 1;
@@ -671,6 +733,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     DeliveryIntent::Cleared {
                         range: clear_range,
                         apex: CLEAR_APEX_METRES,
+                        turn,
                     },
                     false,
                     3,

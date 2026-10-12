@@ -308,6 +308,7 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
         pitch: Default::default(),
         standard_of_football: 0.6630,
         penalty_saves: Vec::new(),
+        penalty_misses: Vec::new(),
     }
 }
 

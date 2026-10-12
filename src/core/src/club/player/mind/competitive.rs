@@ -18,7 +18,7 @@ use super::situation::MindSituation;
 use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 use crate::club::player::player::Player;
 use crate::club::player::statistics::PlayerStatisticsHistoryItem;
-use crate::PlayerSquadStatus;
+use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -83,9 +83,10 @@ pub struct CompetitiveMatchRead {
     pub standard: f32,
     pub minutes: f32,
     pub competitive: bool,
-    /// A keeper who started and finished a competitive match without
-    /// conceding.
-    pub kept_clean_sheet: bool,
+    /// How much of a clean sheet is his, 0..1: zero unless he started a
+    /// match his side finished without conceding, then the share of his
+    /// role that is keeping goals out (`CompetitiveMind::defensive_share`).
+    pub clean_sheet_share: f32,
 }
 
 /// The state of mind a player brings to kickoff — never his statistics.
@@ -246,7 +247,7 @@ impl CompetitiveMind {
             standard,
             minutes: 90.0,
             competitive: true,
-            kept_clean_sheet: false,
+            clean_sheet_share: 0.0,
         };
         let cameo = CompetitiveMatchRead {
             minutes: Self::SEEDED_SUB_MINUTES,
@@ -274,14 +275,31 @@ impl CompetitiveMind {
         Self::STEADY_FLOOR + (1.0 - Self::STEADY_FLOOR) * step
     }
 
-    /// The match is in: stage how exposed his belief was to it, take the
-    /// clean sheet, then learn the standard he played at.
+    /// The match is in: stage how exposed his belief was to it, take his
+    /// share of a clean sheet, then learn the standard he played at.
     pub fn on_match_played(&mut self, read: &CompetitiveMatchRead, pace: f32) {
         self.match_steadiness = self.steadiness_at(read.standard);
-        if read.kept_clean_sheet && read.competitive {
-            self.shift(Self::LIFT * Self::CLEAN_SHEET_SHARE * self.match_steadiness);
+        if read.competitive && read.clean_sheet_share > 0.0 {
+            self.shift(
+                Self::LIFT
+                    * Self::CLEAN_SHEET_SHARE
+                    * read.clean_sheet_share
+                    * self.match_steadiness,
+            );
         }
         self.absorb(read, pace);
+    }
+
+    /// How much of a clean sheet belongs to a man in this part of the
+    /// side: the keeper's all of it, a defender's nearly as much, a
+    /// midfielder's a little, a forward's none.
+    pub fn defensive_share(group: PlayerFieldPositionGroup) -> f32 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 1.0,
+            PlayerFieldPositionGroup::Defender => 0.8,
+            PlayerFieldPositionGroup::Midfielder => 0.3,
+            PlayerFieldPositionGroup::Forward => 0.0,
+        }
     }
 
     fn absorb(&mut self, read: &CompetitiveMatchRead, pace: f32) {
@@ -991,7 +1009,7 @@ mod tests {
             standard,
             minutes,
             competitive: true,
-            kept_clean_sheet: false,
+            clean_sheet_share: 0.0,
         }
     }
 
@@ -1032,7 +1050,7 @@ mod tests {
         let mut hero = seeded(0.55);
         hero.on_match_played(
             &CompetitiveMatchRead {
-                kept_clean_sheet: true,
+                clean_sheet_share: 1.0,
                 ..read(0.67, 90.0)
             },
             pace,
@@ -1149,7 +1167,7 @@ mod tests {
         let mut clean = seeded(0.67);
         clean.on_match_played(
             &CompetitiveMatchRead {
-                kept_clean_sheet: true,
+                clean_sheet_share: 1.0,
                 ..read(0.67, 90.0)
             },
             1.0,

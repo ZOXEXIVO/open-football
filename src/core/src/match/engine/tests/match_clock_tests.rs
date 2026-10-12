@@ -125,6 +125,25 @@ fn the_last_third_is_read_off_the_whole_match() {
 }
 
 #[test]
+fn the_closing_stage_is_the_end_of_the_second_half_and_of_extra_time() {
+    let (_, mut context) = second_half();
+    context.time.time = MATCH_HALF_TIME_MS / 2;
+    assert_eq!(context.closing_stage(), 0.0);
+    context.time.time = MATCH_HALF_TIME_MS * 5 / 6;
+    assert!((context.closing_stage() - 0.5).abs() < 1e-3);
+    context.time.time = MATCH_HALF_TIME_MS + 60_000;
+    assert_eq!(context.closing_stage(), 1.0);
+
+    context.state.set(MatchState::FirstHalf);
+    context.time.time = MATCH_HALF_TIME_MS;
+    assert_eq!(context.closing_stage(), 0.0);
+
+    context.state.set(MatchState::ExtraTimeSecond);
+    context.time.time = MATCH_EXTRA_TIME_MS * 2 / 3;
+    assert!((context.closing_stage() - 0.5).abs() < 1e-3);
+}
+
+#[test]
 fn extra_time_is_two_periods_with_a_change_of_ends_between_them() {
     let (mut field, mut context) = second_half();
     context.is_knockout = true;

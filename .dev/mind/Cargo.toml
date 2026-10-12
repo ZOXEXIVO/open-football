@@ -16,8 +16,8 @@ edition = "2024"
 #
 # NB: like `.dev/transfers` this does NOT default to `match-stub`. The
 # mind is fed by played matches — episodes, form, coach observations, the
-# situation every faculty reflects on — so a stubbed 0-0 world would
-# report a mind that cannot exist.
+# situation every faculty reflects on — and the stub plays no episodes, so
+# a stubbed world reports a mind fed by scorelines and stat lines alone.
 core = { path = "../../src/core" }
 database = { path = "../../src/database" }
 chrono = "0.4"

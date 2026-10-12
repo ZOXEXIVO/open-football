@@ -12,7 +12,7 @@ use crate::r#match::engine::chemistry::{
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
 use crate::r#match::engine::management::{TimeWasting, TimeWastingRestart};
 use crate::r#match::engine::psychology::{
-    NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState,
+    ActionLapse, NegativeEvent, PositiveEvent, PsychState, Psychology, PsychologyState,
 };
 use crate::r#match::engine::referee::{ContactLocation, FoulCallContext, RefereeProfile};
 use crate::r#match::engine::set_pieces::{
@@ -169,15 +169,9 @@ fn leadership_dampens_negative_momentum() {
 }
 
 #[test]
-fn captain_leadership_dampens_pressure_load() {
-    let env = MatchEnvironment {
-        match_importance: 0.8,
-        derby_intensity: 0.5,
-        crowd_intensity: 0.85,
-        ..Default::default()
-    };
-    let no_leader = Psychology::pressure_load(&env, 0.7, 0.4, 0.0);
-    let strong_leader = Psychology::pressure_load(&env, 0.7, 0.4, 1.0);
+fn captain_leadership_dampens_the_closing_stage() {
+    let no_leader = Psychology::moment_pressure(0.7, 1, 0.8, 0.0);
+    let strong_leader = Psychology::moment_pressure(0.7, 1, 0.8, 1.0);
     assert!(strong_leader < no_leader);
 }
 
@@ -200,17 +194,6 @@ fn yellow_card_raises_low_temperament_player_more_than_high() {
     let cool = p.get(1).cloned().unwrap_or_default();
     let rattled = p.get(2).cloned().unwrap_or_default();
     assert!(rattled.nervousness > cool.nervousness);
-}
-
-#[test]
-fn very_high_nervousness_state_lifts_foul_risk_modifier() {
-    let s = PsychState {
-        nervousness: 0.7,
-        ..Default::default()
-    };
-    let m = Psychology::skill_modifiers(&s);
-    assert!(m.foul_risk_add > 0.0);
-    assert!(m.miscontrol_add > 0.0);
 }
 
 #[test]
@@ -274,5 +257,5 @@ fn psych_neutral_state_is_neutral_modifiers() {
     let m = Psychology::skill_modifiers(&s);
     assert_eq!(m.composure_mul, 1.0);
     assert_eq!(m.first_touch_mul, 1.0);
-    assert_eq!(m.foul_risk_add, 0.0);
+    assert_eq!(ActionLapse::multiplier(Some(&s)), 1.0);
 }

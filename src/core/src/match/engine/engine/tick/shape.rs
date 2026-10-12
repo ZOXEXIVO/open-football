@@ -458,6 +458,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     context.seed_psychology(p);
                 }
             }
+            let moment = context.pressure_moment();
+            context
+                .psychology
+                .refresh(&field.players, current_tick, &moment);
         }
         let home_skill_aggregates = context.home_skill_aggregates;
         let away_skill_aggregates = context.away_skill_aggregates;

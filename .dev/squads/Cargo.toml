@@ -9,8 +9,8 @@ edition = "2024"
 # every intra-club move as it happens, periodic roster tables per squad,
 # and a world census of short youth squads and idle overstaffed ones.
 #
-# Defaults to `match-stub` (0-0 results, but the FieldSquads are real, so
-# selection and appearances still count): squad placement is decided by
+# Defaults to `match-stub` (results drawn from the squads, whose
+# FieldSquads are real, so selection and appearances still count): squad placement is decided by
 # the club passes around the engine, not by the scorelines. Drop it with
 # `--no-default-features` to watch the same thing against real matches.
 core = { path = "../../src/core" }

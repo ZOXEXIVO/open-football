@@ -1040,6 +1040,14 @@ impl PlayerStatisticsHistory {
         self.mark_departed(&from.slug, is_loan, date);
     }
 
+    /// An academy graduate's first spell: a free arrival at the club, like
+    /// every other move into it, so a graduation after the season's
+    /// matches carries into the season he joined for instead of freezing a
+    /// row for one he never played.
+    pub fn record_academy_graduation(&mut self, to: &TeamInfo, date: NaiveDate) {
+        self.push_new_entry(to, PlayerStatistics::default(), false, Some(0.0), date);
+    }
+
     /// Record a free-agent signing. Unlike `record_transfer`,
     /// there is no source club — only the destination — so we just freeze
     /// any prior-season entries and push one fresh row for the new club.
@@ -1384,7 +1392,7 @@ impl PlayerStatisticsHistory {
         // projection gap-fills it with a phantom parent-club row — the
         // reported "2027/28 Juventus instead of Palermo (Loan)" case.
         self.flush_prior_season_seeds(season.start_year, team, is_loan);
-        // Carry-forward: a still-active market move the player joined too
+        // Carry-forward: a still-active arrival the player joined too
         // late to feature in — ZERO official apps — is really a NEXT-season
         // spell. `Season::from_date`'s August boundary mis-stamps a late /
         // off-season move into the just-ended season even though its
@@ -1395,10 +1403,11 @@ impl PlayerStatisticsHistory {
         // into the next season where its games are actually recorded.
         //
         // Common gates (all carried moves):
-        //   * `transfer_fee.is_some()` — a real market move. Home /
-        //     youth-alias seeds carry no fee, so a quiet season at the
-        //     career-home club always keeps its row, and a continued
-        //     loan re-seeded with no fee isn't re-carried each year.
+        //   * `transfer_fee.is_some()` — an arrival: a paid or free move, an
+        //     academy graduation. Home / youth-alias seeds and world
+        //     bootstrap carry no fee, so a quiet season at the career-home
+        //     club always keeps its row, and a continued loan re-seeded with
+        //     no fee isn't re-carried each year.
         //   * `departed_date.is_none()` — the player is STILL there (the
         //     spell continues next season). A loan that already RETURNED,
         //     or a club the player was bought by then loaned out of, is
@@ -1412,14 +1421,15 @@ impl PlayerStatisticsHistory {
         //     matches-end date, so its time-at-club is 0 and clears the
         //     same bar). A loan begun earlier is a real, if unproductive,
         //     spell and stays.
-        //   * PERMANENT (transfer / free signing) — the player's NEW club:
-        //     carry only an OFF-SEASON join (after the matches ended,
-        //     before the next season). A late IN-SEASON signing — even
-        //     days before the end — establishes the player's club for that
-        //     season and stays (a €10M deadline buy must show that year).
+        //   * PERMANENT (transfer / free signing / graduation) — the
+        //     player's NEW club: carry only a join after the matches ended,
+        //     including one on or after the next season's calendar start
+        //     that lands before this country's snapshot runs. A late
+        //     IN-SEASON signing — even days before the end — establishes
+        //     the player's club for that season and stays (a €10M deadline
+        //     buy must show that year).
         let season_matches_end = season.end_date();
         let season_span_days = (season_matches_end - season.start_date()).num_days().max(1);
-        let next_season_start = Season::new(season.start_year + 1).start_date();
         let carried_forward: Vec<(u32, String, bool, Option<f64>)> = self
             .current
             .iter()
@@ -1435,8 +1445,7 @@ impl PlayerStatisticsHistory {
                     return false;
                 }
                 if !e.is_loan {
-                    // Permanent move: off-season window only.
-                    return e.joined_date > season_matches_end && e.joined_date < next_season_start;
+                    return e.joined_date > season_matches_end;
                 }
                 // Loan: joined in the last 30% of the season (or after it).
                 let days_in_season = (season_matches_end - e.joined_date).num_days().max(0);

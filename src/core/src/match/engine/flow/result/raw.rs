@@ -134,6 +134,11 @@ pub struct MatchResultRaw {
     /// Shoot-out saves live in `penalty_shootout`.
     #[serde(default)]
     pub penalty_saves: Vec<u32>,
+    /// One entry per penalty not scored during play — saved, wide, over or
+    /// off the woodwork — naming the taker. Shoot-out misses live in
+    /// `penalty_shootout`.
+    #[serde(default)]
+    pub penalty_misses: Vec<u32>,
 }
 
 impl Clone for MatchResultRaw {
@@ -162,6 +167,7 @@ impl Clone for MatchResultRaw {
             pitch: self.pitch,
             standard_of_football: self.standard_of_football,
             penalty_saves: self.penalty_saves.clone(),
+            penalty_misses: self.penalty_misses.clone(),
         }
     }
 }
@@ -192,6 +198,7 @@ impl MatchResultRaw {
             pitch: Pitch::default(),
             standard_of_football: MatchStandard::CALIBRATION,
             penalty_saves: Vec::new(),
+            penalty_misses: Vec::new(),
         }
     }
 
@@ -220,6 +227,7 @@ impl MatchResultRaw {
             pitch: self.pitch,
             standard_of_football: self.standard_of_football,
             penalty_saves: self.penalty_saves.clone(),
+            penalty_misses: self.penalty_misses.clone(),
         }
     }
 
@@ -230,6 +238,17 @@ impl MatchResultRaw {
             .penalty_shootout
             .iter()
             .filter(|k| !k.scored && k.goalkeeper_id == Some(keeper_id))
+            .count();
+        (in_play + shootout).min(u8::MAX as usize) as u8
+    }
+
+    /// Spot-kicks this taker failed to score, in play and in a shoot-out.
+    pub fn penalties_missed_by(&self, taker_id: u32) -> u8 {
+        let in_play = self.penalty_misses.iter().filter(|&&t| t == taker_id).count();
+        let shootout = self
+            .penalty_shootout
+            .iter()
+            .filter(|k| !k.scored && k.taker_id == taker_id)
             .count();
         (in_play + shootout).min(u8::MAX as usize) as u8
     }
@@ -402,5 +421,15 @@ mod tests {
         assert_eq!(result.penalties_saved_by(1), 3);
         assert_eq!(result.penalties_saved_by(2), 2);
         assert_eq!(result.penalties_saved_by(3), 0);
+    }
+
+    #[test]
+    fn a_taker_is_charged_with_every_spot_kick_he_failed_to_score() {
+        let mut result = MatchResultRaw::with_match_time(90 * 60 * 1000);
+        result.penalty_misses = vec![9, 7];
+        result.penalty_shootout = vec![kick(Some(1), false), kick(Some(1), true)];
+        assert_eq!(result.penalties_missed_by(9), 2);
+        assert_eq!(result.penalties_missed_by(7), 1);
+        assert_eq!(result.penalties_missed_by(3), 0);
     }
 }
