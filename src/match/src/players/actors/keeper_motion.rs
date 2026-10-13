@@ -77,6 +77,7 @@ impl PlayerActor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::broadcast::lineup::Lineup;
     use crate::players::body::skeleton::{boot, glove};
     use bevy::ecs::system::RunSystemOnce;
     use std::time::Duration;
@@ -87,12 +88,15 @@ mod tests {
         playback.playing = true;
         playback.speed = speed;
         playback.seeked = false;
+        // Every run of `animate` here is one frame of play.
+        playback.advanced_ms = f64::from(frame * speed) * 1000.0;
         world.insert_resource(playback);
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_secs_f32(frame));
         world.insert_resource(time);
         world.insert_resource(BallState::default());
         world.insert_resource(Aftermath::default());
+        world.insert_resource(Lineup::default());
         let actor = world
             .spawn((
                 PlayerActor::new(100, true, true),

@@ -730,14 +730,14 @@
             if (config && asked.get("perf") === "1") {
                 config.perf = true;
             }
-            // …and `?grain=spare` / `?grain=full` force how finely the
-            // twenty-two are lathed, which the machine's own tier would
-            // otherwise decide. The pair is what makes the decision
-            // checkable: a viewer can watch the same match both ways on his
-            // own computer and read the frame cost off the bar each time,
-            // which is the one comparison that settles whether the coarse
-            // figure is worth what it buys.
-            if (config && ["full", "spare"].includes(asked.get("grain"))) {
+            // …and `?grain=full` / `?grain=spare` / `?grain=far` set the
+            // finest cut the twenty-two are drawn at, which the machine's own
+            // tier would otherwise decide; a man far from the camera is cut
+            // coarser still, and `far` cuts everybody at the coarsest. This is
+            // what makes the decision checkable: a viewer can watch the same
+            // match each way on his own computer and read the frame cost off
+            // the bar each time.
+            if (config && ["full", "spare", "far"].includes(asked.get("grain"))) {
                 config.grain = asked.get("grain");
             }
             // …and `?device=handheld` / `?device=roomy` force what kind of

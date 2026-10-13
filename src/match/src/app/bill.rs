@@ -421,7 +421,7 @@ mod tests {
     #[ignore = "prints the scene's memory bill; run with --ignored --nocapture"]
     fn dump_memory_bill() {
         use crate::app::config::VenueInfo;
-        use crate::app::quality::Footprint;
+        use crate::app::quality::{Footprint, Tier};
         use crate::app::stage::Stage;
         use crate::art::textures::Textures;
         use crate::players::body::{BodyParts, Grain};
@@ -429,7 +429,15 @@ mod tests {
         use crate::scene::pitch::Stands;
         use bevy::prelude::{Assets, Color, StandardMaterial, UVec2};
 
-        for footprint in [Footprint::Roomy, Footprint::Handheld] {
+        for (label, footprint, tier) in [
+            ("ROOMY multisampled", Footprint::Roomy, Tier::Multisampled),
+            (
+                "ROOMY post-processed",
+                Footprint::Roomy,
+                Tier::PostProcessed,
+            ),
+            ("HANDHELD", Footprint::Handheld, Tier::PostProcessed),
+        ] {
             MemoryBill::forget();
             let mut images = Assets::<Image>::default();
             let mut materials = Assets::<StandardMaterial>::default();
@@ -438,7 +446,8 @@ mod tests {
             // A great ground, comfortably full — the ceiling rather than the
             // common case, and the one a bill should be written against.
             let stature = Stature::of(&VenueInfo::default());
-            let throng = Throng::of(footprint, None);
+            let throng = Throng::of(footprint, tier, None);
+            let mut spectators_vertices = 0;
 
             // The sheets, in the order the bring-up paints them.
             let _turf = Textures::turf(&mut images, Color::srgb(0.10, 0.35, 0.12));
@@ -468,16 +477,18 @@ mod tests {
                 ) else {
                     continue;
                 };
+                spectators_vertices += crowd.count_vertices();
                 MemoryBill::mesh(Held::Crowd, &crowd);
             }
 
-            // The shared squad, at the grain this footprint would cut.
-            let grain = match footprint {
-                Footprint::Roomy => Grain::FULL,
-                Footprint::Handheld => Grain::SPARE,
-            };
-            let parts = BodyParts::new(&mut meshes, grain);
-            MemoryBill::note(Held::Squad, parts.bytes(&meshes));
+            // The shared squad, at every grain this tier cuts.
+            let finest = Grain::of(tier, None);
+            let mut triangles = Vec::new();
+            for &grain in finest.and_coarser() {
+                let parts = BodyParts::new(&mut meshes, grain);
+                MemoryBill::note(Held::Squad, parts.bytes(&meshes));
+                triangles.push(parts.triangles(&meshes));
+            }
 
             // …and the attachments, at the canvas an iPad shows in landscape.
             let window = UVec2::new(2360, 1328);
@@ -485,7 +496,7 @@ mod tests {
             // is what this canvas can pay for. See
             // `Stage::affords_multisampling` — an iPad's canvas cannot, which
             // is the answer the pixel budget could not give.
-            let samples = if footprint == Footprint::Roomy && Stage::affords_multisampling(window) {
+            let samples = if tier == Tier::Multisampled && Stage::affords_multisampling(window) {
                 4
             } else {
                 1
@@ -494,12 +505,8 @@ mod tests {
             MemoryBill::hold(Held::Stage, Stage::attachments(target, window, samples));
 
             println!(
-                "\n{} · squad {} tri/player · stage {}x{} at {} sample(s)\n  {}",
-                match footprint {
-                    Footprint::Roomy => "ROOMY",
-                    Footprint::Handheld => "HANDHELD",
-                },
-                parts.triangles(&meshes),
+                "\n{label} · crowd {spectators_vertices} vertices · squad {:?} tri/player · stage {}x{} at {} sample(s)\n  {}",
+                triangles,
                 target.x,
                 target.y,
                 samples,

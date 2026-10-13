@@ -176,8 +176,8 @@ pub(super) fn shirt(grain: Grain, keeper: bool) -> Mesh {
     #[cfg(test)]
     {
         use std::sync::OnceLock;
-        static MESHES: [OnceLock<Mesh>; 4] = [const { OnceLock::new() }; 4];
-        let index = usize::from(grain == Grain::SPARE) * 2 + usize::from(keeper);
+        static MESHES: [OnceLock<Mesh>; 6] = [const { OnceLock::new() }; 6];
+        let index = grain.rank() * 2 + usize::from(keeper);
         MESHES[index].get_or_init(|| cut(grain, keeper)).clone()
     }
     #[cfg(not(test))]
@@ -204,17 +204,15 @@ pub(super) fn shorts(grain: Grain) -> Mesh {
     #[cfg(test)]
     {
         use std::sync::OnceLock;
-        static MESHES: [OnceLock<Mesh>; 2] = [const { OnceLock::new() }; 2];
-        MESHES[usize::from(grain == Grain::SPARE)]
-            .get_or_init(make)
-            .clone()
+        static MESHES: [OnceLock<Mesh>; 3] = [const { OnceLock::new() }; 3];
+        MESHES[grain.rank()].get_or_init(make).clone()
     }
     #[cfg(not(test))]
     make()
 }
 
 fn surface(grain: Grain, pattern: &Pattern, origin: Vec3, size: Vec3, cuff: bool) -> Mesh {
-    let spacing = if grain == Grain::SPARE { 0.020 } else { 0.010 };
+    let spacing = grain.cloth as f32 / 1000.0;
     let counts = (size / spacing).ceil().as_uvec3() + UVec3::ONE;
     let at = |x: u32, y: u32, z: u32| (x + counts.x * (y + counts.y * z)) as usize;
     let mut points = Vec::new();
@@ -595,7 +593,7 @@ mod tests {
 
     #[test]
     fn each_garment_is_one_connected_surface() {
-        for grain in [Grain::FULL, Grain::SPARE] {
+        for grain in Grain::ALL {
             for mesh in [shirt(grain, false), shirt(grain, true), shorts(grain)] {
                 let positions = mesh
                     .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -654,7 +652,7 @@ mod tests {
 
     #[test]
     fn skin_weights_anchor_chest_and_cuffs_to_the_existing_rig() {
-        for grain in [Grain::FULL, Grain::SPARE] {
+        for grain in Grain::ALL {
             for keeper in [false, true] {
                 let mut mesh = shirt(grain, keeper);
                 skin(&mut mesh, grain, keeper);

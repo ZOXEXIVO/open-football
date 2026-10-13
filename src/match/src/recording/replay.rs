@@ -41,6 +41,14 @@ impl Sample {
             })
             .collect()
     }
+
+    /// Metres from this sample to `to`. `x`/`y` are engine grid units and `z`
+    /// is already metres — the one place in the crate where the two axes
+    /// carry different units.
+    fn metres_to(self, to: Sample) -> f32 {
+        let across = ((to.x - self.x).hypot(to.y - self.y)) * Field::METERS_PER_UNIT;
+        across.hypot(to.z - self.z)
+    }
 }
 
 impl<'de> Deserialize<'de> for Sample {
@@ -283,21 +291,19 @@ pub struct Track {
 /// or not yet on. Keep it above that heartbeat or stationary players blink.
 const PRESENCE_TOLERANCE_MS: f64 = 1000.0;
 
-/// Widest gap between two samples that is still treated as movement.
-///
-/// The recorder drops samples that repeat a position, so a wider gap than this
-/// means the entity was standing still — or that the engine teleported it, as
-/// it does when a goal resets the ball to the centre spot. Interpolating across
-/// that turns a restart into the ball gliding sixty metres up the pitch.
-const INTERPOLATION_GAP_MS: f64 = 200.0;
+/// The recorder's sample period: three 10 ms engine ticks. Restated here
+/// because the viewer cannot depend on the engine.
+const RECORDER_PERIOD_MS: f64 = 30.0;
+
+/// How far a thing moves from the last sample the recorder wrote of it before
+/// it writes another, in metres: 0.3 engine units, height included.
+const RECORDER_TOLERANCE_M: f32 = 0.0375;
 
 /// Fastest anything on this pitch can actually travel, in metres per second.
 ///
-/// The guard above tests the wrong thing on its own. It asks how long the gap
-/// between two samples is, when what makes a jump a teleport is how far the
-/// thing went in that time — and the recorder emits a sample every 30 ms
-/// whatever the engine does, so a restart lands between two CONSECUTIVE
-/// samples and sails straight through a test keyed on 200 ms.
+/// What makes a jump a teleport is how far the thing went in the time it is
+/// drawn moving, not how long the gap between two samples is: a restart lands
+/// between two CONSECUTIVE samples 30 ms apart.
 ///
 /// Measured over a real match, and not by counting steps — by asking whether
 /// each fast step is part of a FLIGHT or stands alone, which is what separates
@@ -452,33 +458,57 @@ impl Track {
         *cursor = index;
 
         let a = self.samples[index];
-        if let Some(b) = self.samples.get(index + 1) {
-            let span = (b.t as f64) - (a.t as f64);
-            if span > 0.0 && span <= INTERPOLATION_GAP_MS && !Self::teleported(a, *b, span) {
-                let f = (((time_ms - a.t as f64) / span) as f32).clamp(0.0, 1.0);
-                return Some([
-                    a.x + (b.x - a.x) * f,
-                    a.y + (b.y - a.y) * f,
-                    a.z + (b.z - a.z) * f,
-                ]);
-            }
+        if let Some(b) = self.samples.get(index + 1)
+            && let Some(over) = Self::travel_ms(a, *b, self.samples.get(index + 2).copied())
+        {
+            let f = (((time_ms - (b.t as f64 - over)) / over) as f32).clamp(0.0, 1.0);
+            return Some([
+                a.x + (b.x - a.x) * f,
+                a.y + (b.y - a.y) * f,
+                a.z + (b.z - a.z) * f,
+            ]);
         }
         Some([a.x, a.y, a.z])
     }
 
-    /// Whether the engine PUT this thing here rather than it having travelled.
+    /// **How long the move from one sample to the next is drawn over**,
+    /// ending on the later one, or `None` when the engine PUT the thing there.
     ///
-    /// Holding the earlier sample until the playhead passes the later one is
-    /// how a teleport gets drawn: as a cut. Sliding between them draws a goal
-    /// kick as the ball flying backwards out of the net at two hundred metres
-    /// a second, which is the bug this exists to stop — and then the viewer
-    /// reads that flight back off the path and spins the ball like a top.
-    fn teleported(from: Sample, to: Sample, span: f64) -> bool {
-        // `x`/`y` are engine grid units and `z` is already metres — the one
-        // place in the crate where the two axes carry different units.
-        let across = ((to.x - from.x).hypot(to.y - from.y)) * Field::METERS_PER_UNIT;
-        let travelled = across.hypot(to.z - from.z);
-        travelled > TELEPORT_SPEED * (span as f32 / 1000.0)
+    /// One period before `to` the thing was still within the recorder's
+    /// tolerance of `from`, or that period would have written a sample. So the
+    /// move is steady across the whole gap only while that holds — a jog, a
+    /// slow walk. Otherwise it stood at `from` and then moved, as a keeper's
+    /// step after a rest or a ball struck from a standstill, and holding the
+    /// whole gap drew that as a jump in one frame. The move goes at the pace
+    /// `then` shows it carrying on with, because a struck ball leaves at its
+    /// flight speed, and never slower than the tolerance allows.
+    ///
+    /// A cut is drawn as a hold until the playhead passes `to`. Sliding instead
+    /// draws a goal kick as the ball flying backwards out of the net at two
+    /// hundred metres a second, and then the viewer reads that flight back off
+    /// the path and spins the ball like a top.
+    fn travel_ms(from: Sample, to: Sample, then: Option<Sample>) -> Option<f64> {
+        let span = (to.t as f64) - (from.t as f64);
+        if span <= 0.0 {
+            return None;
+        }
+        let travelled = from.metres_to(to);
+        let longest = if travelled > RECORDER_TOLERANCE_M {
+            RECORDER_PERIOD_MS.min(span) * f64::from(travelled / (travelled - RECORDER_TOLERANCE_M))
+        } else {
+            span
+        };
+        let over = if longest < span {
+            let carried = then
+                .filter(|then| f64::from(then.t - to.t) <= RECORDER_PERIOD_MS)
+                .map(|then| to.metres_to(then) / ((then.t - to.t) as f32 / 1000.0))
+                .filter(|pace| *pace <= TELEPORT_SPEED)
+                .unwrap_or(0.0);
+            longest.min(f64::from(travelled / carried) * 1000.0)
+        } else {
+            span
+        };
+        (travelled <= TELEPORT_SPEED * (over as f32 / 1000.0)).then_some(over)
     }
 
     /// Index of the last sample at or before `time_ms`, starting from
@@ -866,6 +896,76 @@ mod cuts {
         assert!(
             (middle[0] - 700.0).abs() < 1e-3,
             "skated the length of the pitch: {middle:?}"
+        );
+    }
+
+    fn metres_from(at: [f32; 3], x: f32) -> f32 {
+        (at[0] - x).abs() * Field::METERS_PER_UNIT
+    }
+
+    /// A keeper who stood 450 ms and then stepped 20 cm stands until the
+    /// step and takes it in about a period: neither the whole gap held and
+    /// the step jumped in a frame, nor the step smeared across the gap.
+    #[test]
+    fn a_resting_goalkeeper_steps() {
+        let mut keeper = track(&[(0, 20.0, 272.0, 0.0), (450, 21.6, 272.0, 0.0)]);
+        let standing = keeper.position_at(390.0).expect("a sample");
+        assert_eq!(standing[0], 20.0, "smeared the step across the gap");
+        let a_period_before = keeper.position_at(420.0).expect("a sample");
+        assert!(
+            metres_from(a_period_before, 20.0) <= RECORDER_TOLERANCE_M + 1e-4,
+            "left before the recorder says he did: {a_period_before:?}"
+        );
+        let stepping = keeper.position_at(435.0).expect("a sample");
+        assert!(
+            stepping[0] > 20.5 && stepping[0] < 21.6,
+            "not drawn moving inside the step: {stepping:?}"
+        );
+    }
+
+    /// A ball that rested 600 ms and was struck at 20 m/s leaves its spot in
+    /// the last period, at the pace it flies on at, rather than appearing
+    /// 60 cm away.
+    #[test]
+    fn a_resting_ball_is_struck() {
+        let mut ball = track(&[
+            (0, 400.0, 272.0, 0.0),
+            (600, 404.8, 272.0, 0.0),
+            (630, 409.6, 272.0, 0.0),
+        ]);
+        assert_eq!(ball.position_at(560.0).expect("a sample")[0], 400.0);
+        let leaving = ball.position_at(575.0).expect("a sample");
+        let gone = ball.position_at(595.0).expect("a sample");
+        assert!(
+            leaving[0] > 400.0 && gone[0] < 404.8,
+            "not drawn leaving its spot: {leaving:?} then {gone:?}"
+        );
+        let pace = metres_from(gone, leaving[0]) / 0.020;
+        assert!((pace - 20.0).abs() < 0.5, "left at {pace} m/s");
+    }
+
+    /// Six metres at the end of a long rest is more than anything travels in
+    /// a period, so it is a placement: held, then cut.
+    #[test]
+    fn a_relocation_after_a_long_rest_is_still_a_cut() {
+        let mut ball = track(&[(0, 400.0, 272.0, 0.0), (600, 448.0, 272.0, 0.0)]);
+        assert_eq!(ball.position_at(595.0).expect("a sample")[0], 400.0);
+        assert_eq!(ball.position_at(600.0).expect("a sample")[0], 448.0);
+    }
+
+    /// A walk slow enough to be written every 90 ms stays a steady walk, not a
+    /// stand and a hop each sample.
+    #[test]
+    fn a_slow_walk_is_drawn_steady() {
+        let mut walker = track(&[
+            (0, 100.0, 272.0, 0.0),
+            (90, 100.36, 272.0, 0.0),
+            (180, 100.72, 272.0, 0.0),
+        ]);
+        let halfway = walker.position_at(135.0).expect("a sample");
+        assert!(
+            (halfway[0] - 100.54).abs() < 1e-3,
+            "not drawn steady: {halfway:?}"
         );
     }
 }

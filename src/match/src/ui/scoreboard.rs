@@ -584,6 +584,7 @@ impl FullTime {
             .spawn((
                 FullTimeCard,
                 Node {
+                    display: Display::None,
                     position_type: PositionType::Absolute,
                     width: percent(100),
                     height: percent(100),
@@ -917,7 +918,7 @@ impl FullTime {
         mut card: ResMut<FullTime>,
         veil: Single<&mut Visibility, With<FullTimeVeil>>,
         screen: Single<
-            (&mut Visibility, &mut UiTransform),
+            (&mut Visibility, &mut UiTransform, &mut Node),
             (With<FullTimeCard>, Without<FullTimeVeil>),
         >,
         mut grounds: Query<(&FullTimeGround, &mut BackgroundColor)>,
@@ -947,8 +948,19 @@ impl FullTime {
             Visibility::Hidden
         };
         veil.into_inner().set_if_neq(drawn);
-        let (mut seen, mut lift) = screen.into_inner();
+        let (mut seen, mut lift, mut node) = screen.into_inner();
         seen.set_if_neq(drawn);
+        // Out of the layout as well as out of sight while it is down: nothing
+        // reads its size then, and a node that is only hidden is still laid
+        // out on every frame.
+        let display = if card.showing() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != display {
+            node.display = display;
+        }
 
         let shown = Self::ease(weight);
         // A transform rather than the panel's own `top`: an inset is a layout

@@ -10,21 +10,37 @@
 //! MATCH_REPLAY=<chunk.json> MATCH_PLAYER=<id> MATCH_AT=<ms> MATCH_FIGURE_DUMP=<dir> cargo test --lib dump_rehearsal -- --ignored --nocapture
 //! ```
 
+use super::pre_roll::PreRoll;
 use super::replayed::Chunk;
 use super::*;
+use crate::app::quality::Tier;
 use crate::players::body::preview::{Canvas, Lens, ball, posed};
 use crate::players::body::skeleton::{boot, crown, step};
-use crate::players::body::{BodyParts, Limb};
+use crate::players::body::{BodyParts, Footballer, Limb};
+use crate::players::kit::{HairStyle, Outfit};
+use crate::recording::playback::RecordedSpans;
 use bevy::ecs::system::SystemId;
+use bevy::transform::systems::{
+    StaticTransformOptimizations, mark_dirty_trees, propagate_parent_transforms,
+    sync_simple_transforms,
+};
 use std::collections::HashMap;
-use std::time::Duration;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::{Duration, Instant};
 
 /// One recording, one world, the real systems in the order the app runs them.
 pub(crate) struct Rehearsal {
     world: World,
     ball: Entity,
     players: Vec<(u32, Entity)>,
-    systems: [SystemId; 3],
+    systems: Vec<(&'static str, SystemId)>,
+    /// What each system cost on the last frame, in microseconds.
+    laps: Vec<f32>,
+    /// How many `GlobalTransform`s the last frame changed.
+    changed: usize,
+    /// Match seconds a drawn frame covers, as the speed chip sets it.
+    speed: f32,
     now: f64,
     pub start: f64,
     pub until: f64,
@@ -52,6 +68,7 @@ impl Rehearsal {
         world.insert_resource(ChunkLoader::default());
         world.insert_resource(BallState::default());
         world.insert_resource(Aftermath::default());
+        world.insert_resource(Lineup::default());
         world.insert_resource(tracks);
         let ball = world
             .spawn((BallActor, Transform::default(), Visibility::Hidden))
@@ -72,20 +89,82 @@ impl Rehearsal {
                 )
             })
             .collect();
-        let systems = [
-            world.register_system(Actors::follow_playhead),
-            world.register_system(Actors::animate),
-            world.register_system(Playback::end_frame),
+        world.insert_resource(RecordedSpans::default());
+        let follow = world.register_system(Actors::follow_playhead);
+        let animate = world.register_system(Actors::animate);
+        world.insert_resource(PreRoll::new(vec![follow, animate]));
+        let systems = vec![
+            ("follow", follow),
+            ("animate", animate),
+            ("pre-roll", world.register_system(PreRoll::run)),
+            ("pose", world.register_system(Actors::pose_joints)),
+            ("end", world.register_system(Playback::end_frame)),
         ];
         Some(Rehearsal {
             world,
             ball,
             players,
             systems,
+            laps: Vec::new(),
+            changed: 0,
+            speed: 1.0,
             now: start,
             start,
             until,
         })
+    }
+
+    /// Hangs a body on every man, as [`Actors::take_the_field`] does, and adds
+    /// what the app runs on those bodies every frame: the carriage, and Bevy's
+    /// transform propagation behind the whole of `Update`.
+    pub fn dress(&mut self, grain: Grain) {
+        let mut meshes = Assets::<Mesh>::default();
+        let mut binds = Assets::<SkinnedMeshInverseBindposes>::default();
+        let mut parts = BodyParts::new(&mut meshes, grain);
+        parts.bind_clothes(&mut binds);
+        // Prints and hair as a dressed man wears them, so the entity count is
+        // the app's; nothing here is ever drawn, so no handle has to resolve.
+        let outfit = Outfit {
+            kit: Handle::default(),
+            limb: Handle::default(),
+            strip: 0,
+            boots: Handle::default(),
+            skin: Handle::default(),
+            face: Handle::default(),
+            hands: Handle::default(),
+            hair: Handle::default(),
+            hair_style: HairStyle::Short,
+            number: Some(Handle::default()),
+            name: Some(Handle::default()),
+            name_front: Some(Handle::default()),
+        };
+        for &(_, entity) in &self.players {
+            let keeper = self
+                .world
+                .get::<PlayerActor>(entity)
+                .is_some_and(|actor| actor.is_goalkeeper);
+            Footballer::assemble(&mut self.world.commands(), entity, &parts, &outfit, keeper);
+        }
+        self.world.flush();
+        self.world.insert_resource(meshes);
+        self.world.insert_resource(binds);
+        self.world.init_resource::<StaticTransformOptimizations>();
+        let carry = self.world.register_system(Actors::carry_body);
+        let after_pose = self
+            .systems
+            .iter()
+            .position(|(name, _)| *name == "pose")
+            .map_or(self.systems.len(), |at| at + 1);
+        self.systems.insert(after_pose, ("carry", carry));
+        let propagation = [
+            ("dirty", self.world.register_system(mark_dirty_trees)),
+            (
+                "propagate",
+                self.world.register_system(propagate_parent_transforms),
+            ),
+            ("sync", self.world.register_system(sync_simple_transforms)),
+        ];
+        self.systems.extend(propagation);
     }
 
     /// Cuts to `at` the way a scrub does, so every filter starts from rest.
@@ -94,19 +173,104 @@ impl Rehearsal {
         let mut playback = self.world.resource_mut::<Playback>();
         playback.time_ms = at;
         playback.seeked = true;
+        playback.advanced_ms = 0.0;
         self.run();
+    }
+
+    /// Plays at `speed` from here on, as the speed chip does.
+    pub fn at_speed(&mut self, speed: f32) {
+        self.speed = speed;
+        self.world.resource_mut::<Playback>().speed = speed;
     }
 
     /// One frame of play.
     pub fn tick(&mut self) {
-        self.now += Self::FRAME_MS;
-        self.world.resource_mut::<Playback>().time_ms = self.now;
+        self.now += Self::FRAME_MS * f64::from(self.speed);
+        let mut playback = self.world.resource_mut::<Playback>();
+        playback.time_ms = self.now;
+        playback.playing = true;
+        playback.advanced_ms = Self::FRAME_MS * f64::from(self.speed);
         self.run();
     }
 
+    /// One frame with the playhead stopped, as the transport bar's pause has it.
+    pub fn hold(&mut self) {
+        let mut playback = self.world.resource_mut::<Playback>();
+        playback.playing = false;
+        playback.advanced_ms = 0.0;
+        self.run();
+    }
+
+    /// Runs the frame and clears the change trackers behind it, as the app does
+    /// at the end of every update — so `changed` counts this frame's writes.
     fn run(&mut self) {
-        for system in self.systems {
+        self.laps.clear();
+        for index in 0..self.systems.len() {
+            let (_, system) = self.systems[index];
+            let clock = Instant::now();
             self.world.run_system(system).expect("a pipeline system");
+            self.laps.push(clock.elapsed().as_secs_f32() * 1e6);
+        }
+        self.changed = self
+            .world
+            .query_filtered::<(), Changed<GlobalTransform>>()
+            .iter(&self.world)
+            .count();
+        self.world.clear_trackers();
+    }
+
+    pub fn stages(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.systems.iter().map(|(name, _)| *name)
+    }
+
+    pub fn laps(&self) -> &[f32] {
+        &self.laps
+    }
+
+    pub fn changed(&self) -> usize {
+        self.changed
+    }
+
+    pub fn joints(&mut self) -> usize {
+        self.world.query::<&Joint>().iter(&self.world).count()
+    }
+
+    /// Every joint's rotation this frame, for comparing two frames.
+    pub fn joint_rotations(&mut self) -> HashMap<Entity, Quat> {
+        self.world
+            .query_filtered::<(Entity, &Transform), With<Joint>>()
+            .iter(&self.world)
+            .map(|(entity, transform)| (entity, transform.rotation))
+            .collect()
+    }
+
+    /// Every pose in the squad folded into `hasher`: each man's root, carriage
+    /// and joints, walked down his own hierarchy so the order is the rig's and
+    /// not the order the archetypes happen to be stored in.
+    pub fn fingerprint(&self, hasher: &mut DefaultHasher) {
+        for &(_, entity) in &self.players {
+            self.fold(entity, hasher);
+        }
+    }
+
+    fn fold(&self, entity: Entity, hasher: &mut DefaultHasher) {
+        let node = self.world.entity(entity);
+        let posed = node.contains::<PlayerActor>()
+            || node.contains::<Carriage>()
+            || node.contains::<Joint>();
+        if let Some(transform) = node.get::<Transform>().filter(|_| posed) {
+            transform
+                .translation
+                .to_array()
+                .map(f32::to_bits)
+                .hash(hasher);
+            transform.rotation.to_array().map(f32::to_bits).hash(hasher);
+            transform.scale.to_array().map(f32::to_bits).hash(hasher);
+        }
+        if let Some(children) = node.get::<Children>() {
+            for child in children.iter() {
+                self.fold(child, hasher);
+            }
         }
     }
 
@@ -473,6 +637,9 @@ fn census_contact() {
     let mut skating: Vec<(f32, f64, u32, String)> = Vec::new();
     let mut hovering: Vec<(f32, f64, u32, String)> = Vec::new();
     let mut hugging: Vec<(f64, u32, String)> = Vec::new();
+    // Planted slip by what moved the body under the sole, with the count of
+    // those frames skating past 1.5 m/s.
+    let mut causes: HashMap<&str, (Spread, u64)> = HashMap::new();
     while rehearsal.now() < until {
         rehearsal.tick();
         let now = rehearsal.now();
@@ -495,9 +662,28 @@ fn census_contact() {
                 )
             });
             bodies.insert(id, (position, actor.heading));
+            // Faster than anybody runs is the recording moving him; a body
+            // moving over legs that stand is the engine holding him on a
+            // spot; then a turn; then a pace the legs have not caught yet.
+            // What is left is the cycle itself.
+            let cause = if moved > 12.0 {
+                "hop"
+            } else if actor.tread < Actors::STEPPING * 0.5 && moved > 0.3 {
+                "dither"
+            } else if turned > 2.0 {
+                "turn"
+            } else if (moved - actor.tread).abs() > 1.0 {
+                "pace"
+            } else {
+                "gait"
+            };
             // A man the legs say is standing still, and how fast his body
-            // is being moved about by the recording anyway.
-            if actor.tread < Actors::STEPPING * 0.5 && actor.height <= Actors::AIRBORNE_FEET {
+            // is being moved about by the recording anyway — short of a
+            // teleport, which is cut to rather than drawn moving.
+            if actor.tread < Actors::STEPPING * 0.5
+                && actor.height <= Actors::AIRBORNE_FEET
+                && moved <= Actors::TELEPORT
+            {
                 jitter.note(moved);
             }
             let soles = [-1.0f32, 1.0].map(|side| world.transform_point(boot(side, gait)));
@@ -515,14 +701,18 @@ fn census_contact() {
             for (index, sole) in soles.into_iter().enumerate() {
                 let key = (id, index as i8);
                 // The boot swinging through a ball brushes the grass at
-                // contact; it is not a planted foot.
+                // contact; it is not a planted foot. On the grass is under
+                // 2 cm: a standing man's boot rests 17 mm up.
                 let striking = gait.power + gait.trap + gait.header > 0.02
                     && (index as f32 * 2.0 - 1.0) * gait.foot > 0.0;
-                if sole.y < 0.015 && !striking {
+                if sole.y < 0.02 && !striking {
                     if let Some(was) = planted.get(&key) {
                         let slip = Vec2::new(sole.x - was.x, sole.z - was.z).length() / dt;
                         slips.entry(bucket).or_default().note(slip);
+                        let (by_cause, skated) = causes.entry(cause).or_default();
+                        by_cause.note(slip);
                         if slip > 1.5 {
+                            *skated += 1;
                             skating.push((
                                 slip,
                                 now,
@@ -548,7 +738,7 @@ fn census_contact() {
     }
     println!("from {from:.0} ms for {span:.0} s");
     println!(
-        "body speed while his legs stand, m/s p50 p95 p99.9 max: {}",
+        "body speed while his legs stand, teleports left out, m/s p50 p95 p99.9 max: {}",
         jitter.line()
     );
     println!(
@@ -561,6 +751,19 @@ fn census_contact() {
         let slip = slips.get_mut(key).map_or("—".into(), Spread::line);
         let float = floating.get_mut(key).map_or("—".into(), Spread::line);
         println!("{key:<13} {:>8} {slip:>34}   {float:>34}", frames[key]);
+    }
+    println!(
+        "{:<13} {:>8} {:>9} {:>34}",
+        "cause", "soles", "> 1.5", "planted slip m/s p50 p95 p99.9 max"
+    );
+    for cause in ["hop", "dither", "turn", "pace", "gait"] {
+        if let Some((slip, skated)) = causes.get_mut(cause) {
+            println!(
+                "{cause:<13} {:>8} {skated:>9} {:>34}",
+                slip.values.len(),
+                slip.line()
+            );
+        }
     }
     let worst = |name: &str, list: &mut Vec<(f32, f64, u32, String)>| {
         list.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -908,9 +1111,18 @@ fn trace_rehearsal() {
 #[test]
 #[ignore = "needs MATCH_REPLAY, MATCH_PLAYER, MATCH_AT and MATCH_FIGURE_DUMP"]
 fn dump_rehearsal() {
-    const WIDE: usize = 240;
-    const TALL: usize = 360;
+    const BOTTOM: f32 = -0.08;
+    const TOP: f32 = 2.6;
     let read = |name: &str| std::env::var(name).ok();
+    // `MATCH_GRAIN` cuts him at another grain and `MATCH_PIXELS` draws him that
+    // many pixels tall, so two neighbouring grains can be compared at the
+    // height a man is cut over from one to the other.
+    let grain = Grain::of(Tier::Multisampled, read("MATCH_GRAIN").as_deref());
+    let pixels: f32 = read("MATCH_PIXELS")
+        .and_then(|pixels| pixels.parse().ok())
+        .unwrap_or(240.0);
+    let tall = (pixels * (TOP - BOTTOM) / Physique::STATURE).round() as usize;
+    let wide = tall * 2 / 3;
     let directory = std::path::PathBuf::from(read("MATCH_FIGURE_DUMP").expect("MATCH_FIGURE_DUMP"));
     let id: u32 = read("MATCH_PLAYER")
         .and_then(|id| id.parse().ok())
@@ -931,13 +1143,13 @@ fn dump_rehearsal() {
         panic!("set MATCH_REPLAY to a decompressed chunk");
     };
     let mut meshes = Assets::<Mesh>::default();
-    let parts = BodyParts::tailor(&mut meshes, Grain::FULL);
+    let parts = BodyParts::tailor(&mut meshes, grain);
     rehearsal.seek(at - 2_000.0);
     while rehearsal.now() < at {
         rehearsal.tick();
     }
     let rows = [bearing, bearing + FRAC_PI_2];
-    let mut sheet = vec![0u8; WIDE * columns * TALL * rows.len() * 4];
+    let mut sheet = vec![0u8; wide * columns * tall * rows.len() * 4];
     let mut report = String::from(
         "ms,speed,height,dive,stretch,grounded,rising,reach,save,set,land,power,swing,jump,flat,lead,smother,push,thud\n",
     );
@@ -983,10 +1195,10 @@ fn dump_rehearsal() {
         for (row, bearing) in rows.into_iter().enumerate() {
             let lens = Lens {
                 bearing,
-                bottom: -0.08,
-                top: 2.6,
+                bottom: BOTTOM,
+                top: TOP,
             };
-            let mut canvas = Canvas::new(WIDE, TALL);
+            let mut canvas = Canvas::new(wide, tall);
             posed(
                 &mut canvas,
                 &lens,
@@ -1000,14 +1212,500 @@ fn dump_rehearsal() {
                 ball(&mut canvas, &lens, offset);
             }
             let pixels = canvas.pixels();
-            for line in 0..TALL {
-                let from = line * WIDE * 4;
-                let to = ((row * TALL + line) * WIDE * columns + column * WIDE) * 4;
-                sheet[to..to + WIDE * 4].copy_from_slice(&pixels[from..from + WIDE * 4]);
+            for line in 0..tall {
+                let from = line * wide * 4;
+                let to = ((row * tall + line) * wide * columns + column * wide) * 4;
+                sheet[to..to + wide * 4].copy_from_slice(&pixels[from..from + wide * 4]);
             }
         }
     }
     std::fs::write(directory.join("rehearsal.rgba"), sheet).expect("wrote the sheet");
     std::fs::write(directory.join("rehearsal.csv"), report).expect("wrote the report");
-    println!("{}x{}", WIDE * columns, TALL * rows.len());
+    println!("{}x{}", wide * columns, tall * rows.len());
+}
+
+/// What each system cost, frame by frame, over one stretch of a run.
+struct Laps {
+    stages: Vec<&'static str>,
+    cost: Vec<Spread>,
+    total: Spread,
+    changed: Spread,
+}
+
+impl Laps {
+    fn new(rehearsal: &Rehearsal) -> Laps {
+        let stages: Vec<&'static str> = rehearsal.stages().collect();
+        Laps {
+            cost: stages.iter().map(|_| Spread::default()).collect(),
+            stages,
+            total: Spread::default(),
+            changed: Spread::default(),
+        }
+    }
+
+    fn note(&mut self, rehearsal: &Rehearsal) {
+        for (spread, lap) in self.cost.iter_mut().zip(rehearsal.laps()) {
+            spread.note(*lap);
+        }
+        self.total.note(rehearsal.laps().iter().sum());
+        self.changed.note(rehearsal.changed() as f32);
+    }
+
+    fn print(&mut self, title: &str) {
+        println!(
+            "{title} ({} frames)            µs p50     p95   p99.9      max",
+            self.total.values.len()
+        );
+        for (stage, spread) in self.stages.iter().zip(self.cost.iter_mut()) {
+            println!("  {stage:<26} {}", spread.line());
+        }
+        println!("  {:<26} {}", "frame", self.total.line());
+        println!(
+            "  {:<26} {}",
+            "GlobalTransforms changed",
+            self.changed.line()
+        );
+    }
+}
+
+/// **What a frame of the squad costs the CPU**, system by system, over the
+/// real bodies: the playhead, the posing, the carriage and Bevy's transform
+/// propagation — playing, on the frame of a seek and the frames after it, and
+/// paused. Also how many `GlobalTransform`s each frame dirties, and a
+/// fingerprint of every pose played, so a change that claims to leave the
+/// figures alone can prove it.
+///
+/// Native, so it is an A/B instrument rather than a figure for the browser:
+/// run both sides on the same machine and compare.
+///
+/// ```text
+/// MATCH_REPLAY=<chunk.json> [MATCH_AT=<ms>] [MATCH_SPAN=<s>] [MATCH_GRAIN=spare] cargo test --release --lib bench_frame -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+fn bench_frame() {
+    let grain = Grain::of(
+        Tier::Multisampled,
+        std::env::var("MATCH_GRAIN").ok().as_deref(),
+    );
+    let Some(mut rehearsal) = Rehearsal::open() else {
+        panic!("set MATCH_REPLAY to a decompressed chunk");
+    };
+    let from: f64 = std::env::var("MATCH_AT")
+        .ok()
+        .and_then(|at| at.parse().ok())
+        .unwrap_or(rehearsal.start + 5_000.0);
+    let span: f64 = std::env::var("MATCH_SPAN")
+        .ok()
+        .and_then(|span| span.parse().ok())
+        .unwrap_or(60.0);
+    let until = (from + span * 1000.0).min(rehearsal.until);
+    rehearsal.dress(grain);
+    rehearsal.seek(from - 2_000.0);
+    while rehearsal.now() < from {
+        rehearsal.tick();
+    }
+
+    let mut playing = Laps::new(&rehearsal);
+    let mut fingerprint = DefaultHasher::new();
+    while rehearsal.now() < until {
+        rehearsal.tick();
+        playing.note(&rehearsal);
+        rehearsal.fingerprint(&mut fingerprint);
+    }
+
+    let mut seeking = Laps::new(&rehearsal);
+    let mut after = Laps::new(&rehearsal);
+    let mut at = from;
+    while at < until {
+        rehearsal.seek(at);
+        seeking.note(&rehearsal);
+        for _ in 0..5 {
+            rehearsal.tick();
+            after.note(&rehearsal);
+        }
+        at += 10_000.0;
+    }
+
+    let mut paused = Laps::new(&rehearsal);
+    for _ in 0..120 {
+        rehearsal.hold();
+        paused.note(&rehearsal);
+    }
+
+    println!(
+        "grain {}, {} players, {} joints, from {from:.0} ms for {:.0} s",
+        grain.describe(),
+        rehearsal.players().count(),
+        rehearsal.joints(),
+        (until - from) / 1000.0
+    );
+    playing.print("playing");
+    seeking.print("seek frame");
+    after.print("five frames after a seek");
+    paused.print("paused");
+    println!("pose fingerprint {:016x}", fingerprint.finish());
+}
+
+/// An angle folded into a half turn either way.
+fn folded(angle: f32) -> f32 {
+    (angle + PI).rem_euclid(TAU) - PI
+}
+
+/// The angle between two flat directions, in degrees; `None` if either has
+/// no length to speak of.
+fn apart(a: Vec2, b: Vec2) -> Option<f32> {
+    let (a, b) = (a.try_normalize()?, b.try_normalize()?);
+    Some(a.dot(b).clamp(-1.0, 1.0).acos().to_degrees())
+}
+
+/// The window a census reads: `MATCH_AT` (or five seconds in) for
+/// `MATCH_SPAN` seconds (or `span`), after two seconds of play so every
+/// filter has settled.
+fn window(rehearsal: &mut Rehearsal, span: f64) -> (f64, f64) {
+    let from: f64 = std::env::var("MATCH_AT")
+        .ok()
+        .and_then(|at| at.parse().ok())
+        .unwrap_or(rehearsal.start + 5_000.0);
+    let span: f64 = std::env::var("MATCH_SPAN")
+        .ok()
+        .and_then(|span| span.parse().ok())
+        .unwrap_or(span);
+    let until = (from + span * 1000.0).min(rehearsal.until);
+    rehearsal.seek(from - 2_000.0);
+    while rehearsal.now() < from {
+        rehearsal.tick();
+    }
+    (from, until)
+}
+
+/// **Which way the outfielders face while they move**: the angle between the
+/// chest and the ball by pace and by where the run points against the ball;
+/// how often a man's facing swings round by more than a right angle inside
+/// half a second; how fast he turns; and how far off his own facing his legs
+/// travel. Keepers are left out, since they square to the ball by design.
+#[test]
+#[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+fn census_facing() {
+    const PACES: [(&str, f32); 5] = [
+        ("< 1.1", 1.1),
+        ("1.1-2", 2.0),
+        ("2-3", 3.0),
+        ("3-5", 5.0),
+        ("5+", f32::INFINITY),
+    ];
+    const HALF_SECOND: usize = 30;
+    let Some(mut rehearsal) = Rehearsal::open() else {
+        panic!("set MATCH_REPLAY to a decompressed chunk");
+    };
+    let (from, until) = window(&mut rehearsal, 120.0);
+    let dt = (Rehearsal::FRAME_MS / 1000.0) as f32;
+    let ids: Vec<u32> = rehearsal.players().collect();
+    // [pace][toward, across, away] = (frames, back to the ball, sum of degrees)
+    let mut cells = [[(0u64, 0u64, 0.0f64); 3]; 5];
+    let mut retreating = (0u64, 0u64);
+    let mut headings: HashMap<u32, Vec<f32>> = HashMap::new();
+    let mut cooling: HashMap<u32, usize> = HashMap::new();
+    let mut reversals = 0u64;
+    let mut outfield = 0u64;
+    let mut rates = Spread::default();
+    let mut spun = 0u64;
+    let mut off_facing = [0u64; 4];
+    let mut moving = 0u64;
+    while rehearsal.now() < until {
+        rehearsal.tick();
+        let ball = rehearsal.ball();
+        for &id in &ids {
+            let position = rehearsal.position(id);
+            let Some(actor) = rehearsal.actor(id) else {
+                headings.remove(&id);
+                continue;
+            };
+            if actor.is_goalkeeper {
+                continue;
+            }
+            outfield += 1;
+            let heading = actor.heading;
+            let past = headings.entry(id).or_default();
+            if let Some(&was) = past.last() {
+                let rate = folded(heading - was).abs().to_degrees() / dt;
+                rates.note(rate);
+                if rate > 360.0 {
+                    spun += 1;
+                }
+            }
+            past.push(heading);
+            if past.len() > HALF_SECOND {
+                past.remove(0);
+            }
+            let cool = cooling.entry(id).or_default();
+            if *cool > 0 {
+                *cool -= 1;
+            } else if past.len() == HALF_SECOND && folded(heading - past[0]).abs() > FRAC_PI_2 {
+                reversals += 1;
+                *cool = HALF_SECOND;
+            }
+            if actor.speed > Actors::MOVING {
+                moving += 1;
+                let off = actor.course.x.atan2(actor.course.y).abs().to_degrees();
+                let band = [30.0, 60.0, 100.0]
+                    .iter()
+                    .take_while(|&&edge| off >= edge)
+                    .count();
+                off_facing[band] += 1;
+            }
+            let Some(ball) = ball else {
+                continue;
+            };
+            let to_ball = Vec2::new(ball.x - position.x, ball.z - position.z);
+            let travel = Vec2::new(actor.travel.x, actor.travel.z);
+            if to_ball.length() < 0.5 || travel.length() < 0.3 {
+                continue;
+            }
+            let chest = Vec2::new(heading.sin(), heading.cos());
+            let (Some(to_chest), Some(run)) = (apart(chest, to_ball), apart(travel, to_ball))
+            else {
+                continue;
+            };
+            let pace = PACES
+                .iter()
+                .position(|(_, top)| actor.speed < *top)
+                .unwrap_or(PACES.len() - 1);
+            let way = [60.0, 120.0]
+                .iter()
+                .take_while(|&&edge| run >= edge)
+                .count();
+            let cell = &mut cells[pace][way];
+            cell.0 += 1;
+            cell.1 += u64::from(to_chest > 120.0);
+            cell.2 += f64::from(to_chest);
+            if way == 2 && actor.speed > 0.5 && actor.speed < 3.0 {
+                retreating.0 += 1;
+                retreating.1 += u64::from(to_chest > 120.0);
+            }
+        }
+    }
+    let share = |part: u64, whole: u64| 100.0 * part as f64 / whole.max(1) as f64;
+    println!(
+        "from {from:.0} ms for {:.0} s, {outfield} outfield player-frames",
+        (until - from) / 1000.0
+    );
+    println!("chest to ball by pace and run: frames, back turned (>120°) %, mean °");
+    println!(
+        "{:<8} {:>26} {:>26} {:>26}",
+        "m/s", "toward (<60°)", "across (60-120°)", "away (>120°)"
+    );
+    for (row, (name, _)) in PACES.iter().enumerate() {
+        let line: Vec<String> = cells[row]
+            .iter()
+            .map(|(frames, back, sum)| {
+                format!(
+                    "{frames:>8} {:>7.1}% {:>7.0}°",
+                    share(*back, *frames),
+                    sum / (*frames).max(1) as f64
+                )
+            })
+            .collect();
+        println!("{name:<8} {}", line.join("  "));
+    }
+    println!(
+        "retreating at 0.5-3 m/s: {} frames, {:.1}% with the back more than 120° to the ball",
+        retreating.0,
+        share(retreating.1, retreating.0)
+    );
+    println!(
+        "facing reversals past 90° inside half a second: {reversals}, {:.2} per player-minute",
+        reversals as f64 / (outfield as f64 / 3600.0).max(1e-9)
+    );
+    println!(
+        "turn rate °/s p50 p95 p99.9 max: {}; {:.2}% of frames past 360°/s",
+        rates.line(),
+        share(spun, outfield)
+    );
+    println!(
+        "moving past {:.1} m/s, legs off the facing: <30° {:.1}%, 30-60° {:.1}%, 60-100° {:.1}%, >100° {:.1}%",
+        Actors::MOVING,
+        share(off_facing[0], moving),
+        share(off_facing[1], moving),
+        share(off_facing[2], moving),
+        share(off_facing[3], moving)
+    );
+}
+
+/// **Whether a cut lands in stride**: every ten seconds the playhead is cut to
+/// an instant that a second run reaches by playing straight through, and each
+/// man's pace, heading and lean are compared on the frame of the cut and the
+/// ten after it.
+#[test]
+#[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+fn census_cut() {
+    const AFTER: usize = 10;
+    let (Some(mut through), Some(mut cut)) = (Rehearsal::open(), Rehearsal::open()) else {
+        panic!("set MATCH_REPLAY to a decompressed chunk");
+    };
+    let (from, until) = window(&mut through, 120.0);
+    let ids: Vec<u32> = through.players().collect();
+    // [frame after the cut] = [pace m/s, heading °, drive ×100, bank ×100]
+    let mut errors: Vec<[Spread; 4]> = (0..=AFTER).map(|_| Default::default()).collect();
+    let mut cuts = 0;
+    while through.now() + (AFTER as f64 + 1.0) * Rehearsal::FRAME_MS < until {
+        let at = through.now();
+        cut.seek(at);
+        for (frame, error) in errors.iter_mut().enumerate() {
+            if frame > 0 {
+                through.tick();
+                cut.tick();
+            }
+            for &id in &ids {
+                let (Some(played), Some(jumped)) = (through.actor(id), cut.actor(id)) else {
+                    continue;
+                };
+                error[0].note((played.speed - jumped.speed).abs());
+                error[1].note(folded(played.heading - jumped.heading).abs().to_degrees());
+                error[2].note((played.drive - jumped.drive).abs() * 100.0);
+                error[3].note((played.turn - jumped.turn).abs() * 100.0);
+            }
+        }
+        cuts += 1;
+        let next = at + 10_000.0;
+        while through.now() < next {
+            through.tick();
+        }
+    }
+    println!("{cuts} cuts from {from:.0} ms; error against playing through, p50 p95 p99.9 max");
+    for frame in [0, 1, 2, 5, AFTER] {
+        let [pace, heading, drive, bank] = &mut errors[frame];
+        println!("frame {frame:>2}");
+        println!("  pace m/s   {}", pace.line());
+        println!("  heading °  {}", heading.line());
+        println!("  drive ×100 {}", drive.line());
+        println!("  bank ×100  {}", bank.line());
+    }
+}
+
+/// **Whether a paused replay holds still**: plays two seconds, pauses for two,
+/// and counts every joint that moves while paused; then compares the first
+/// frame after it with an ordinary frame of play.
+#[test]
+#[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+fn census_pause() {
+    const HOLD: usize = 120;
+    let Some(mut rehearsal) = Rehearsal::open() else {
+        panic!("set MATCH_REPLAY to a decompressed chunk");
+    };
+    rehearsal.dress(Grain::SPARE);
+    window(&mut rehearsal, 0.0);
+    // Zero only when the rotation is the same bits: `angle_between` of a
+    // quaternion and itself rounds to a few hundredths of a degree.
+    let turned = |before: &HashMap<Entity, Quat>, after: &HashMap<Entity, Quat>| {
+        after
+            .iter()
+            .filter_map(|(joint, now)| {
+                before.get(joint).map(|was| {
+                    if was == now {
+                        0.0
+                    } else {
+                        was.angle_between(*now).to_degrees().max(f32::MIN_POSITIVE)
+                    }
+                })
+            })
+            .collect::<Vec<f32>>()
+    };
+    let mut ordinary = Spread::default();
+    let mut before = rehearsal.joint_rotations();
+    for _ in 0..HOLD {
+        rehearsal.tick();
+        let after = rehearsal.joint_rotations();
+        for angle in turned(&before, &after) {
+            ordinary.note(angle);
+        }
+        before = after;
+    }
+    let mut paused = Spread::default();
+    let mut moving_frames = 0;
+    let mut changed = 0;
+    for _ in 0..HOLD {
+        rehearsal.hold();
+        changed += rehearsal.changed();
+        let after = rehearsal.joint_rotations();
+        let moved: Vec<f32> = turned(&before, &after)
+            .into_iter()
+            .filter(|angle| *angle > 0.0)
+            .collect();
+        moving_frames += usize::from(!moved.is_empty());
+        for angle in moved {
+            paused.note(angle);
+        }
+        before = after;
+    }
+    rehearsal.tick();
+    let mut resumed = Spread::default();
+    for angle in turned(&before, &rehearsal.joint_rotations()) {
+        resumed.note(angle);
+    }
+    println!("joint turn between two frames, ° p50 p95 p99.9 max");
+    println!("  playing             {}", ordinary.line());
+    println!(
+        "  paused              {}  ({moving_frames} of {HOLD} frames moved a joint, {} joint moves, {changed} GlobalTransforms changed)",
+        paused.line(),
+        paused.values.len()
+    );
+    println!("  first frame after   {}", resumed.line());
+}
+
+/// **How far the legs come round between two drawn frames**, at each playback
+/// speed: the advance the gait asks for, and what the eye sees. The second is
+/// the change of phase folded into a half turn either way, so a leg drawn
+/// wheeling backwards while its man runs forwards reads as negative.
+#[test]
+#[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+fn census_stride() {
+    let frames = 30 * 60;
+    println!("legs per drawn frame at 60 fps, ° of cycle p50 p95 p99.9 max, men moving past 1 m/s");
+    for speed in [1.0f32, 2.0, 4.0, 8.0, 16.0] {
+        let Some(mut rehearsal) = Rehearsal::open() else {
+            panic!("set MATCH_REPLAY to a decompressed chunk");
+        };
+        rehearsal.at_speed(speed);
+        window(&mut rehearsal, 0.0);
+        let dt = (Rehearsal::FRAME_MS / 1000.0) as f32 * speed;
+        let ids: Vec<u32> = rehearsal.players().collect();
+        let mut phases: HashMap<u32, f32> = HashMap::new();
+        let mut asked = Spread::default();
+        let mut seen = Spread::default();
+        let mut backwards = 0u64;
+        let mut past_quarter = 0u64;
+        for _ in 0..frames {
+            if rehearsal.now() >= rehearsal.until {
+                break;
+            }
+            rehearsal.tick();
+            for &id in &ids {
+                let Some(actor) = rehearsal.actor(id) else {
+                    phases.remove(&id);
+                    continue;
+                };
+                let was = phases.insert(id, actor.phase);
+                if actor.speed <= 1.0 {
+                    continue;
+                }
+                let (stride, _) = Actors::stride_of(actor.id, actor.speed, actor.underfoot);
+                asked.note((actor.tread * dt * PI / stride).to_degrees());
+                if let Some(was) = was {
+                    let step = folded(actor.phase - was);
+                    seen.note(step.to_degrees());
+                    backwards += u64::from(step < 0.0);
+                    past_quarter += u64::from(step.abs() > FRAC_PI_2);
+                }
+            }
+        }
+        let moving = seen.values.len().max(1) as f64;
+        println!("{speed:>4}x  asked {}", asked.line());
+        println!(
+            "       seen  {}  ({:.1}% backwards, {:.1}% past a quarter turn)",
+            seen.line(),
+            100.0 * backwards as f64 / moving,
+            100.0 * past_quarter as f64 / moving
+        );
+    }
 }

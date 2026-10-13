@@ -55,6 +55,7 @@ use crate::app::config::ViewerConfig;
 use crate::app::quality::{Footprint, Quality};
 use crate::scene::pitch::Stands;
 use crate::players::actors::{PlayerActor, Undressed};
+use crate::players::body::Grain;
 use crate::recording::loader::ChunkLoader;
 use bevy::prelude::*;
 
@@ -132,13 +133,20 @@ impl Bringup {
     /// session — see [`MemoryBill`](crate::app::bill::MemoryBill).
     const PER_BANK: usize = 2;
 
-    /// How many frames the stadium is spread over: the structure, then two per
-    /// bank.
+    /// The courses the stadium itself takes: the structure, then two per bank.
+    const STANDS: usize = Self::STRUCTURE + Stands::BANKS * Self::PER_BANK;
+
+    /// …then one for each grain of the squad coarser than the finest, cut
+    /// after the stands — see
+    /// [`Tailoring`](crate::players::body::tailoring::Tailoring).
+    const GRAINS: usize = Grain::ALL.len() - 1;
+
+    /// How many frames the bring-up is spread over.
     ///
     /// A course is "a frame the bring-up is allowed to spend", and there are
     /// three reasons to spend one — a shader link, a large allocation, and
     /// letting a large allocation GO.
-    pub const COURSES: usize = Self::STRUCTURE + Stands::BANKS * Self::PER_BANK;
+    pub const COURSES: usize = Self::STANDS + Self::GRAINS;
 
     /// Updates to let go by before the first course is laid.
     ///
@@ -200,13 +208,30 @@ impl Bringup {
     /// with [`Self::COURSES`].
     fn raises_a_bank(course: usize) -> bool {
         course > Self::STRUCTURE
-            && course <= Self::COURSES
+            && course <= Self::STANDS
             && (course - Self::STRUCTURE - 1).is_multiple_of(Self::PER_BANK)
     }
 
     /// The run condition behind [`Self::raises_a_bank`].
     pub fn raising(bringup: Res<Bringup>) -> bool {
         bringup.warmed() && Self::raises_a_bank(bringup.course)
+    }
+
+    /// Whether this course cuts one of the squad's coarser grains.
+    fn cuts_a_grain(course: usize) -> bool {
+        course > Self::STANDS && course <= Self::COURSES
+    }
+
+    /// The run condition behind [`Self::cuts_a_grain`].
+    pub fn cutting(bringup: Res<Bringup>) -> bool {
+        bringup.warmed() && Self::cuts_a_grain(bringup.course)
+    }
+
+    /// What the page was last told, for the census that charges each shader
+    /// link to the course whose frame paid for it — see
+    /// [`ProgramCensus`](crate::app::perf::ProgramCensus).
+    pub fn phase(&self) -> Option<Phase> {
+        self.told
     }
 
     /// Whether the renderer has had time to draw a frame of its own.
@@ -440,6 +465,26 @@ mod tests {
         // …and the structure is laid before any of them, so no bank shares a
         // frame with a shader link.
         assert!(raising[0] > Bringup::STRUCTURE);
+    }
+
+    /// **Each coarser grain of the squad has a course of its own**, after the
+    /// last bank, so no cut shares a frame with a stand going up.
+    #[test]
+    fn the_squad_is_cut_coarser_after_the_stands_one_grain_a_course() {
+        let cutting: Vec<usize> = (1..=Bringup::COURSES + 1)
+            .filter(|course| Bringup::cuts_a_grain(*course))
+            .collect();
+        assert_eq!(cutting.len(), Grain::ALL.len() - 1);
+        assert!(
+            cutting
+                .iter()
+                .all(|course| !Bringup::raises_a_bank(*course))
+        );
+        let last_bank = (1..=Bringup::COURSES)
+            .filter(|course| Bringup::raises_a_bank(*course))
+            .max()
+            .expect("the stands go up");
+        assert!(cutting[0] > last_bank);
     }
 
     /// Nothing is raised once the stadium is up, so a long match cannot walk

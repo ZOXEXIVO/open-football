@@ -8,6 +8,12 @@ Captures the existing observable behavior of the match replay viewer's players m
 ### Requirement: Player motion is derived from recorded positions, not simulated
 A player's on-screen running, turning, pace and posture SHALL be computed each frame from the recorded position track sampled at the current playhead time, rather than from an independent physics simulation, so that the viewer reproduces the same match the engine actually played.
 
+Motion SHALL advance on the clock of whatever has the picture:
+- the playhead, while the replay is shown, so a replay that is paused, waiting for data or finished is a still picture;
+- real time, while the pre-match line-up has the picture and holds the playhead.
+
+After any discontinuity, a player SHALL be drawn in the stride that the recording implies at the new time. He SHALL NOT ease in from the state he was in before the jump.
+
 #### Scenario: A player accelerates out of a stationary start
 - **WHEN** the position track shows a player covering increasing ground between consecutive sampled frames
 - **THEN** the viewer eases the player's drawn speed and heading toward the values implied by that ground covered, rather than snapping instantly to them
@@ -15,6 +21,19 @@ A player's on-screen running, turning, pace and posture SHALL be computed each f
 #### Scenario: A gap in the recording is crossed
 - **WHEN** the distance between two consecutive samples for a player exceeds the teleport threshold
 - **THEN** the viewer treats the frame as a discontinuity (a restart or seek) instead of drawing the player sliding across the gap at an extreme speed
+
+#### Scenario: A paused replay is a still picture
+- **WHEN** playback is paused, is waiting for recording data, or has stopped at full time
+- **THEN** every player holds exactly the pose he had on the last frame the playhead moved, breathing, gestures and settling included
+- **AND** when play resumes, he resumes from that pose
+
+#### Scenario: The line-up stays alive while the playhead is held
+- **WHEN** the pre-match line-up has the picture and the playhead is held at its start
+- **THEN** the players standing in the line keep breathing and shifting their weight at real-time pace
+
+#### Scenario: A cut lands in stride
+- **WHEN** the playhead jumps, whether by a scrub, by a cut to the next recorded clip, or at the end of the line-up
+- **THEN** on the first frame after the jump, each player's pace, heading and lean match what the recording implies around the new time, as closely as if the replay had played through to that time
 
 ### Requirement: Goalkeeper animation reflects saves, dives and the ball
 The goalkeeper's pose SHALL react to the ball's approach and to recorded height changes: coiling before a take-off, tracking flight direction and reach during a dive or jump, and settling into a landing recovery afterward.
@@ -84,3 +103,92 @@ Shirts and shorts SHALL be built as a single continuous surface that follows the
 #### Scenario: A player raises an arm during play
 - **WHEN** the shoulder joint rotates through its running or reaching pose
 - **THEN** the sleeve and cuff mesh deforms with the arm's skin weights so the cloth and the arm move together without a seam or gap opening at the join
+
+### Requirement: Planted feet hold their place on the turf
+A player on his feet SHALL keep each sole that has come down on the grass at the point where it landed, until his stride lifts it. The leg SHALL bend to keep reaching that point as the body moves over it.
+
+If a foot could only be kept in place by stretching the leg past its reach, the foot SHALL come up off the grass toward that point, as at toe-off, rather than slide across it. A standing player whose held foot he has turned too far over, or drifted too far from, SHALL step it back under him.
+
+The same rule SHALL hold at every pace and in every direction of movement, for outfielders and goalkeepers alike. Only a foot that is swinging at the ball is exempt.
+
+#### Scenario: Running through a turn
+- **WHEN** a running player changes direction
+- **THEN** each planted sole stays where it landed until it lifts, the boot pivoting on it, and the turn is made across successive footfalls rather than by the feet sliding on the grass
+
+#### Scenario: A standing player shifted slightly by the recording
+- **WHEN** a standing player's recorded position moves a few centimetres back and forth
+- **THEN** his soles stay where they are and his body sways over them
+
+#### Scenario: A foot left behind is re-planted
+- **WHEN** a standing player's recorded position drifts so far that one of his planted feet could only be held by over-reaching
+- **THEN** he takes a step that brings that foot back under him
+
+#### Scenario: Starting and stopping
+- **WHEN** a player accelerates out of a standing start or pulls up from a run
+- **THEN** no planted sole slides across the grass, and the change of pace is taken across his footfalls
+
+#### Scenario: The kicking foot is free
+- **WHEN** a player swings at the ball
+- **THEN** the striking foot follows its swing, and only the standing foot is held to the grass
+
+### Requirement: Outfielders keep the play in view at moderate pace
+An outfielder's body SHALL face a direction between his direction of travel and the ball. One continuous rule SHALL set the weight between the two, from two inputs: his pace, and the angle between the two directions.
+- At walking pace, he SHALL face the ball.
+- As his pace rises, he SHALL turn toward where he runs.
+- He SHALL make that turn at a lower pace when moving across the ball's line than when moving directly away from it.
+
+There SHALL be no single pace at which his facing flips between the two.
+
+His legs SHALL step in the direction he actually travels. He backpedals or shuffles sideways under a body that faces the play.
+
+#### Scenario: A defender retreats at jogging pace
+- **WHEN** an outfielder moves directly away from the ball at about 2.5 m/s
+- **THEN** his body faces the ball and his legs backpedal with a running cycle
+
+#### Scenario: A player sprints away from the ball
+- **WHEN** an outfielder moves away from the ball at sprinting pace
+- **THEN** he faces where he runs
+
+#### Scenario: A player shuffles across the play
+- **WHEN** an outfielder moves across the ball's line at walking to jogging pace
+- **THEN** his body faces the ball, his legs side-step, and he turns to face where he runs as his pace rises
+
+#### Scenario: Pace hovering around the old switching pace
+- **WHEN** an outfielder's pace hovers around 1.1 m/s
+- **THEN** his facing changes smoothly with pace and does not flip back and forth between the ball and his direction of travel
+
+#### Scenario: Running at the ball
+- **WHEN** an outfielder moves toward the ball
+- **THEN** he faces where he runs at every pace
+
+### Requirement: The stride stays readable at fast playback
+The drawn leg cycle SHALL NOT advance by more than a quarter of a stride between two drawn frames. When playback speed, frame rate and a player's pace together would need more than that, his legs SHALL cycle at that limit, and his feet are allowed to fall behind the ground he covers.
+
+#### Scenario: Fast-forward
+- **WHEN** playback runs at 16× and a player sprints
+- **THEN** his legs are seen swinging forward through each stride and never wheel backwards
+
+#### Scenario: Ordinary speeds are untouched
+- **WHEN** playback runs at 1× or 2× on a display drawing 60 frames a second
+- **THEN** every player's stride is drawn exactly as it would be without this limit
+
+### Requirement: Player detail follows on-screen size
+Each footballer SHALL be drawn at a level of geometric detail chosen from how tall he appears on screen. The finest level SHALL be used only when the camera is close to him, and no player SHALL be drawn finer than his device class allows. A player whose on-screen size sits near the boundary between two levels SHALL NOT switch between them from one frame to the next.
+
+Every level SHALL show the same kit, number, name and face.
+
+#### Scenario: Broadcast view
+- **WHEN** the camera shows the play from the gantry at its rest zoom
+- **THEN** the players are drawn at the coarse level, wearing the same kit, numbers, names and faces as at the finer levels
+
+#### Scenario: Flown close
+- **WHEN** the camera is flown to arm's length of a player
+- **THEN** he is drawn at the finest level his device allows
+
+#### Scenario: Hovering near a boundary
+- **WHEN** a player's on-screen height hovers around a switching size
+- **THEN** he changes level at most once for each time he crosses the boundary, and not on every frame
+
+#### Scenario: Handheld device
+- **WHEN** the viewer runs on a handheld device
+- **THEN** no player is drawn finer than the handheld level, however close the camera

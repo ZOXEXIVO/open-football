@@ -67,6 +67,19 @@ impl RecordedSpans {
                 .any(|(from, to)| *from < end && *to >= start)
     }
 
+    /// Where the stretch of recording `time_ms` is in begins: the start of its
+    /// clip, `time_ms` itself in a hole, and nowhere when the whole match was
+    /// kept.
+    pub fn start_of(&self, time_ms: f64) -> f64 {
+        if !self.partial {
+            return f64::NEG_INFINITY;
+        }
+        self.spans
+            .iter()
+            .find(|(start, end)| time_ms >= *start && time_ms <= *end)
+            .map_or(time_ms, |(start, _)| *start)
+    }
+
     /// Start of the first clip that begins after `time_ms`.
     pub fn next_start(&self, time_ms: f64) -> Option<f64> {
         self.spans
@@ -108,6 +121,10 @@ pub struct Playback {
     pub speed: f32,
     /// Set for one frame after a seek so followers can cut instead of glide.
     pub seeked: bool,
+    /// How far the playhead moved this frame, in milliseconds of match: nothing
+    /// while paused, waiting on the recording or finished, and nothing on a
+    /// frame that cut rather than played. See [`Self::match_delta`].
+    pub advanced_ms: f64,
     /// Set for one frame when the playhead ran out of a clip and was carried
     /// to the next one — a cut the REPLAY made, as against a seek somebody
     /// asked for.
@@ -140,6 +157,7 @@ impl Playback {
             playing: false,
             speed: 1.0,
             seeked: false,
+            advanced_ms: 0.0,
             cut: false,
         }
     }
@@ -214,6 +232,19 @@ impl Playback {
         self.stamp(self.time_ms, labels)
     }
 
+    /// What [`Self::clock_label`] reads, short of formatting it: the whole
+    /// second into the half, and whether it is the second half.
+    pub fn clock_reading(&self) -> (u64, bool) {
+        let half = self.duration_ms * 0.5;
+        let second_half = self.time_ms >= half;
+        let offset = if second_half {
+            self.time_ms - half
+        } else {
+            self.time_ms
+        };
+        ((offset / 1000.0).max(0.0) as u64, second_half)
+    }
+
     pub fn stamp(&self, time_ms: f64, labels: &ViewerLabels) -> String {
         let half = self.duration_ms * 0.5;
         let (offset, half_label) = if time_ms < half {
@@ -231,9 +262,11 @@ impl Playback {
         spans: Res<RecordedSpans>,
         time: Res<Time>,
     ) {
+        playback.advanced_ms = 0.0;
         if !playback.playing || !loader.ready {
             return;
         }
+        let from = playback.time_ms;
         playback.time_ms += time.delta_secs_f64() * 1000.0 * playback.speed as f64;
 
         // Run out of the end of a clip and there is nothing ahead but empty
@@ -255,6 +288,24 @@ impl Playback {
         if playback.time_ms >= playback.duration_ms {
             playback.time_ms = playback.duration_ms;
             playback.playing = false;
+        }
+        if !playback.seeked {
+            playback.advanced_ms = playback.time_ms - from;
+        }
+    }
+
+    /// **Seconds of match the picture moved through this frame**, which is
+    /// the clock every figure on the pitch is animated on.
+    ///
+    /// The playhead's own advance, so a replay that is paused, waiting on the
+    /// recording or finished is a still picture — except while the line-up
+    /// has the picture: it holds the playhead and is a live scene, so it runs
+    /// on the real clock (`ceremony`, `real`).
+    pub fn match_delta(&self, ceremony: bool, real: f32) -> f32 {
+        if ceremony {
+            real
+        } else {
+            (self.advanced_ms / 1000.0) as f32
         }
     }
 

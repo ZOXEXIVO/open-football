@@ -36,6 +36,7 @@ use crate::recording::replay::ReplayTracks;
 use crate::scene::field::Field;
 use crate::scene::net::Netting;
 use crate::sound::mixer::{Meeting, Mixer};
+use bevy::input::touch::Touches;
 use bevy::prelude::*;
 
 /// The browser's audio engine, once it has been persuaded to hand one over.
@@ -307,6 +308,9 @@ impl Soundtrack {
         mut tracks: ResMut<ReplayTracks>,
         mut soundtrack: ResMut<Soundtrack>,
         mut speakers: NonSendMut<Speakers>,
+        mouse: Res<ButtonInput<MouseButton>>,
+        keys: Res<ButtonInput<KeyCode>>,
+        touches: Res<Touches>,
     ) {
         // A paused replay is a still picture, and nothing is being kicked in
         // a still picture. Muted is the same instruction arriving from the bar
@@ -322,10 +326,17 @@ impl Soundtrack {
         let Some(mixer) = speakers.amplify() else {
             return;
         };
-        // Cheap on a running context, and the only thing that gets a viewer
-        // who pressed play before the browser trusted the page from silence
-        // to sound.
-        mixer.wake();
+        // The only thing that gets a viewer who pressed play before the
+        // browser trusted the page from silence to sound. Asked on a frame
+        // the viewer did something, the only kind of frame a browser resumes
+        // audio on; asked on every frame it was a call into JavaScript per
+        // frame and a console warning per refusal.
+        if mouse.get_just_pressed().next().is_some()
+            || keys.get_just_pressed().next().is_some()
+            || touches.any_just_pressed()
+        {
+            mixer.wake();
+        }
         mixer.listen(Self::LEVEL);
 
         // A seek — or a cut from the end of one clip to the start of the next
@@ -727,13 +738,12 @@ mod possession {
     /// A straight run from one point to another over a second, sampled at the
     /// recorder's own 30 ms step.
     ///
-    /// ⚠ **The step matters.** A track whose samples are further apart than
-    /// [`INTERPOLATION_GAP_MS`](crate::recording::replay) is HELD rather than
-    /// interpolated — the recorder drops samples that repeat a position, so a
-    /// wide gap means the thing was standing still. A fixture written with two
-    /// samples a second apart therefore describes nobody moving at all, which
-    /// is how this file's first pass "proved" that a twelve-metre pass never
-    /// left its man.
+    /// ⚠ **The step matters.** A track reads a wide gap the way the recorder
+    /// writes one ([`Track`](crate::recording::replay::Track)): the thing stood
+    /// still until the last period. A fixture written with two samples a
+    /// second apart therefore describes nobody moving and then a cut, which is
+    /// how this file's first pass "proved" that a twelve-metre pass never left
+    /// its man.
     ///
     /// Metres in, engine units out: `x` and `y` are the 0.125 m grid.
     fn run(from: (f32, f32), to: (f32, f32), height: f32) -> Vec<Sample> {

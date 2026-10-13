@@ -40,12 +40,44 @@
 //! is exact. `Instant` is `performance.now()` here, which Chrome coarsens to
 //! about 100 µs on a page that is not cross-origin isolated — hence the
 //! window: a median over two seconds of frames is well clear of that step.
+//!
+//! ## The recipe
+//!
+//! Every figure quoted against this readout is taken the same way, so any two
+//! of them can be compared:
+//!
+//! 1. `cargo build --release` in `.dev/match`, then
+//!    `OF_NO_BROWSER=1 OF_NO_LINEUP=1 target/release/dev_match.exe viewer 14 14`.
+//!    The harness serves uncapped (`fps_cap` 0) with the readout on, and
+//!    cross-origin isolated, so the clock here is fine-grained (about 5 µs)
+//!    rather than the 100 µs step above; `OF_NO_BROWSER` keeps a second
+//!    viewer off the GPU being measured.
+//! 2. `chrome --headless=new --enable-logging=stderr --v=0
+//!    --user-data-dir=<fresh absolute path> --disable-gpu-vsync
+//!    --disable-frame-rate-limit --autoplay-policy=no-user-gesture-required
+//!    --window-size=1920,1080 http://localhost:18002/` for sixty seconds.
+//!    A fresh profile every run: Chrome keeps linked programs in it, and a
+//!    second run would report a first open it never paid for. Autoplay is
+//!    allowed so the soundtrack runs as it does for anyone who has clicked.
+//! 3. The page's console comes out as `INFO:CONSOLE` lines on Chrome's
+//!    stderr. Read the median of the last ten frame-cost lines. The squad's
+//!    own cost is that figure minus the same run with `?squad=off`;
+//!    `?grain=full`, `?grain=spare` and `?grain=far` set the finest cut a
+//!    man is drawn at, `far` drawing everybody at the coarsest; and
+//!    `programs at ready` is the shader bill of the open (see
+//!    [`ProgramCensus`]).
 
 use crate::app::bill::MemoryBill;
+use crate::app::bringup::{Bringup, Phase};
 use crate::app::config::ViewerConfig;
+use crate::players::body::Grain;
 use bevy::camera::visibility::ViewVisibility;
+use bevy::platform::collections::HashSet;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
+use bevy::render::render_resource::{CachedPipelineState, PipelineCache, PipelineDescriptor};
+use bevy::render::{Extract, ExtractSchedule, Render, RenderApp, RenderSystems};
+use bevy::shader::ShaderDefVal;
 
 /// A fixed window of millisecond samples, kept unsorted and summarised on
 /// demand — a frame writes three of these and the readout asks four times a
@@ -112,12 +144,18 @@ pub struct FrameCost {
     /// let through. Sampled rather than counted every frame.
     meshes: u32,
     drawn: u32,
+    /// How many different mesh assets the drawn ones share between them: the
+    /// count 0.20's WebGL2 renderer rebuilds bind groups for, every frame.
+    distinct: u32,
     counted: u32,
     /// **What the squad costs in triangles**, and at which grain — reported
     /// once by [`crate::players::actors::Actors::spawn`] and repeated on every
     /// line afterwards. See [`Self::note_geometry`] for why it is told rather
     /// than counted.
     geometry: Option<String>,
+    /// How many men on the pitch are drawn at each grain, finest first — see
+    /// [`Tailoring`](crate::players::body::tailoring::Tailoring).
+    cut: [u32; Grain::ALL.len()],
     /// The single worst frame since the last console line, and what it cost.
     ///
     /// Separate from the window's own 95th percentile, and not the same
@@ -171,7 +209,7 @@ impl FrameCost {
     /// the browser and the GPU.
     pub fn close(
         mut cost: ResMut<FrameCost>,
-        meshes: Query<&ViewVisibility, With<Mesh3d>>,
+        meshes: Query<(&ViewVisibility, &Mesh3d)>,
         config: Res<ViewerConfig>,
     ) {
         let now = Instant::now();
@@ -185,12 +223,17 @@ impl FrameCost {
             cost.counted = 0;
             let mut total = 0;
             let mut drawn = 0;
-            for visibility in &meshes {
+            let mut assets = HashSet::new();
+            for (visibility, mesh) in &meshes {
                 total += 1;
-                drawn += u32::from(visibility.get());
+                if visibility.get() {
+                    drawn += 1;
+                    assets.insert(mesh.id());
+                }
             }
             cost.meshes = total;
             cost.drawn = drawn;
+            cost.distinct = assets.len() as u32;
         }
 
         if !config.instrumented() {
@@ -224,6 +267,11 @@ impl FrameCost {
     /// and is found by hand, months later, off a user's complaint.
     pub fn note_geometry(&mut self, summary: String) {
         self.geometry = Some(summary);
+    }
+
+    /// How many men on the pitch are drawn at each grain this frame.
+    pub fn note_cut(&mut self, cut: [u32; Grain::ALL.len()]) {
+        self.cut = cut;
     }
 
     /// The median whole-frame time over the last window, in milliseconds.
@@ -286,15 +334,18 @@ impl FrameCost {
         let (update, _) = self.update.spread();
         let fps = if frame > 0.0 { 1000.0 / frame } else { 0.0 };
         format!(
-            "match viewer — {fps:.0} fps · frame {frame:.1} ms (p95 {worst:.1}, \
-             worst {spike:.0}) = update {update:.1} + rest of main {rest:.1} \
-             + outside {outside:.1} · {drawn}/{meshes} meshes drawn{geometry} \
-             · heap {heap:.0} MiB (peak {peak:.0}) · assets {assets:.0} MiB",
+            "match viewer — {fps:.0} fps · frame {frame:.2} ms (p95 {worst:.1}, \
+             worst {spike:.0}) = update {update:.2} + rest of main {rest:.2} \
+             + outside {outside:.2} · {drawn}/{meshes} meshes drawn ({distinct} distinct){geometry} \
+             · men cut full/spare/far {cut:?} · heap {heap:.0} MiB (peak {peak:.0}) \
+             · assets {assets:.0} MiB",
             spike = self.spike,
             rest = (main - update).max(0.0),
             outside = (frame - main).max(0.0),
             drawn = self.drawn,
             meshes = self.meshes,
+            distinct = self.distinct,
+            cut = self.cut,
             geometry = match &self.geometry {
                 Some(summary) => format!(" · {summary}"),
                 None => String::new(),
@@ -320,5 +371,151 @@ impl FrameCost {
             drawn = self.drawn,
             meshes = self.meshes,
         )
+    }
+}
+
+/// **Which shader programs a session links, and whose frame pays for each.**
+///
+/// On WebGL2 every pipeline is a program linked synchronously on the main
+/// thread, four to six seconds apiece for a material one under ANGLE, which
+/// is why [`Bringup`] spreads the scene over courses. This names each
+/// pipeline as the cache finishes it — with the shader defs and vertex layout
+/// that make it a program of its own — against the phase the page was told
+/// about that frame, and totals them at `ready`. Instrumented sessions only.
+pub struct ProgramCensus;
+
+impl Plugin for ProgramCensus {
+    fn build(&self, app: &mut App) {
+        let wanted = app
+            .world()
+            .get_resource::<ViewerConfig>()
+            .is_some_and(ViewerConfig::instrumented);
+        let Some(render) = app.get_sub_app_mut(RenderApp).filter(|_| wanted) else {
+            return;
+        };
+        render
+            .init_resource::<Linked>()
+            .add_systems(ExtractSchedule, Linked::follow_bringup)
+            .add_systems(Render, Linked::note.in_set(RenderSystems::Cleanup));
+    }
+}
+
+/// The census, kept in the render world.
+#[derive(Resource, Default)]
+struct Linked {
+    /// What the page was last told, copied over from the main world.
+    phase: Option<Phase>,
+    /// Which of the cache's pipelines have been reported, by position.
+    reported: Vec<bool>,
+    pipelines: usize,
+    materials: usize,
+    /// Wall time of the frames that linked anything, in milliseconds.
+    linking: f32,
+    since: Option<Instant>,
+    totalled: bool,
+}
+
+impl Linked {
+    fn follow_bringup(bringup: Extract<Res<Bringup>>, mut linked: ResMut<Linked>) {
+        linked.phase = bringup.phase();
+    }
+
+    fn note(cache: Res<PipelineCache>, mut linked: ResMut<Linked>) {
+        let now = Instant::now();
+        let frame = linked
+            .since
+            .map_or(0.0, |since| (now - since).as_secs_f32() * 1000.0);
+        linked.since = Some(now);
+
+        let mut fresh = Vec::new();
+        for (index, pipeline) in cache.pipelines().enumerate() {
+            if !matches!(pipeline.state, CachedPipelineState::Ok(_)) {
+                continue;
+            }
+            if linked.reported.len() <= index {
+                linked.reported.resize(index + 1, false);
+            }
+            if !std::mem::replace(&mut linked.reported[index], true) {
+                fresh.push(Self::describe(&pipeline.descriptor));
+            }
+        }
+        if !fresh.is_empty() {
+            let materials = fresh.iter().filter(|(material, _)| *material).count();
+            linked.pipelines += fresh.len();
+            linked.materials += materials;
+            linked.linking += frame;
+            FrameCost::announce(&format!(
+                "match viewer — {}: {} pipelines linked, {} of them material, in a {:.0} ms frame",
+                Self::stage(linked.phase),
+                fresh.len(),
+                materials,
+                frame
+            ));
+            for (_, line) in &fresh {
+                FrameCost::announce(line);
+            }
+        }
+        if linked.phase == Some(Phase::Ready) && !linked.totalled {
+            linked.totalled = true;
+            FrameCost::announce(&format!(
+                "match viewer — programs at ready: {} pipelines, {} material, {:.1} s in the frames that linked them",
+                linked.pipelines,
+                linked.materials,
+                linked.linking / 1000.0
+            ));
+        }
+    }
+
+    fn stage(phase: Option<Phase>) -> String {
+        match phase {
+            None | Some(Phase::Starting) => "starting".into(),
+            Some(Phase::Building(course)) => format!("course {course}/{}", Bringup::COURSES),
+            Some(Phase::Recording) => "recording".into(),
+            Some(Phase::Squad) => "squad".into(),
+            Some(Phase::Ready) => "ready".into(),
+        }
+    }
+
+    /// One pipeline on one line, and whether it runs a material's fragment
+    /// shader — Bevy labels every one of those `*_mesh_pipeline`, and they are
+    /// the programs that cost seconds.
+    fn describe(descriptor: &PipelineDescriptor) -> (bool, String) {
+        let PipelineDescriptor::RenderPipelineDescriptor(render) = descriptor else {
+            return (false, "  (compute)".into());
+        };
+        let label = render.label.as_deref().unwrap_or("unlabelled");
+        let layout = render
+            .vertex
+            .buffers
+            .iter()
+            .map(|buffer| {
+                let locations: Vec<String> = buffer
+                    .attributes
+                    .iter()
+                    .map(|attribute| attribute.shader_location.to_string())
+                    .collect();
+                format!("{}B@{}", buffer.array_stride, locations.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut defs: Vec<String> = render
+            .fragment
+            .iter()
+            .flat_map(|fragment| fragment.shader_defs.iter().map(Self::def))
+            .collect();
+        defs.sort();
+        (
+            label.ends_with("mesh_pipeline"),
+            format!("  {label} · vertex {layout} · {}", defs.join(" ")),
+        )
+    }
+
+    fn def(def: &ShaderDefVal) -> String {
+        match def {
+            ShaderDefVal::Bool(name, true) => name.to_string(),
+            ShaderDefVal::Bool(name, false) => format!("!{name}"),
+            ShaderDefVal::Int(name, value) => format!("{name}={value}"),
+            ShaderDefVal::UInt(name, value) => format!("{name}={value}"),
+        }
     }
 }

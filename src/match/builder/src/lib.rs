@@ -76,13 +76,67 @@ impl MatchViewer {
         let staging = Self::staging(crate_dir, assets_dir);
 
         if Self::staged(assets_dir) && Self::stamp(&staging).as_deref() == Some(&fingerprint) {
-            return Ok(());
+            return Self::census(&staging, assets_dir);
         }
 
         Self::bindgen(&wasm, &staging)?;
         Self::optimize(&staging)?;
         Self::compress(&staging, assets_dir)?;
-        Self::stamp_write(&staging, &fingerprint)
+        Self::stamp_write(&staging, &fingerprint)?;
+        Self::census(&staging, assets_dir)
+    }
+
+    /// Prints what the staged viewer costs a browser: its bytes, its bytes on
+    /// the wire, and its function count — the figure Safari's memory follows,
+    /// see [`Self::optimize`]. On a cache hit too, so every build that
+    /// considers the viewer says what it is shipping.
+    fn census(staging: &Path, assets_dir: &Path) -> Result<(), String> {
+        let wasm = staging.join(format!("{}_bg.wasm", Self::OUT_NAME));
+        let bytes = fs::read(&wasm)
+            .map_err(|error| format!("could not read {}: {}", wasm.display(), error))?;
+        let gzipped = fs::metadata(assets_dir.join(Self::wasm_file()))
+            .map(|meta| meta.len())
+            .map_err(|error| format!("could not read the staged wasm: {}", error))?;
+        let functions = Self::functions(&bytes)
+            .ok_or_else(|| format!("{} is not a wasm module", wasm.display()))?;
+        println!(
+            "cargo:warning=match viewer: {} bytes, {} gzipped, {} functions",
+            bytes.len(),
+            gzipped,
+            functions
+        );
+        Ok(())
+    }
+
+    /// How many function bodies the module defines: the entry count of its
+    /// code section (id 10). Imports have no body and are not counted, which
+    /// is right — an engine compiles bodies, not imports.
+    fn functions(wasm: &[u8]) -> Option<u32> {
+        // Past the magic number and the version.
+        let mut at = 8;
+        while at < wasm.len() {
+            let id = wasm[at];
+            at += 1;
+            let size = Self::leb128(wasm, &mut at)?;
+            if id == 10 {
+                return Self::leb128(wasm, &mut at);
+            }
+            at = at.checked_add(usize::try_from(size).ok()?)?;
+        }
+        Some(0)
+    }
+
+    fn leb128(bytes: &[u8], at: &mut usize) -> Option<u32> {
+        let mut value = 0u64;
+        for shift in (0..35).step_by(7) {
+            let byte = *bytes.get(*at)?;
+            *at += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return u32::try_from(value).ok();
+            }
+        }
+        None
     }
 
     /// Scratch space for the raw wasm-bindgen output, and the fingerprint that
@@ -430,5 +484,36 @@ impl MatchViewer {
                     && Path::new(String::from_utf8_lossy(&output.stdout).trim()).exists()
             })
             .unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One `() -> ()` type, two functions of it, two empty bodies.
+    const TWO_FUNCTIONS: [u8; 28] = [
+        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic, version
+        0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section
+        0x03, 0x03, 0x02, 0x00, 0x00, // function section
+        0x0a, 0x07, 0x02, 0x02, 0x00, 0x0b, 0x02, 0x00, 0x0b, // code section
+    ];
+
+    #[test]
+    fn counts_the_bodies_in_the_code_section() {
+        assert_eq!(MatchViewer::functions(&TWO_FUNCTIONS), Some(2));
+    }
+
+    #[test]
+    fn a_module_without_code_has_no_functions() {
+        assert_eq!(MatchViewer::functions(&TWO_FUNCTIONS[..19]), Some(0));
+    }
+
+    #[test]
+    fn leb128_reads_multi_byte_counts() {
+        let mut at = 0;
+        assert_eq!(MatchViewer::leb128(&[0xac, 0x02], &mut at), Some(300));
+        assert_eq!(at, 2);
+        assert_eq!(MatchViewer::leb128(&[0x80], &mut 0), None);
     }
 }

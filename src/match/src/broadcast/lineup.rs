@@ -888,6 +888,22 @@ impl Lineup {
 }
 
 #[cfg(test)]
+impl Lineup {
+    /// A ceremony that has the picture, for tests of what runs under one.
+    pub fn walking_out() -> Lineup {
+        Lineup {
+            act: Act::Running(0.0),
+            shot: Some(Shot {
+                stand: Vec3::ZERO,
+                aim: Vec3::Z,
+                lens: 1.0,
+            }),
+            ..default()
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::broadcast::camera::TvCamera;

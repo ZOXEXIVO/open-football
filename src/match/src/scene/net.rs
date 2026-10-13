@@ -26,7 +26,9 @@
 //!   ball hit into the top corner peels the netting off the crossbar.
 
 use crate::art::textures::Textures;
+use crate::broadcast::lineup::Lineup;
 use crate::players::actors::{Actors, BallState};
+use crate::recording::playback::Playback;
 use crate::scene::field::Field;
 use crate::scene::pitch::Pitch;
 use bevy::asset::RenderAssetUsages;
@@ -255,10 +257,14 @@ impl NetPanel {
                 .dot(self.across)
                 .clamp(-self.half_across, self.half_across);
             let up = flat.dot(self.up).clamp(0.0, self.edge_at(u));
-            self.contact = self.across * along + self.up * up;
+            let contact = self.across * along + self.up * up;
+            // A ball lying still in the netting presses the same dent on
+            // every frame, and only a dent that moved is worth a new mesh.
+            let moved = contact != self.contact || out != self.amplitude || self.phase != 0.0;
+            self.contact = contact;
             self.amplitude = out;
             self.phase = 0.0;
-            return true;
+            return moved;
         }
 
         if self.amplitude <= Self::NEGLIGIBLE {
@@ -689,11 +695,20 @@ impl Netting {
     /// Push the netting around with the ball, once per frame.
     pub fn ripple(
         ball: Res<BallState>,
+        playback: Res<Playback>,
+        lineup: Res<Lineup>,
         time: Res<Time>,
         mut meshes: ResMut<Assets<Mesh>>,
         mut panels: Query<(&mut NetPanel, &Mesh3d)>,
     ) {
-        let delta = time.delta_secs().clamp(1e-4, 0.1);
+        // On the same clock as the ball that pushes it: a paused replay holds
+        // the netting where it was, wobble and all.
+        let delta = playback
+            .match_delta(lineup.on(), time.delta_secs())
+            .min(0.1);
+        if delta <= 0.0 && !playback.seeked {
+            return;
+        }
         // Resolved once for the whole net rather than per panel: it is a
         // question about the BALL, and asking it ten times invites ten
         // different answers — which is precisely how the side panels came

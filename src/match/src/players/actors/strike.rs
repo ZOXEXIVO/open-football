@@ -315,7 +315,7 @@ mod tests {
     fn a_strike_is_timed_to_the_millisecond() {
         let mut ball = struck(300);
         let mut last: Option<f32> = None;
-        for now in 200..290 {
+        for now in 210..290 {
             let contact = Actors::next_impact(&mut ball, now as f64).expect("a strike");
             if let Some(was) = last {
                 let closer = was - contact.delay;

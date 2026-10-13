@@ -3710,6 +3710,9 @@ fn print_usage() {
     eprintln!(
         "  SQUAD_SPREAD=<sd>                   within-squad quality spread in skill points (default 0)"
     );
+    eprintln!(
+        "  OF_NO_BROWSER=1                     serve the viewer without opening a browser window"
+    );
     eprintln!();
     eprintln!(
         "Random level range: {}–{} inclusive.",
@@ -14479,20 +14482,23 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
 
     println!("\nStarting viewer at http://localhost:18002");
 
+    // A headless browser measuring frame cost shares the GPU with whatever
+    // this opens, so the measuring recipe serves without a window.
+    let open_browser = std::env::var_os("OF_NO_BROWSER").is_none();
     #[cfg(target_os = "windows")]
-    {
+    if open_browser {
         let _ = std::process::Command::new("cmd")
             .args(["/C", "start", "http://localhost:18002"])
             .spawn();
     }
     #[cfg(target_os = "macos")]
-    {
+    if open_browser {
         let _ = std::process::Command::new("open")
             .arg("http://localhost:18002")
             .spawn();
     }
     #[cfg(target_os = "linux")]
-    {
+    if open_browser {
         let _ = std::process::Command::new("xdg-open")
             .arg("http://localhost:18002")
             .spawn();
@@ -14518,12 +14524,30 @@ async fn serve() {
         .route(
             "/static/viewer/match_viewer_bg.wasm",
             get(viewer_wasm_handler),
-        );
+        )
+        // Cross-origin isolated, so the page's `performance.now()` is fine
+        // enough to time a paused frame: Chrome coarsens it to 100 µs
+        // otherwise, which is the whole of what such a frame costs.
+        .layer(axum::middleware::map_response(isolated));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:18002")
         .await
         .unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+
+async fn isolated(mut response: axum::response::Response) -> axum::response::Response {
+    use axum::http::{HeaderName, HeaderValue};
+    let headers = response.headers_mut();
+    headers.insert(
+        HeaderName::from_static("cross-origin-opener-policy"),
+        HeaderValue::from_static("same-origin"),
+    );
+    headers.insert(
+        HeaderName::from_static("cross-origin-embedder-policy"),
+        HeaderValue::from_static("require-corp"),
+    );
+    response
 }
 
 async fn page_handler() -> axum::response::Html<String> {

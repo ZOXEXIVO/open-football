@@ -1612,7 +1612,7 @@ impl Pitch {
             &mut materials,
             &mut images,
             &config,
-            Throng::of(quality.footprint(), config.crowd.as_deref()),
+            Throng::of(quality.footprint(), quality.tier(), config.crowd.as_deref()),
             *upkeep,
         );
     }

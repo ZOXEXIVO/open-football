@@ -502,19 +502,27 @@ impl FlightPad {
             .unwrap_or(Vec2::ZERO);
         let reach = offset.length();
 
+        // Every write below is compared first: a `Node` touched re-runs the
+        // UI layout over the whole tree, and this runs on every frame.
         if let Ok((mut node, mut border)) = ring.single_mut() {
-            node.display = shown;
+            if node.display != shown {
+                node.display = shown;
+            }
             let wanted = if pad.stick.is_some() {
                 Self::EDGE_LIVE
             } else {
                 Self::EDGE
             };
-            border.set_all(wanted);
+            border.set_if_neq(BorderColor::all(wanted));
         }
         if let Ok((mut node, mut fill)) = knob.single_mut() {
             let travel = offset * (Layout::RADIUS - Layout::KNOB);
-            node.left = px(Layout::RADIUS - Layout::KNOB - 1.0 + travel.x);
-            node.top = px(Layout::RADIUS - Layout::KNOB - 1.0 + travel.y);
+            let left = px(Layout::RADIUS - Layout::KNOB - 1.0 + travel.x);
+            let top = px(Layout::RADIUS - Layout::KNOB - 1.0 + travel.y);
+            if node.left != left || node.top != top {
+                node.left = left;
+                node.top = top;
+            }
             let wanted = match pad.stick {
                 Some(_) if reach >= Self::RIM => Self::FAST,
                 Some(_) if reach >= Self::DEAD => Self::LIVE,
@@ -525,7 +533,9 @@ impl FlightPad {
             }
         }
         for (lift, mut node, mut fill) in &mut lifts {
-            node.display = shown;
+            if node.display != shown {
+                node.display = shown;
+            }
             let held = pad.lift.is_some_and(|(_, up)| up == lift.up);
             let wanted = if held { Self::LIVE } else { Self::SLAB };
             if fill.0 != wanted {

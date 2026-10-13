@@ -77,7 +77,14 @@ When the playhead is moved by the viewer (scrubbing) or by the playback engine (
 - **THEN** the position used for playback snaps to the nearest boundary of a recorded clip rather than remaining on the requested but unrecorded instant
 
 ### Requirement: Entity positions are read back as interpolated movement or as instantaneous placement
-Between two recorded samples of the same entity (ball or player), the viewer SHALL interpolate a smooth position when the gap represents plausible travel, and SHALL instead hold the earlier position until the later sample's time is reached when the gap represents an instantaneous placement (e.g. a restart, a substitution, a kickoff reset) that could not physically have been travelled at that speed.
+Between two recorded samples of the same entity (ball or player), the viewer SHALL interpolate a smooth position when the gap represents plausible travel. It SHALL instead hold the earlier position until the later sample's time when the gap represents an instantaneous placement (e.g. a restart, a substitution, a kickoff reset) that could not physically have been travelled at that speed.
+
+The recorder writes a sample only once an entity has moved past a small tolerance from the last sample it wrote, or on a periodic heartbeat. One recording period before any sample, the entity was therefore still within that tolerance of the previous one.
+- The viewer SHALL draw the movement between two samples as steady across the whole gap when steady movement would have stayed within the tolerance until the last period.
+- Otherwise it SHALL draw a hold at the earlier position, then a single move ending on the later sample. That move goes at the pace the next recording period shows the entity carrying on with, and never slower than the tolerance allows.
+- Whether that move is plausible travel or an instantaneous placement SHALL be judged on that move's speed.
+
+In every case, the drawn position at a sample's own time SHALL be that sample's recorded position.
 
 #### Scenario: A struck ball is shown as continuous movement
 - **WHEN** two consecutive ball samples are close enough in time and the implied speed of travel between them is within what a struck ball or a running player could plausibly achieve
@@ -90,6 +97,23 @@ Between two recorded samples of the same entity (ball or player), the viewer SHA
 #### Scenario: A vertical drop counts toward the same judgment
 - **WHEN** the height component of a sample changes sharply between two consecutive samples
 - **THEN** that vertical change is included when deciding whether the movement was plausible travel or an instantaneous placement
+
+#### Scenario: A resting goalkeeper steps
+- **WHEN** a goalkeeper's consecutive samples are 210–690 ms apart and the later one lies 10–30 cm from the earlier one
+- **THEN** the viewer holds him at the earlier point, then moves him to the later one in a single move ending on it, leaving no earlier than the recording allows
+- **AND** it neither holds him for the whole gap and jumps the distance in a single drawn frame, nor smears the step across the whole gap
+
+#### Scenario: A resting ball is struck
+- **WHEN** a ball has been at rest long enough that its next sample comes after a gap longer than one recording period, and that sample lies a struck ball's single-period travel away
+- **THEN** the ball is drawn leaving its spot within the final recording period, at the pace it flies on at, instead of appearing at the later point in a single drawn frame
+
+#### Scenario: A slow walk stays steady
+- **WHEN** a player walks slowly enough that his samples are a few recording periods apart, and steady movement between them would have stayed within the recorder's tolerance
+- **THEN** he is drawn moving steadily between them, not standing and then hopping each sample
+
+#### Scenario: A relocation after a long rest is still a cut
+- **WHEN** a gap longer than one recording period ends in a sample that is further from the earlier one than anything could travel in one recording period
+- **THEN** the viewer holds the earlier position until the later sample's time and then cuts to it
 
 ### Requirement: Entities absent from the recording near the playhead are not shown as present
 A player or the ball SHALL only be considered "on the pitch" at a given playback time if the recording has actual sample data near that time, distinct from the recording simply not having downloaded yet.

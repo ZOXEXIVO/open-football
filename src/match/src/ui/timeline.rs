@@ -16,6 +16,7 @@ use bevy::input::touch::Touches;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak};
 use bevy::ui::RelativeCursorPosition;
+use bevy::window::PrimaryWindow;
 
 /// The two faces of the play button, rasterised once at startup.
 ///
@@ -65,6 +66,62 @@ pub struct LoadingNotice;
 /// and a re-shape twice a second at worst.
 #[derive(Component)]
 pub struct FpsBadge;
+
+/// **What the pointer is doing to one of the bar's controls**: resting on it,
+/// holding it down, or neither.
+///
+/// The three states `bevy_ui` kept as the now deprecated `Press`, kept
+/// here because Bevy's replacement (`Hovered` and `Pressed`) needs the
+/// picking stack: 7,812 more functions in a module Safari bills per function,
+/// for five buttons that never overlap.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum Press {
+    #[default]
+    None,
+    Hovered,
+    Pressed,
+}
+
+impl Press {
+    /// Follows the pointer onto the controls as `bevy_ui`'s focus system did:
+    /// a press that starts on a control holds it `Pressed` for as long as the
+    /// button or finger stays down, wherever the pointer goes; otherwise the
+    /// control under the pointer is `Hovered`; and a hidden control is
+    /// neither. A click that comes and goes inside one frame is still
+    /// `Pressed` for that frame.
+    pub fn follow_pointer(
+        window: Single<&Window, With<PrimaryWindow>>,
+        mouse: Res<ButtonInput<MouseButton>>,
+        touches: Res<Touches>,
+        mut controls: Query<(
+            &mut Press,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &InheritedVisibility,
+        )>,
+    ) {
+        let pointer = window.physical_cursor_position().or_else(|| {
+            touches
+                .first_pressed_position()
+                .map(|at| at * window.scale_factor())
+        });
+        let went_down = mouse.just_pressed(MouseButton::Left) || touches.any_just_pressed();
+        let held = mouse.pressed(MouseButton::Left) || touches.iter().next().is_some();
+        for (mut press, node, transform, visible) in &mut controls {
+            let over = pointer.is_some_and(|at| node.contains_point(*transform, at));
+            let wanted = if !visible.get() {
+                Press::None
+            } else if over && went_down || *press == Press::Pressed && held {
+                Press::Pressed
+            } else if over {
+                Press::Hovered
+            } else {
+                Press::None
+            };
+            press.set_if_neq(wanted);
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct SpeedButton;
@@ -266,7 +323,7 @@ impl Timeline {
                     bar.spawn((
                         PlayToggle,
                         ControlHint("Space: play / pause   |   [ / ]: slower / faster"),
-                        Interaction::default(),
+                        Press::default(),
                         Node {
                             width: px(Self::PLAY_WIDTH),
                             height: px(Self::CHIP_HEIGHT),
@@ -456,7 +513,7 @@ impl Timeline {
                         SpeedButton,
                         ControlHint("Click: faster   |   Shift + click: slower   |   [ / ]: slower / faster"),
                         Chip::default(),
-                        Interaction::default(),
+                        Press::default(),
                         // Wide enough for the longest label the cycle can
                         // produce ("0.25x"); 40 px fitted only the
                         // whole-number speeds it used to carry.
@@ -487,7 +544,7 @@ impl Timeline {
                         // replay is running, so this can never be a page that
                         // starts shouting on its own — see `sound`.
                         Chip { armed: true },
-                        Interaction::default(),
+                        Press::default(),
                         Self::chip(60.0),
                         BackgroundColor(Self::ARMED),
                         BorderColor::all(Self::ARMED_EDGE),
@@ -520,7 +577,7 @@ impl Timeline {
                         CameraResetButton,
                         ControlHint("Return to the broadcast camera and follow the ball"),
                         Chip::default(),
-                        Interaction::default(),
+                        Press::default(),
                         Self::chip(60.0),
                         BackgroundColor(Self::CHIP),
                         BorderColor::all(Self::CHIP_EDGE),
@@ -542,7 +599,7 @@ impl Timeline {
                         bar.spawn((
                             StatesButton,
                             Chip::default(),
-                            Interaction::default(),
+                            Press::default(),
                             Self::chip(62.0),
                             BackgroundColor(Self::CHIP),
                             BorderColor::all(Self::CHIP_EDGE),
@@ -828,17 +885,17 @@ impl Timeline {
     /// over it.
     pub fn paint_chips(
         mut chips: Query<
-            (&Interaction, &Chip, &mut BackgroundColor, &mut BorderColor),
-            Or<(Changed<Interaction>, Changed<Chip>)>,
+            (&Press, &Chip, &mut BackgroundColor, &mut BorderColor),
+            Or<(Changed<Press>, Changed<Chip>)>,
         >,
     ) {
         for (interaction, chip, mut background, mut border) in &mut chips {
             let (fill, edge) = match (chip.armed, interaction) {
-                (_, Interaction::Pressed) => (Self::CHIP_PRESSED, Self::CHIP_EDGE_HOVER),
-                (true, Interaction::Hovered) => (Self::ARMED, Self::CHIP_EDGE_HOVER),
-                (true, Interaction::None) => (Self::ARMED, Self::ARMED_EDGE),
-                (false, Interaction::Hovered) => (Self::CHIP_HOVER, Self::CHIP_EDGE_HOVER),
-                (false, Interaction::None) => (Self::CHIP, Self::CHIP_EDGE),
+                (_, Press::Pressed) => (Self::CHIP_PRESSED, Self::CHIP_EDGE_HOVER),
+                (true, Press::Hovered) => (Self::ARMED, Self::CHIP_EDGE_HOVER),
+                (true, Press::None) => (Self::ARMED, Self::ARMED_EDGE),
+                (false, Press::Hovered) => (Self::CHIP_HOVER, Self::CHIP_EDGE_HOVER),
+                (false, Press::None) => (Self::CHIP, Self::CHIP_EDGE),
             };
             background.set_if_neq(BackgroundColor(fill));
             border.set_if_neq(BorderColor::all(edge));
@@ -849,16 +906,13 @@ impl Timeline {
     /// it is not one — it is a solid fill rather than a tint, and it has no
     /// armed state to compose with.
     pub fn paint_play(
-        mut toggle: Query<
-            (&Interaction, &mut BackgroundColor),
-            (With<PlayToggle>, Changed<Interaction>),
-        >,
+        mut toggle: Query<(&Press, &mut BackgroundColor), (With<PlayToggle>, Changed<Press>)>,
     ) {
         for (interaction, mut fill) in &mut toggle {
             fill.set_if_neq(BackgroundColor(match interaction {
-                Interaction::Pressed => Self::GO_PRESSED,
-                Interaction::Hovered => Self::GO_HOVER,
-                Interaction::None => Self::GO,
+                Press::Pressed => Self::GO_PRESSED,
+                Press::Hovered => Self::GO_HOVER,
+                Press::None => Self::GO,
             }));
         }
     }
@@ -960,11 +1014,11 @@ impl Timeline {
     }
 
     pub fn handle_toggle(
-        toggle: Query<&Interaction, (Changed<Interaction>, With<PlayToggle>)>,
+        toggle: Query<&Press, (Changed<Press>, With<PlayToggle>)>,
         mut playback: ResMut<Playback>,
     ) {
         for interaction in &toggle {
-            if *interaction != Interaction::Pressed {
+            if *interaction != Press::Pressed {
                 continue;
             }
             let finished = playback.time_ms >= playback.duration_ms;
@@ -984,16 +1038,16 @@ impl Timeline {
     /// derived from anything: this button IS the state, so the press and the
     /// light are the same fact and splitting them would only give two systems
     /// a chance to disagree.
-    /// `Changed<Interaction>` and not a bare read, for the reason
+    /// `Changed<Press>` and not a bare read, for the reason
     /// [`Self::handle_toggle`] wants it: `Pressed` is a state and not an
     /// event, so a held button is `Pressed` on every frame of the hold and a
     /// toggle read off it would flip the sound sixty times a second.
     pub fn handle_sound(
-        mut button: Query<(&Interaction, &mut Chip), (Changed<Interaction>, With<SoundButton>)>,
+        mut button: Query<(&Press, &mut Chip), (Changed<Press>, With<SoundButton>)>,
         mut soundtrack: ResMut<Soundtrack>,
     ) {
         for (interaction, mut chip) in &mut button {
-            if *interaction == Interaction::Pressed {
+            if *interaction == Press::Pressed {
                 soundtrack.muted = !soundtrack.muted;
             }
             chip.set_if_neq(Chip {
@@ -1009,13 +1063,13 @@ impl Timeline {
     /// happened rather than the next one — the same reason the orbit drag
     /// sits where it does.
     pub fn handle_camera_reset(
-        button: Query<&Interaction, (Changed<Interaction>, With<CameraResetButton>)>,
+        button: Query<&Press, (Changed<Press>, With<CameraResetButton>)>,
         mut orbit: ResMut<CameraOrbit>,
         mut zoom: ResMut<CameraZoom>,
         mut flight: ResMut<CameraFlight>,
         mut subject: ResMut<CameraSubject>,
     ) {
-        if button.iter().any(|i| *i == Interaction::Pressed) {
+        if button.iter().any(|i| *i == Press::Pressed) {
             CameraRig::reset(&mut orbit, &mut zoom, &mut flight, &mut subject);
         }
     }
@@ -1027,11 +1081,11 @@ impl Timeline {
     /// its handler has to run there. Leaving it in `handle_debug_controls`
     /// would draw a button that does nothing.
     pub fn handle_speed(
-        speed: Query<&Interaction, (Changed<Interaction>, With<SpeedButton>)>,
+        speed: Query<&Press, (Changed<Press>, With<SpeedButton>)>,
         mut playback: ResMut<Playback>,
         keys: Res<ButtonInput<KeyCode>>,
     ) {
-        if speed.iter().any(|i| *i == Interaction::Pressed) {
+        if speed.iter().any(|i| *i == Press::Pressed) {
             if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
                 playback.adjust_speed(false);
             } else {
@@ -1041,29 +1095,35 @@ impl Timeline {
     }
 
     pub fn refresh_hints(
-        controls: Query<(&Interaction, &ControlHint)>,
+        controls: Query<(&Press, &ControlHint)>,
         mut label: Query<(&mut Text, &mut Visibility), With<HintLabel>>,
     ) {
         let Ok((mut text, mut visibility)) = label.single_mut() else {
             return;
         };
-        if let Some((_, hint)) = controls
-            .iter()
-            .find(|(state, _)| **state != Interaction::None)
-        {
+        if let Some((_, hint)) = controls.iter().find(|(state, _)| **state != Press::None) {
             if text.as_str() != hint.0 {
                 **text = hint.0.into();
             }
-            *visibility = Visibility::Inherited;
+            visibility.set_if_neq(Visibility::Inherited);
         } else {
-            *visibility = Visibility::Hidden;
+            visibility.set_if_neq(Visibility::Hidden);
         }
     }
 
     /// Keeps the speed chip's label in step. Also unconditional — see
     /// [`Self::handle_speed`].
-    pub fn refresh_speed(playback: Res<Playback>, mut speed: Query<&mut Text, With<SpeedLabel>>) {
+    pub fn refresh_speed(
+        playback: Res<Playback>,
+        mut speed: Query<&mut Text, With<SpeedLabel>>,
+        mut shown: Local<Option<f32>>,
+    ) {
+        // Formatted when the speed moves, not on every frame to compare.
+        if *shown == Some(playback.speed) {
+            return;
+        }
         if let Ok(mut text) = speed.single_mut() {
+            *shown = Some(playback.speed);
             let wanted = playback.speed_label();
             if text.as_str() != wanted {
                 **text = wanted;
@@ -1074,10 +1134,10 @@ impl Timeline {
     /// Flips the state labels. Debug overlay only — the button does not
     /// exist otherwise.
     pub fn handle_debug_controls(
-        states: Query<&Interaction, (Changed<Interaction>, With<StatesButton>)>,
+        states: Query<&Press, (Changed<Press>, With<StatesButton>)>,
         mut overlay: ResMut<DebugOverlay>,
     ) {
-        if states.iter().any(|i| *i == Interaction::Pressed) {
+        if states.iter().any(|i| *i == Press::Pressed) {
             overlay.states = !overlay.states;
         }
     }
@@ -1193,6 +1253,7 @@ impl Timeline {
         mut clock: Query<&mut Text, With<ClockLabel>>,
         mut icon: Query<&mut ImageNode, With<PlayToggleIcon>>,
         mut notice: Query<(&mut Visibility, &mut Text), (With<LoadingNotice>, Without<ClockLabel>)>,
+        mut read: Local<Option<(u64, bool)>>,
     ) {
         // The playhead, in whole pixels of the rail rather than as a share of
         // it. A percentage moves every frame the replay plays, and each write
@@ -1242,12 +1303,15 @@ impl Timeline {
                 node.border_radius = BorderRadius::all(px(size * 0.5));
             }
         }
-        if let Ok(mut text) = clock.single_mut() {
-            // Compared before writing, like every other label on this bar.
-            // The clock reads to the minute and this system runs on every
-            // frame, so an unconditional write re-shaped a line of text three
-            // thousand times for each time it changed — and text shaping is
-            // the most expensive thing the UI does.
+        let reading = playback.clock_reading();
+        if *read != Some(reading)
+            && let Ok(mut text) = clock.single_mut()
+        {
+            // Formatted only when the reading moves, and compared before
+            // writing like every other label on this bar: an unconditional
+            // write re-shaped a line of text on every frame — and text
+            // shaping is the most expensive thing the UI does.
+            *read = Some(reading);
             let wanted = playback.clock_label(&config.labels);
             if text.as_str() != wanted {
                 **text = wanted;
@@ -1270,11 +1334,11 @@ impl Timeline {
             // that a near miss is kept too it means a match in which neither
             // side had a shot worth the name, which is rarer and duller still.
             let empty = spans.nothing_recorded();
-            *visibility = if loader.ready && !empty {
+            visibility.set_if_neq(if loader.ready && !empty {
                 Visibility::Hidden
             } else {
                 Visibility::Inherited
-            };
+            });
             let wanted = if empty {
                 &config.labels.no_recording
             } else {
@@ -1306,5 +1370,141 @@ impl Timeline {
                 armed: CameraRig::moved(&orbit, &zoom, &flight, &subject),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    /// A window, a mouse, and one 40 × 20 control centred at (100, 50).
+    struct Pointer {
+        world: World,
+        control: Entity,
+    }
+
+    impl Pointer {
+        const ON: Vec2 = Vec2::new(95.0, 45.0);
+        const OFF: Vec2 = Vec2::new(300.0, 300.0);
+
+        fn new() -> Pointer {
+            let mut world = World::new();
+            world.spawn((Window::default(), PrimaryWindow));
+            world.insert_resource(ButtonInput::<MouseButton>::default());
+            world.insert_resource(Touches::default());
+            let control = world
+                .spawn((
+                    Press::default(),
+                    ComputedNode {
+                        size: Vec2::new(40.0, 20.0),
+                        ..default()
+                    },
+                    UiGlobalTransform::from_translation(Vec2::new(100.0, 50.0)),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            Pointer { world, control }
+        }
+
+        /// One frame with the pointer at `at`, the left button going `down`
+        /// and/or `up` during it, and what the control reads afterwards.
+        fn frame(&mut self, at: Option<Vec2>, down: bool, up: bool) -> Press {
+            self.world
+                .query_filtered::<&mut Window, With<PrimaryWindow>>()
+                .single_mut(&mut self.world)
+                .unwrap()
+                .set_physical_cursor_position(at.map(|at| at.as_dvec2()));
+            let mut mouse = self.world.resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            if down {
+                mouse.press(MouseButton::Left);
+            }
+            if up {
+                mouse.release(MouseButton::Left);
+            }
+            self.world.run_system_once(Press::follow_pointer).unwrap();
+            *self.world.get::<Press>(self.control).unwrap()
+        }
+    }
+
+    #[test]
+    fn a_pointer_resting_on_a_control_hovers_it_and_leaving_lets_go() {
+        let mut pointer = Pointer::new();
+        assert_eq!(
+            pointer.frame(Some(Pointer::ON), false, false),
+            Press::Hovered
+        );
+        assert_eq!(pointer.frame(Some(Pointer::OFF), false, false), Press::None);
+        assert_eq!(pointer.frame(None, false, false), Press::None);
+    }
+
+    #[test]
+    fn a_press_holds_until_release_wherever_the_pointer_goes() {
+        let mut pointer = Pointer::new();
+        assert_eq!(
+            pointer.frame(Some(Pointer::ON), true, false),
+            Press::Pressed
+        );
+        assert_eq!(
+            pointer.frame(Some(Pointer::OFF), false, false),
+            Press::Pressed
+        );
+        assert_eq!(pointer.frame(Some(Pointer::OFF), false, true), Press::None);
+    }
+
+    #[test]
+    fn releasing_over_the_control_leaves_it_hovered() {
+        let mut pointer = Pointer::new();
+        pointer.frame(Some(Pointer::ON), true, false);
+        assert_eq!(
+            pointer.frame(Some(Pointer::ON), false, true),
+            Press::Hovered
+        );
+    }
+
+    #[test]
+    fn a_click_inside_one_frame_is_pressed_for_that_frame() {
+        let mut pointer = Pointer::new();
+        assert_eq!(pointer.frame(Some(Pointer::ON), true, true), Press::Pressed);
+        assert_eq!(
+            pointer.frame(Some(Pointer::ON), false, false),
+            Press::Hovered
+        );
+    }
+
+    #[test]
+    fn a_press_that_starts_elsewhere_does_not_press_what_it_drags_over() {
+        let mut pointer = Pointer::new();
+        assert_eq!(pointer.frame(Some(Pointer::OFF), true, false), Press::None);
+        assert_eq!(
+            pointer.frame(Some(Pointer::ON), false, false),
+            Press::Hovered
+        );
+    }
+
+    #[test]
+    fn a_hidden_control_is_neither_hovered_nor_pressed() {
+        let mut pointer = Pointer::new();
+        pointer
+            .world
+            .entity_mut(pointer.control)
+            .insert(InheritedVisibility::HIDDEN);
+        assert_eq!(pointer.frame(Some(Pointer::ON), true, false), Press::None);
+    }
+
+    #[test]
+    fn an_unchanged_state_is_not_rewritten() {
+        let mut pointer = Pointer::new();
+        pointer.frame(Some(Pointer::ON), false, false);
+        let tick = pointer.world.change_tick();
+        pointer.frame(Some(Pointer::ON), false, false);
+        let changed = pointer
+            .world
+            .entity(pointer.control)
+            .get_change_ticks::<Press>()
+            .unwrap()
+            .is_changed(tick, pointer.world.change_tick());
+        assert!(!changed);
     }
 }

@@ -22,7 +22,7 @@
 
 use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::VenueInfo;
-use crate::app::quality::Footprint;
+use crate::app::quality::{Footprint, Tier};
 use crate::art::textures::{CrowdPalette, Textures};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
@@ -569,17 +569,28 @@ impl Throng {
         spacing: Crowd::HANDHELD_SPACING,
     };
 
+    /// …and what a computer on the post-processed tier builds: the phone's
+    /// figure at the computer's spacing, so the same people sit in the same
+    /// seats in the same clothes, cut as coarsely as its squad is.
+    pub const SPARE: Throng = Throng {
+        spacing: Crowd::SPACING,
+        ..Self::HANDHELD
+    };
+
     /// Handhelds omit spectator meshes to leave room for browser and upload
-    /// memory during startup. The stadium itself is still built. Explicit
+    /// memory during startup. The stadium itself is still built. A computer
+    /// builds the figure its rendering tier draws its squad at — see
+    /// [`Grain::of`](crate::players::body::Grain::of). Explicit
     /// `?crowd=handheld|full|off` overrides remain available for diagnostics.
-    pub fn of(footprint: Footprint, asked: Option<&str>) -> Option<Throng> {
+    pub fn of(footprint: Footprint, tier: Tier, asked: Option<&str>) -> Option<Throng> {
         match asked {
             Some("off") => None,
             Some("full") => Some(Self::FULL),
             Some("handheld") => Some(Self::HANDHELD),
-            _ => match footprint {
-                Footprint::Roomy => Some(Self::FULL),
-                Footprint::Handheld => None,
+            _ => match (footprint, tier) {
+                (Footprint::Handheld, _) => None,
+                (Footprint::Roomy, Tier::Multisampled) => Some(Self::FULL),
+                (Footprint::Roomy, Tier::PostProcessed) => Some(Self::SPARE),
             },
         }
     }
@@ -2881,27 +2892,97 @@ mod tests {
         );
     }
 
-    /// Missing or invalid overrides retain the device's safe startup default.
+    /// Missing or invalid overrides retain the device's safe startup default,
+    /// whichever tier the machine is on.
     #[test]
     fn the_page_can_empty_the_ground_and_cannot_be_given_nonsense() {
-        assert_eq!(Throng::of(Footprint::Roomy, Some("off")), None);
+        for tier in [Tier::Multisampled, Tier::PostProcessed] {
+            assert_eq!(Throng::of(Footprint::Roomy, tier, Some("off")), None);
+            assert_eq!(
+                Throng::of(Footprint::Roomy, tier, Some("handheld")),
+                Some(Throng::HANDHELD)
+            );
+            assert_eq!(
+                Throng::of(Footprint::Handheld, tier, Some("full")),
+                Some(Throng::FULL)
+            );
+            // Anything else is the device's own answer.
+            assert_eq!(Throng::of(Footprint::Handheld, tier, Some("of")), None);
+            assert_eq!(
+                Throng::of(Footprint::Handheld, tier, Some("handheld")),
+                Some(Throng::HANDHELD)
+            );
+        }
         assert_eq!(
-            Throng::of(Footprint::Roomy, Some("handheld")),
-            Some(Throng::HANDHELD)
-        );
-        assert_eq!(
-            Throng::of(Footprint::Handheld, Some("full")),
+            Throng::of(Footprint::Roomy, Tier::Multisampled, Some("of")),
             Some(Throng::FULL)
         );
-        // Anything else is the device's own answer.
-        assert_eq!(Throng::of(Footprint::Handheld, Some("of")), None);
-        assert_eq!(Throng::of(Footprint::Handheld, None), None);
+    }
+
+    /// **The crowd is cut by the tier that cuts the squad**: a multisampled
+    /// computer builds the full figure, a post-processed one the phone's
+    /// figure in the same seats, and a phone none.
+    #[test]
+    fn the_crowd_follows_the_rendering_tier() {
         assert_eq!(
-            Throng::of(Footprint::Handheld, Some("handheld")),
-            Some(Throng::HANDHELD)
+            Throng::of(Footprint::Roomy, Tier::Multisampled, None),
+            Some(Throng::FULL)
         );
-        assert_eq!(Throng::of(Footprint::Roomy, Some("of")), Some(Throng::FULL));
-        assert_eq!(Throng::of(Footprint::Roomy, None), Some(Throng::FULL));
+        assert_eq!(
+            Throng::of(Footprint::Roomy, Tier::PostProcessed, None),
+            Some(Throng::SPARE)
+        );
+        for tier in [Tier::Multisampled, Tier::PostProcessed] {
+            assert_eq!(Throng::of(Footprint::Handheld, tier, None), None);
+        }
+    }
+
+    /// **The two computer crowds are the same people in the same seats.** Each
+    /// bank's vertices and indices are two equations in how many sit and how
+    /// many stand; both banks answer them the same way, and the coarser
+    /// figure comes to well under two thirds of the geometry (about half).
+    #[test]
+    fn the_two_roomy_throngs_seat_the_same_crowd() {
+        use crate::scene::pitch::Pitch;
+        let stature = Stature::of(&venue(62_000, 54_000, 9_800, true));
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let bank = Terrace {
+            length: 120.0,
+            rows: 34,
+            riser: 0.72,
+            tread: Pitch::TREAD,
+            from: 40.0,
+            slab: Pitch::SLAB,
+        };
+        let seated_and_standing = |throng: Throng| {
+            let mesh = Crowd::fill(&bank, stature, Stand::Side, &palette, 1, throng)
+                .expect("a full bank holds a crowd");
+            let vertices = mesh.count_vertices() as i64;
+            let indices = mesh.indices().expect("a bank is indexed").len() as i64;
+            let (seat, legs) = (
+                Figures::vertices(throng) as i64,
+                Figures::leg_vertices(throng) as i64,
+            );
+            let (seat_indices, leg_indices) = (
+                Figures::indices(throng) as i64,
+                Figures::leg_indices(throng) as i64,
+            );
+            let det = seat * leg_indices - legs * seat_indices;
+            assert_ne!(det, 0);
+            let seated = vertices * leg_indices - legs * indices;
+            let standing = seat * indices - vertices * seat_indices;
+            assert_eq!(seated % det, 0);
+            assert_eq!(standing % det, 0);
+            ((seated / det, standing / det), vertices)
+        };
+        let (full, full_vertices) = seated_and_standing(Throng::FULL);
+        let (spare, spare_vertices) = seated_and_standing(Throng::SPARE);
+        assert!(full.0 > 500 && full.1 > 0, "{full:?} is not a crowd");
+        assert_eq!(full, spare, "the two throngs seat different crowds");
+        assert!(
+            spare_vertices * 5 < full_vertices * 3,
+            "the coarse crowd is {spare_vertices} vertices against {full_vertices}"
+        );
     }
 
     /// Nobody stands in mid-air, and nobody stands on the pitch side of the

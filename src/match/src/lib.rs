@@ -40,7 +40,7 @@ mod ui;
 
 use crate::app::bringup::Bringup;
 use crate::app::config::ViewerConfig;
-use crate::app::perf::FrameCost;
+use crate::app::perf::{FrameCost, ProgramCensus};
 use crate::app::quality::{Footprint, Quality};
 use crate::app::stage::Stage;
 use crate::art::typeface::Typeface;
@@ -50,8 +50,10 @@ use crate::broadcast::cut::CutFade;
 use crate::broadcast::focus::{CameraSubject, FocusRing};
 use crate::broadcast::goal::GoalShot;
 use crate::broadcast::lineup::Lineup;
+use crate::players::actors::pre_roll::PreRoll;
 use crate::players::actors::{Actors, BallState};
 use crate::players::aftermath::Aftermath;
+use crate::players::body::tailoring::Tailoring;
 use crate::players::portrait::Portraits;
 use crate::recording::loader::ChunkLoader;
 use crate::recording::playback::{EventLog, Playback, RecordedSpans};
@@ -62,10 +64,11 @@ use crate::scene::sky::Sky;
 use crate::sound::matchday::{Soundtrack, Speakers};
 use crate::ui::scoreboard::{FullTime, Scoreboard};
 use crate::ui::teamsheet::TeamSheet;
-use crate::ui::timeline::{DebugOverlay, Timeline};
+use crate::ui::timeline::{DebugOverlay, Press, Timeline};
 use crate::ui::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use crate::ui::watermark::Watermark;
 use bevy::asset::AssetMetaCheck;
+use bevy::input::InputSystems;
 use bevy::light::{DirectionalLightShadowMap, PointLightShadowMap};
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
@@ -194,6 +197,10 @@ impl MatchViewer {
             // `quality`.
             .insert_resource(quality)
             .insert_resource(config)
+            // After the config, which says whether this session is
+            // instrumented: the census lives in the render world and only
+            // installs itself for a page that asked for the readout.
+            .add_plugins(ProgramCensus)
             .insert_resource(Playback::new(duration_ms))
             .init_resource::<ReplayTracks>()
             .init_resource::<ChunkLoader>()
@@ -284,6 +291,7 @@ impl MatchViewer {
                     // `stage`.
                     Stage::spawn,
                     Actors::spawn,
+                    PreRoll::install,
                     // Hidden until a player is picked. Built here rather than
                     // then for the reason `FlightPad::spawn` is: a marker
                     // assembled on the frame it is first wanted is a mesh and
@@ -356,6 +364,9 @@ impl MatchViewer {
                     // numbers. See `Bringup::PER_BANK` for why they are not on
                     // consecutive courses.
                     Pitch::raise_bank.run_if(Bringup::raising),
+                    // …and the squad's coarser grains, one a course, after
+                    // the stands. See `Tailoring`.
+                    Tailoring::cut_next.run_if(Bringup::cutting),
                 )
                     .chain()
                     .run_if(Bringup::building)
@@ -428,6 +439,29 @@ impl MatchViewer {
                     // against nothing at all.
                     Portraits::ask.before(Portraits::attach),
                 ),
+            )
+            // **The cut and the joints**: the pre-roll behind `animate`, so a
+            // seek lands on the state playing through would have reached, and
+            // the joints behind that and in front of the carriage hung from
+            // the same bodies. Named for the reason the pair below are.
+            .add_systems(
+                Update,
+                (
+                    PreRoll::run.after(Actors::animate),
+                    Actors::pose_joints
+                        .after(PreRoll::run)
+                        .before(Actors::carry_body),
+                ),
+            )
+            // **Each man cut as finely as the screen has room for**, off where
+            // the camera and he have both just been put this frame. Named for
+            // the reason the pair above are.
+            .add_systems(
+                Update,
+                Tailoring::fit
+                    .after(CameraFlight::steer)
+                    .after(Actors::animate)
+                    .before(FrameCost::leave_update),
             )
             // **The soundtrack**, named here for the same reason the pair
             // above are: both of the twenty-system groups below are full, and
@@ -609,6 +643,9 @@ impl MatchViewer {
             // Bevy runs on this thread and `Last` is behind it, so what falls
             // outside the pair is the render sub-app and the browser — which
             // is the split that says whether a slow frame is ours or the GPU's.
+            // Where `bevy_ui` reads the pointer too, so a click lands on the
+            // frame it happened. See `Press`.
+            .add_systems(PreUpdate, Press::follow_pointer.after(InputSystems))
             .add_systems(First, FrameCost::open)
             .add_systems(Last, FrameCost::close)
             // The corner frame counter. Registered apart from the full chain

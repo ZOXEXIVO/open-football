@@ -949,7 +949,8 @@ impl TvCamera {
         // football yet. It TAKES the frame outright and gives it back on a cut
         // — see [`Lineup`], which explains why this end of it is not a ramp.
         let (stand, aim) = lineup.framing().unwrap_or((stand, aim));
-        transform.translation = stand;
-        transform.look_at(aim, Vec3::Y);
+        // Compared first: a camera at rest over a still picture is a frame
+        // that changes nothing.
+        transform.set_if_neq(Transform::from_translation(stand).looking_at(aim, Vec3::Y));
     }
 }

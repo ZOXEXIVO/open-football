@@ -47,8 +47,30 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
     // viewer built from src/match; this hands it the canvas and the fixture.
     import init, { MatchViewer } from "/static/viewer/match_viewer.js";
 
+    // The match page's diagnostic overrides, validated the same way, so the
+    // measuring recipe in `src/match/src/app/perf.rs` can ask this harness for
+    // `?squad=off` or `?grain=spare` exactly as it would ask the game.
+    const config = __CONFIG__;
+    const asked = new URLSearchParams(location.search);
+    if (["full", "spare", "far"].includes(asked.get("grain"))) {
+        config.grain = asked.get("grain");
+    }
+    if (["handheld", "roomy"].includes(asked.get("device"))) {
+        config.device = asked.get("device");
+    }
+    if (["off", "handheld", "full"].includes(asked.get("crowd"))) {
+        config.crowd = asked.get("crowd");
+    }
+    if (asked.get("squad") === "off") {
+        config.squad = "off";
+    }
+    const megapixels = asked.has("stage") ? Number(asked.get("stage")) : NaN;
+    if (megapixels > 0 && megapixels <= 32) {
+        config.stage = megapixels;
+    }
+
     init({ module_or_path: "/static/viewer/match_viewer_bg.wasm" })
-        .then(() => MatchViewer.start(JSON.stringify(__CONFIG__)))
+        .then(() => MatchViewer.start(JSON.stringify(config)))
         .catch((error) => {
             console.error("match viewer failed to start", error);
             document.getElementById("placeholder").textContent = "viewer failed to start: " + error;

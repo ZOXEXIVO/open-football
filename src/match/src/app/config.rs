@@ -78,8 +78,10 @@ pub struct ViewerConfig {
     /// ever going to be. `debug` implies it — see [`Self::instrumented`].
     #[serde(default)]
     pub perf: bool,
-    /// Forces how finely the twenty-two are cut, overriding what the machine
-    /// was measured to deserve: `"full"` or `"spare"`.
+    /// Forces the finest grain the twenty-two are cut at, overriding what the
+    /// machine was measured to deserve: `"full"`, `"spare"` or `"far"`. A man
+    /// far from the camera is still cut coarser than this; `"far"` cuts every
+    /// man at the coarsest.
     ///
     /// Absent means the tier decides, which is the answer in the game — see
     /// [`Grain`](crate::players::body::Grain). This exists because the

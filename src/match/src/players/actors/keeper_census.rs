@@ -178,8 +178,7 @@ fn keeper_glide() {
             let settle = 1.0 - (-frame / Actors::COURSE_RESPONSE).exp();
             let was = actor.course;
             actor.course = (was + (wanted_course - was) * settle).clamp_length_max(1.0);
-            actor.open = Actors::opening(actor.speed, actor.course, true);
-            actor.underfoot = Actors::underfoot(actor.course, actor.open);
+            actor.open_legs(frame, false);
             actor.idle = (actor.idle + frame * Actors::IDLE_RATE).rem_euclid(TAU);
             actor.clock = (now * 1e-3) as f32;
 

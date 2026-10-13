@@ -92,3 +92,36 @@ The viewer SHALL be able to report, at any point in its lifecycle, how much memo
 #### Scenario: A device class is included with every progress update
 - **WHEN** any progress phase is reported to the hosting page
 - **THEN** the notification includes the current memory usage figures and which device-size classification the viewer is using, so the state at the moment of a failure is visible on screen
+
+### Requirement: A still frame does no scene work
+When nothing the picture depends on has changed since the previous frame, the viewer SHALL NOT re-pose any player, and SHALL NOT rewrite any transform, visibility or interface element. A paused replay with a still camera is the main case. Such a replay SHALL cost a small fraction of a playing one.
+
+#### Scenario: Paused with a still camera
+- **WHEN** playback is paused and the camera is not moving
+- **THEN** the frame-cost readout shows the viewer's own update work at no more than a third of its cost during play, what is left being the fixed cost of running its systems at all
+- **AND** no player, ball, shadow, name plate or interface element is rewritten from frame to frame
+
+#### Scenario: Flying the camera over a paused replay
+- **WHEN** playback is paused and the viewer flies the camera
+- **THEN** only the camera and what is drawn relative to it (the sky backdrop and the name plates) change from frame to frame, and every player keeps his pose
+
+#### Scenario: Interface at rest
+- **WHEN** the clock label, the speed label and the transport bar have nothing new to show
+- **THEN** none of them is rewritten, and the interface layout is not recomputed for them
+
+### Requirement: Crowd geometry follows the rendering tier
+The crowd's figures SHALL be built at a level of geometric detail chosen by the same rendering-tier decision, made before the scene is built, that chooses the squad's detail and the antialiasing. A machine that draws the squad at reduced detail SHALL therefore draw the crowd at reduced detail too.
+
+Reducing the crowd's detail SHALL NOT change how many spectators there are, where they sit, or what they wear. The explicit crowd override SHALL still force either level.
+
+#### Scenario: A desktop on the post-processed tier
+- **WHEN** the viewer settles on the post-processed tier on a desktop before the scene is built
+- **THEN** the crowd is built from the reduced figure, with the same seats, density and colours as on the multisampled tier
+
+#### Scenario: The page asks for the full crowd
+- **WHEN** the configuration explicitly asks for the full crowd
+- **THEN** the full figure is built whatever the tier
+
+#### Scenario: A handheld device
+- **WHEN** the viewer runs on a handheld device and the page asks for no crowd override
+- **THEN** no crowd is built, as before
