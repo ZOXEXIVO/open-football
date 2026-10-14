@@ -41,23 +41,22 @@
 //! * and five licences — [`creation`](Self::creation),
 //!   [`carry`](Self::carry), [`shooting`](Self::shooting),
 //!   [`arrival`](Self::arrival), [`tempo`](Self::tempo) — each a blend
-//!   of *who he is* (attributes, priced against `MatchStandard` so the
-//!   division cannot decide them) and *where he was put*.
+//!   of *who he is* (attributes, measured against the standard of the
+//!   match so the division cannot decide them) and *where he was put*.
 //!
 //! [`Archetype`] falls out of the licences afterwards, for diagnostics
 //! and for the handful of places where a name reads better than four
 //! numbers. Nothing branches on it that could not branch on the numbers.
 //!
-//! # Why every absolute read is shifted
+//! # Why the reads are standard-relative
 //!
-//! Same reason `MidfielderSkillProfile` does it: these are convex curves
-//! over ability, and an unshifted read makes the licence a function of
-//! the league rather than of the player. See
-//! `engine::teamplay::standard::MatchStandard`.
+//! These are convex curves over ability, so a read against the whole
+//! game makes the licence a function of the league rather than of the
+//! player. The squads are measured against the standard of the match at
+//! kickoff — see `MatchStandard::measure`.
 
 use crate::PlayerPositionType;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 
 /// **Control arm for the whole role layer.**
@@ -345,10 +344,6 @@ impl MidfieldRole {
 
 /// The five attribute blends [`MidfieldRole`] needs, separated from the
 /// context so the role can be built in a test without a live match.
-///
-/// Every read is already peer-shifted by
-/// `MidfielderSkillProfile`,
-/// except the two raw ones below, which are shifted here.
 #[derive(Debug, Clone, Copy)]
 pub struct MidfieldSkillView {
     /// Sees and plays the progressive ball.
@@ -365,8 +360,7 @@ pub struct MidfieldSkillView {
 
 impl MidfieldSkillView {
     pub fn from_profile(ctx: &StateProcessingContext, profile: &MidfielderSkillProfile) -> Self {
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |raw: f32| ((raw / 20.0).clamp(0.0, 1.0) - shift).clamp(0.0, 1.0);
+        let read = |raw: f32| (raw / 20.0).clamp(0.0, 1.0);
         let s = &ctx.player.skills;
 
         // `progressive_selection` already blends vision / decisions /
@@ -374,21 +368,21 @@ impl MidfieldSkillView {
         // good passer into one who tries the ball nobody else sees, and
         // it is not in that composite.
         let progressive =
-            (profile.progressive_selection * 0.78 + peer(s.mental.flair) * 0.22).clamp(0.0, 1.0);
+            (profile.progressive_selection * 0.78 + read(s.mental.flair) * 0.22).clamp(0.0, 1.0);
 
         // Off-the-ball is the timing of the run, work rate is the engine
         // that repeats it, stamina is whether he still can at 70
         // minutes. `support_profile` carries the profile's own view.
         let running = (profile.support_profile * 0.60
-            + peer(s.mental.off_the_ball) * 0.25
-            + peer(s.physical.stamina) * 0.15)
+            + read(s.mental.off_the_ball) * 0.25
+            + read(s.physical.stamina) * 0.15)
             .clamp(0.0, 1.0);
 
         // Holding it under pressure and picking the pace: composure and
         // decisions, with press resistance for whether he keeps it when
         // somebody arrives.
-        let tempo = (peer(s.mental.composure) * 0.38
-            + peer(s.mental.decisions) * 0.32
+        let tempo = (read(s.mental.composure) * 0.38
+            + read(s.mental.decisions) * 0.32
             + profile.press_resistance * 0.30)
             .clamp(0.0, 1.0);
 

@@ -1,6 +1,5 @@
 use crate::PlayerSkills;
 use crate::r#match::MatchContext;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfieldPlay, MidfielderCondition,
@@ -597,7 +596,7 @@ impl MidfielderAttackSupportingState {
     ///
     /// They are **absolute reads**, so which runs a side makes is decided
     /// by its division rather than by its players — the fault
-    /// [`MatchStandard`] exists to remove, and the same one that made the
+    /// `MatchStandard` exists to remove, and the same one that made the
     /// arriving-runner tier 44% of every shot at level 6 and 2% at level
     /// 18. And they are **cliffs**: two midfielders a tenth of a point
     /// apart in off-the-ball made completely different runs from the same
@@ -665,15 +664,11 @@ impl MidfielderAttackSupportingState {
             return AttackingRunType::SupportRun;
         }
 
-        // Priced against the standard of football in this match, so a
-        // fast midfielder is fast relative to the men he is playing
-        // against rather than relative to a number.
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |v: f32| ((v / 20.0).clamp(0.0, 1.0) - shift).clamp(0.0, 1.0);
-        let pace = peer(s.physical.pace);
-        let off_ball = peer(s.mental.off_the_ball);
-        let anticipation = peer(s.mental.anticipation);
-        let work_rate = peer(s.mental.work_rate);
+        let read = |v: f32| (v / 20.0).clamp(0.0, 1.0);
+        let pace = read(s.physical.pace);
+        let off_ball = read(s.mental.off_the_ball);
+        let anticipation = read(s.mental.anticipation);
+        let work_rate = read(s.mental.work_rate);
 
         // How advanced the ATTACK is — the ball, not the man. 1.0 at the
         // goal line, 0 at the halfway line.

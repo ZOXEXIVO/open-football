@@ -349,14 +349,12 @@ impl DefenderTacklingState {
 
         // ⚠ BOTH SIDES OF THE DUEL MUST BE ON ONE SCALE.
         //
-        // This scored `tackle_profile`, which subtracts
-        // `MatchStandard::shift` from every input, against an ABSOLUTE
-        // carry composite. Differencing a peer-relative score against an
-        // absolute one leaves the standard of the match in the result:
-        // the same equal-quality matchup won 55% at the bottom of the
-        // pyramid and 24% at the top. `defensive_duel` is the same family
-        // of composite as `dribble_attack`, so the difference is level at
-        // every level. The profile still drives the decision, the
+        // This scored `tackle_profile` against the carry composite, two
+        // quantities on different scales, and the difference left the
+        // standard of the match in the result: the same equal-quality
+        // matchup won 55% at the bottom of the pyramid and 24% at the
+        // top. `defensive_duel` is the same family of composite as
+        // `dribble_attack`, so the difference is level at every level. The profile still drives the decision, the
         // movement and the discipline — it is a selection model, not a
         // contest one.
         let raw_diff = sc::defensive_duel(ctx.player, minute) - attacker_score;
@@ -713,12 +711,11 @@ mod tests {
     /// **The production duel is level for equal quality, at every level
     /// of the pyramid.**
     ///
-    /// This is the property `tackle_profile` could not have. It subtracts
-    /// `MatchStandard::shift` from each of its inputs and `dribble_attack`
-    /// does not, so differencing the two left the standard of the match in
-    /// the result: the same matched pair resolved at 0.55 in the fourth
-    /// tier and 0.24 in the top flight. Both composites here are absolute,
-    /// so the difference is zero wherever the pair is drawn from.
+    /// Scoring `tackle_profile` against `dribble_attack` could not have
+    /// it: the two were on different scales, so the same matched pair
+    /// resolved at 0.55 in the fourth tier and 0.24 in the top flight.
+    /// Both composites here are one family, so the difference is zero
+    /// wherever the pair is drawn from.
     #[test]
     fn an_equal_duel_resolves_level_at_every_level() {
         let win = |level: f32| {

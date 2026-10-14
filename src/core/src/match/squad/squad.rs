@@ -32,3 +32,19 @@ pub struct MatchSquad {
     /// the legacy (memory-less) scoring in that case.
     pub coach_snapshot: Option<CoachMatchSnapshot>,
 }
+
+impl MatchSquad {
+    /// Every player this squad carries into the match — the XI, the bench
+    /// and the designated takers' copies — read against the standard of
+    /// the match. See `MatchStandard::measure`.
+    pub fn measure_against(&mut self, outfield_points: f32, goalkeeping_points: f32) {
+        self.main_squad
+            .iter_mut()
+            .chain(self.substitutes.iter_mut())
+            .chain(self.captain_id.iter_mut())
+            .chain(self.vice_captain_id.iter_mut())
+            .chain(self.penalty_taker_id.iter_mut())
+            .chain(self.free_kick_taker_id.iter_mut())
+            .for_each(|p| p.measure_against(outfield_points, goalkeeping_points));
+    }
+}

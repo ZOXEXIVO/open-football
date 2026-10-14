@@ -46,6 +46,16 @@ pub enum GoalkeeperSpeedContext {
 }
 
 impl PlayerSkills {
+    /// Every attribute moved by the same number of points, inside 1-20;
+    /// the goalkeeping ones by their own. `match_readiness` is a state,
+    /// not an ability, and stays where it is.
+    pub fn shift(&mut self, outfield_points: f32, goalkeeping_points: f32) {
+        self.technical.shift(outfield_points);
+        self.mental.shift(outfield_points);
+        self.physical.shift(outfield_points);
+        self.goalkeeping.shift(goalkeeping_points);
+    }
+
     /// Derive current_ability (1-200) from the average of all skills (1-20 each).
     /// Technical (14) + Mental (14) + Physical (8) averaged, then mapped to 1-200.
     pub fn calculate_ability(&self) -> u8 {
@@ -357,6 +367,23 @@ impl Technical {
         self.tackling = self.tackling.max(min);
         self.technique = self.technique.max(min);
     }
+
+    pub fn shift(&mut self, points: f32) {
+        self.corners = (self.corners + points).clamp(1.0, 20.0);
+        self.crossing = (self.crossing + points).clamp(1.0, 20.0);
+        self.dribbling = (self.dribbling + points).clamp(1.0, 20.0);
+        self.finishing = (self.finishing + points).clamp(1.0, 20.0);
+        self.first_touch = (self.first_touch + points).clamp(1.0, 20.0);
+        self.free_kicks = (self.free_kicks + points).clamp(1.0, 20.0);
+        self.heading = (self.heading + points).clamp(1.0, 20.0);
+        self.long_shots = (self.long_shots + points).clamp(1.0, 20.0);
+        self.long_throws = (self.long_throws + points).clamp(1.0, 20.0);
+        self.marking = (self.marking + points).clamp(1.0, 20.0);
+        self.passing = (self.passing + points).clamp(1.0, 20.0);
+        self.penalty_taking = (self.penalty_taking + points).clamp(1.0, 20.0);
+        self.tackling = (self.tackling + points).clamp(1.0, 20.0);
+        self.technique = (self.technique + points).clamp(1.0, 20.0);
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -412,6 +439,23 @@ impl Mental {
         self.vision = self.vision.max(min);
         self.work_rate = self.work_rate.max(min);
     }
+
+    pub fn shift(&mut self, points: f32) {
+        self.aggression = (self.aggression + points).clamp(1.0, 20.0);
+        self.anticipation = (self.anticipation + points).clamp(1.0, 20.0);
+        self.bravery = (self.bravery + points).clamp(1.0, 20.0);
+        self.composure = (self.composure + points).clamp(1.0, 20.0);
+        self.concentration = (self.concentration + points).clamp(1.0, 20.0);
+        self.decisions = (self.decisions + points).clamp(1.0, 20.0);
+        self.determination = (self.determination + points).clamp(1.0, 20.0);
+        self.flair = (self.flair + points).clamp(1.0, 20.0);
+        self.leadership = (self.leadership + points).clamp(1.0, 20.0);
+        self.off_the_ball = (self.off_the_ball + points).clamp(1.0, 20.0);
+        self.positioning = (self.positioning + points).clamp(1.0, 20.0);
+        self.teamwork = (self.teamwork + points).clamp(1.0, 20.0);
+        self.vision = (self.vision + points).clamp(1.0, 20.0);
+        self.work_rate = (self.work_rate + points).clamp(1.0, 20.0);
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -450,6 +494,17 @@ impl Physical {
         self.pace = self.pace.max(min);
         self.stamina = self.stamina.max(min);
         self.strength = self.strength.max(min);
+    }
+
+    pub fn shift(&mut self, points: f32) {
+        self.acceleration = (self.acceleration + points).clamp(1.0, 20.0);
+        self.agility = (self.agility + points).clamp(1.0, 20.0);
+        self.balance = (self.balance + points).clamp(1.0, 20.0);
+        self.jumping = (self.jumping + points).clamp(1.0, 20.0);
+        self.natural_fitness = (self.natural_fitness + points).clamp(1.0, 20.0);
+        self.pace = (self.pace + points).clamp(1.0, 20.0);
+        self.stamina = (self.stamina + points).clamp(1.0, 20.0);
+        self.strength = (self.strength + points).clamp(1.0, 20.0);
     }
 }
 
@@ -502,6 +557,22 @@ impl Goalkeeping {
         self.reflexes = self.reflexes.max(min);
         self.rushing_out = self.rushing_out.max(min);
         self.throwing = self.throwing.max(min);
+    }
+
+    pub fn shift(&mut self, points: f32) {
+        self.aerial_reach = (self.aerial_reach + points).clamp(1.0, 20.0);
+        self.command_of_area = (self.command_of_area + points).clamp(1.0, 20.0);
+        self.communication = (self.communication + points).clamp(1.0, 20.0);
+        self.eccentricity = (self.eccentricity + points).clamp(1.0, 20.0);
+        self.first_touch = (self.first_touch + points).clamp(1.0, 20.0);
+        self.handling = (self.handling + points).clamp(1.0, 20.0);
+        self.kicking = (self.kicking + points).clamp(1.0, 20.0);
+        self.one_on_ones = (self.one_on_ones + points).clamp(1.0, 20.0);
+        self.passing = (self.passing + points).clamp(1.0, 20.0);
+        self.punching = (self.punching + points).clamp(1.0, 20.0);
+        self.reflexes = (self.reflexes + points).clamp(1.0, 20.0);
+        self.rushing_out = (self.rushing_out + points).clamp(1.0, 20.0);
+        self.throwing = (self.throwing + points).clamp(1.0, 20.0);
     }
 }
 

@@ -33,8 +33,8 @@ pub mod tick;
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
 use contest::pass_block::PassBlockCommit;
 pub use contest::{
-    BlockContact, ContactInPlace, PassChainEntry, PassReach, PlayerReach, PossessionSource, block,
-    contact, interception, ownership, possession, reach, save,
+    BlockContact, PassChainEntry, PassReach, PlayerReach, PossessionSource, block, interception,
+    ownership, possession, reach, save,
 };
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics
@@ -56,7 +56,8 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag, strike_diag, teleport,
+    arrival_diag, assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag,
+    strike_diag, teleport,
 };
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
@@ -176,6 +177,21 @@ pub struct Ball {
     /// [`block_diag::StrikeOrigin`]. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub strike_origin: Option<block_diag::StrikeOrigin>,
+    /// The grant still waiting for the ball's next move — see
+    /// [`arrival_diag`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub arrival: Option<arrival_diag::Arrival>,
+    /// The tick the current owner was given the ball, and the timing
+    /// buckets of the last shot — see [`arrival_diag::ShotTiming`].
+    /// Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub granted_at: u64,
+    #[cfg(feature = "match-logs")]
+    pub shot_timing: Option<(usize, usize)>,
+    /// The ball's planar travel over its last move, the "step before" an
+    /// arrival is judged against. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub last_step: Vector3<f32>,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -185,6 +201,14 @@ pub struct Ball {
 
     pub previous_owner: Option<u32>,
     pub current_owner: Option<u32>,
+    /// The man whose touch the ball is under — set by [`Ball::touch`] on
+    /// the tick he meets it, and gone once the ball has another owner or
+    /// none. A ball under his touch moves with him; one he owns without
+    /// having touched it is his to go and get.
+    pub controlled_by: Option<u32>,
+    /// How the ball reached the man who last touched it — see
+    /// [`motion::Reception`].
+    pub reception: Option<motion::Reception>,
     pub take_ball_notified_players: Vec<u32>,
     pub notification_cooldown: u32,
     pub notification_timeout: u32,
@@ -870,16 +894,8 @@ impl Ball {
     /// [`Ball::settling_out_of_the_air`].
     pub const DECK: f32 = 0.1;
 
-    /// Inside this an owned ball is at its owner's feet and moves with him.
-    /// Beyond it the ball is still his, but he has to go and get it —
-    /// nothing draws a ball across the grass to a man.
-    ///
-    /// A quarter of a metre, and the snap onto him inside it is the whole
-    /// of what may move a ball to a man. Measured on recorded matches, a
-    /// half-metre radius doubled the reversals it was meant to remove —
-    /// the snap IS a reversal for a ball coming from behind him — so the
-    /// last stride is his to take, and the first touch
-    /// (`Ball::first_touch_toward`) is what brings an arriving ball in.
+    /// Inside this an owned ball is at its owner's feet: a quarter of a
+    /// metre, where the carry ([`Ball::touch`]) keeps a ball he controls.
     pub const AT_FEET: f32 = 2.0;
 
     /// Is a ball at `ball` at the feet of a man standing at `man`? Planar,
@@ -891,23 +907,17 @@ impl Ball {
         dx * dx + dy * dy <= Self::AT_FEET * Self::AT_FEET
     }
 
-    /// Is a ball at `ball` moving at `velocity` coming to a man standing at
-    /// `man` inside his reach — so that his first touch
-    /// (`first_touch_toward`) will bring it onto his feet? On the deck,
-    /// rolling, inside [`CONTROL_DISTANCE`] and closing on him. A ball
-    /// that is not is his to go and get.
-    pub fn within_first_touch(
+    /// Will a ball at `ball` moving at `velocity` — coming down at
+    /// `landing` while it is in the air — pass within touch reach of a man
+    /// standing at `man` on its own, so that he can stand and take it? A
+    /// ball that will not is his to go and get.
+    pub fn will_reach(
         ball: Vector3<f32>,
         velocity: Vector3<f32>,
+        landing: Vector3<f32>,
         man: Vector3<f32>,
     ) -> bool {
-        let dx = man.x - ball.x;
-        let dy = man.y - ball.y;
-        ball.z <= Self::DECK
-            && dx * dx + dy * dy <= CONTROL_DISTANCE * CONTROL_DISTANCE
-            && velocity.x * velocity.x + velocity.y * velocity.y
-                > BallRoll::STOPPED * BallRoll::STOPPED
-            && velocity.x * dx + velocity.y * dy > 0.0
+        Self::travel_passes(ball, velocity, landing, man, LOOSE_CLAIM_DISTANCE)
     }
 
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
@@ -935,10 +945,20 @@ impl Ball {
             pass_block_census: None,
             #[cfg(feature = "match-logs")]
             strike_origin: None,
+            #[cfg(feature = "match-logs")]
+            arrival: None,
+            #[cfg(feature = "match-logs")]
+            granted_at: 0,
+            #[cfg(feature = "match-logs")]
+            shot_timing: None,
+            #[cfg(feature = "match-logs")]
+            last_step: Vector3::zeros(),
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
             current_owner: None,
+            controlled_by: None,
+            reception: None,
             take_ball_notified_players: Vec::new(),
             notification_cooldown: 0,
             notification_timeout: 0,
@@ -1790,6 +1810,27 @@ impl Ball {
         Vector3::new(clamped_x, clamped_y, 0.0)
     }
 
+    /// Is the ball being carried — under its owner's touch, or in a
+    /// keeper's hands — so that it goes where he takes it?
+    #[inline]
+    pub fn is_carried(&self) -> bool {
+        self.current_owner.is_some()
+            && (self.held_in_hands || self.controlled_by == self.current_owner)
+    }
+
+    /// The ball's motion of its own: none while it is carried, because then
+    /// it goes where its carrier goes. This is what the players read as the
+    /// ball's velocity; a carried ball moving at its carrier's pace is not
+    /// a ball that has been struck.
+    #[inline]
+    pub fn own_velocity(&self) -> Vector3<f32> {
+        if self.is_carried() {
+            Vector3::zeros()
+        } else {
+            self.velocity
+        }
+    }
+
     /// Check if the ball is aerial (in the air above player reach)
     pub fn is_aerial(&self) -> bool {
         const PLAYER_REACH_HEIGHT: f32 = 2.3;
@@ -1851,6 +1892,8 @@ impl Ball {
     /// Sharing the body is what stops the two drifting apart.
     fn clear_for_dead_ball(&mut self) {
         self.current_owner = None;
+        self.controlled_by = None;
+        self.reception = None;
         self.previous_owner = None;
         self.ownership_duration = 0;
         self.claim_cooldown = 0;

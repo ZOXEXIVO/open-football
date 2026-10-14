@@ -318,7 +318,11 @@ impl Ball {
             + self.velocity.y * self.velocity.y)
             .sqrt()
             .max(1.5);
+        #[cfg(feature = "match-logs")]
+        let before_move = self.position;
         self.move_to(tick_context);
+        #[cfg(feature = "match-logs")]
+        self.settle_arrival(before_move);
         #[cfg(feature = "match-logs")]
         probe.note(
             crate::r#match::engine::ball::ball::flight_diag::STAGE_MOVE,
@@ -465,7 +469,6 @@ impl Ball {
                                 .total_cmp(&(b.position - owner.position).magnitude())
                         })
                     {
-                        use crate::r#match::engine::teamplay::standard::MatchStandard;
                         use crate::r#match::player::strategies::players::ops::skill_composites as sc;
                         use crate::r#match::{ActivityIntensity, MovementEffort};
                         let minute = sc::minute_from_ticks(self.current_tick_cached);
@@ -479,7 +482,6 @@ impl Ball {
                                 owner,
                                 minute,
                                 owner.player_attributes.condition_percentage(),
-                                MatchStandard::shift(context),
                             );
                         let chaser_cap = chaser.max_speed_with_condition_cached()
                             * MovementEffort::speed_fraction(
@@ -818,7 +820,11 @@ impl Ball {
         self.try_keeper_body_block(context, players);
 
         // Move ball: find owner position from players slice directly
+        #[cfg(feature = "match-logs")]
+        let before_move = self.position;
         self.move_to_with_players(players);
+        #[cfg(feature = "match-logs")]
+        self.settle_arrival(before_move);
         self.check_frame_rebound(context, events);
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);

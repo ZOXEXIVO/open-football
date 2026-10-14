@@ -19,7 +19,6 @@ use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::passing::CrossType;
@@ -317,12 +316,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     best_att = Some((i, s));
                 }
             } else if is_gk {
-                let raw = MatchStandard::peer(
-                    (p.skills.goalkeeping.command_of_area * 0.6
-                        + p.skills.goalkeeping.aerial_reach * 0.4)
-                        / 20.0,
-                    MatchStandard::keeper_shift(context),
-                );
+                let raw = ((p.skills.goalkeeping.command_of_area * 0.6
+                    + p.skills.goalkeeping.aerial_reach * 0.4)
+                    / 20.0)
+                    .clamp(0.0, 1.0);
                 // A keeper who has come for it read the flight and won the
                 // race to it, or he would not have come
                 // (`KeeperAerialClaim::assess`): it is his on his handling.

@@ -28,20 +28,18 @@
 //! three families of absolute read: how often a defender challenges, how
 //! near goal a carrier drives, and how much of the goal a keeper covers.
 //!
-//! # The primitive
+//! # The measurement
 //!
-//! [`MatchStandard::of`] is the standard of football in this match, on
-//! the same 0..1 scale as a normalised attribute. [`MatchStandard::shift`]
-//! is its distance from the calibration division: **zero there by
-//! construction**, negative below it, positive above.
-//!
-//! A site is made divisionally flat by reading `attribute - shift`
-//! instead of `attribute`. That is exactly calibration-neutral — at the
-//! level every constant in the engine was titrated on, the shift is 0 and
-//! not a single number moves — and it leaves the WITHIN-division spread
-//! completely intact: a good tackler is still a good tackler, he is just
-//! measured against the football around him instead of against a
-//! yardstick from another league.
+//! [`MatchStandard::of`] is the standard of football in a match, on the
+//! same 0..1 scale as a normalised attribute; its distance from the
+//! calibration division is **zero there by construction**, negative below
+//! it, positive above. [`MatchStandard::measure`] moves every attribute
+//! of both squads by that distance before kickoff, so the whole engine
+//! reads the players against the football around them. That is exactly
+//! calibration-neutral — at the level every constant was titrated on, not
+//! a single number moves — and it leaves the WITHIN-division spread
+//! intact: a good tackler is still a good tackler, measured against his
+//! own league instead of against a yardstick from another.
 //!
 //! # Why a team composite can stand in for an attribute
 //!
@@ -56,23 +54,16 @@
 //! estimate around.
 //!
 //! The goalkeeping attributes live on their own scale and get their own
-//! reading — see [`MatchStandard::keeper_shift`].
+//! reading — see `MatchStandard::keeper_shift_of`.
 
 use crate::club::player::mind::MindSwitch;
-use crate::r#match::MatchContext;
+use crate::r#match::MatchSquad;
 use crate::r#match::engine::teamplay::tactical::TeamSkillAggregates;
 use std::sync::OnceLock;
 
-/// The two standards, read once and then held for the whole match.
-///
-/// **Latched deliberately.** The team composites are recomputed every
-/// ~100 ticks off `effective_skill`, so they sag as the match is played;
-/// letting the standard sag with them would mean a tiring side quietly
-/// re-levelling every constant it is measured against — a feedback loop,
-/// and one that would also break the profile memos, which are keyed on
-/// the assumption that everything but condition is frozen. The standard
-/// of football in a fixture is a property of the two squads that turned
-/// up, so it is read at kickoff and left alone.
+/// The two standards as the squads brought them, read once at kickoff:
+/// the standard of football in a fixture is a property of the two squads
+/// that turned up, not of how tired they are by the 80th minute.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StandardReading {
     /// [`MatchStandard::of`] at kickoff.
@@ -81,27 +72,19 @@ pub struct StandardReading {
     pub keeper: f32,
 }
 
-/// The standard of football in a match, and its distance from the
-/// division the engine's constants were fitted in.
+/// The standard of football in a match, and the measurement of both
+/// squads against it.
 pub struct MatchStandard;
 
 impl MatchStandard {
-    /// Value of [`Self::of`] in the calibration division.
-    ///
-    /// **Measured, not chosen.** `dev_match stats 80 14 14` prints it as
-    /// `STANDARD` in the willingness table — 0.6630 over 80 matches at
-    /// level 14, which is the division `stats 300 14 14` and every
-    /// constant titrated on it belong to. It reads the same in all six
-    /// distance bands (0.66275-0.66368), because it is a property of the
-    /// squads and not of the shot. Re-read it if the composite weights or
-    /// the generator move; `OF_STANDARD_REF` overrides it so a re-fit
+    /// The standard every constant in the engine was fitted against: the
+    /// reading the per-read corrections centred on when `stats 300 14 14`
+    /// titrated them (0.6630 then). Squads are measured onto it at
+    /// kickoff, so the willingness table's `STANDARD` column reads it back
+    /// at every level; the generator's own levels read off the raw squads
+    /// in `MatchResultRaw::standard_of_football` — level 4 ~0.40, level 14
+    /// ~0.69, level 18 ~0.80. `OF_STANDARD_REF` overrides it so a re-fit
     /// costs no rebuild.
-    ///
-    /// The generator is linear in the level — measured 0.36937 at level 4
-    /// through 0.84075 at level 20, a slope of 0.0295 a level against the
-    /// 0.02875 a uniform +0.575 attribute shift predicts — so the shift
-    /// below is a straight reading of how far this match sits from the
-    /// calibration division, in attribute units.
     pub const CALIBRATION: f32 = 0.6630;
 
     /// Value of [`Self::keeper_of`] in the same division, printed as
@@ -155,56 +138,35 @@ impl MatchStandard {
         (home.gk_quality + away.gk_quality) * 0.5
     }
 
-    /// Take the kickoff reading, once. Called from the first
-    /// skill-aggregate pass (`TeamShape::refresh`); a second call is a
-    /// no-op, which is what makes the reading a property of the fixture
-    /// rather than of the minute.
-    #[inline]
-    pub fn latch(ctx: &mut MatchContext) {
-        if ctx.standard.is_some() {
-            return;
+    /// Read both squads against the standard of football they bring, once,
+    /// before a ball is kicked: every attribute moves by the match's
+    /// distance from the calibration division, so every read in the engine
+    /// — a decision's gate, a contest, a stride — is against the football
+    /// around the player. Returns the standard as the squads brought it.
+    /// One place rather than a correction at each read, because the reads
+    /// left uncorrected were the whole of the chance-volume slope up the
+    /// pyramid. `OF_STANDARD_OFF=1` leaves the squads as they came.
+    pub fn measure(home: &mut MatchSquad, away: &mut MatchSquad) -> StandardReading {
+        let home_side = TeamSkillAggregates::at_kickoff(&home.main_squad);
+        let away_side = TeamSkillAggregates::at_kickoff(&away.main_squad);
+        let reading = StandardReading {
+            outfield: Self::of(&home_side, &away_side),
+            keeper: Self::keeper_of(&home_side, &away_side),
+        };
+        if !Self::disabled() {
+            let outfield = -20.0 * Self::shift_of(reading);
+            let goalkeeping = -20.0 * Self::keeper_shift_of(reading);
+            home.measure_against(outfield, goalkeeping);
+            away.measure_against(outfield, goalkeeping);
         }
-        ctx.standard = Some(StandardReading {
-            outfield: Self::of(&ctx.home_skill_aggregates, &ctx.away_skill_aggregates),
-            keeper: Self::keeper_of(&ctx.home_skill_aggregates, &ctx.away_skill_aggregates),
-        });
+        reading
     }
 
-    /// Distance from the calibration division. Add this to a fixed
-    /// reference, or subtract it from an attribute — the two are the same
-    /// operation and both are exactly neutral at the calibration level.
-    ///
-    /// Zero before the first aggregate pass has run, which is the honest
-    /// answer: with both sides still reading `TeamSkillAggregates::neutral`
-    /// there is nothing to measure the match against yet.
-    #[inline]
-    pub fn shift(ctx: &MatchContext) -> f32 {
-        match ctx.standard {
-            Some(r) if !Self::disabled() => {
-                (r.outfield - Self::reference()).clamp(-Self::MAX_SHIFT, Self::MAX_SHIFT)
-            }
-            _ => 0.0,
-        }
-    }
-
-    /// A normalised (0..1) attribute read against the standard of
-    /// football in this match rather than against the whole game.
-    ///
-    /// The operation is `norm01 - shift`, which is nothing more than
-    /// [`Self::shift`]'s own doc restated — but it is the operation every
-    /// caller wants and it was open-coded at each of them, so a new one
-    /// could read the raw attribute and nothing would say it had gone
-    /// wrong. `ShotSkillProfile` applies it to eleven bands;
-    /// `PlayerOperationsImpl::shoot_goal_power` did not apply it at all,
-    /// and that single omission was worth **38% of shot power across the
-    /// pyramid** (measured 1.415 at level 6 against 1.953 at level 18,
-    /// `dev_match levels`) with every other term in the shooting chain
-    /// coming out flat.
-    ///
-    /// Exactly neutral at the calibration level, where `shift` is zero.
-    #[inline]
-    pub fn peer(norm01: f32, shift: f32) -> f32 {
-        (norm01 - shift).clamp(0.0, 1.0)
+    /// Distance from the calibration division, in normalised-attribute
+    /// units: zero there by construction, negative below it, positive
+    /// above.
+    fn shift_of(r: StandardReading) -> f32 {
+        (r.outfield - Self::reference()).clamp(-Self::MAX_SHIFT, Self::MAX_SHIFT)
     }
 
     /// Keeper standard per unit of outfield standard, across the levels of
@@ -214,7 +176,7 @@ impl MatchStandard {
     /// `OF_STANDARD_GK_SLOPE` overrides it so a re-fit costs no rebuild.
     pub const KEEPER_SLOPE: f32 = 1.02;
 
-    /// The goalkeeping equivalent of [`Self::shift`]: the standard of
+    /// The goalkeeping equivalent of [`Self::shift_of`]: the standard of
     /// goalkeeping the football in this match implies.
     ///
     /// Derived from the OUTFIELD standard, not read off the two keepers on
@@ -223,16 +185,7 @@ impl MatchStandard {
     /// his gap on reach, read and hands — and against the man in the other
     /// goal, who has nothing to do with the shots he faces. `OF_MIND_OFF`
     /// restores the two-keeper reading as the A/B control.
-    #[inline]
-    pub fn keeper_shift(ctx: &MatchContext) -> f32 {
-        match ctx.standard {
-            Some(r) if !Self::disabled() => Self::keeper_shift_of(r),
-            _ => 0.0,
-        }
-    }
-
-    #[inline]
-    pub fn keeper_shift_of(r: StandardReading) -> f32 {
+    fn keeper_shift_of(r: StandardReading) -> f32 {
         let shift = if MindSwitch::armed() {
             (r.outfield - Self::reference()) * Self::keeper_slope()
         } else {
@@ -252,11 +205,8 @@ impl MatchStandard {
         })
     }
 
-    /// `OF_STANDARD_OFF=1` pins every shift to zero, which restores the
-    /// pre-2026-08-21 engine exactly. The A/B control for the whole
-    /// family — see the module note.
-    #[inline]
-    pub fn disabled() -> bool {
+    /// `OF_STANDARD_OFF=1` leaves the squads unmeasured — the A/B control.
+    fn disabled() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| {
             std::env::var("OF_STANDARD_OFF")

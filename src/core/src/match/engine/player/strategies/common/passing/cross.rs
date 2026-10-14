@@ -32,7 +32,6 @@ use crate::r#match::engine::ball::ball::{AerialReach, Ball, GRAVITY_PER_TICK};
 use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::engine::environment::EnvModifiers;
 use crate::r#match::engine::set_pieces::CornerRoutine;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::LateralLane;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -624,9 +623,9 @@ impl CrossModel {
         // pyramid loses the whole channel. A ball on the deck into the
         // box is what produces box shots; whether it is the right ball
         // depends on the target against the men marking him, not against
-        // a number from another league. See `MatchStandard`.
-        let raw_heading =
-            (target_heading_skill - MatchStandard::shift(ctx.context)).clamp(0.0, 1.0) * 20.0;
+        // a number from another league — which is what measuring the
+        // squads at kickoff (`MatchStandard::measure`) gives it.
+        let raw_heading = target_heading_skill.clamp(0.0, 1.0) * 20.0;
         let p_poor_header_byline = 1.0 - SkillCurve::new(raw_heading, 11.0, 0.6).probability();
         let p_poor_header_wide = 1.0 - SkillCurve::new(raw_heading, 10.0, 0.6).probability();
 

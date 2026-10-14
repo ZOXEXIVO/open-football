@@ -3,12 +3,12 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::contest::contact::ContactInPlace;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{
     BEHIND_BALL, BEYOND_LOOKAHEAD, BlockDiag, CANDIDATES, FIRED, IN_WINDOW, OPP_SEEN,
     OUTSIDE_CORRIDOR, PERP_SUM_X100, SHOTS_SEEN, TOO_HIGH,
 };
+use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 use crate::r#match::engine::ball::ball::{
@@ -443,6 +443,7 @@ impl Ball {
             None => return,
         };
         let blocker_pos = blocker.position;
+        let blocker_carrier = Carrier::of(blocker);
         let blocker_team = blocker.team_id;
         let blocker_side = blocker.side;
         let composure = (blocker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
@@ -540,32 +541,10 @@ impl Ball {
             blocker_pos.x - self.position.x,
             blocker_pos.y - self.position.y,
         );
-        // ⚠ **Neither axis is written any more.**
-        //
-        // Horizontally, this is the same argument as `secure_ball_for` and
-        // `apply_failed_first_touch`, and it lands the same way: the block
-        // happens where the ball is. `blocker_in_reach` is
-        // `CONTROL_DISTANCE`, so the write was up to 1.5 m of ball moving
-        // with nothing touching it, and where it mattered — the clean
-        // block, where the defender takes possession — `move_to` draws the
-        // ball to him at 1.5 u/tick anyway, well inside
-        // `MAX_OWNER_TRACK_DISTANCE`. `blocker_in_reach` now decides only
-        // the *controlled* branch, which is what its name says.
-        //
-        // Vertically, `position.z = 0.0` dropped a ball from as high as
-        // `MAX_BLOCK_HEIGHT` (2.2 m) onto the grass in one tick. Its
-        // sibling `try_save_shot` has captured `contact_z` and restored it
-        // per branch for exactly this reason since the save-contact work;
-        // the block path never got the same treatment. The deflection
-        // branches below now `sink_to_ground` instead of zeroing `vz`, and
-        // the controlled branch needs nothing — the owner's `carry_toward`
-        // has it.
-        if !ContactInPlace::armed() {
-            if blocker_in_reach {
-                self.position = blocker_pos;
-            }
-            self.position.z = 0.0;
-        }
+        // Neither axis is written. A clean block is a touch where the ball
+        // met him (`blocker_in_reach` decides only that branch), and the
+        // deflections below give a ball met off the deck a descent rather
+        // than putting it on the grass in one tick.
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;
         self.cached_shot_target = None;
@@ -579,11 +558,14 @@ impl Ball {
         events.add_ball_event(BallEvent::Blocked(blocker_id, block_position));
 
         if roll < p_controlled {
-            // Clean block — defender gets the ball at his feet.
-            self.velocity = Vector3::zeros();
-            self.current_owner = Some(blocker_id);
+            // Clean block — the defender has it under his touch.
             #[cfg(feature = "match-logs")]
-            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+            {
+                StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+                self.open_arrival(GrantPath::CONTEST, blocker_pos);
+            }
+            self.current_owner = Some(blocker_id);
+            self.touch(blocker_id, blocker_carrier);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 25;
             events.add_ball_event(BallEvent::Intercepted(
@@ -643,7 +625,7 @@ impl Ball {
             let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0);
             self.velocity.x = (dx / dist) * speed;
             self.velocity.y = (dy / dist) * speed;
-            self.settle_or_flatten();
+            self.sink_to_ground();
             self.current_owner = None;
             self.flags.in_flight_state = 30;
             // Hold off re-claims so the deflection crosses the byline before
@@ -665,7 +647,7 @@ impl Ball {
             };
             self.velocity.x = -shot_dir_y * sign * safe_speed;
             self.velocity.y = shot_dir_x * sign * safe_speed;
-            self.settle_or_flatten();
+            self.sink_to_ground();
             self.current_owner = None;
             self.flags.in_flight_state = 25;
             self.claim_cooldown = 0;
@@ -687,7 +669,7 @@ impl Ball {
             let loose_speed = (ball_velocity_2d * 0.30).clamp(1.0, 2.8);
             self.velocity.x = rev_x * loose_speed;
             self.velocity.y = rev_y * loose_speed;
-            self.settle_or_flatten();
+            self.sink_to_ground();
             self.current_owner = None;
             self.flags.in_flight_state = 20;
             self.claim_cooldown = 0;
@@ -704,7 +686,7 @@ impl Ball {
         let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5);
         self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
         self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
-        self.settle_or_flatten();
+        self.sink_to_ground();
         self.current_owner = None;
         self.flags.in_flight_state = 25;
         self.claim_cooldown = 0;

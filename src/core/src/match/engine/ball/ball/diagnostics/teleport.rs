@@ -144,7 +144,7 @@ pub static DEAD_JUMPS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 /// Of the relocations booked, how many were purely VERTICAL — the ball
 /// dropped onto or lifted off the floor with no horizontal movement.
 /// A separate row because the fix is different: a height snap is almost
-/// always a missing `carry_toward`, not a missing flight.
+/// always a missing carry, not a missing flight.
 ///
 /// ⚠ This axis is the one `flight_diag` cannot see at all: its `StageProbe`
 /// measures `sqrt(dx² + dy²)` and drops `z` on the floor, so a ball

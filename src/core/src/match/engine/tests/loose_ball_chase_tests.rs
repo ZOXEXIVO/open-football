@@ -795,6 +795,57 @@ fn a_pass_in_flight_ends_where_its_receiver_takes_it() {
     );
 }
 
+/// **The man a pass is played to arrives settled.** His own meeting point
+/// is the collection point, and he is braked into it the way every other
+/// man is braked into a collection point — not run through it at the
+/// cut-off's full pace, which turned the ball round on his touch.
+#[test]
+fn the_receiver_is_braked_into_where_he_takes_his_pass() {
+    let ball_pos = Vector3::new(400.0, 272.0, 0.0);
+    let ball_vel = Vector3::new(0.8, 0.0, 0.0);
+    let receiver_id = 205;
+    let (field, context, tick_context) = election(
+        |p| {
+            if p.id == receiver_id {
+                p.position = Vector3::new(440.0, 276.0, 0.0);
+            }
+        },
+        |b| {
+            b.position = ball_pos;
+            b.velocity = ball_vel;
+            b.pass_target_player_id = Some(receiver_id);
+            b.flags.in_flight_state = 5;
+        },
+    );
+    let receiver = field
+        .players
+        .iter()
+        .find(|p| p.id == receiver_id)
+        .expect("the receiver is on the field");
+    let ctx = StateProcessingContext {
+        in_state_time: 0,
+        player: receiver,
+        context: &context,
+        tick_context: &tick_context,
+    };
+    let (_, taken) = LooseBallChase::meeting(&ctx, ball_pos, ball_vel);
+    assert_eq!(
+        taken, 1.0,
+        "his own meeting is not read as the collection point"
+    );
+    let (target, velocity) = LooseBallChase::aim(&ctx);
+    let brake = SteeringBehavior::Arrive {
+        target,
+        slowing_distance: 10.0,
+    }
+    .calculate(receiver)
+    .velocity;
+    assert!(
+        (velocity - brake).norm() < 1e-4,
+        "he is run at the ball at {velocity:?} rather than braked into {target:?}"
+    );
+}
+
 /// The projection's early end, on its own: past the tick the ball is
 /// taken it is a fixed point, priced as the straight run to it or the
 /// wait for it, whichever is longer.
@@ -950,17 +1001,15 @@ fn move_player(field: &mut MatchField, id: u32, to: Vector3<f32>) {
         .position = to;
 }
 
-/// **A ball granted ahead of him rolls on; he runs onto it.**
+/// **A ball granted beyond his touch rolls on; he runs onto it.**
 ///
-/// Every reception is granted 0.25-1.9 m from the man, and the ball used
-/// to be drawn back onto him at 1.5 u/tick from there — 85 reversals of a
-/// median 33 cm inside one 30 ms frame per 90 min, off a recorded match.
-/// The ball keeps its own motion until it is at his feet, and only then
-/// is it on him.
+/// Nothing draws a ball across the grass to a man: one he was given a
+/// stride and a half ahead keeps its own motion until his foot reaches it,
+/// and from that tick it moves with him at his pace, from where he met it.
 #[test]
 fn a_ball_granted_ahead_of_him_rolls_on_and_he_runs_onto_it() {
     let (mut field, _context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
-    field.ball.position = Vector3::new(605.0, 272.0, 0.0);
+    field.ball.position = Vector3::new(607.0, 272.0, 0.0);
     field.ball.velocity = Vector3::new(0.4, 0.0, 0.0);
     field.ball.current_owner = Some(man);
     let mut players = field.players.clone();
@@ -986,28 +1035,45 @@ fn a_ball_granted_ahead_of_him_rolls_on_and_he_runs_onto_it() {
         Some(man),
         "still his while it is inside the tracking cap"
     );
+    assert_eq!(
+        field.ball.controlled_by, None,
+        "touched from beyond his reach"
+    );
 
-    // He gets there: inside a foot of it, it is on him.
+    // He runs onto it: his foot meets it, and it leaves the contact at his
+    // pace from where it was.
+    let run = Vector3::new(0.5, 0.0, 0.0);
     let ball = field.ball.position;
-    let him = Vector3::new(ball.x - 1.0, ball.y, 0.0);
-    players
+    let him = players
         .iter_mut()
         .find(|p| p.id == man)
-        .expect("the man is on the field")
-        .position = him;
+        .expect("the man is on the field");
+    him.position = Vector3::new(ball.x - 3.0, ball.y, 0.0);
+    him.velocity = run;
     field.ball.update_velocity();
+    let met = field.ball.position;
     field.ball.move_to_with_players(&players);
+    assert_eq!(
+        field.ball.controlled_by,
+        Some(man),
+        "his foot met it and nothing happened"
+    );
+    let step = field.ball.position - met;
     assert!(
-        (field.ball.position.x - him.x).abs() < 1e-3
-            && (field.ball.position.y - him.y).abs() < 1e-3,
-        "at his feet the ball should be on him, it is at {:?}",
+        (step - field.ball.velocity).norm() < 1e-3,
+        "the ball was written to {:?} rather than moved",
         field.ball.position
     );
-    assert_eq!(field.ball.velocity, Vector3::zeros());
+    assert!(
+        (field.ball.velocity.x - run.x).abs() <= Ball::CARRY_BOUND + 1e-4
+            && field.ball.velocity.y.abs() <= Ball::CARRY_BOUND + 1e-4,
+        "the ball left the contact at {:?}, not at his pace",
+        field.ball.velocity
+    );
 }
 
 /// A ball in a keeper's gloves is still brought into his body: that is his
-/// arms, not a force on the ball.
+/// arms, at a hand's pace on every axis, not a force on the ball.
 #[test]
 fn a_ball_in_his_gloves_is_still_brought_into_his_body() {
     let (mut field, _context, _man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
@@ -1024,8 +1090,16 @@ fn a_ball_in_his_gloves_is_still_brought_into_his_body() {
     field.ball.current_owner = Some(keeper);
     field.ball.held_in_hands = true;
     let players = field.players.clone();
-    for _ in 0..6 {
+    for tick in 0..30 {
+        let before = field.ball.position;
         field.ball.move_to_with_players(&players);
+        let step = field.ball.position - before;
+        assert!(
+            step.x.abs() <= Ball::HANDS_BOUND + 1e-4
+                && step.y.abs() <= Ball::HANDS_BOUND + 1e-4
+                && step.z.abs() <= 0.1 + 1e-4,
+            "tick {tick}: the ball jumped {step:?} into his hands"
+        );
     }
     assert!(
         Ball::at_feet(field.ball.position, at),
@@ -1170,51 +1244,73 @@ fn a_team_mate_standing_over_his_ball_does_not_take_it_off_him() {
     );
 }
 
-/// **A pass arriving within a stride is touched onto his feet; one going
-/// away from him is not pulled back.**
+/// **A ball of his arriving within a stride is touched where it meets him;
+/// one going away beyond his touch is not pulled back.**
 ///
-/// The touch is the only thing that may turn a ball toward its owner, and
-/// it turns it at a controlled pace: never faster than the ball arrived
-/// and no faster than a firm touch. A ball already past him is his to
-/// chase, and rolls on.
+/// The touch is the only thing that changes an arriving ball's motion, and
+/// it does so once: until it is within a stride the ball keeps its line,
+/// on the tick it gets there its pace drops to his, and from there it
+/// comes to his feet at no more than a slow walk, never gaining pace. A
+/// ball already past his touch is his to chase, and rolls on.
 #[test]
 fn a_pass_arriving_within_a_stride_is_touched_onto_his_feet() {
     let (mut field, _context, man) = field_with_a_man_at(Vector3::new(600.0, 272.0, 0.0));
     let players = field.players.clone();
+    let him = Vector3::new(600.0, 272.0, 0.0);
 
     // Coming to him, passing three units beside him.
-    field.ball.position = Vector3::new(596.0, 275.0, 0.0);
+    field.ball.position = Vector3::new(592.0, 275.0, 0.0);
     field.ball.velocity = Vector3::new(1.5, 0.0, 0.0);
     field.ball.current_owner = Some(man);
+    let mut touched = None;
     let mut arrived = None;
-    for tick in 0..40 {
+    for tick in 0..60 {
         field.ball.update_velocity();
+        let met = field.ball.position;
         field.ball.move_to_with_players(&players);
-        let speed = (field.ball.velocity.x.powi(2) + field.ball.velocity.y.powi(2)).sqrt();
+        let speed = field.ball.velocity.x.hypot(field.ball.velocity.y);
         assert!(
             speed <= 1.5 + 1e-4,
             "the touch put pace on the ball: {speed:.2}"
         );
-        if Ball::at_feet(field.ball.position, Vector3::new(600.0, 272.0, 0.0)) {
+        if touched.is_none() {
+            if field.ball.controlled_by == Some(man) {
+                touched = Some(tick);
+                assert!(
+                    (met - him).xy().norm() <= LOOSE_CLAIM_DISTANCE,
+                    "touched {:.1}u from him",
+                    (met - him).xy().norm()
+                );
+                assert!(
+                    speed <= Ball::CARRY_BOUND * 2.0_f32.sqrt() + 1e-4,
+                    "the touch left it at {speed:.2} u/tick, not at his pace"
+                );
+            } else {
+                assert_eq!(
+                    field.ball.velocity.y, 0.0,
+                    "the pass was turned before he met it"
+                );
+            }
+        }
+        if Ball::at_feet(field.ball.position, him) {
             arrived = Some(tick);
             break;
         }
     }
-    let arrived = arrived.expect("a pass within a stride of him never reached his feet");
+    let touched = touched.expect("a pass within a stride of him was never touched");
+    let arrived = arrived.expect("a pass he touched never reached his feet");
     assert!(
-        arrived <= 20,
-        "the touch took {arrived} ticks to bring a ball five units in"
+        arrived - touched <= 40,
+        "the carry took {} ticks to bring the ball to his feet",
+        arrived - touched
     );
-    // The next tick it is on him.
-    field.ball.update_velocity();
-    field.ball.move_to_with_players(&players);
-    assert_eq!(field.ball.velocity, Vector3::zeros());
-    assert_eq!(field.ball.position, Vector3::new(600.0, 272.0, 0.0));
 
-    // Going away from him, already beyond his reach: no touch, no pull.
+    // A fresh ball of his, going away and already beyond his touch: no
+    // touch, no pull.
     field.ball.position = Vector3::new(606.0, 272.0, 0.0);
     field.ball.velocity = Vector3::new(1.0, 0.0, 0.0);
     field.ball.current_owner = Some(man);
+    field.ball.controlled_by = None;
     for _ in 0..10 {
         let before = field.ball.position.x;
         field.ball.update_velocity();

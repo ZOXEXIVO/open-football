@@ -9,12 +9,11 @@ use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RunOff};
-use crate::r#match::engine::corner_shape::{CornerDeadline, CornerShape, CornerShapeHold};
+use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
     pick_corner_routine, score_corner_routines, score_corner_taker,
 };
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
@@ -272,6 +271,10 @@ impl Ball {
             };
 
             self.goal_scored = true;
+            #[cfg(feature = "match-logs")]
+            if let Some(buckets) = self.shot_timing.take() {
+                crate::r#match::engine::ball::ball::arrival_diag::ShotTiming::note_goal(buckets);
+            }
             // No scorer could be credited (a goal with no owner and no
             // previous owner — a ball that crossed the line off nobody).
             // There is no goal event and no celebration to run, so the ball
@@ -709,21 +712,16 @@ impl Ball {
                         && p.tactical_position.current_position.is_goalkeeper()
                 })
                 .map(|gk| {
-                    MatchStandard::peer(
-                        (gk.skills.goalkeeping.command_of_area * 0.55
-                            + gk.skills.goalkeeping.aerial_reach * 0.45)
-                            / 20.0,
-                        MatchStandard::keeper_shift(context),
-                    )
+                    ((gk.skills.goalkeeping.command_of_area * 0.55
+                        + gk.skills.goalkeeping.aerial_reach * 0.45)
+                        / 20.0)
+                        .clamp(0.0, 1.0)
                 })
                 .unwrap_or(0.5);
 
-            // The taker and the keeper read against the standard of the
-            // match: an "elite" corner taker is one for this level.
-            let shift = MatchStandard::shift(context);
             let scores = score_corner_routines(
-                MatchStandard::peer(sc::n(taker.skills.technical.corners), shift),
-                MatchStandard::peer(sc::n(taker.skills.technical.crossing), shift),
+                sc::n(taker.skills.technical.corners),
+                sc::n(taker.skills.technical.crossing),
                 aerial_advantage,
                 gk_aerial,
                 chasing_late,
@@ -814,7 +812,6 @@ impl Ball {
                 armed_tick: self.current_tick_cached,
                 live_tick: (!walked).then_some(self.current_tick_cached),
                 taker_id,
-                deadline_ticks: CornerDeadline::ticks(context),
             });
 
             if walked {

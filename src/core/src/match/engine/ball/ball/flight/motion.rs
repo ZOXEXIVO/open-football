@@ -4,9 +4,17 @@
 //! that pushes the ball back inside the field after it crosses a
 //! touchline.
 
-use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::ownership::reception_diag;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
+use crate::r#match::engine::ball::ball::{
+    Ball, GRAVITY_PER_TICK, LOOSE_CLAIM_DISTANCE, MAX_OWNER_TRACK_DISTANCE,
+};
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use nalgebra::Vector3;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering;
 
 /// Ball rotation and the aerodynamic force it produces.
 ///
@@ -223,7 +231,44 @@ impl SpinModel {
     }
 }
 
+/// Where the man the ball is with stands and how he is moving — all the
+/// carry follows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Carrier {
+    pub position: Vector3<f32>,
+    pub velocity: Vector3<f32>,
+}
+
+/// How the ball reached the man who has it: who touched it, and its
+/// velocity the moment he did — what a first-time strike is struck off.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reception {
+    pub by: u32,
+    pub velocity: Vector3<f32>,
+}
+
+impl Carrier {
+    pub fn of(player: &MatchPlayer) -> Self {
+        Carrier {
+            position: player.position,
+            velocity: player.velocity,
+        }
+    }
+}
+
 impl Ball {
+    /// Gain of the carry's pull toward the point the ball is carried at,
+    /// per tick: first order, so the gap closes without overshooting.
+    const CARRY_GAIN: f32 = 0.15;
+    /// The most the pull moves a carried ball relative to its carrier on
+    /// either axis across the grass: 0.1 u/tick, 1.25 m/s, a slow walk.
+    pub(crate) const CARRY_BOUND: f32 = 0.1;
+    /// …and a ball in a keeper's hands: 0.4 u/tick, 5 m/s, his arms.
+    pub(crate) const HANDS_BOUND: f32 = 0.4;
+    /// The bound on the vertical axis, m/tick: 10 m/s, as fast as a man
+    /// snatches a ball into his chest and no faster.
+    const CARRY_RATE: f32 = 0.10;
+
     pub fn update_velocity(&mut self) {
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
         use crate::r#match::engine::ball::ball::flight::ballistics::BOUNCE_COEFFICIENT;
@@ -434,14 +479,14 @@ impl Ball {
                 // **…but a ball somebody is CARRYING is not lying on the
                 // grass, and its height is not this branch's to write.**
                 //
-                // A carried ball has no velocity at all — `move_to` zeroes
-                // it every tick — so it lands here every tick, and the
-                // height it is climbing towards (`carry_height`, 1.15 m in
-                // a keeper's gloves) was flattened back to zero every time.
-                // `carry_toward` climbs at exactly 0.10 m a tick and the
-                // `airborne` test above reads `z > 0.1`, so a gather off
-                // the deck settled into a perfect two-cycle: 0 → 0.10 →
-                // 0 → 0.10, for the whole two-to-five-second hold.
+                // A ball carried by a man standing still has next to no
+                // velocity, so it lands here, and the height it is
+                // climbing towards (`carry_height`, 1.15 m in a keeper's
+                // gloves) was flattened back to zero every time. The carry
+                // climbs at 0.10 m a tick and the `airborne` test above
+                // reads `z > 0.1`, so a gather off the deck settled into a
+                // perfect two-cycle: 0 → 0.10 → 0 → 0.10, for the whole
+                // two-to-five-second hold.
                 //
                 // On screen that is the keeper standing over the ball
                 // rather than holding it, which is the artefact
@@ -456,114 +501,96 @@ impl Ball {
         }
     }
 
-    /// Move the ball's HEIGHT toward the one its owner carries it at,
-    /// rather than writing it there.
-    ///
-    /// A direct assignment is a teleport on the vertical axis, and the
-    /// vertical axis is the one where a teleport always shows: a keeper's
-    /// gather lifted the ball off the grass into his chest inside a single
-    /// 10 ms tick, and a ball claimed out of the air dropped a metre and a
-    /// half just as fast. Both were reported as the ball "flipping" to the
-    /// player.
-    ///
-    /// `CARRY_RATE` is 0.10 m/tick — 10 m/s, as fast as a man can snatch a
-    /// ball into his chest and no faster. A keeper's gather off the deck
-    /// therefore takes about a tenth of a second, which is what it takes.
-    ///
-    /// ⚠ **It is no longer how a ball comes DOWN to anybody.** A constant
-    /// 10 m/s with no gravity, applied from any height, is what a replay
-    /// showed as a ball stopping dead in the sky over a man and dropping
-    /// onto him in a straight line: 77 of those a match, 22 of them
-    /// starting above head height and the worst from 6.68 m. Nothing
-    /// pulls a ball down faster than gravity, so a ball above its
-    /// owner's carry height is not carried at all — it is CONTROLLED,
-    /// and it falls. See [`Ball::settling_out_of_the_air`].
-    ///
-    /// What is left here is the movement that is real, and only that: a
-    /// keeper's hands, and the last few centimetres of an outfielder's
-    /// ball settling onto the grass at his feet. A ball in the GLOVES is
-    /// held — it goes where his hands go, up off the deck into his chest
-    /// or down into it from a catch at full stretch, and both of those
-    /// are a man moving a ball he has hold of. An outfielder's ball only
-    /// reaches here inside [`Ball::DECK`] of the turf, because everything
-    /// above that is [`Ball::settling_out_of_the_air`]'s.
-    #[inline]
-    fn carry_toward(&mut self, carry: f32) {
-        const CARRY_RATE: f32 = 0.10;
-        self.position.z += (carry - self.position.z).clamp(-CARRY_RATE, CARRY_RATE);
-    }
-
     /// **The ball is owned and still in the air.**
     ///
-    /// This is the whole test behind the control path: above
-    /// [`Ball::DECK`] the ball belongs to gravity, at it to the owner
-    /// tracking in [`Ball::move_to`].
-    ///
-    /// A ball in a keeper's GLOVES is excluded, and that is not an
-    /// exception to the model — it is the model. Nothing may pull a ball
-    /// nobody is holding; a ball he has both hands on is a ball he is
-    /// holding, and it moves where his hands move, up or down, at the
-    /// bounded [`carry_toward`](Self::carry_toward) rate. That is what
-    /// `carry_height` exists for.
+    /// Above [`Ball::DECK`] a ball he has taken belongs to gravity on the
+    /// vertical axis; at it, to the carry. A ball in a keeper's GLOVES is
+    /// excluded, and that is not an exception to the model — it is the
+    /// model: a ball he has both hands on moves where his hands move, up
+    /// or down, at the carry's bounded rate. That is what `carry_height`
+    /// exists for.
     #[inline]
     pub(crate) fn settling_out_of_the_air(&self) -> bool {
         !self.held_in_hands && self.position.z > Self::DECK
     }
 
-    /// **The touch.** Take the pace off the flight and bring it down at
-    /// his feet.
+    /// **The touch** — the tick a man's foot, chest or head meets a ball he
+    /// is taking.
     ///
-    /// A ball granted above the deck has been taken out of the air off a
-    /// chest, a thigh or a head. It used to stop dead where the grant
-    /// found it and drop from there — and the grant finds it within a
-    /// stride and a half of the man, not on him, so the picture was a ball
-    /// halting in the sky beside a player and falling in a straight line
-    /// (90 ms of it in one recorded clip, 60 cm from the man it belonged
-    /// to). The pace comes off at the BODY: the ball keeps travelling
-    /// toward him, never faster than it arrived and under gravity alone,
-    /// so it reaches the grass at his feet. Re-aimed every tick of the
-    /// fall — a man stepping to it slows it, and one it cannot reach in
-    /// time is left short for [`finish_control`](Self::finish_control) to
-    /// rule on. Only at the deck can it be kicked, which is what
-    /// [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach)
-    /// enforces at the other end.
-    #[inline]
-    fn take_control_of_the_flight(&mut self, owner_position: Vector3<f32>) {
-        // He has stopped it, not headed it on: it does not climb again.
+    /// The one place a ball coming under control has its motion written:
+    /// its pace across the grass drops to his, once, where it was met, and
+    /// from then on it is carried ([`Self::carry`]). Nothing is moved — the
+    /// ball is where he met it. A ball met above the deck stops climbing
+    /// and loses its spin, and gravity brings it down to him. A heavy touch
+    /// or a miscontrol is not this: it leaves the ball loose from the same
+    /// spot (`apply_failed_first_touch`).
+    pub(crate) fn touch(&mut self, owner: u32, carrier: Carrier) {
+        self.reception = Some(Reception {
+            by: owner,
+            velocity: self.velocity,
+        });
+        self.controlled_by = Some(owner);
+        self.velocity.x = carrier.velocity.x;
+        self.velocity.y = carrier.velocity.y;
         self.velocity.z = self.velocity.z.min(0.0);
         self.spin = Vector3::zeros();
-        let incoming =
-            (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
-        if incoming <= 0.0 {
-            return;
+    }
+
+    /// One tick of a ball he controls: it moves with him, plus a pull
+    /// toward him — his feet, or the hands of a keeper holding it.
+    ///
+    /// The pull is toward his position, not a point led along his run: a
+    /// ball carried ahead of him swung round his body on every turn and sat
+    /// out of a tackler's reach, which cost two tackles a team a match. The
+    /// viewer draws the ball at his boot.
+    ///
+    /// The motion is velocity and nothing else. The pull is first order
+    /// and bounded per axis, so the gap closes at no more than a slow walk
+    /// (a keeper's arms: 5 m/s) and never overshoots, and the ball is never
+    /// written onto him: a ball coming from behind a man used to reverse
+    /// onto his centre in one tick, which is the snap the replay showed.
+    ///
+    /// A ball he took above the deck is carried across the grass but falls
+    /// under gravity alone, and when it reaches the deck
+    /// [`finish_control`](Self::finish_control) asks whether he is still
+    /// under it.
+    fn carry(&mut self, carrier: Carrier) {
+        let bound = if self.held_in_hands {
+            Self::HANDS_BOUND
+        } else {
+            Self::CARRY_BOUND
+        };
+        let pull = |gap: f32| (gap * Self::CARRY_GAIN).clamp(-bound, bound);
+        self.velocity.x = carrier.velocity.x + pull(carrier.position.x - self.position.x);
+        self.velocity.y = carrier.velocity.y + pull(carrier.position.y - self.position.y);
+        self.spin = Vector3::zeros();
+        let falling = self.settling_out_of_the_air();
+        if falling {
+            self.take_control_of_the_flight();
+        } else {
+            self.velocity.z =
+                (self.carry_height() - self.position.z).clamp(-Self::CARRY_RATE, Self::CARRY_RATE);
         }
+        self.apply_movement();
+        if falling {
+            self.finish_control(carrier.position);
+        }
+    }
+
+    /// **A ball taken out of the air comes down under gravity.** He has
+    /// stopped it, not headed it on: it does not climb again. Across the
+    /// grass it is carried; the fall is left to gravity alone, because a
+    /// ball lowered faster than gravity — 10 m/s straight down from as high
+    /// as 6.68 m, 77 times a match — was what the replay showed as a ball
+    /// stopping dead in the sky over a man and dropping onto him.
+    #[inline]
+    fn take_control_of_the_flight(&mut self) {
+        self.velocity.z = self.velocity.z.min(0.0);
         #[cfg(feature = "match-logs")]
         if !self.control_noted {
             self.control_noted = true;
-            crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_control(
-                self.position.z,
-            );
+            StrikeCensus::note_control(self.position.z);
         }
-        let dx = owner_position.x - self.position.x;
-        let dy = owner_position.y - self.position.y;
-        let gap = (dx * dx + dy * dy).sqrt();
-        if gap <= f32::EPSILON {
-            self.velocity.x = 0.0;
-            self.velocity.y = 0.0;
-            return;
-        }
-        let drop = (self.position.z - Self::DECK).max(0.0);
-        let falling = -self.velocity.z;
-        let fall_ticks = ((falling * falling + 2.0 * GRAVITY_PER_TICK * drop).sqrt() - falling)
-            / GRAVITY_PER_TICK;
-        let toward = if fall_ticks > 0.0 {
-            gap / fall_ticks
-        } else {
-            0.0
-        };
-        let speed = toward.min(incoming);
-        self.velocity.x = dx / gap * speed;
-        self.velocity.y = dy / gap * speed;
     }
 
     /// …and the landing. The ball has reached his feet: is he still
@@ -615,8 +642,8 @@ impl Ball {
     /// Put the ball on the grass by giving it a descent, not by writing
     /// `position.z = 0.0`.
     ///
-    /// The sibling of [`carry_toward`](Self::carry_toward) for a ball
-    /// nobody has taken control of: a block off a shin, a mis-controlled
+    /// The sibling of the carry's vertical step for a ball nobody has
+    /// taken control of: a block off a shin, a mis-controlled
     /// first touch, a deflection. Those all end with the ball on the deck,
     /// and every one of them used to get there by assignment — from as
     /// high as 2.8 m, in a single 10 ms tick, on the axis a replay shows
@@ -629,7 +656,7 @@ impl Ball {
     /// ([`teleport`](crate::r#match::engine::ball::ball::teleport)) folds
     /// height in at 8 u/m and reports these in its `vertical` column.
     ///
-    /// The rate is deliberately quicker than `CARRY_RATE`: this is a ball
+    /// The rate is deliberately quicker than [`Self::CARRY_RATE`]: this is a ball
     /// knocked down, not gathered, and everything that reads the height —
     /// the block window, `is_aerial`, the receiver ceiling — must see what
     /// it always saw. An eighth of a second is under every one of their
@@ -641,72 +668,51 @@ impl Ball {
         self.velocity.z = -(self.position.z.max(0.0) / SETTLE_TICKS);
     }
 
-    /// [`sink_to_ground`](Self::sink_to_ground), or the flat `vz = 0` it
-    /// replaced when the arm is off.
-    ///
-    /// The two are not the same even though both end with the ball on the
-    /// deck: `vz = 0` on a ball that was two metres up leaves it hanging
-    /// there under gravity alone, which is why every call site paired it
-    /// with a `position.z = 0.0` assignment. See
-    /// [`ContactInPlace`](crate::r#match::engine::ball::ball::contest::contact::ContactInPlace).
-    #[inline]
-    pub(crate) fn settle_or_flatten(&mut self) {
-        if crate::r#match::engine::ball::ball::contest::contact::ContactInPlace::armed() {
-            self.sink_to_ground();
-        } else {
-            self.velocity.z = 0.0;
-        }
-    }
-
-    /// **The first touch.** A ball coming to its owner within his reach is
-    /// played onto his feet: turned toward him, never faster than it
-    /// arrived and no faster than a controlled touch travels. A ball
-    /// beyond his reach, or already going away from him, is not touched —
-    /// he goes after it, and if it outruns him it is lost
-    /// (`check_ball_ownership`).
-    ///
-    /// The reach is [`CONTROL_DISTANCE`], the distance the first-touch
-    /// roll is made at and the pass model aims within: a delivery lands a
-    /// mean 5.5u from the man it is meant for. With the owner pull gone
-    /// and only a stride's reach, every pass arriving beside him rather
-    /// than through his feet rolled past: 140 balls a match ran clear of
-    /// their owner at a stride, 79 at a stride and a half.
-    fn first_touch_toward(&mut self, owner: Vector3<f32>, gap_sq: f32) {
-        /// The pace a controlled ball leaves the boot at, in u/tick: about
-        /// 6 m/s, a firm touch and no more.
-        const TOUCH_PACE: f32 = 0.5;
-
-        if !Self::within_first_touch(self.position, self.velocity, owner) {
+    /// The ball has an owner. Under his touch or in his hands it is
+    /// carried; a ball granted to him that his foot has just reached is
+    /// touched; anything else keeps its own motion and is his to go and get
+    /// (`should_force_takeball` sends him) — unless he is beyond any reach
+    /// of it, when it is not his at all.
+    fn follow_owner(&mut self, owner: u32, carrier: Carrier) {
+        let dx = carrier.position.x - self.position.x;
+        let dy = carrier.position.y - self.position.y;
+        let gap_sq = dx * dx + dy * dy;
+        // A ball in a keeper's GLOVES is never disowned for the distance:
+        // a catch resolves wherever the save happened, up to 4 m from him,
+        // and the hands bring it in. Disowning it would hand a caught shot
+        // straight back to the six-yard box.
+        if !self.held_in_hands && gap_sq > MAX_OWNER_TRACK_DISTANCE * MAX_OWNER_TRACK_DISTANCE {
+            #[cfg(feature = "match-logs")]
+            {
+                reception_diag::OWNER_TOO_FAR.fetch_add(1, Ordering::Relaxed);
+                reception_diag::too_far::note(
+                    gap_sq.sqrt(),
+                    self.held_in_hands,
+                    self.cached_shot_target.is_some(),
+                    self.velocity.norm(),
+                );
+            }
+            self.previous_owner = self.current_owner;
+            self.current_owner = None;
+            self.controlled_by = None;
+            self.ownership_duration = 0;
+            self.apply_movement();
             return;
         }
-        let dx = owner.x - self.position.x;
-        let dy = owner.y - self.position.y;
-        let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
-        let gap = gap_sq.sqrt().max(f32::EPSILON);
-        let pace = speed.min(TOUCH_PACE);
-        self.velocity.x = dx / gap * pace;
-        self.velocity.y = dy / gap * pace;
-        self.spin = Vector3::zeros();
+        if !self.held_in_hands && self.controlled_by != Some(owner) {
+            if gap_sq > LOOSE_CLAIM_DISTANCE * LOOSE_CLAIM_DISTANCE {
+                self.apply_movement();
+                return;
+            }
+            self.touch(owner, carrier);
+        }
+        self.carry(carrier);
     }
 
     pub(in crate::r#match::engine::ball::ball) fn move_to(
         &mut self,
         tick_context: &GameTickContext,
     ) {
-        // Clear notified players only when ball state changes significantly:
-        // 1. Ball starts moving (not stopped anymore)
-        // 2. Ball has an owner (claimed)
-        // Maximum distance owner can be from ball - must match deadlock claim distances
-        // This allows deadlock resolution while preventing truly absurd teleports
-        const MAX_OWNER_TELEPORT_DISTANCE: f32 =
-            crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
-        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
-            MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
-
-        // A ball in his GLOVES comes into his body at this rate: that is
-        // his arms moving, not a force on the ball.
-        const GLOVE_RATE: f32 = 1.5;
-
         let has_owner = self.current_owner.is_some();
         #[cfg(feature = "match-logs")]
         if !has_owner {
@@ -722,118 +728,15 @@ impl Ball {
             self.take_ball_notified_players.clear();
         }
 
-        if let Some(owner_player_id) = self.current_owner {
-            let owner_position = tick_context.positions.players.position(owner_player_id);
-
-            // ── THE CONTROL, AND NOT THE PULL ─────────────────────────
-            //
-            // The owner tracking below is for a ball on the deck, or in a
-            // keeper's gloves. A ball that is still in the air is being
-            // CONTROLLED: the flight stops at the body and the ball drops
-            // to his feet under gravity, with nothing dragging it
-            // sideways and nothing lowering it faster than gravity does.
-            // He moves under it or he does not, and if he does not it is
-            // a loose ball — see [`Self::finish_control`].
-            //
-            // What this replaces: `BALL_TRACK_SPEED` at 1.5 u/tick is
-            // 18.75 m/s sideways, applied to a ball two metres up next to
-            // a man. A speed jump of that size next to a player is the
-            // replay rig's own definition of a kick
-            // (`Actors::next_impact`), so every one of them was DRAWN as
-            // a swing and HEARD as a strike. That is the phantom in the
-            // report, and it was 99 of them a match.
-            if self.settling_out_of_the_air() {
-                self.take_control_of_the_flight(owner_position);
-                self.apply_movement();
-                self.finish_control(owner_position);
-                return;
+        if self.controlled_by != self.current_owner {
+            self.controlled_by = None;
+        }
+        match self.current_owner {
+            Some(owner) => {
+                let (position, velocity) = tick_context.positions.players.pos_vel(owner);
+                self.follow_owner(owner, Carrier { position, velocity });
             }
-
-            let dx = owner_position.x - self.position.x;
-            let dy = owner_position.y - self.position.y;
-            let distance_squared = dx * dx + dy * dy;
-
-            // ── HIS FEET, HIS GLOVES, OR HIS TO COLLECT ──────────────────
-            //
-            // The ball used to be drawn to its owner at 1.5 u/tick from
-            // anywhere inside the tracking cap. Every reception is granted
-            // 0.25-1.9 m from the man (`CONTROL_DISTANCE`,
-            // `LOOSE_CLAIM_DISTANCE`), so every reception ended with the
-            // ball reversing onto him: off a recorded match, 85 times per
-            // 90 min it turned round by a median 33 cm inside one 30 ms
-            // frame, and 49 times it slid half a metre across the grass to
-            // a man standing still. A ball beyond his feet keeps its own
-            // motion and he goes to it — `should_force_takeball` sends him.
-            // Only a ball in a keeper's gloves is brought in, because that
-            // is his arms; `held_in_hands` also overrides the distance cap,
-            // see the branch below for why it is never disowned.
-            let at_feet = distance_squared <= Self::AT_FEET * Self::AT_FEET;
-            if at_feet || self.held_in_hands {
-                let carry = self.carry_height();
-                if self.held_in_hands {
-                    let distance = distance_squared.sqrt();
-                    if distance > f32::EPSILON {
-                        let step = GLOVE_RATE.min(distance);
-                        self.position.x += dx / distance * step;
-                        self.position.y += dy / distance * step;
-                    }
-                } else {
-                    self.position.x = owner_position.x;
-                    self.position.y = owner_position.y;
-                }
-                self.carry_toward(carry);
-                self.velocity = Vector3::zeros();
-                self.spin = Vector3::zeros();
-            } else if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
-                self.first_touch_toward(owner_position, distance_squared);
-                self.apply_movement();
-            } else {
-                // Owner is too far - this shouldn't happen but is a safety net
-                // Clear ownership and let ball move naturally.
-                //
-                // A ball in a keeper's GLOVES never reaches here (see the
-                // `held_in_hands` term on the test above). `try_save_shot`'s
-                // catch resolves wherever the save physically happened —
-                // anywhere inside the dive reach `SaveModel::wedge` prices,
-                // up to 4 m — and no longer teleports the ball onto him, so
-                // the gap it leaves is real and the tracking above closes it
-                // over the next few ticks. Disowning it for that distance
-                // would hand a caught shot straight back to the six-yard box.
-                #[cfg(feature = "match-logs")]
-                {
-                    crate::r#match::engine::ball::ball::ownership::reception_diag::OWNER_TOO_FAR
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    // Split it by distance / gather / shot / already-dead so
-                    // the granting site can be identified — see `too_far`.
-                    crate::r#match::engine::ball::ball::ownership::reception_diag::too_far::note(
-                        distance_squared.sqrt(),
-                        self.held_in_hands,
-                        self.cached_shot_target.is_some(),
-                        self.velocity.norm(),
-                    );
-                }
-                self.previous_owner = self.current_owner;
-                self.current_owner = None;
-                self.ownership_duration = 0;
-
-                // Move ball normally
-                self.position.x += self.velocity.x;
-                self.position.y += self.velocity.y;
-                self.position.z += self.velocity.z;
-
-                if self.position.z < 0.0 {
-                    self.position.z = 0.0;
-                }
-            }
-        } else {
-            self.position.x += self.velocity.x;
-            self.position.y += self.velocity.y;
-            self.position.z += self.velocity.z;
-
-            // Ensure ball doesn't go below ground
-            if self.position.z < 0.0 {
-                self.position.z = 0.0;
-            }
+            None => self.apply_movement(),
         }
     }
 
@@ -842,74 +745,19 @@ impl Ball {
     // whole `update_light`, which tests the tick orchestration rather than
     // how the ball gets into a keeper's hands. Same reason `check_goal` is.
     pub(crate) fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
-        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
-            crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE
-                * crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
-        const GLOVE_RATE: f32 = 1.5;
-
         #[cfg(feature = "match-logs")]
         if self.current_owner.is_none() {
             self.control_noted = false;
         }
-        if let Some(owner_id) = self.current_owner {
-            if let Some(owner) = players.iter().find(|p| p.id == owner_id) {
-                // The control, exactly as `move_to` runs it — a ball
-                // still in the air is nobody's to drag.
-                if self.settling_out_of_the_air() {
-                    self.take_control_of_the_flight(owner.position);
-                    self.apply_movement();
-                    self.finish_control(owner.position);
-                    return;
-                }
-
-                let dx = owner.position.x - self.position.x;
-                let dy = owner.position.y - self.position.y;
-                let dist_sq = dx * dx + dy * dy;
-
-                // See `move_to`: at his feet or in his gloves it is on him,
-                // beyond his feet it rolls on and he collects it, and a held
-                // ball ignores the distance cap.
-                let at_feet = dist_sq <= Self::AT_FEET * Self::AT_FEET;
-                if at_feet || self.held_in_hands {
-                    let carry = self.carry_height();
-                    if self.held_in_hands {
-                        let dist = dist_sq.sqrt();
-                        if dist > f32::EPSILON {
-                            let step = GLOVE_RATE.min(dist);
-                            self.position.x += (dx / dist) * step;
-                            self.position.y += (dy / dist) * step;
-                        }
-                    } else {
-                        self.position.x = owner.position.x;
-                        self.position.y = owner.position.y;
-                    }
-                    self.carry_toward(carry);
-                    self.velocity = Vector3::zeros();
-                } else if dist_sq <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
-                    self.first_touch_toward(owner.position, dist_sq);
-                    self.apply_movement();
-                } else {
-                    #[cfg(feature = "match-logs")]
-                    {
-                        crate::r#match::engine::ball::ball::ownership::reception_diag::OWNER_TOO_FAR
-                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        crate::r#match::engine::ball::ball::ownership::reception_diag::too_far::note(
-                            dist_sq.sqrt(),
-                            self.held_in_hands,
-                            self.cached_shot_target.is_some(),
-                            self.velocity.norm(),
-                        );
-                    }
-                    self.previous_owner = self.current_owner;
-                    self.current_owner = None;
-                    self.ownership_duration = 0;
-                    self.apply_movement();
-                }
-            } else {
-                self.apply_movement();
-            }
-        } else {
-            self.apply_movement();
+        if self.controlled_by != self.current_owner {
+            self.controlled_by = None;
+        }
+        match self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+        {
+            Some(owner) => self.follow_owner(owner.id, Carrier::of(owner)),
+            None => self.apply_movement(),
         }
     }
 
@@ -1260,41 +1108,152 @@ mod tests {
         );
     }
 
-    /// **A ball taken out of the air keeps coming to the man.**
+    /// **The touch writes the pace, never the place.** On the contact tick
+    /// the ball's velocity across the grass becomes the man's, it stops
+    /// climbing and spinning, and it is exactly where he met it.
+    #[test]
+    fn a_clean_touch_takes_his_pace_where_the_ball_is() {
+        let man = Carrier {
+            position: Vector3::new(400.0, 270.0, 0.0),
+            velocity: Vector3::new(0.3, -0.2, 0.0),
+        };
+        for height in [0.0_f32, 1.7] {
+            let mut ball = Ball::with_coord(840.0, 545.0);
+            ball.position = Vector3::new(403.0, 268.0, height);
+            ball.velocity = Vector3::new(-0.9, 0.1, 0.04);
+            ball.spin = Vector3::new(0.0, 0.0, 0.3);
+            let met = ball.position;
+            ball.touch(7, man);
+            assert_eq!(ball.position, met, "the touch moved the ball");
+            assert_eq!(
+                (ball.velocity.x, ball.velocity.y),
+                (man.velocity.x, man.velocity.y),
+                "the ball left the contact at {:?}, not at his pace",
+                ball.velocity
+            );
+            assert!(ball.velocity.z <= 0.0, "a touched ball climbed on");
+            assert_eq!(ball.spin, Vector3::zeros());
+            assert_eq!(ball.controlled_by, Some(7));
+        }
+    }
+
+    /// One tick of an owned ball and the man it belongs to: the ball as
+    /// `follow_owner` moves it, the man by his own velocity. Asserts the
+    /// ball moved by its velocity and nothing else, and returns its step
+    /// relative to him.
+    fn step_with(ball: &mut Ball, man: &mut Carrier) -> Vector3<f32> {
+        let before = ball.position - man.position;
+        ball.update_velocity();
+        let from = ball.position;
+        ball.follow_owner(7, *man);
+        assert!(
+            ((ball.position - from) - ball.velocity).norm() < 1e-3,
+            "the ball was written to {:?}, not moved",
+            ball.position
+        );
+        man.position += man.velocity;
+        (ball.position - man.position) - before
+    }
+
+    fn within_the_carry_bound(relative: Vector3<f32>) -> bool {
+        relative.x.abs() <= Ball::CARRY_BOUND + 1e-3 && relative.y.abs() <= Ball::CARRY_BOUND + 1e-3
+    }
+
+    /// **A received ball moves with the man who took it.** Met a stride
+    /// ahead of a receiver running at 5 m/s, it leaves the contact at his
+    /// pace, closes on his feet at no more than a slow walk, and is at his
+    /// feet inside 30 ticks.
+    #[test]
+    fn a_received_ball_runs_with_him_and_settles_at_his_feet() {
+        let mut man = Carrier {
+            position: Vector3::new(300.0, 272.0, 0.0),
+            velocity: Vector3::new(0.4, 0.0, 0.0),
+        };
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.position = Vector3::new(304.5, 272.5, 0.0);
+        ball.velocity = Vector3::new(-0.8, 0.0, 0.0);
+        ball.current_owner = Some(7);
+        ball.touch(7, man);
+        let mut at_feet = None;
+        for tick in 0..40 {
+            let relative = step_with(&mut ball, &mut man);
+            assert!(
+                within_the_carry_bound(relative),
+                "tick {tick}: the ball closed {relative:?} on him in one tick"
+            );
+            if at_feet.is_none() && Ball::at_feet(ball.position, man.position) {
+                at_feet = Some(tick);
+            }
+        }
+        let tick = at_feet.expect("the ball never reached his feet");
+        assert!(tick < 30, "the ball took {tick} ticks to reach his feet");
+        assert_eq!(ball.current_owner, Some(7));
+    }
+
+    /// **A turn carries the ball round; it is never written onto him.** A
+    /// man running at 5 m/s who turns back the way he came takes the ball
+    /// with him, never faster than a slow walk relative to his body and
+    /// every tick by its own velocity, and ends with it at his feet.
+    #[test]
+    fn a_turn_carries_the_ball_round_without_writing_it_onto_him() {
+        let mut man = Carrier {
+            position: Vector3::new(300.0, 272.0, 0.0),
+            velocity: Vector3::new(0.4, 0.0, 0.0),
+        };
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.position = man.position + Vector3::new(1.5, 0.0, 0.0);
+        ball.current_owner = Some(7);
+        ball.touch(7, man);
+        for tick in 0..80 {
+            if tick < 10 {
+                let (sin, cos) = (std::f32::consts::PI / 10.0).sin_cos();
+                let v = man.velocity;
+                man.velocity = Vector3::new(v.x * cos - v.y * sin, v.x * sin + v.y * cos, 0.0);
+            }
+            let relative = step_with(&mut ball, &mut man);
+            assert!(
+                within_the_carry_bound(relative),
+                "tick {tick}: the ball jumped {relative:?} relative to him"
+            );
+        }
+        assert!(Ball::at_feet(ball.position, man.position));
+    }
+
+    /// **A ball taken out of the air comes down at his feet.**
     ///
-    /// The grant finds the ball within a stride and a half of him, not on
-    /// him; killing the flight there left it hanging in the sky beside him
-    /// and dropping in a straight line. The control brings it down at his
-    /// feet instead: moving for as long as it is up, never faster than it
-    /// arrived, and on the deck within `CONTROL_DISTANCE` of him.
+    /// Touched a stride from him off the deck, it loses its pace across
+    /// the grass on the contact tick and the carry brings it in while
+    /// gravity alone lowers it: moving for as long as it is up, never
+    /// faster than it arrived, still his when it lands, and then at his
+    /// feet.
     #[test]
     fn a_controlled_ball_travels_to_his_feet_instead_of_stopping_in_the_sky() {
-        use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
-
-        let owner = Vector3::new(696.0, 180.0, 0.0);
         for (from, velocity) in [
-            // Passing him at head height, a stride and a half away.
+            // Passing him at head height, a stride away.
             (
-                Vector3::new(700.0, 184.0, 1.5),
-                Vector3::new(0.4, 0.25, -0.08),
+                Vector3::new(699.0, 183.0, 1.5),
+                Vector3::new(-0.6, -0.4, -0.08),
             ),
             // Dropping steeply out of a punt, slower across the ground.
             (
-                Vector3::new(699.0, 182.0, 2.6),
-                Vector3::new(0.2, 0.05, -0.02),
+                Vector3::new(698.0, 182.0, 2.6),
+                Vector3::new(-0.2, -0.05, -0.02),
             ),
         ] {
+            let mut man = Carrier {
+                position: Vector3::new(696.0, 180.0, 0.0),
+                velocity: Vector3::zeros(),
+            };
             let mut ball = Ball::with_coord(840.0, 545.0);
             ball.position = from;
             ball.velocity = velocity;
             ball.current_owner = Some(7);
-            let arrived_at = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+            let arrived_at = velocity.x.hypot(velocity.y);
+            ball.touch(7, man);
             let mut ticks = 0;
             while ball.position.z > Ball::DECK {
-                ball.update_velocity();
-                ball.take_control_of_the_flight(owner);
-                let across =
-                    (ball.velocity.x * ball.velocity.x + ball.velocity.y * ball.velocity.y).sqrt();
+                step_with(&mut ball, &mut man);
+                let across = ball.velocity.x.hypot(ball.velocity.y);
                 assert!(
                     across > 0.0,
                     "the ball stopped dead in the air at z={:.2}",
@@ -1304,15 +1263,17 @@ mod tests {
                     across <= arrived_at + 1e-4,
                     "a touch put pace ON the ball: {across:.3} > {arrived_at:.3}"
                 );
-                ball.apply_movement();
                 ticks += 1;
                 assert!(ticks < 400, "the ball never came down");
             }
-            let gap =
-                ((owner.x - ball.position.x).powi(2) + (owner.y - ball.position.y).powi(2)).sqrt();
+            assert_eq!(ball.current_owner, Some(7), "he was under it and lost it");
+            for _ in 0..30 {
+                step_with(&mut ball, &mut man);
+            }
             assert!(
-                gap <= CONTROL_DISTANCE,
-                "landed {gap:.1}u from him, out of control reach"
+                Ball::at_feet(ball.position, man.position),
+                "the ball settled {:.1}u from him",
+                (ball.position - man.position).xy().norm()
             );
         }
     }

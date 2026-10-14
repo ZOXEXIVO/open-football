@@ -376,7 +376,7 @@ fn the_ball_waits_longer_the_further_the_keeper_has_to_come() {
 
 /// **The ball reaches his gloves.**
 ///
-/// `move_to`'s `carry_toward` climbs to `Ball::carry_height` at 10 cm a
+/// The carry climbs to `Ball::carry_height` at 10 cm a
 /// tick, and the settle branch in `update_velocity` read "airborne" as
 /// `z > 0.1` — exactly one carry step. A carried ball has no velocity of
 /// its own, so it took that branch every tick, and a gather off the deck

@@ -76,6 +76,9 @@ use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionDuel;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::{BlockDiag, PassBlockCensus};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::strike_diag::GrantPath;
+use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, BlockContact, CONTROL_DISTANCE, FlightProtection, GRAVITY_PER_TICK,
 };
@@ -705,10 +708,12 @@ impl Ball {
         events.add_ball_event(BallEvent::Blocked(blocker_id, self.position));
 
         if controlled {
+            #[cfg(feature = "match-logs")]
+            self.open_arrival(GrantPath::CONTEST, blocker.position);
             self.current_owner = Some(blocker_id);
+            self.touch(blocker_id, Carrier::of(blocker));
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 15;
-            self.velocity = Vector3::zeros();
             events.add_player_event(PlayerEvent::ClaimBall(blocker_id));
             return;
         }

@@ -5979,6 +5979,11 @@ const RELIEF_REFERENCE_BASE: f32 = 0.520;
 /// How much of the urge a man stretching at full tilt for a ball he has
 /// not got under control gives up. See `poise`.
 const STRETCH_COST: f32 = 0.45;
+/// How much of the urge the hardest ball he could have just received
+/// costs him while it is still fresh. See `Poise::first_time`. Fitted on
+/// `stats 200 14 14`: shots within 15 ticks of the reception 15.0 → 11.0
+/// a match, shots 15.3 → 13.6 a team (master 11.6 and 13.9).
+const FIRST_TIME_COST: f32 = 0.8;
 /// How much of the urge survives a corridor that is completely blocked
 /// by outfield bodies. Not zero: a shot into traffic is a real shot, and
 /// whether the body gets in the way is largely `try_block_shot`'s
@@ -6210,22 +6215,15 @@ impl StrikingRange {
     /// shots came from inside the box against a real ~8, and that half is
     /// chance supply".
     ///
-    /// Subtracting [`MatchStandard::shift`] measures the strike against
-    /// the standard of the match: zero at the calibration division, so
-    /// nothing here recalibrates, and the specialist keeps every metre of
-    /// his edge over the men he actually plays with.
+    /// The squads are measured against the standard of the match at
+    /// kickoff (`MatchStandard::measure`), so the specialist keeps every
+    /// metre of his edge over the men he actually plays with.
     pub fn of(ctx: &StateProcessingContext) -> f32 {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let tech = sc::EffActionContext::technical(minute);
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |v: f32| (v - shift).clamp(0.0, 1.0);
-        let power = (peer(sc::n(sc::eff(ctx.player, tech, |p| {
-            p.skills.technical.long_shots
-        }))) * 0.45
-            + peer(sc::n(sc::eff(ctx.player, tech, |p| {
-                p.skills.technical.technique
-            }))) * 0.30
-            + peer((ctx.player.skills.physical.strength / 20.0).clamp(0.0, 1.0)) * 0.25)
+        let power = (sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.long_shots)) * 0.45
+            + sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.technique)) * 0.30
+            + (ctx.player.skills.physical.strength / 20.0).clamp(0.0, 1.0) * 0.25)
             .clamp(0.0, 1.0);
         200.0 + power * 190.0
     }
@@ -6268,6 +6266,69 @@ impl Poise {
     pub fn pace(ctx: &StateProcessingContext) -> f32 {
         let top = ctx.player.max_speed_with_condition_cached().max(0.01);
         (ctx.player.velocity.norm() / top).clamp(0.0, 1.0)
+    }
+
+    /// How long after his touch the way the ball arrived still governs the
+    /// strike: half a second, the time it takes to kill a hard ball and set
+    /// the feet.
+    const SETTLE_TICKS: f32 = 50.0;
+    /// Arrival pace no harder to strike than a ball at his feet (6 m/s)…
+    const EASY_PACE: f32 = 0.5;
+    /// …and the pace at which the ball alone is as hard as a strike gets
+    /// (20 m/s), in u/tick.
+    const HARD_PACE: f32 = 1.6;
+
+    /// How unsettled a ball he has only just received leaves him, 0..1.
+    ///
+    /// A first-time finish is real football, and the clean reception makes
+    /// it available off every pass; what decides whether he takes it is
+    /// how the ball came to him. A soft lay-off is struck first time by
+    /// anybody; a driven ball he has to turn back toward goal is taken down
+    /// first by everybody but the best technicians.
+    pub fn first_time(ctx: &StateProcessingContext) -> f32 {
+        let ball = &ctx.tick_context.ball;
+        let Some(reception) = ball.reception.filter(|r| r.by == ctx.player.id) else {
+            return 0.0;
+        };
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let technique = sc::n(sc::eff(
+            ctx.player,
+            sc::EffActionContext::technical(minute),
+            |p| p.skills.technical.technique,
+        ));
+        Self::first_time_of(
+            reception.velocity,
+            ctx.player().opponent_goal_position() - ctx.player.position,
+            ball.ownership_duration,
+            technique,
+        )
+    }
+
+    /// [`Self::first_time`] from its inputs: the ball's velocity as he
+    /// touched it, the line to goal, ticks since the touch and his
+    /// technique (0..1).
+    pub fn first_time_of(
+        arrived: Vector3<f32>,
+        to_goal: Vector3<f32>,
+        ticks_since_touch: u32,
+        technique: f32,
+    ) -> f32 {
+        let fresh = 1.0 - ticks_since_touch as f32 / Self::SETTLE_TICKS;
+        let planar = Vector3::new(arrived.x, arrived.y, 0.0);
+        let speed = planar.norm();
+        let pace =
+            ((speed - Self::EASY_PACE) / (Self::HARD_PACE - Self::EASY_PACE)).clamp(0.0, 1.0);
+        if fresh <= 0.0 || pace <= 0.0 {
+            return 0.0;
+        }
+        let to_goal = Vector3::new(to_goal.x, to_goal.y, 0.0)
+            .try_normalize(1.0e-3)
+            .unwrap_or(planar / speed);
+        // 0 for a ball running on toward goal, 1 for one coming straight
+        // back from it.
+        let turn = (1.0 - planar.dot(&to_goal) / speed) * 0.5;
+        (fresh * pace * (0.4 + 0.6 * turn) * (1.0 - technique.clamp(0.0, 1.0) * 0.5))
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -6441,14 +6502,13 @@ impl FreeKickResolver {
             )
         };
 
-        let shift = MatchStandard::shift(ctx.context);
         let scores = score_free_kick_choices(
             FreeKickBand::from_distance(ctx.ball().distance_to_opponent_goal()),
             Self::goal_angle(ctx),
             // Only a direct free kick reaches this decision.
             false,
-            MatchStandard::peer(sc::n(ctx.player.skills.technical.free_kicks), shift),
-            MatchStandard::peer(sc::n(ctx.player.skills.technical.crossing), shift),
+            sc::n(ctx.player.skills.technical.free_kicks),
+            sc::n(ctx.player.skills.technical.crossing),
             Self::aerial_advantage(ctx, minute),
             late && mine < theirs,
             late && mine > theirs,
@@ -6623,28 +6683,15 @@ pub fn evaluate_forward_shot_decision(
     let tech = sc::EffActionContext::technical(minute);
     let mental = sc::EffActionContext::mental(minute);
     // A few raw-band reads still drive 1v1 cool-headedness; routed
-    // through effective_skill so fatigue applies, and through the
-    // match's own standard so they mean the same thing in every
-    // division. `ShotSkillProfile` centres its half already; these are
-    // the leftovers that feed `poise` and `boldness`, and measured on
-    // `dev_match stats` those two ran **poise 0.697 → 0.917** and
-    // **boldness 0.909 → 1.155** from level 6 to level 20, i.e. a 27%
-    // flat lift on the urge of every shot at the top of the pyramid.
-    let standard_shift = MatchStandard::shift(ctx.context);
-    let peer = |v: f32| (v - standard_shift).clamp(0.0, 1.0);
-    let _finishing = peer(sc::n(sc::eff(ctx.player, tech, |p| {
-        p.skills.technical.finishing
-    })));
-    let composure = peer(sc::n(sc::eff(ctx.player, mental, |p| {
-        p.skills.mental.composure
-    })));
-    let _technique = peer((skills.technical.technique / 20.0).clamp(0.0, 1.0));
-    let first_touch = peer(sc::n(sc::eff(ctx.player, tech, |p| {
+    // through effective_skill so fatigue applies. They feed `poise` and
+    // `boldness`.
+    let _finishing = sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.finishing));
+    let composure = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.composure));
+    let _technique = (skills.technical.technique / 20.0).clamp(0.0, 1.0);
+    let first_touch = sc::n(sc::eff(ctx.player, tech, |p| {
         p.skills.technical.first_touch
-    })));
-    let decisions = peer(sc::n(sc::eff(ctx.player, mental, |p| {
-        p.skills.mental.decisions
-    })));
+    }));
+    let decisions = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.decisions));
 
     // ── Sight of goal ─────────────────────────────────────────────────
     // Geometry and bodies. `angle_quality` is how central he is FOR HIS
@@ -6733,14 +6780,19 @@ pub fn evaluate_forward_shot_decision(
     // and it is a term that varies with the moment instead of with the
     // roster.
     let sprinting = Poise::pace(ctx);
-    let physical_balance = (peer(skills.physical.strength / 20.0)
-        + peer(skills.physical.agility / 20.0)
+    let physical_balance = ((skills.physical.strength / 20.0).clamp(0.0, 1.0)
+        + (skills.physical.agility / 20.0).clamp(0.0, 1.0)
         + first_touch
         + composure)
         / 4.0;
     let stretched = (sprinting * (1.0 - body_control)).clamp(0.0, 1.0);
-    let poise =
-        ((1.0 - stretched * STRETCH_COST) * (0.80 + physical_balance * 0.20)).clamp(0.0, 1.0);
+    // …and a ball he has only just received, struck before it is under
+    // control. See `Poise::first_time`.
+    let first_time = Poise::first_time(ctx);
+    let poise = ((1.0 - stretched * STRETCH_COST)
+        * (0.80 + physical_balance * 0.20)
+        * (1.0 - first_time * FIRST_TIME_COST))
+        .clamp(0.0, 1.0);
 
     // ── Being closed down ─────────────────────────────────────────────
     //
@@ -6849,9 +6901,7 @@ pub fn evaluate_forward_shot_decision(
     // i.e. it was a fourth flat tax with a little variation riding on
     // top, and the bar had been calibrated against the depressed
     // distribution the four of them produced together.
-    let temperament = peer(sc::n(sc::eff(ctx.player, mental, |p| {
-        p.skills.mental.flair
-    }))) * 0.45
+    let temperament = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.flair)) * 0.45
         + composure_skill * 0.25
         + execution_skill * 0.30;
     let boldness = (1.0 + (temperament - 0.5) * 0.55).clamp(0.70, 1.30);
@@ -7757,5 +7807,53 @@ mod tests {
         let cool_elite = (0.80 + 0.85 + 0.80) / 3.0_f32;
         let prox_elite = (0.55 + cool_elite * 0.55).clamp(0.55, 1.10);
         assert!(prox_elite > prox_poor + 0.10);
+    }
+}
+
+#[cfg(test)]
+mod first_time_tests {
+    use super::Poise;
+    use nalgebra::Vector3;
+
+    const TO_GOAL: Vector3<f32> = Vector3::new(1.0, 0.0, 0.0);
+
+    /// A soft lay-off is struck first time by anybody.
+    #[test]
+    fn a_soft_ball_costs_nothing() {
+        let rolled = Vector3::new(-0.4, 0.0, 0.0);
+        assert_eq!(Poise::first_time_of(rolled, TO_GOAL, 0, 0.5), 0.0);
+    }
+
+    /// A driven ball he has to turn back toward goal is harder than one
+    /// of the same pace running on toward it.
+    #[test]
+    fn turning_a_ball_back_is_harder_than_running_onto_it() {
+        let onto = Poise::first_time_of(Vector3::new(1.4, 0.0, 0.0), TO_GOAL, 0, 0.5);
+        let across = Poise::first_time_of(Vector3::new(0.0, 1.4, 0.0), TO_GOAL, 0, 0.5);
+        let back = Poise::first_time_of(Vector3::new(-1.4, 0.0, 0.0), TO_GOAL, 0, 0.5);
+        assert!(onto < across && across < back, "{onto} {across} {back}");
+    }
+
+    /// The better technician handles the same ball better.
+    #[test]
+    fn technique_takes_the_sting_out() {
+        let ball = Vector3::new(-1.2, 0.3, 0.0);
+        let ordinary = Poise::first_time_of(ball, TO_GOAL, 0, 0.4);
+        let gifted = Poise::first_time_of(ball, TO_GOAL, 0, 0.9);
+        assert!(gifted < ordinary, "{gifted} vs {ordinary}");
+    }
+
+    /// Once it is under control the way it arrived no longer matters.
+    #[test]
+    fn the_cost_fades_as_he_settles_it() {
+        let ball = Vector3::new(-1.6, 0.0, 0.0);
+        let mut previous = Poise::first_time_of(ball, TO_GOAL, 0, 0.5);
+        assert!(previous > 0.0);
+        for ticks in [10, 25, 40] {
+            let now = Poise::first_time_of(ball, TO_GOAL, ticks, 0.5);
+            assert!(now < previous, "not fading at {ticks}");
+            previous = now;
+        }
+        assert_eq!(Poise::first_time_of(ball, TO_GOAL, 50, 0.5), 0.0);
     }
 }

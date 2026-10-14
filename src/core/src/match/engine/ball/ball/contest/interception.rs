@@ -2,7 +2,7 @@
 //! the air on its way to somebody else.
 
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::contest::contact::ContactInPlace;
+use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::flight_diag::FlightDiag;
 #[cfg(feature = "match-logs")]
@@ -12,11 +12,11 @@ use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE,
 };
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
+#[cfg(feature = "match-logs")]
 use nalgebra::Vector3;
 
 /// **The interception duel, priced as a contest.**
@@ -213,16 +213,12 @@ impl InterceptionContest {
 
     /// Ticks after a strike before a man has read the ball.
     ///
-    /// ⚠ **`read` must be PEER-RELATIVE** — `MatchStandard::peer` of his
-    /// interception composite, not the raw composite. This is the one
-    /// absolute skill term the contest had, and absolute skill terms walk
-    /// straight up the pyramid: [`InterceptionDuel`] cancels because it
-    /// scores a DIFFERENCE, and a clock scored on one man's ability alone
-    /// has nothing on the passer's side to cancel it. Measured over a
-    /// level sweep (60 fixtures at each of levels 4-18), the absolute form
-    /// ran 37 interceptions a team at level 4 against 72 at level 18,
-    /// against a baseline that ran 28 to 38 — the same defect, in the same
-    /// channel, that the duel was introduced to fix.
+    /// `read` is his interception composite, which walks with the division
+    /// unless the squads were measured against the standard of the match
+    /// (`MatchStandard::measure`): [`InterceptionDuel`] cancels because it
+    /// scores a DIFFERENCE, while a clock scored on one man's ability has
+    /// nothing on the passer's side to cancel it — read absolutely it ran
+    /// 37 interceptions a team at level 4 against 72 at level 18.
     #[inline]
     pub fn read_delay(read: f32) -> f32 {
         Self::READ_SLOW - (Self::READ_SLOW - Self::READ_QUICK) * read.clamp(0.0, 1.0)
@@ -248,8 +244,8 @@ impl InterceptionContest {
     /// playing into a lane nobody could explain. A man who has to move
     /// settles a stride off the line, the loose-ball claim band, rather
     /// than arriving exactly on it.
-    pub fn closing_miss(perp: f32, arrives: f32, read: f32, max_speed: f32, shift: f32) -> f32 {
-        let delay = Self::read_delay(MatchStandard::peer(read, shift));
+    pub fn closing_miss(perp: f32, arrives: f32, read: f32, max_speed: f32) -> f32 {
+        let delay = Self::read_delay(read);
         let closing = ((arrives - delay).max(0.0) * max_speed).min(Self::STEP_IN);
         if closing > 0.0 {
             (perp - closing).max(perp.min(LOOSE_CLAIM_DISTANCE))
@@ -259,10 +255,7 @@ impl InterceptionContest {
     }
 
     /// `read` is the man's interception composite and `delivery` the
-    /// passer's execution — the two halves of [`InterceptionDuel`], both
-    /// RAW, because the duel scores the difference and a difference is
-    /// already peer-relative. `shift` is [`MatchStandard::shift`], and it
-    /// is what keeps the readiness clock from walking up the pyramid.
+    /// passer's execution — the two halves of [`InterceptionDuel`].
     /// `set` is [`Self::is_set_for_it`] on his distance from the lane AT
     /// THE STRIKE — the caller owns that reading, because only the caller
     /// knows where he was standing then.
@@ -274,14 +267,13 @@ impl InterceptionContest {
         height_factor: f32,
         read: f32,
         delivery: f32,
-        shift: f32,
         set: bool,
     ) -> f32 {
         let stretch = (miss / Self::REACH).clamp(0.0, 1.0);
         let reach = 1.0 - stretch * stretch;
         let pace = 1.0 / (1.0 + speed.max(0.0) * Self::SPEED_DRAG);
         let set = if set { Self::SET_READ_MULT } else { 1.0 };
-        let half = Self::read_delay(MatchStandard::peer(read, shift)) * set * 0.5;
+        let half = Self::read_delay(read) * set * 0.5;
         let t = ((ticks_since_strike - half) / half).clamp(0.0, 1.0);
         let ready = t * t * (3.0 - 2.0 * t);
         let skill = InterceptionDuel::advantage(read, delivery);
@@ -347,7 +339,6 @@ impl Ball {
         let passer_team = passer.team_id;
         let minute = sc::minute_from_ticks(self.current_tick_cached);
         let delivery = sc::passing_execution(passer, minute);
-        let shift = MatchStandard::shift(context);
         // The last stride and a half to its man is the receiver's: what
         // happens there is his first touch under pressure and the duel
         // after it, both priced elsewhere, not an interception.
@@ -443,7 +434,6 @@ impl Ball {
                 height_factor,
                 sc::interception(player, minute),
                 delivery,
-                shift,
                 set,
             );
             let fires = context.rng.unit_f32() < chance;
@@ -479,8 +469,9 @@ impl Ball {
         }
     }
 
-    /// The ball is his: stopped where it is and drawn in by `move_to`,
-    /// exactly as every other grant — see [`ContactInPlace`].
+    /// The ball is his, under his touch where he met it: it leaves the
+    /// contact at his pace rather than lying dead or running on along the
+    /// pass — see [`Ball::touch`].
     fn take_intercepted(&mut self, interceptor: &MatchPlayer, events: &mut EventCollection) {
         // A ball taken above standing reach is taken in the air. The ball
         // code holds the squad immutably, so it asks for the jump rather
@@ -497,19 +488,13 @@ impl Ball {
                 interceptor.is_airborne() || leap > 0.0,
             );
             StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+            self.open_arrival(GrantPath::CONTEST, interceptor.position);
         }
         self.current_owner = Some(interceptor.id);
+        self.touch(interceptor.id, Carrier::of(interceptor));
         self.pass_target_player_id = None;
         self.flags.in_flight_state = 0;
         self.claim_cooldown = 15;
-        // Stopped dead: a stationary ball cannot roll past the owner-drop
-        // threshold and cross a line unowned.
-        self.velocity = Vector3::zeros();
-        // No height write: `move_to`'s `carry_toward` walks it down to his
-        // carry height, which is the machinery that exists for this.
-        if !ContactInPlace::armed() {
-            self.position.z = 0.0;
-        }
         // A shot the defender got a body in front of is a BLOCK, and the
         // stat sheet should say so. `cached_shot_target` alone under-reports
         // it — several paths clear it while the ball is still a shot in
@@ -599,18 +584,15 @@ mod interception_contest_tests {
 
     const READY: f32 = 100.0;
 
-    /// The contest at the standard of football it is being played at —
-    /// `shift` is zero for a mid-pyramid match, and the level sweep is
-    /// what guards the rest.
     /// A man who had to move to it: the ordinary case, and the one the
     /// read clock is written for.
     fn chance(miss: f32, speed: f32, ticks: f32, height: f32, read: f32, delivery: f32) -> f32 {
-        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, 0.0, false)
+        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, false)
     }
 
     /// …and one who was already standing in the lane when it was struck.
     fn chance_set(miss: f32, speed: f32, ticks: f32, height: f32, read: f32, delivery: f32) -> f32 {
-        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, 0.0, true)
+        InterceptionContest::chance(miss, speed, ticks, height, read, delivery, true)
     }
 
     /// A ball through an even reader's feet is a real chance — not a

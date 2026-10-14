@@ -9,6 +9,7 @@ use crate::r#match::engine::engine::phase_prof::PhaseProf;
 use crate::r#match::engine::engine::run::stub::StubMatch;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::result::{DeadTime, PeriodKind, PlayingTime};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -76,8 +77,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// date.
     #[allow(unreachable_code)]
     pub fn play_with_config(
-        left_squad: MatchSquad,
-        right_squad: MatchSquad,
+        mut left_squad: MatchSquad,
+        mut right_squad: MatchSquad,
         config: MatchEngineConfig,
     ) -> MatchResultRaw {
         // Skip the simulation and draw the result from the squads — see
@@ -96,6 +97,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let starting_home_tactic = Some(left_squad.tactics.tactic_type);
         let starting_away_tactic = Some(right_squad.tactics.tactic_type);
 
+        let standard = MatchStandard::measure(&mut left_squad, &mut right_squad);
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
         let mut match_position_data = if !config.match_recordings {
@@ -114,6 +116,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // through the state machine.
         context.starting_home_tactic = starting_home_tactic;
         context.starting_away_tactic = starting_away_tactic;
+        context.standard = Some(standard);
+        for p in &field.players {
+            context.seed_psychology(p);
+        }
 
         // Seed the chemistry map from the kickoff XI of each side.
         // Pair scores stay constant for the match — live events could

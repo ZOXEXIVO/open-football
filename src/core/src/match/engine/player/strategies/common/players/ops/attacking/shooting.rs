@@ -1,6 +1,5 @@
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::StateProcessingContext;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::shot_skill::{
     ShotSkillInputs, ShotSkillProfile,
 };
@@ -110,7 +109,6 @@ impl<'p> ShootingOperationsImpl<'p> {
                 .then(|| ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart))
                 .flatten()
                 .unwrap_or(ShotType::FootOpenPlay),
-            standard_shift: MatchStandard::shift(self.ctx.context),
         };
 
         ShotSkillProfile::from_player(player, &inputs)

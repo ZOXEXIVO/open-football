@@ -755,8 +755,25 @@ impl LevelSkillCurve {
         total / (14 + 14 + 8 + 13) as f32
     }
 
+    /// `SQUAD_UNCLAMPED=1` lets the shift carry attributes past 1-20. The
+    /// kickoff measurement brings them back inside the scale, but a squad
+    /// clamped here has already lost its best attributes to the ceiling
+    /// at the top of the pyramid and its worst to the floor at the bottom
+    /// — saturation that alone reads −0.48 ±0.19 goals from level 4 to 18
+    /// on a flat engine, so the flatness gate is read unclamped.
+    fn unclamped() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| env::var("SQUAD_UNCLAMPED").is_ok_and(|v| v != "0" && !v.is_empty()))
+    }
+
     fn shift_all(skills: &mut PlayerSkills, delta: f32) {
-        let bump = |x: &mut f32| *x = (*x + delta).clamp(1.0, 20.0);
+        let unclamped = Self::unclamped();
+        let bump = |x: &mut f32| {
+            *x += delta;
+            if !unclamped {
+                *x = x.clamp(1.0, 20.0);
+            }
+        };
         let s = &mut skills.technical;
         bump(&mut s.corners);
         bump(&mut s.crossing);
@@ -3621,6 +3638,9 @@ fn print_usage() {
     eprintln!(
         "                                      each level; goals/match MUST be flat across the pyramid"
     );
+    eprintln!(
+        "  dev_match ball_track [lvlA] [lvlB]  one recorded match: ball reversals, pace steps, reception profiles"
+    );
     eprintln!("  dev_match league [teams] [rounds] [minLvl] [maxLvl]  full round-robin season");
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
@@ -4211,6 +4231,13 @@ fn main() {
             // has footage behind its marker.
             let clipped = args.get(4).is_some_and(|s| s == "clipped");
             run_record(level_a, level_b, clipped);
+        }
+        // The recorded ball track censused in-process, on the 30 ms grid the
+        // viewer interpolates. See `BallTrackCensus`.
+        "ball_track" => {
+            let level_a: Option<u8> = args.get(2).and_then(|s| s.parse().ok());
+            let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
+            BallTrackCensus::run(level_a, level_b);
         }
         // Deterministic seeded timing + calibration-neutrality benchmark.
         // What a clipped recording actually comes out holding, over N
@@ -5146,6 +5173,8 @@ struct LevelRow {
     /// `FLAT_TOLERANCE`.
     goals_sq: u64,
     shots: u32,
+    /// Sum of squared per-team shot counts, for the shots slope's SE.
+    team_shots_sq: u64,
     on_target: u32,
     saves: u32,
     interceptions: u32,
@@ -5250,6 +5279,11 @@ impl LevelSweep {
             println!(
                 "SQUAD_SPREAD={:.1} - squads are spread around each level's mean.",
                 SquadSpread::sd()
+            );
+        }
+        if LevelSkillCurve::unclamped() {
+            println!(
+                "SQUAD_UNCLAMPED - attributes may leave 1-20 before the kickoff measurement, so the scale's saturation is not in the comparison."
             );
         }
         println!();
@@ -5509,11 +5543,82 @@ impl LevelSweep {
                     .ceil(),
             );
         }
+        // **The slope**, which tells two builds apart where the range
+        // cannot: a least-squares line through the level means, read as
+        // the change from the lowest level to the highest, with its
+        // standard error from the sweep's own per-match variance.
+        let span = (rows[rows.len() - 1].level - rows[0].level) as f64;
+        let goals = Self::slope(
+            &rows,
+            |r| (r.goals as f64, r.goals_sq as f64, r.matches as f64),
+            span,
+        );
+        let shots = Self::slope(
+            &rows,
+            |r| {
+                (
+                    r.shots as f64,
+                    r.team_shots_sq as f64,
+                    2.0 * r.matches as f64,
+                )
+            },
+            span,
+        );
+        let verdict = |(slope, se): (f64, f64)| {
+            if slope.abs() <= 2.0 * se {
+                "flat"
+            } else {
+                "TILTED"
+            }
+        };
+        println!(
+            "  SLOPE:    goals/match {:+.2} ±{:.2} ({}), shots/team {:+.2} ±{:.2} ({}) from level {} \
+             to level {}   (flat = within two standard errors of zero)",
+            goals.0,
+            goals.1,
+            verdict(goals),
+            shots.0,
+            shots.1,
+            verdict(shots),
+            rows[0].level,
+            rows[rows.len() - 1].level,
+        );
         println!(
             "  LEVEL:    mean {:.2} goals/match against a real ~{:.2}  (that one is `stats`'s question)",
             mean,
             Self::REAL_GOALS,
         );
+    }
+
+    /// Least-squares slope of a per-observation quantity's level means on
+    /// level, scaled to `span` levels, and its standard error. `sample`
+    /// gives a level's `(sum, sum of squares, observations)`; the SE of a
+    /// level mean comes from the variance pooled across every level.
+    fn slope(
+        rows: &[LevelRow],
+        sample: impl Fn(&LevelRow) -> (f64, f64, f64),
+        span: f64,
+    ) -> (f64, f64) {
+        let points: Vec<(f64, f64, f64, f64)> = rows
+            .iter()
+            .map(|r| {
+                let (sum, sum_sq, n) = sample(r);
+                (r.level as f64, sum / n.max(1.0), sum_sq, n.max(1.0))
+            })
+            .collect();
+        let k = points.len() as f64;
+        let mean_x = points.iter().map(|p| p.0).sum::<f64>() / k;
+        let mean_y = points.iter().map(|p| p.1).sum::<f64>() / k;
+        let sxx: f64 = points.iter().map(|p| (p.0 - mean_x).powi(2)).sum();
+        if sxx <= 0.0 {
+            return (0.0, 0.0);
+        }
+        let sxy: f64 = points.iter().map(|p| (p.0 - mean_x) * (p.1 - mean_y)).sum();
+        let ss: f64 = points.iter().map(|p| p.2 - p.3 * p.1 * p.1).sum();
+        let n: f64 = points.iter().map(|p| p.3).sum();
+        let sd = (ss / (n - k).max(1.0)).max(0.0).sqrt();
+        let se_mean = sd / (n / k).sqrt();
+        (sxy / sxx * span, se_mean / sxx.sqrt() * span)
     }
 
     fn one_level(n_matches: usize, level: u8) -> LevelRow {
@@ -5601,6 +5706,7 @@ impl LevelSweep {
             row.high_scoring += (total >= 4) as u32;
             for t in [h, a] {
                 row.shots += t.shots as u32;
+                row.team_shots_sq += (t.shots as u64) * (t.shots as u64);
                 row.on_target += t.on_target as u32;
                 row.saves += t.saves as u32;
                 row.interceptions += t.interceptions;
@@ -5686,6 +5792,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::reception_diag::reset();
     core::flight_diag::FlightDiag::reset();
     core::strike_diag::StrikeCensus::reset();
+    core::arrival_diag::ArrivalCensus::reset();
+    core::arrival_diag::ShotTiming::reset();
     core::teleport::TeleportCensus::reset();
     core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
@@ -8219,6 +8327,85 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             },
                         );
                     }
+                }
+                // ── ARRIVALS ─────────────────────────────────────────
+                //
+                // What a grant does to the ball's motion, from the grant
+                // to the ball's next move: pace in and out, how far from
+                // the man it was taken, whether that first step turned it
+                // round, and whether it was the ball's own velocity or a
+                // write. See `arrival_diag`.
+                {
+                    use core::strike_diag::GrantPath;
+                    const MPS: f64 = 12.5;
+                    const M: f64 = 0.125;
+                    let rows = core::arrival_diag::ArrivalCensus::snapshot();
+                    let per = |v: u64| v as f64 / n_matches as f64;
+                    println!(
+                        "  ARRIVALS — what a grant does to the ball's motion over its next move"
+                    );
+                    println!(
+                        "    {:<10} {:>8} {:>15} {:>8} {:>9} {:>18} {:>10}",
+                        "path",
+                        "/match",
+                        "pace m/s in→out",
+                        "gap",
+                        "reversed",
+                        "relocated (vis)",
+                        "mean"
+                    );
+                    for (p, name) in GrantPath::NAMES.iter().enumerate() {
+                        let r = rows[p];
+                        let n = r.grants.max(1) as f64;
+                        println!(
+                            "    {:<10} {:>8.1} {:>7.1} → {:>5.1} {:>7.2}m {:>8.1}% {:>10.1} ({:>4.1}) {:>9.2}m",
+                            name,
+                            per(r.grants),
+                            r.pace_before / n * MPS,
+                            r.pace_after / n * MPS,
+                            r.gap / n * M,
+                            r.reversed as f64 / n * 100.0,
+                            per(r.relocated),
+                            per(r.visible),
+                            if r.relocated > 0 {
+                                r.relocation / r.relocated as f64 * M
+                            } else {
+                                0.0
+                            },
+                        );
+                    }
+                    {
+                        use core::arrival_diag::ShotTiming;
+                        let (shots_g, goals_g, shots_p, goals_p) = ShotTiming::snapshot();
+                        let row = |names: &[&str], shots: &[u64], goals: &[u64]| {
+                            names
+                                .iter()
+                                .enumerate()
+                                .map(|(i, n)| {
+                                    format!(
+                                        "{n} {:.1} ({:.0}%)",
+                                        per(shots[i]),
+                                        goals[i] as f64 / shots[i].max(1) as f64 * 100.0
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        };
+                        println!(
+                            "  SHOT TIMING — shots/match (conversion) by ticks since his grant: {}",
+                            row(&ShotTiming::GRANT_NAMES, &shots_g, &goals_g)
+                        );
+                        println!(
+                            "    …by ticks since the last pass was struck: {}",
+                            row(&ShotTiming::PASS_NAMES, &shots_p, &goals_p)
+                        );
+                    }
+                    println!(
+                        "    SECURE_OUT_OF_REACH {:.2}/match   (tackle / gain-ball grants to a man \
+                         beyond the owner-tracking cap)",
+                        per(core::reception_diag::SECURE_OUT_OF_REACH
+                            .load(std::sync::atomic::Ordering::Relaxed)),
+                    );
                 }
                 // Who the ball dies on. A stalled ball is nearly always a
                 // state with no way to act on possession — see
@@ -14337,6 +14524,361 @@ fn run_record(level_a: Option<u8>, level_b: Option<u8>, clipped: bool) {
         );
     }
     println!("wrote {} chunks to {}", chunks.len(), out_dir.display());
+}
+
+/// **The recorded ball track, read the way the viewer reads it.**
+///
+/// Plays one match with the recorder on and censuses its ball track on the
+/// 30 ms grid the viewer interpolates: direction reversals per minute by
+/// phase, pace steps per minute, and the pace and ball–man gap around every
+/// `PassCompleted` and `Intercepted`. The acceptance instrument for the
+/// ball's motion at a reception, because it measures what the viewer draws
+/// rather than what the engine meant.
+struct BallTrackCensus;
+
+/// A reception the profile tables are read around: when, and who took it.
+struct TrackReception {
+    at: u64,
+    man: u32,
+}
+
+impl BallTrackCensus {
+    const CADENCE_MS: u64 = 30;
+    const M_PER_U: f32 = 0.125;
+    /// A step shorter than this has no direction worth comparing: 1 cm.
+    const STILL: f32 = 0.08;
+    /// More than 120° between consecutive steps.
+    const REVERSAL_COS: f32 = -0.5;
+    /// How long after a reception its reversals are booked to it.
+    const RECEPTION_MS: u64 = 300;
+    /// A ball within a metre of a man is at his feet.
+    const CARRIED: f32 = 8.0;
+    /// At least this fast, or this high, the ball is travelling.
+    const FLIGHT_MPS: f32 = 2.0;
+    const FLIGHT_HEIGHT: f32 = 0.5;
+    /// A pace step: from above `STEP_FROM_MPS` to under `STEP_RATIO` of
+    /// that pace between consecutive steps.
+    const STEP_FROM_MPS: f32 = 4.0;
+    const STEP_RATIO: f32 = 0.35;
+    const PHASES: [&'static str; 4] = ["reception", "flight", "carried", "free"];
+    const OFFSETS_MS: [i64; 10] = [-120, -90, -60, -30, 0, 30, 60, 90, 120, 150];
+
+    fn run(level_a: Option<u8>, level_b: Option<u8>) {
+        MatchRuntime::set_events_mode(true);
+        core::teleport::TeleportCensus::reset();
+        let level_a = level_a.unwrap_or_else(random_level);
+        let level_b = level_b.unwrap_or_else(random_level);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level_a, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level_b, 11);
+        let result = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        let data = &result.position_data;
+        let ball = data.ball_track();
+        let (Some(first), Some(last)) = (ball.first(), ball.last()) else {
+            println!("no ball track was recorded");
+            return;
+        };
+        let score = result.score.as_ref().unwrap();
+        let minutes = (last.timestamp - first.timestamp) as f64 / 60_000.0;
+        println!(
+            "ball track: {}:{} (level {} vs {}), {:.1} min, {} ball samples, 30 ms grid",
+            score.home_team.get(),
+            score.away_team.get(),
+            level_a,
+            level_b,
+            minutes,
+            ball.len(),
+        );
+
+        let men: Vec<(u32, &[core::r#match::ResultPositionDataItem])> = data
+            .get_player_ids()
+            .into_iter()
+            .filter_map(|id| data.player_track(id).map(|track| (id, track)))
+            .collect();
+        let (passes, intercepts, claims) = Self::receptions(data.match_events());
+        let mut received: Vec<u64> = passes
+            .iter()
+            .chain(&intercepts)
+            .chain(&claims)
+            .map(|r| r.at)
+            .collect();
+        received.sort_unstable();
+
+        let grid: Vec<(u64, core::Vector3<f32>)> = (first.timestamp..=last.timestamp)
+            .step_by(Self::CADENCE_MS as usize)
+            .map(|t| (t, Self::at(ball, t)))
+            .collect();
+        let strikes = Self::strikes(data.match_events());
+        let mut reversals = [0u64; 4];
+        let mut struck = [0u64; 4];
+        let mut steps = [0u64; 4];
+        for w in grid.windows(3) {
+            let before = Self::flat(w[1].1 - w[0].1);
+            let after = Self::flat(w[2].1 - w[1].1);
+            let (lb, la) = (before.norm(), after.norm());
+            let reversed = lb > Self::STILL
+                && la > Self::STILL
+                && before.dot(&after) < Self::REVERSAL_COS * lb * la;
+            let (pb, pa) = (Self::mps(lb), Self::mps(la));
+            let stepped = pb > Self::STEP_FROM_MPS && pa < Self::STEP_RATIO * pb;
+            if !reversed && !stepped {
+                continue;
+            }
+            let phase = Self::phase(w[1].0, w[1].1, pb, &received, &men);
+            if reversed && Self::struck_between(&strikes, w[0].0, w[2].0) {
+                struck[phase] += 1;
+            } else {
+                reversals[phase] += reversed as u64;
+            }
+            steps[phase] += stepped as u64;
+        }
+
+        let per_min = |v: u64| v as f64 / minutes;
+        println!();
+        println!(
+            "  direction reversals (>120° between consecutive 30 ms steps, both > 1 cm), \
+             not explained by a strike"
+        );
+        println!(
+            "    total {:.1}/min   {}",
+            per_min(reversals.iter().sum()),
+            Self::by_phase(&reversals, per_min)
+        );
+        println!(
+            "  …and those a strike in the same two steps explains (pass, shot, clearance, block, failed touch)"
+        );
+        println!(
+            "    total {:.1}/min   {}",
+            per_min(struck.iter().sum()),
+            Self::by_phase(&struck, per_min)
+        );
+        println!("  pace steps (to under 35% between consecutive steps, from > 4 m/s)");
+        println!(
+            "    total {:.1}/min   {}",
+            per_min(steps.iter().sum()),
+            Self::by_phase(&steps, per_min)
+        );
+
+        for (name, list) in [("PassCompleted", &passes), ("Intercepted", &intercepts)] {
+            Self::profile(name, list, ball, &men);
+        }
+        Self::relocations();
+    }
+
+    /// The ball's pace and its gap to the man who took it, as medians at
+    /// each offset from the reception event.
+    fn profile(
+        name: &str,
+        list: &[TrackReception],
+        ball: &[core::r#match::ResultPositionDataItem],
+        men: &[(u32, &[core::r#match::ResultPositionDataItem])],
+    ) {
+        println!();
+        println!("  {} (n={}): medians around the event", name, list.len());
+        let header: Vec<String> = Self::OFFSETS_MS
+            .iter()
+            .map(|o| format!("{o:>+6}"))
+            .collect();
+        println!("    {:<10} {}", "ms", header.join(""));
+        let mut pace = vec![Vec::new(); Self::OFFSETS_MS.len()];
+        let mut gap = vec![Vec::new(); Self::OFFSETS_MS.len()];
+        let mut monotone = 0usize;
+        let mut judged = 0usize;
+        let half = Self::CADENCE_MS / 2;
+        for reception in list {
+            let Some(track) = men.iter().find(|(id, _)| *id == reception.man).map(|m| m.1) else {
+                continue;
+            };
+            let mut from_contact = Vec::new();
+            for (i, offset) in Self::OFFSETS_MS.iter().enumerate() {
+                let Ok(t) = u64::try_from(reception.at as i64 + offset) else {
+                    continue;
+                };
+                let step =
+                    Self::flat(Self::at(ball, t + half) - Self::at(ball, t.saturating_sub(half)));
+                pace[i].push(Self::mps(step.norm()));
+                let g = Self::flat(Self::at(ball, t) - Self::at(track, t)).norm()
+                    * Self::M_PER_U
+                    * 100.0;
+                gap[i].push(g);
+                if *offset >= 0 {
+                    from_contact.push(g);
+                }
+            }
+            if from_contact.len() > 1 {
+                judged += 1;
+                if from_contact.windows(2).all(|w| w[1] <= w[0] + 2.0) {
+                    monotone += 1;
+                }
+            }
+        }
+        let row = |v: &mut Vec<Vec<f32>>| -> String {
+            v.iter_mut()
+                .map(|xs| format!("{:>6.1}", Self::median(xs)))
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        println!("    {:<10} {}", "pace m/s", row(&mut pace));
+        println!("    {:<10} {}", "gap cm", row(&mut gap));
+        println!(
+            "    gap closes monotonically (no rise over 2 cm) from the event to +150 ms in {:.0}% of {}",
+            monotone as f64 / judged.max(1) as f64 * 100.0,
+            judged,
+        );
+    }
+
+    /// The relocation census rows the ball has to leave empty, read off the
+    /// same match.
+    fn relocations() {
+        use core::teleport::{STAGES, TeleportCensus};
+        let rows = TeleportCensus::snapshot();
+        println!();
+        println!("  whole-tick relocation census on this match (visible = 4u / 0.5 m and over)");
+        for stage in [
+            core::teleport::STAGE_BALL_UPDATE,
+            core::teleport::STAGE_BALL_LIVE,
+            core::teleport::STAGE_BALL_RESTART,
+            core::teleport::STAGE_BALL_NET,
+            core::teleport::STAGE_DISPATCH,
+            core::teleport::STAGE_L_BALL_UPDATE,
+            core::teleport::STAGE_L_DISPATCH,
+        ] {
+            let (n, mean, max, visible, dead, _) = rows[stage];
+            println!(
+                "    {:<22} {:>6} relocations, {:>4} visible, {:>4} on a dead ball, mean {:>5.1}u, worst {:>5.1}u",
+                STAGES[stage], n, visible, dead, mean, max,
+            );
+        }
+    }
+
+    /// Every ball event that hands a man the ball: completed passes,
+    /// interceptions, and the claims and gains of loose balls.
+    fn receptions(
+        events: &[core::r#match::MatchEventData],
+    ) -> (
+        Vec<TrackReception>,
+        Vec<TrackReception>,
+        Vec<TrackReception>,
+    ) {
+        let mut passes = Vec::new();
+        let mut intercepts = Vec::new();
+        let mut claims = Vec::new();
+        for event in events.iter().filter(|e| e.category == "ball") {
+            let into = if event.description.starts_with("PassCompleted(") {
+                &mut passes
+            } else if event.description.starts_with("Intercepted(") {
+                &mut intercepts
+            } else if event.description.starts_with("Claimed(")
+                || event.description.starts_with("Gained(")
+            {
+                &mut claims
+            } else {
+                continue;
+            };
+            if let Some(man) = event
+                .description
+                .split(['(', ','])
+                .nth(1)
+                .and_then(|v| v.trim().parse().ok())
+            {
+                into.push(TrackReception {
+                    at: event.timestamp,
+                    man,
+                });
+            }
+        }
+        (passes, intercepts, claims)
+    }
+
+    /// When anything struck the ball: a pass, a shot or a clearance that
+    /// was played, a block, a header clear, or a first touch that spilled.
+    fn strikes(events: &[core::r#match::MatchEventData]) -> Vec<u64> {
+        const PLAYER: [&str; 4] = ["PassTo(", "Shoot(", "ClearBall(", "MiscuedClearance("];
+        const BALL: [&str; 3] = ["Blocked(", "HeadedClear(", "FirstTouchFailed("];
+        let mut at: Vec<u64> = events
+            .iter()
+            .filter(|e| match e.category.as_str() {
+                "player" => PLAYER.iter().any(|p| e.description.starts_with(p)),
+                "ball" => BALL.iter().any(|p| e.description.starts_with(p)),
+                _ => false,
+            })
+            .map(|e| e.timestamp)
+            .collect();
+        at.sort_unstable();
+        at
+    }
+
+    /// Was the ball struck after `from` and no later than `to`?
+    fn struck_between(strikes: &[u64], from: u64, to: u64) -> bool {
+        let first = strikes.partition_point(|&t| t <= from);
+        strikes.get(first).is_some_and(|&t| t <= to)
+    }
+
+    /// Which phase of play the ball is in at `t`: just received, carried at
+    /// a man's feet, travelling, or loose and slow.
+    fn phase(
+        t: u64,
+        ball: core::Vector3<f32>,
+        pace: f32,
+        received: &[u64],
+        men: &[(u32, &[core::r#match::ResultPositionDataItem])],
+    ) -> usize {
+        let since = received.partition_point(|&r| r <= t);
+        if since > 0 && t - received[since - 1] <= Self::RECEPTION_MS {
+            return 0;
+        }
+        let nearest = men
+            .iter()
+            .map(|(_, track)| Self::flat(Self::at(track, t) - ball).norm())
+            .fold(f32::MAX, f32::min);
+        if nearest <= Self::CARRIED {
+            2
+        } else if pace >= Self::FLIGHT_MPS || ball.z > Self::FLIGHT_HEIGHT {
+            1
+        } else {
+            3
+        }
+    }
+
+    fn by_phase(counts: &[u64; 4], per_min: impl Fn(u64) -> f64) -> String {
+        Self::PHASES
+            .iter()
+            .zip(counts)
+            .map(|(name, &n)| format!("{name} {:.1}", per_min(n)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Linear interpolation of a deduplicated track, which is how the
+    /// viewer draws it.
+    fn at(track: &[core::r#match::ResultPositionDataItem], t: u64) -> core::Vector3<f32> {
+        let i = track.partition_point(|s| s.timestamp <= t);
+        if i == 0 {
+            return track[0].position;
+        }
+        if i == track.len() {
+            return track[i - 1].position;
+        }
+        let (a, b) = (&track[i - 1], &track[i]);
+        let f = (t - a.timestamp) as f32 / (b.timestamp - a.timestamp) as f32;
+        a.position + (b.position - a.position) * f
+    }
+
+    fn flat(v: core::Vector3<f32>) -> core::Vector3<f32> {
+        core::Vector3::new(v.x, v.y, 0.0)
+    }
+
+    /// Game units per 30 ms step, in metres per second.
+    fn mps(units_per_step: f32) -> f32 {
+        units_per_step * Self::M_PER_U * 1000.0 / Self::CADENCE_MS as f32
+    }
+
+    fn median(xs: &mut [f32]) -> f32 {
+        if xs.is_empty() {
+            return 0.0;
+        }
+        xs.sort_by(f32::total_cmp);
+        xs[xs.len() / 2]
+    }
 }
 
 fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {

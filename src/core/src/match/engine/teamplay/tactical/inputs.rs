@@ -131,18 +131,4 @@ pub struct TacticalRefreshInputs<'a> {
     pub home_edge: f32,
     /// The hardest any side can press today: a hot afternoon caps it.
     pub press_ceiling: f32,
-    /// How far the standard of football in this fixture sits from the
-    /// division the skill gates below were fitted in — see
-    /// `MatchStandard`. Subtracted from every team-quality read in
-    /// `refresh`, because those gates are ABSOLUTE thresholds (0.45 /
-    /// 0.55 / 0.65) on a quantity that scales with the division, so read
-    /// raw they hand every side below mid-table a weak press and a deep
-    /// line and every side above it a high one. Measured, the whole
-    /// family switches over between levels 8 and 12 — which is exactly
-    /// where the `levels` sweep steps.
-    pub standard_shift: f32,
-    /// The goalkeeping equivalent — `gk_quality` blends the goalkeeping
-    /// attributes, which the generator does not hand the same population
-    /// mean as the outfield ones, so `gk_line_lift` needs its own.
-    pub standard_gk_shift: f32,
 }

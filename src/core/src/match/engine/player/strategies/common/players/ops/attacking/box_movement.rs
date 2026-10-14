@@ -65,7 +65,7 @@
 
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{BoxSlot, MatchStandard, StateProcessingContext, SteeringBehavior, TeamShape};
+use crate::r#match::{BoxSlot, StateProcessingContext, SteeringBehavior, TeamShape};
 use nalgebra::Vector3;
 
 pub struct BoxMovement;
@@ -480,17 +480,12 @@ impl BoxMovement {
             return Vector3::zeros();
         }
 
-        // Priced against the standard of football in this match, so a
-        // fourth-tier striker works his box like a fourth-tier striker
-        // rather than like a statue. See `MatchStandard`.
-        let shift = MatchStandard::shift(ctx.context);
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let movement = (sc::n(sc::eff(
+        let movement = sc::n(sc::eff(
             ctx.player,
             sc::EffActionContext::mental(minute),
             |p| p.skills.mental.off_the_ball,
-        )) - shift)
-            .clamp(0.0, 1.0);
+        ));
         let amplitude = (Self::WORK_BASE + Self::WORK_SKILL * movement) * fade;
 
         // Each occupant gets his own phase, or the four of them shuffle

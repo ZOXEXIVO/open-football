@@ -9,7 +9,6 @@ use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE, OffsideLine, Th
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::common::passing::CrossModel;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -493,13 +492,7 @@ impl PassEvaluator {
             };
             late && mine < theirs
         };
-        let routine = pick_throw_routine(
-            long_throws,
-            in_attacking_third,
-            aerial,
-            chasing_late,
-            MatchStandard::shift(ctx.context),
-        );
+        let routine = pick_throw_routine(long_throws, in_attacking_third, aerial, chasing_late);
         match routine {
             ThrowRoutine::LongBox => {
                 #[cfg(feature = "match-logs")]
@@ -1140,7 +1133,6 @@ impl PassEvaluator {
         let pace = Ball::pass_pace(pass_distance, &ctx.context.conditions);
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let delivery = sc::passing_execution(passer, minute);
-        let shift = MatchStandard::shift(ctx.context);
 
         let field_width = ctx.context.field_size.width as f32;
         let line = passer.side.map(|side| StrikeLine {
@@ -1168,13 +1160,8 @@ impl PassEvaluator {
             let perp = (to_opponent - direction * along).norm();
             let arrives = along / pace;
             let take = store.get(opponent.id).map_or(0.0, |man| {
-                let miss = InterceptionContest::closing_miss(
-                    perp,
-                    arrives,
-                    man.read,
-                    man.max_speed,
-                    shift,
-                );
+                let miss =
+                    InterceptionContest::closing_miss(perp, arrives, man.read, man.max_speed);
                 if miss >= InterceptionContest::REACH {
                     return 0.0;
                 }
@@ -1185,7 +1172,6 @@ impl PassEvaluator {
                     1.0,
                     man.read,
                     delivery,
-                    shift,
                     InterceptionContest::is_set_for_it(perp),
                 )
             });

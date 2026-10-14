@@ -21,7 +21,12 @@
 //!   and what a refused strike costs before it is struck for real.
 //! * [`lane_diag`] — how close the nearest opponent came to each pass
 //!   in flight, and whether it got through him anyway.
+//! * [`arrival_diag`] — what a grant does to the ball's motion: pace in
+//!   and out, the gap it is taken at, and whether the step after it is a
+//!   reversal or a write.
 
+#[cfg(feature = "match-logs")]
+pub mod arrival_diag;
 #[cfg(feature = "match-logs")]
 pub mod assist_diag;
 #[cfg(feature = "match-logs")]

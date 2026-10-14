@@ -5,6 +5,7 @@
 use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{
     AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
@@ -12,7 +13,6 @@ use crate::r#match::engine::ball::ball::{
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily, PsychState};
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -469,6 +469,7 @@ pub mod reception_diag {
             &SHOT_WIDE,
             &SHOT_OVER,
             &SHOT_CLAIMED,
+            &SECURE_OUT_OF_REACH,
             &SHOT_NO_TARGET,
             &GOAL_REJECTED,
             &ENDLINE_CLAMPED_IN_MOUTH,
@@ -521,25 +522,6 @@ pub mod reception_diag {
             DIED_DEAD_BALL.load(Ordering::Relaxed),
             OUT_OF_REACH.load(Ordering::Relaxed),
         )
-    }
-}
-
-/// **The takeover bar is an absolute edge, not a share of the league.**
-///
-/// `OF_TAKEOVER_ABS_OFF=1` restores the bare `1.25×` ratio exactly — the
-/// pre-2026-08-26 engine. The A/B control for the channel; see the note
-/// at its use inside `check_ball_ownership`.
-pub struct TakeoverMargin;
-
-impl TakeoverMargin {
-    #[inline]
-    pub fn armed() -> bool {
-        static ON: OnceLock<bool> = OnceLock::new();
-        *ON.get_or_init(|| {
-            !var("OF_TAKEOVER_ABS_OFF")
-                .map(|v| v != "0" && !v.is_empty())
-                .unwrap_or(false)
-        })
     }
 }
 
@@ -683,16 +665,7 @@ impl Ball {
         }
 
         let minute = sc::minute_from_ticks(self.current_tick_cached);
-        // …against the standard of football in this match. `1.15 -
-        // quality` is an absolute bar and `receiving_first_touch` is a
-        // weight-1 linear blend, so subtracting the shift is exact —
-        // see `MatchStandard`. Read raw, the term is 0.78 at the bottom
-        // of the pyramid against 0.28 at the top and the fourth tier
-        // drowns in loose balls: measured 67.9 miscontrols + 107.2 heavy
-        // touches per team at level 6 against 5.9 + 14.6 at level 18, on
-        // an identical 841 passes, against a real ~8-15 everywhere.
-        let quality = (sc::receiving_first_touch(receiver, minute) - MatchStandard::shift(context))
-            .clamp(0.0, 1.0);
+        let quality = sc::receiving_first_touch(receiver, minute);
 
         // Arrival difficulty — every term continuous in [0, 1].
         let speed01 = ((self.velocity.norm() - 1.5) / 5.0).clamp(0.0, 1.0);
@@ -801,7 +774,6 @@ impl Ball {
         context: &MatchContext,
         receiver_id: u32,
         receiver_team: u32,
-        receiver_position: Vector3<f32>,
         passer_id: u32,
         outcome: FirstTouchOutcome,
         events: &mut EventCollection,
@@ -835,51 +807,11 @@ impl Ball {
             }
         };
 
-        // A failed touch happens where the BALL is, not where the receiver is.
-        //
-        // Same rule as `try_block_shot`, for the same reason. The claim that
-        // brings us here fires at `CONTROL_DISTANCE`, and the ball travels
-        // further inside the tick, so an unconditional move put it down up to
-        // two metres from where it had been — with no kick, no bounce and
-        // nothing touching it, which is the "ball suddenly somewhere else"
-        // report. Measured over a real match, one arrival in twenty was from
-        // beyond two metres.
-        //
-        // Beyond his reach the contact is a stretched leg that got a toe on
-        // it: the ball deflects from its own position and he does not get to
-        // drag it to himself first.
-        //
-        // ⚠ **AND SO IS EVERY OTHER TOUCH — the guard was dead code.**
-        //
-        // Both callers already gate on the same radius before they get
-        // here (`dist_sq < RECEIVER_CLAIM_DISTANCE_SQ` at :810 and
-        // `dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ` at :1443, both
-        // `CONTROL_DISTANCE²`), so `reach <= CONTROL_DISTANCE` could
-        // never be false and the ball was ALWAYS dragged onto the
-        // receiver — up to the full 12 u. Measured on the whole-tick
-        // relocation census: **13 a match at a mean of 1.43 m**, every one
-        // of them large enough for a replay to show, and pinned at the
-        // cap rather than distributed under it, which is the signature of
-        // a guard that never fires.
-        //
-        // The paragraph above is the right rule; it just was not being
-        // applied. A failed touch happens where the ball is. The
-        // deflection below works identically from there — same direction,
-        // same speed — and `move_to` was never going to draw this ball in
-        // anyway, because the whole point is that he did not control it.
-        //
-        // The height goes the same way. `position.z = 0.0` snapped a ball
-        // from as high as `RECEIVER_MAX_HEIGHT` (2.8 m) onto the grass in
-        // one 10 ms tick, on the axis a replay shows most plainly. A
-        // descent rate puts it there inside an eighth of a second instead
-        // — quick enough that the block window, `is_aerial` and the
-        // receiver ceiling see what they always saw, slow enough to draw.
-        if !crate::r#match::engine::ball::ball::contest::contact::ContactInPlace::armed() {
-            self.position = receiver_position;
-            self.position.z = 0.0;
-        }
+        // A failed touch happens where the BALL is, not where the receiver
+        // is: the deflection runs on from the point he met it, and a ball
+        // met off the deck is given a descent rather than put on the grass.
         self.velocity = out_dir * out_speed;
-        self.settle_or_flatten();
+        self.sink_to_ground();
         self.previous_owner = Some(receiver_id);
         self.current_owner = None;
         self.pass_target_player_id = None;
@@ -1185,11 +1117,30 @@ impl Ball {
     }
 
     /// Does the ball's remaining travel ever come within `reach` of
-    /// `point`? The travel is the straight run to wherever it would end
-    /// up untouched, so this is a point-to-segment distance.
+    /// `point`?
     fn travel_passes_within(&self, point: Vector3<f32>, reach: f32) -> bool {
-        let from = Vector3::new(self.position.x, self.position.y, 0.0);
-        let travel = self.projected_arrival() - from;
+        Self::travel_passes(
+            self.position,
+            self.velocity,
+            self.cached_landing_position,
+            point,
+            reach,
+        )
+    }
+
+    /// Does the travel of a ball at `position` moving at `velocity`,
+    /// landing at `landing` while it is in the air, ever come within
+    /// `reach` of `point`? The travel is the straight run to wherever it
+    /// would end up untouched, so this is a point-to-segment distance.
+    pub(crate) fn travel_passes(
+        position: Vector3<f32>,
+        velocity: Vector3<f32>,
+        landing: Vector3<f32>,
+        point: Vector3<f32>,
+        reach: f32,
+    ) -> bool {
+        let from = Vector3::new(position.x, position.y, 0.0);
+        let travel = Self::arrival_of(position, velocity, landing) - from;
         let len_sq = travel.norm_squared();
         let along = if len_sq <= f32::EPSILON {
             0.0
@@ -1202,13 +1153,17 @@ impl Ball {
         dx * dx + dy * dy <= reach * reach
     }
 
-    /// Where the ball ends up if nobody touches it: the landing spot
-    /// while it is in the air, otherwise the end of its roll.
-    fn projected_arrival(&self) -> Vector3<f32> {
+    /// Where a ball ends up if nobody touches it: the landing spot while
+    /// it is in the air, otherwise the end of its roll.
+    fn arrival_of(
+        position: Vector3<f32>,
+        velocity: Vector3<f32>,
+        landing: Vector3<f32>,
+    ) -> Vector3<f32> {
         // Same sill as `is_delivery_spent`: anything with height left is
         // still arriving.
         const AIRBORNE: f32 = 0.5;
-        let velocity = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+        let velocity = Vector3::new(velocity.x, velocity.y, 0.0);
         let speed = velocity.norm();
         // A lofted delivery does not finish where it lands — it lands and
         // RUNS ON, and a ball flighted to drop in front of its man and
@@ -1216,10 +1171,10 @@ impl Ball {
         // projection at the landing spot called all of them misses: 84%
         // of every expiry was an airborne ball, at a mean 28.9 degrees
         // off a line it was in fact going to reach.
-        let start = if self.position.z > AIRBORNE {
-            self.cached_landing_position
+        let start = if position.z > AIRBORNE {
+            landing
         } else {
-            Vector3::new(self.position.x, self.position.y, 0.0)
+            Vector3::new(position.x, position.y, 0.0)
         };
         if speed <= BallRoll::STOPPED {
             return start;
@@ -1260,51 +1215,16 @@ impl Ball {
             self.check_ball_ownership(context, players, events);
             return;
         }
-        // Check if pass target can claim the ball
+        // **The receiver takes the ball where his foot meets it.** Until
+        // the delivery is within his touch it is his by right — the
+        // exclusive claim and the in-flight window — and nobody's to
+        // steer: it keeps its own pace and line. Ownership, the first
+        // touch and the completion credit are all decided on the tick it
+        // reaches him, with the pressure and the arrival pace read then.
         if let Some(target_id) = self.pass_target_player_id
             && let Some(target_player) = players.iter().find(|p| p.id == target_id)
         {
-            // Distance to the BALL, not to where it is going to land.
-            // The landing-point variant let the intended receiver take
-            // ownership while the ball was still in the air on the far
-            // side of the pass — see `CONTROL_DISTANCE`. His priority
-            // over the delivery is enforced by `pass_target_player_id`
-            // plus the in-flight window, which is where it belongs;
-            // taking CONTROL has to wait for the ball to arrive.
-            let dx = target_player.position.x - self.position.x;
-            let dy = target_player.position.y - self.position.y;
-            let dist_sq = dx * dx + dy * dy;
-
-            // Receiver claim radius = real control distance.
-            //
-            // This was 100u, chosen because widening it made the pass
-            // ACCURACY metric climb (14u→21%, 20u→38%, 32u→72%,
-            // 40u→85%). That reading was an artefact: the metric
-            // counts claims, and a claim beyond `MAX_OWNER_TRACK_DISTANCE`
-            // is immediately undone by `move_to`, so the wider radius
-            // bought completion events rather than completed passes.
-            // See `CONTROL_DISTANCE` for the full measurement.
-            const RECEIVER_CLAIM_DISTANCE_SQ: f32 =
-                crate::r#match::engine::ball::ball::CONTROL_DISTANCE
-                    * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
-            // **The receiver's own ceiling for taking a pass out
-            // of the air**, and one of the three copies of this
-            // number the engine used to carry.
-            //
-            // The replay viewer copied it too
-            // (`Soundtrack::OVERHEAD`), which is how the picture
-            // came to be refusing balls the engine was granting.
-            // Kept at 2.8 rather than folded into
-            // [`PlayerReach::under_ceiling`] because it is a
-            // calibrated reception radius and not a physical
-            // reach: it sits deliberately UNDER the best
-            // leaper's 3.1 m, so a pass nobody could control is
-            // not booked as one that was. The general rule is
-            // `PlayerReach`; this is the same question asked
-            // more tightly, and the two must stay consistent.
-            const RECEIVER_MAX_HEIGHT: f32 = 2.8;
-
-            if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
+            if PlayerReach::can_touch(self, target_player) {
                 // Receiver is becoming active. If we have an offside
                 // snapshot for this receiver and it's offside per the
                 // kick-time geometry, fire offside instead of a clean
@@ -1325,12 +1245,10 @@ impl Ball {
                 if let Some(pid) = passer_id.filter(|&id| id != target_id) {
                     let outcome = self.roll_first_touch(context, target_player, players);
                     if outcome != FirstTouchOutcome::Clean {
-                        let receiver_position = target_player.position;
                         self.apply_failed_first_touch(
                             context,
                             target_id,
                             target_team,
-                            receiver_position,
                             pid,
                             outcome,
                             events,
@@ -1340,7 +1258,11 @@ impl Ball {
                 }
                 self.current_owner = Some(target_id);
                 #[cfg(feature = "match-logs")]
-                StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                {
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                    self.open_arrival(GrantPath::RECEIVER, target_player.position);
+                }
+                self.touch(target_id, Carrier::of(target_player));
                 self.pass_target_player_id = None;
                 self.ownership_duration = 0;
                 self.flags.in_flight_state = 0;
@@ -1404,7 +1326,10 @@ impl Ball {
                             let passer_team = prev_player.team_id;
                             self.current_owner = Some(prev_id);
                             #[cfg(feature = "match-logs")]
-                            StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                            {
+                                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                                self.open_arrival(GrantPath::SCAN, prev_player.position);
+                            }
                             self.pass_target_player_id = None;
                             self.ownership_duration = 0;
                             self.flags.in_flight_state = 0;
@@ -1528,7 +1453,12 @@ impl Ball {
             if let Some(player_id) = claiming_player_id {
                 self.current_owner = Some(player_id);
                 #[cfg(feature = "match-logs")]
-                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                {
+                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                    if let Some(claimant) = players.iter().find(|p| p.id == player_id) {
+                        self.open_arrival(GrantPath::SCAN, claimant.position);
+                    }
+                }
                 self.pass_target_player_id = None;
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
@@ -1632,7 +1562,10 @@ impl Ball {
                     // Grant ownership
                     self.current_owner = Some(nearest_player.id);
                     #[cfg(feature = "match-logs")]
-                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                    {
+                        StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                        self.open_arrival(GrantPath::SCAN, nearest_player.position);
+                    }
                     self.previous_owner = None;
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
@@ -1888,8 +1821,13 @@ impl Ball {
                 let min_vel_sq = MIN_VELOCITY_FOR_DISTANCE_CHECK * MIN_VELOCITY_FOR_DISTANCE_CHECK;
 
                 // Only clear ownership if ball is moving AND far from owner
-                // This prevents interference with deadlock claiming and boundary situations
-                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED && ball_speed_sq > min_vel_sq {
+                // This prevents interference with deadlock claiming and boundary situations.
+                // A ball under his touch moves with him, so it is never one
+                // flying away from him.
+                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED
+                    && ball_speed_sq > min_vel_sq
+                    && !self.is_carried()
+                {
                     // Use unnormalized dot product — sign is what matters
                     // dot(velocity, to_owner) < 0 means ball moving away from owner
                     let dot = self.velocity.x * dx + self.velocity.y * dy;
@@ -1962,39 +1900,13 @@ impl Ball {
             }
         }
 
-        // Priority claim for pass target receiver (larger radius before normal competition)
+        // Priority claim for the pass target, ahead of the scan: the same
+        // touch as `try_pass_target_claim`, for a delivery that outlived
+        // its in-flight window.
         if let Some(target_id) = self.pass_target_player_id
             && let Some(target_player) = players.iter().find(|p| p.id == target_id)
         {
-            let dx = target_player.position.x - self.position.x;
-            let dy = target_player.position.y - self.position.y;
-            let dist_sq = dx * dx + dy * dy;
-
-            // Matches try_pass_target_claim; see rationale there. The
-            // receiver's PRIORITY over the delivery lasts as long as
-            // `pass_target_player_id` is set, but taking control still
-            // needs the ball to be within reach.
-            const RECEIVER_PRIORITY_DISTANCE_SQ: f32 =
-                crate::r#match::engine::ball::ball::CONTROL_DISTANCE
-                    * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
-            // **The receiver's own ceiling for taking a pass out
-            // of the air**, and one of the three copies of this
-            // number the engine used to carry.
-            //
-            // The replay viewer copied it too
-            // (`Soundtrack::OVERHEAD`), which is how the picture
-            // came to be refusing balls the engine was granting.
-            // Kept at 2.8 rather than folded into
-            // [`PlayerReach::under_ceiling`] because it is a
-            // calibrated reception radius and not a physical
-            // reach: it sits deliberately UNDER the best
-            // leaper's 3.1 m, so a pass nobody could control is
-            // not booked as one that was. The general rule is
-            // `PlayerReach`; this is the same question asked
-            // more tightly, and the two must stay consistent.
-            const RECEIVER_MAX_HEIGHT: f32 = 2.8;
-
-            if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
+            if PlayerReach::can_touch(self, target_player) {
                 let passer_id = self.current_owner.or(self.previous_owner);
                 // First-touch resolution on the post-flight priority
                 // claim as well — same roll as the in-flight site so
@@ -2002,13 +1914,11 @@ impl Ball {
                 if let Some(pid) = passer_id.filter(|&id| id != target_id) {
                     let outcome = self.roll_first_touch(context, target_player, players);
                     if outcome != FirstTouchOutcome::Clean {
-                        let receiver_position = target_player.position;
                         let receiver_team = target_player.team_id;
                         self.apply_failed_first_touch(
                             context,
                             target_id,
                             receiver_team,
-                            receiver_position,
                             pid,
                             outcome,
                             events,
@@ -2019,12 +1929,18 @@ impl Ball {
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(target_id);
                 #[cfg(feature = "match-logs")]
-                StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                {
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
+                    self.open_arrival(GrantPath::RECEIVER, target_player.position);
+                    reception_diag::record(
+                        (target_player.position.x - self.position.x)
+                            .hypot(target_player.position.y - self.position.y),
+                    );
+                }
+                self.touch(target_id, Carrier::of(target_player));
                 self.pass_target_player_id = None;
                 self.ownership_duration = 0;
                 self.claim_cooldown = 15;
-                #[cfg(feature = "match-logs")]
-                reception_diag::record(dist_sq.sqrt());
                 if let Some(pid) = passer_id.filter(|&id| id != target_id) {
                     events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
                 } else {
@@ -2125,35 +2041,12 @@ impl Ball {
             25
         };
         const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25;
-        // **How much better the challenger has to be, priced against the
-        // division.**
-        //
-        // This was a bare ratio — `challenger < owner * 1.25`, "beat him
-        // by a quarter of what he is". `calculate_tackling_score` is a
-        // weight-1 blend of composites on a 0..20 scale, so it rises with
-        // the standard of football, and a ratio therefore demands a
-        // BIGGER ABSOLUTE EDGE the higher up the pyramid the match is
-        // played: a quarter of 8 is two attribute points, a quarter of 16
-        // is four. Within-division spread does not scale that way — it is
-        // roughly the same handful of points at every level — so the same
-        // 50/50 that is winnable in the fourth tier is unwinnable in the
-        // first, and possession gets stickier the better the players are
-        // for no footballing reason.
-        //
-        // `MatchStandard::shift` is exactly the deviation of this match's
-        // composites from the calibration division, in the same
-        // normalised units, so `score - 20*shift` is the owner's score
-        // re-read at the division every constant here was fitted in. Zero
-        // shift at level 14 ⇒ bit-identical to the old ratio where it was
-        // measured.
-        let takeover_margin = |owner_score: f32| {
-            let at_calibration = if TakeoverMargin::armed() {
-                (owner_score - 20.0 * MatchStandard::shift(context)).max(0.0)
-            } else {
-                owner_score
-            };
-            at_calibration * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0)
-        };
+        // A ratio on a score that rose with the division would demand a
+        // bigger absolute edge the higher up the pyramid the match is
+        // played; the scores are of squads measured against the standard
+        // of the match (`MatchStandard::measure`), so it does not.
+        let takeover_margin =
+            |owner_score: f32| owner_score * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0);
 
         // Minute derived from cached tick — `current_tick_cached` is
         // refreshed every tick via `update*`, so it tracks the same
@@ -2232,7 +2125,10 @@ impl Ball {
                     events.add_player_event(PlayerEvent::Dispossessed(loser));
                 }
                 #[cfg(feature = "match-logs")]
-                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                {
+                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
+                    self.open_arrival(GrantPath::SCAN, player.position);
+                }
                 self.pass_target_player_id = None;
                 self.ownership_duration = 0;
 

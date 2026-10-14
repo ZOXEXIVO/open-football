@@ -50,7 +50,7 @@
 
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::ball::ball::{
-    AerialReach, Ball, KICKABLE_DISTANCE, MAX_OWNER_TRACK_DISTANCE,
+    AerialReach, Ball, KICKABLE_DISTANCE, LOOSE_CLAIM_DISTANCE, MAX_OWNER_TRACK_DISTANCE,
 };
 use nalgebra::Vector3;
 
@@ -120,6 +120,16 @@ impl PlayerReach {
     pub fn can_possess(ball: &Ball, player: &MatchPlayer) -> bool {
         Self::under_ceiling(ball, player)
             && Self::within(ball.position, player.position, MAX_OWNER_TRACK_DISTANCE)
+    }
+
+    /// **Can his foot meet the ball right now?** — the touch that takes a
+    /// ball under control. One stride across the grass, the reach a loose
+    /// ball is claimed at, and up to the highest ball he can play in the
+    /// air, which is where a chest or a head brings one down.
+    #[inline]
+    pub fn can_touch(ball: &Ball, player: &MatchPlayer) -> bool {
+        ball.position.z <= Self::strike_ceiling(player, true)
+            && Self::within(ball.position, player.position, LOOSE_CLAIM_DISTANCE)
     }
 
     /// May this player KICK the ball right now?

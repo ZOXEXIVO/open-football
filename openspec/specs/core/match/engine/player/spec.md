@@ -32,11 +32,15 @@ An attacking player in possession within shooting range SHALL decide whether to 
 - **THEN** the headed shot's expected-goals value is lower than the foot shot's
 
 ### Requirement: Tackling and duels for the ball
-A defending player near an opponent in possession SHALL be able to attempt a tackle, with the outcome influenced by both players' relevant attributes and the contact severity.
+A defending player near an opponent in possession SHALL be able to attempt a tackle, with the outcome influenced by both players' relevant attributes and the contact severity. A player's willingness to engage SHALL account for a card already held, in every position group. Contact in a tackle or a collision SHALL carry an injury impulse to both players, scaled by the contact severity and each player's physical robustness, that feeds the in-match injury model.
 
 #### Scenario: Tackle outcome depends on both players' attributes
 - **WHEN** a defender attempts a tackle against an opponent in possession
 - **THEN** the outcome of the duel is influenced by both the tackler's and the ball-carrier's relevant attributes and by the contact severity, rather than being decided by one side alone
+
+#### Scenario: Reckless tackle can injure the carrier
+- **WHEN** a reckless-severity tackle makes contact with the carrier
+- **THEN** the carrier's in-match injury probability on that contact is higher than for a clean tackle, and may resolve into an injury of a severity decided in the match
 
 ### Requirement: Goalkeeper shot-stopping
 The goalkeeper SHALL attempt to stop shots on target within their reach, choosing among save actions (catching, punching, diving) appropriate to the shot's trajectory, speed and proximity, with save success influenced by the keeper's positioning, reach and relevant skills.
@@ -75,11 +79,23 @@ A player's effective on-pitch capability (maximum speed and the outcome of skill
 - **THEN** their maximum attainable speed for the remainder of that spell is lower than at full condition
 
 ### Requirement: In-match injury state
-A player SHALL be able to sustain an in-match injury that removes them from active play — they stop moving, recover no condition, and are excluded from ball-chase and loose-ball contests — until a periodic medical check resolves their status.
+A player SHALL be able to sustain an in-match injury from either a contact impulse (tackle, collision) or accumulated load (fatigue, jadedness, age, natural fitness, environment), with a severity decided in the match — a knock the player shakes off, a hurt that lets them continue diminished, or a serious injury that ends their match. An injured player SHALL go down, recover no condition and be excluded from ball-chase and loose-ball contests; the referee SHALL stop play for a hurt or serious injury when the ball is not already dead, treatment SHALL take a time scaled by severity, and the player SHALL leave the injured state for a football reason (treatment complete, stretchered off, substituted) rather than a fixed timer. A player who continues diminished SHALL carry a reduced effective ability for the rest of the match. The injury and its severity SHALL be handed to the player after the match through the player's own reaction method so the persistent injury the player carries out of the match is the one sustained in it, and the independent post-match roll SHALL run only when no in-match injury occurred.
 
 #### Scenario: Injured player is excluded from active play
 - **WHEN** a player is marked injured during the match
-- **THEN** that player stops moving, recovers no condition, and is excluded from ball-chase and loose-ball contests until the next medical check resolves their status
+- **THEN** that player stops moving, recovers no condition, and is excluded from ball-chase and loose-ball contests until treatment resolves their status
+
+#### Scenario: Serious injury stops play
+- **WHEN** a player sustains a serious injury while the ball is in play
+- **THEN** play is stopped, the dead time is measured for stoppage purposes, and play restarts with a drop ball
+
+#### Scenario: Knock is shaken off
+- **WHEN** a player sustains a knock
+- **THEN** play is not stopped, the player is back in their role within a short treatment time, and no persistent injury is recorded after the match
+
+#### Scenario: In-match injury persists after the match
+- **WHEN** a player sustains a serious in-match injury
+- **THEN** the player leaves the match carrying an injury whose type and length derive from that in-match severity, and no second independent injury roll is made for them
 
 ### Requirement: Per-player match statistics recording
 For every player who featured in the match, the system SHALL record a stat line — attempted and completed actions (shots, passes, tackles, interceptions, dribbles, crosses, etc.), disciplinary events, goal involvement, and a computed match rating.
@@ -286,3 +302,100 @@ player's steadiness and the situation, so a settled veteran also makes occasiona
 - **WHEN** a player gives the ball away, his side wins it back, and then loses it to a clean tackle from which the
   opponent shoots within the original error window
 - **THEN** the original giver is not charged with an error leading to a shot
+
+### Requirement: A receiver meets the pass settled
+A player going to take a pass played to him SHALL arrive at the point he takes it braking, the same way every other player is brought into the point a pass will be collected, so that the ball meets a man who has stopped running at it. A pass SHALL NOT be met by a receiver still running into its line at the moment of the touch when he had the time to settle.
+
+#### Scenario: A pass he can reach in time
+- **WHEN** a pass is played to a receiver who can be at the point he takes it before the ball
+- **THEN** he arrives there braking and is settled when the ball reaches him
+- **AND** the ball is not turned back along its own line at the touch
+
+#### Scenario: The recorded track of receptions
+- **WHEN** full matches are recorded and their ball tracks are read at the recorder's 30 ms cadence
+- **THEN** direction reversals inside the 300 ms after a reception that no strike explains number at most one per minute of match time
+
+### Requirement: A carried ball is read as going where its carrier goes
+When a player reads the ball's motion — to judge whether a shot or a pass is coming, or where a rolling ball will be — a ball that another player is carrying, or that a goalkeeper holds, SHALL read as having no motion of its own: it goes where its carrier goes. A ball that is travelling on its own SHALL read at its own velocity.
+
+#### Scenario: A dribbler running at goal
+- **WHEN** an attacker carries the ball toward goal at a run
+- **THEN** the goalkeeper and the defenders read the ball as carried, not as struck toward goal
+- **AND** they react to the carrier, not to a shot
+
+#### Scenario: The same ball struck
+- **WHEN** the carrier shoots or passes
+- **THEN** from that tick the ball reads at the velocity it was struck with
+
+### Requirement: Chance volume does not rise with the level of football
+Between two equally matched sides, the number of shots each side takes and the number of goals scored in a match SHALL NOT rise or fall with the level of football they play at, beyond the run-to-run noise of a divisional sweep. Before kickoff, every attribute of both squads SHALL be moved by the match's distance from the calibration division, so that every read in the engine — a decision, a contest, a stride — is against the football around the player and cancels between equal sides at every level, while a mismatch keeps its edge.
+
+#### Scenario: The divisional sweep
+- **WHEN** equal squads are played at every second level from 4 to 18, 90 matches a level, generated without the 1-20 clamp so the scale's saturation at the top and the bottom of the pyramid is not part of the comparison
+- **THEN** the regression slope of goals per match on level is within two standard errors of zero
+- **AND** the slope of shots per team on level is within two standard errors of zero
+
+#### Scenario: Equal squads measured at both ends of the pyramid
+- **WHEN** two equal squads at the mean of level 4 and two at the mean of level 18 are measured against the standard of their match
+- **THEN** their measured attributes agree to within half a point
+- **AND** the standard each pair brought is still reported as itself
+
+#### Scenario: A mismatch keeps its edge
+- **WHEN** a squad four points better than its opponent is measured against the standard of their match
+- **THEN** it is still four points better
+
+#### Scenario: Equal sides at the top and the bottom
+- **WHEN** two equal level-18 sides and two equal level-4 sides each play 200 matches
+- **THEN** shots per team and goals per match agree between the two batches within their noise
+
+### Requirement: A first-time strike is weighed on how the ball arrived
+A player who has just received the ball SHALL weigh a shot on how it reached him — its pace and how far he must turn it toward goal — against his technique, and that weight SHALL fade over the half second it takes to bring the ball under control. A soft lay-off is struck first time by anybody; a driven ball turned back toward goal is taken down first by all but the best technicians.
+
+#### Scenario: A soft lay-off
+- **WHEN** a forward in shooting range receives a ball arriving at walking pace
+- **THEN** the way it arrived costs nothing in his decision to shoot
+
+#### Scenario: A driven ball turned back toward goal
+- **WHEN** a forward receives a driven ball coming from the direction of goal
+- **THEN** striking it first time weighs more against him than a driven ball of the same pace running on toward goal
+- **AND** more for an ordinary technician than for a gifted one
+
+#### Scenario: Under control
+- **WHEN** half a second has passed since his touch
+- **THEN** the way the ball arrived no longer affects the decision
+
+### Requirement: Dispossession reaction
+A player who has just been dispossessed SHALL react within a bounded reaction time by counter-pressing the new carrier, chasing the loose ball, or committing a tactical foul, according to their attributes, the team's instruction and the counter-press window, rather than returning passively to their role's default state.
+
+#### Scenario: Carrier loses the ball to a tackle
+- **WHEN** a carrier is dispossessed by a tackle and the ball stays within pressing range
+- **THEN** the dispossessed player immediately presses the new carrier or chases the loose ball, and his pressure on the new carrier is counted
+
+### Requirement: Goalkeeper short distribution waits for an option
+A keeper holding the ball who intends to distribute short SHALL wait for a team-mate to become an open option, for a time bounded by the permitted holding time and the coach's tempo instruction, before going long, rather than defaulting to a long clearance after a fixed fraction of a second.
+
+#### Scenario: Short option arrives inside the hold window
+- **WHEN** the keeper holds the ball and a team-mate becomes open within the permitted holding time
+- **THEN** the keeper distributes short to that team-mate
+
+#### Scenario: No option before the hold limit
+- **WHEN** the keeper holds the ball and no short option becomes open before the permitted holding time expires
+- **THEN** the keeper goes long before the holding limit is breached
+
+### Requirement: State exits on match reasons
+A player SHALL leave a resting state when their condition has recovered to a threshold or the ball demands them, SHALL release a forced pass or forced clearance because of pressure, option quality or danger rather than an elapsed tick count, and SHALL leave an off-ball holding pattern because of a positional trigger (ball zone, team phase, marker distance) rather than a fixed timer. Timers MAY remain only as a last-resort stall guard well beyond the football reason.
+
+#### Scenario: Resting ends on recovery
+- **WHEN** a resting forward's condition recovers above the resting threshold while the ball is far from them
+- **THEN** the forward leaves the resting state at that moment, not at a fixed number of ticks after entering it
+
+#### Scenario: Forced pass under pressure
+- **WHEN** a midfielder carrying the ball is closed down with a pressing opponent within pressing range
+- **THEN** the forced release fires because of the pressure, before any stall-guard timer would have
+
+### Requirement: Trait biases consumed in live play
+Each player's trait-driven movement bias (cutting inside, hugging the touchline, running in behind) and personality bias (dissent, caution once booked, diving in) SHALL influence the corresponding live decisions, so that two players of equal attributes but different traits behave differently in a match.
+
+#### Scenario: Inverted winger cuts inside
+- **WHEN** a wide player with a cut-inside trait receives the ball wide with space infield
+- **THEN** their chosen run direction is biased infield relative to an identical player without the trait

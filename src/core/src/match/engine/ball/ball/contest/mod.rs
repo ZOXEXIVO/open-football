@@ -19,8 +19,6 @@
 //!
 //! * [`body`] — the keeper's own volume: not a contest at all, but the
 //!   statement that a ball arriving where he already is comes off him.
-//! * [`contact`] — the arm that decides whether a resolved contact
-//!   writes the ball onto the man or leaves it where it was.
 //! * [`ownership`] — somebody claims it instead: pass-target claims, the
 //!   reception and first-touch flow, deadlock resolution and the
 //!   unowned-too-long safety nets.
@@ -37,7 +35,6 @@
 pub mod aerial_duel;
 pub mod block;
 pub mod body;
-pub mod contact;
 pub mod interception;
 pub mod ownership;
 pub mod pass_block;
@@ -46,6 +43,5 @@ pub mod reach;
 pub mod save;
 pub mod tackle;
 
-pub use contact::ContactInPlace;
 pub use possession::{PassChainEntry, PassReach, PossessionSource};
 pub use reach::{BlockContact, PlayerReach};

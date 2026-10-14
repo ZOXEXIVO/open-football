@@ -1155,6 +1155,21 @@ impl ResultMatchPositionData {
         Some(player_data[idx].position)
     }
 
+    /// The recorded ball track, in time order.
+    pub fn ball_track(&self) -> &[ResultPositionDataItem] {
+        &self.ball
+    }
+
+    /// One player's recorded track, in time order.
+    pub fn player_track(&self, player_id: u32) -> Option<&[ResultPositionDataItem]> {
+        self.players.get(&player_id).map(Vec::as_slice)
+    }
+
+    /// Every match event recorded, in time order.
+    pub fn match_events(&self) -> &[MatchEventData] {
+        &self.events
+    }
+
     /// Get all player IDs that have recorded positions
     pub fn get_player_ids(&self) -> Vec<u32> {
         self.players.keys().copied().collect()

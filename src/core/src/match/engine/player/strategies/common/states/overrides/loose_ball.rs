@@ -587,14 +587,18 @@ impl LooseBallChase {
         };
 
         // The end of the path is defined BY the receiver's meeting, so it
-        // cannot constrain him; everybody else's read stops there.
+        // cannot constrain him; everybody else's read stops there. For the
+        // receiver his own meeting IS the collection point, braked into
+        // like any other: the pass meets a man who has settled, not one
+        // still running at it, whose pace it would take and turn round on.
         let (point, taken) = match ctx.tick_context.chase.path_end() {
             Some(end) if end.receiver != ctx.player.id => {
                 let t = ((when - end.tick) / Self::TAKEN_BAND + 0.5).clamp(0.0, 1.0);
                 let taken = t * t * (3.0 - 2.0 * t);
                 (point + (end.point - point) * taken, taken)
             }
-            _ => (point, 0.0),
+            Some(_) => (point, 1.0),
+            None => (point, 0.0),
         };
 
         let size = &ctx.context.field_size;

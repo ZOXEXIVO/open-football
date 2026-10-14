@@ -484,6 +484,16 @@ impl MatchPlayer {
         value
     }
 
+    /// Read his attributes against the standard of football in this
+    /// match: every one moved by the same number of points — see
+    /// `MatchStandard::measure`. The memos priced on the old values go
+    /// with them.
+    pub fn measure_against(&mut self, outfield_points: f32, goalkeeping_points: f32) {
+        self.skills.shift(outfield_points, goalkeeping_points);
+        self.max_speed_memo = MaxSpeedMemo::new();
+        self.skill_reads = None;
+    }
+
     /// Re-price the memoized skill reads if anything they were priced on
     /// has moved. Called where those inputs move: at the top of every
     /// update (the minute) and on a condition change.

@@ -5,9 +5,10 @@
 //! leader damps its own panic.
 //!
 //! Every input here is a composite from
-//! [`TeamSkillAggregates`](super::inputs::TeamSkillAggregates), and every
-//! one of them is read through the divisional shift first — see
-//! `MatchStandard` — because the gates below are ABSOLUTE thresholds.
+//! [`TeamSkillAggregates`](super::inputs::TeamSkillAggregates) of squads
+//! already measured against the standard of the match — see
+//! `MatchStandard::measure` — because the gates below are ABSOLUTE
+//! thresholds.
 
 use crate::r#match::engine::teamplay::tactical::team_state::TeamTacticalState;
 

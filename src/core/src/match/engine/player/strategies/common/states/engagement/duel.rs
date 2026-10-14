@@ -4,7 +4,6 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
 use crate::r#match::engine::officiating::management::{CounterAttackThreat, ProfessionalFoul};
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::{
     defending_bias, personality_bias,
@@ -349,18 +348,16 @@ impl TackleDecision {
         // own note names as the residual it cannot price ("nobody stops
         // them getting into the box at all").
         //
-        // Subtracting [`MatchStandard::shift`] reads each attribute
-        // against the football around it instead of against a yardstick
-        // from another league. It is exactly neutral at the calibration
-        // level — the shift is 0 there — and leaves the within-division
-        // spread untouched: the aggressive defender still dives in, the
+        // The squads are measured against the standard of the match at
+        // kickoff (`MatchStandard::measure`), so each attribute reads
+        // against the football around it and the within-division spread
+        // is untouched: the aggressive defender still dives in, the
         // thoughtful one still picks his moment.
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
+        let read = |v: f32| (v / 20.0).clamp(0.0, 1.0);
         let skills = &ctx.player.skills;
-        let aggression = peer(skills.mental.aggression);
-        let decisions = peer(skills.mental.decisions);
-        let anticipation = peer(skills.mental.anticipation);
+        let aggression = read(skills.mental.aggression);
+        let decisions = read(skills.mental.decisions);
+        let anticipation = read(skills.mental.anticipation);
 
         // Temperament. An aggressive defender dives in; a good
         // decision-maker picks his moment, which means fewer challenges
@@ -390,7 +387,7 @@ impl TackleDecision {
         // `tackle_profile` already prices whether he WINS it. This prices
         // whether he goes — the two are different questions and the
         // second one had no answer.
-        let tackling = peer(skills.technical.tackling);
+        let tackling = read(skills.technical.tackling);
         let temperament =
             (0.55 + aggression * 0.90 - decisions * 0.30 + (tackling - 0.70) * 1.10).max(0.12);
 
@@ -811,12 +808,11 @@ impl RecoveryChallenge {
     /// get across and stays on his feet. One who has been gone past has
     /// nothing left but the stretch, and takes it.
     pub fn commit_probability(ctx: &StateProcessingContext, distance: f32, lead: f32) -> f32 {
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
+        let read = |v: f32| (v / 20.0).clamp(0.0, 1.0);
         let skills = &ctx.player.skills;
-        let aggression = peer(skills.mental.aggression);
-        let decisions = peer(skills.mental.decisions);
-        let tackling = peer(skills.technical.tackling);
+        let aggression = read(skills.mental.aggression);
+        let decisions = read(skills.mental.decisions);
+        let tackling = read(skills.technical.tackling);
         // Same shape and same centring as `TackleDecision`'s temperament,
         // so how readily a given defender goes is one property of the
         // player rather than two unrelated numbers.
@@ -1093,11 +1089,10 @@ impl ContactFoul {
         // `dev_match stats 16 L L`, fouls ran **9.9 a team at level 6
         // against 18.0 at level 18** and direct free kicks 10.2 against
         // 18.3, which resets both shapes every time.
-        let shift = MatchStandard::shift(ctx.context);
-        let peer = |v: f32| (v - shift).clamp(0.0, 1.0);
         let skills = &ctx.player.skills;
-        let aggression = peer(skills.mental.aggression / 20.0);
-        let discipline = peer((skills.mental.composure + skills.mental.concentration) / 40.0);
+        let aggression = (skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        let discipline =
+            ((skills.mental.composure + skills.mental.concentration) / 40.0).clamp(0.0, 1.0);
 
         // Temperament — the same pull the tackle model uses.
         let temperament = (0.55 + aggression * 0.95 - discipline * 0.35).clamp(0.2, 1.6);

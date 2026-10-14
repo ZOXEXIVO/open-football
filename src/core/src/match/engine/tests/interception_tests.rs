@@ -19,11 +19,14 @@
 use super::goal_celebration_tests::squad;
 use super::substitution_break_tests::kickoff;
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::pass_block::{
     BlockGeometry, PassBlock, PassBlockCommit, StrikeLine,
 };
+use crate::r#match::engine::ball::ball::{GROUND_FRICTION, LOOSE_CLAIM_DISTANCE};
+use crate::r#match::engine::flow::rng::MatchRng;
 use crate::r#match::engine::result::Score;
-use crate::r#match::events::EventCollection;
+use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::strategies::passing::{CrossModel, CrossType, PassEvaluator};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -82,6 +85,28 @@ fn fly(field: &mut MatchField, context: &MatchContext, until_x: f32) -> (f32, Op
         field.ball.current_tick_cached += 1;
     }
     (field.ball.position.x, field.ball.current_owner)
+}
+
+/// Step the ball a unit at a time through the interception contest and
+/// then the receiver's claim, in the order a tick runs them, until
+/// somebody has it or it is past `until_x`.
+fn fly_to_the_receiver(field: &mut MatchField, context: &MatchContext, until_x: f32) {
+    let mut events = EventCollection::new();
+    while field.ball.position.x < until_x && field.ball.current_owner.is_none() {
+        field
+            .ball
+            .try_intercept(context, &field.players, &mut events);
+        if field.ball.current_owner.is_none() {
+            field
+                .ball
+                .process_ownership(context, &field.players, &mut events);
+        }
+        if field.ball.current_owner.is_some() {
+            break;
+        }
+        field.ball.position.x += 1.0;
+        field.ball.current_tick_cached += 1;
+    }
 }
 
 fn slot_of(field: &MatchField, id: u32) -> u64 {
@@ -262,11 +287,11 @@ fn every_man_the_ball_passes_gets_his_own_roll() {
 
 /// **The last stride and a half is a contest, not a gift.**
 ///
-/// `try_intercept` used to return outright once the ball was within
-/// `CONTROL_DISTANCE` of its intended man, so a defender standing ON the
-/// ball's line inside that band was removed from the contest by the
-/// receiver's metadata rather than by anything physical. He is closer to
-/// the ball than the receiver is; it is his to contest.
+/// The receiver takes the ball where his foot meets it, so a defender
+/// standing on the line a stride in front of him is reached first and
+/// contested — with the receiver's own claim running in the same tick.
+/// When the receiver was given the ball a stride and a half out, the
+/// defender's crossing was never reached at all.
 #[test]
 fn a_defender_inside_the_receivers_last_stride_still_contests() {
     let mut rolled = 0;
@@ -280,14 +305,7 @@ fn a_defender_inside_the_receivers_last_stride_still_contests() {
             }
         });
         let bit = slot_of(&field, DEFENDER);
-        let mut events = EventCollection::new();
-        while field.ball.position.x < 344.0 && field.ball.current_owner.is_none() {
-            field
-                .ball
-                .try_intercept(&context, &field.players, &mut events);
-            field.ball.position.x += 1.0;
-            field.ball.current_tick_cached += 1;
-        }
+        fly_to_the_receiver(&mut field, &context, 350.0);
         if field.ball.intercept_rolled & bit != 0 {
             rolled += 1;
         }
@@ -299,33 +317,166 @@ fn a_defender_inside_the_receivers_last_stride_still_contests() {
 }
 
 /// …and the receiver still keeps what is genuinely his: a defender
-/// FURTHER from the ball than the man it is going to does not get to
-/// reach through him for it.
+/// FURTHER from the ball than the man it is going to does not get to reach
+/// through him for it, and the receiver has it where his foot meets it.
 #[test]
 fn the_receiver_keeps_the_ball_a_trailing_defender_cannot_reach_first() {
-    let (mut field, context) = flight(1.0, 100, |p| {
-        if p.id == DEFENDER {
-            // On the line, but a full reach off the ball when it arrives.
+    for seed in 0..20u64 {
+        let (mut field, mut context) = flight(1.0, 100, |p| {
+            if p.id == DEFENDER {
+                // On the line, but a full reach off the ball when it arrives.
+                p.position = Vector3::new(346.0, 279.0, 0.0);
+            } else if p.id == RECEIVER {
+                p.position = Vector3::new(347.0, 272.0, 0.0);
+            }
+        });
+        context.rng = MatchRng::from_seed(seed);
+        let bit = slot_of(&field, DEFENDER);
+        fly_to_the_receiver(&mut field, &context, 350.0);
+        assert_eq!(
+            field.ball.intercept_rolled & bit,
+            0,
+            "a defender further from the ball than its receiver took the contest"
+        );
+        if field.ball.current_owner == Some(RECEIVER) {
+            assert!(
+                347.0 - field.ball.position.x <= LOOSE_CLAIM_DISTANCE,
+                "the receiver was given the ball {:.1}u short of his feet",
+                347.0 - field.ball.position.x
+            );
+        }
+    }
+}
+
+/// Fly a pass through `update_light` until it has an owner, a failed
+/// first touch or `ticks` have gone. Every tick before then is checked for
+/// a ball nobody has touched: on its own line, slowed by friction alone.
+/// Returns the tick's ball state before the contact and the events of the
+/// tick it happened on, if it did.
+fn fly_untouched(
+    field: &mut MatchField,
+    context: &mut MatchContext,
+    ticks: usize,
+) -> Option<(Vector3<f32>, Vec<Event>)> {
+    let players = field.players.clone();
+    for tick in 0..ticks {
+        let at = field.ball.position;
+        let pace = field.ball.velocity.x.hypot(field.ball.velocity.y);
+        let mut events = EventCollection::new();
+        field.ball.update_light(context, &players, &mut events);
+        let events: Vec<Event> = events.drain().collect();
+        let touched = field.ball.current_owner.is_some()
+            || events
+                .iter()
+                .any(|e| matches!(e, Event::BallEvent(BallEvent::FirstTouchFailed(..))));
+        if touched {
+            return Some((at, events));
+        }
+        let now = field.ball.velocity.x.hypot(field.ball.velocity.y);
+        assert_eq!(
+            field.ball.velocity.y, 0.0,
+            "tick {tick}: the delivery was turned off its line"
+        );
+        assert!(
+            (now - pace * (1.0 - GROUND_FRICTION)).abs() < 1e-4,
+            "tick {tick}: the delivery's pace went {pace:.4} -> {now:.4}, more than friction"
+        );
+    }
+    None
+}
+
+/// **A pass through his feet is untouched until it reaches him.** Nothing
+/// steers a delivery because its man is near: it keeps its own pace and
+/// line until it is within a stride of him, and on that tick it is his,
+/// credited, and moving at his pace — or, off a bad touch, loose from
+/// where it was met.
+#[test]
+fn a_pass_through_his_feet_keeps_its_pace_and_line_until_he_meets_it() {
+    for seed in 0..12u64 {
+        let (mut field, mut context) = flight(0.8, 100, |p| {
+            if p.id == RECEIVER {
+                p.position = Vector3::new(346.0, 272.0, 0.0);
+                p.velocity = Vector3::zeros();
+            }
+        });
+        context.rng = MatchRng::from_seed(seed);
+        let (met, events) =
+            fly_untouched(&mut field, &mut context, 120).expect("the pass never reached him");
+        let gap = (346.0 - met.x).hypot(272.0 - met.y);
+        assert!(
+            gap <= LOOSE_CLAIM_DISTANCE,
+            "the pass was taken {gap:.1}u from him"
+        );
+        if field.ball.current_owner == Some(RECEIVER) {
+            assert!(
+                events.iter().any(|e| matches!(
+                    e,
+                    Event::BallEvent(BallEvent::PassCompleted(RECEIVER, PASSER))
+                )),
+                "his on the contact tick but not credited"
+            );
+            let pace = field.ball.velocity.x.hypot(field.ball.velocity.y);
+            assert!(
+                pace <= 0.15,
+                "a standing man's touch left the ball at {pace:.2} u/tick"
+            );
+        } else {
+            let off = field.ball.position - field.ball.velocity;
+            assert!(
+                (off - met).xy().norm() < 1e-3,
+                "the failed touch ran on from {off:?}, not from where it was met ({met:?})"
+            );
+        }
+    }
+}
+
+/// **A pass beside him is not his until he gets to it.** A delivery whose
+/// line runs a stride and a half from a man standing still is never turned
+/// toward him and never credited: it runs on, and he has to go and get it.
+#[test]
+fn a_pass_beside_him_is_never_turned_and_never_credited() {
+    let (mut field, mut context) = flight(0.8, 100, |p| {
+        if p.id == RECEIVER {
             p.position = Vector3::new(346.0, 279.0, 0.0);
-        } else if p.id == RECEIVER {
-            p.position = Vector3::new(347.0, 272.0, 0.0);
+            p.velocity = Vector3::zeros();
         }
     });
-    let bit = slot_of(&field, DEFENDER);
-    let mut events = EventCollection::new();
-    // Past him, so the crossing test itself is reached.
-    while field.ball.position.x < 350.0 && field.ball.current_owner.is_none() {
-        field
-            .ball
-            .try_intercept(&context, &field.players, &mut events);
-        field.ball.position.x += 1.0;
-        field.ball.current_tick_cached += 1;
-    }
-    assert_eq!(
-        field.ball.intercept_rolled & bit,
-        0,
-        "a defender further from the ball than its receiver took the contest"
+    assert!(
+        fly_untouched(&mut field, &mut context, 100).is_none(),
+        "a pass seven units from a man standing still was taken by him"
     );
+    assert!(field.ball.position.x > 346.0, "the pass never got past him");
+}
+
+/// **An interception on the run leaves with the man who made it.** A
+/// defender crossing the lane at 5 m/s takes the pass at his own pace: on
+/// the next tick the ball is moving with him, neither lying where it was
+/// met nor running on along the pass.
+#[test]
+fn an_interception_on_the_run_carries_the_ball_away_with_him() {
+    let across = Vector3::new(0.0, 0.4, 0.0);
+    for _ in 0..300 {
+        let (mut field, context) = flight(1.0, 100, |p| {
+            if p.id == DEFENDER {
+                p.position = Vector3::new(340.0, 271.0, 0.0);
+                p.velocity = across;
+            }
+        });
+        let (_, owner) = fly(&mut field, &context, 345.0);
+        if owner != Some(DEFENDER) {
+            continue;
+        }
+        let players = field.players.clone();
+        field.ball.move_to_with_players(&players);
+        let v = field.ball.velocity;
+        assert!(
+            (v.x - across.x).abs() <= Ball::CARRY_BOUND + 1e-4
+                && (v.y - across.y).abs() <= Ball::CARRY_BOUND + 1e-4,
+            "the intercepted ball moves at {v:?}, not with him"
+        );
+        return;
+    }
+    panic!("a defender crossing the lane at the ball never intercepted it");
 }
 
 /// **One flight, one interception roll per man** — even while the block

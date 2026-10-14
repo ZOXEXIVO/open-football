@@ -3,6 +3,8 @@ use nalgebra::Vector3;
 
 pub struct BallFieldData {
     pub position: Vector3<f32>,
+    /// The ball's own motion — zero while it is carried. See
+    /// [`Ball::own_velocity`].
     pub velocity: Vector3<f32>,
     /// Rotation on the ball, in the same frame `SpinModel` stores it.
     ///
@@ -21,7 +23,7 @@ impl BallFieldData {
     #[inline]
     pub fn update_from(&mut self, ball: &Ball) {
         self.position = ball.position;
-        self.velocity = ball.velocity;
+        self.velocity = ball.own_velocity();
         self.spin = ball.spin;
         self.landing_position = ball.cached_landing_position;
     }
@@ -32,7 +34,7 @@ impl From<&Ball> for BallFieldData {
     fn from(ball: &Ball) -> Self {
         BallFieldData {
             position: ball.position,
-            velocity: ball.velocity,
+            velocity: ball.own_velocity(),
             spin: ball.spin,
             landing_position: ball.cached_landing_position,
         }

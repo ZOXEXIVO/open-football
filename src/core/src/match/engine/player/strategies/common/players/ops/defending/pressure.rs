@@ -1,5 +1,4 @@
 use crate::r#match::engine::psychology::Psychology;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 use std::env::var;
 use std::sync::OnceLock;
@@ -180,18 +179,11 @@ impl PressUnit {
     const BAND: f32 = 0.40;
 
     /// Compliance multiplier, centred on 1.0 at the population.
-    ///
-    /// Reads `teamwork - MatchStandard::shift`, so "a good team player"
-    /// means good relative to the football around him and the term is
-    /// exactly neutral in the calibration division — see [`MatchStandard`].
-    ///
-    /// [`MatchStandard`]: crate::r#match::engine::teamplay::standard::MatchStandard
     pub fn compliance(ctx: &StateProcessingContext) -> f32 {
         if !Self::armed() {
             return 1.0;
         }
-        let unit = ((ctx.player.skills.mental.teamwork / 20.0) - MatchStandard::shift(ctx.context))
-            .clamp(0.0, 1.0);
+        let unit = (ctx.player.skills.mental.teamwork / 20.0).clamp(0.0, 1.0);
         // How hard the side has actually been told to press. At zero
         // there is no unit and the attribute is silent.
         let intensity = ctx.team().press_intensity().clamp(0.0, 1.0);

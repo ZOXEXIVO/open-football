@@ -545,15 +545,12 @@ pub fn score_corner_routines(
 /// says throw it anyway.
 ///
 /// `aerial_advantage_0_1` is the best attacking aerial composite in the
-/// box, `standard_shift` the match's distance from the calibration
-/// division (both are weight-1 composite reads, so subtracting it is
-/// exact and zero at level 14).
+/// box.
 pub fn pick_throw_routine(
     long_throws_0_20: f32,
     in_attacking_third: bool,
     aerial_advantage_0_1: f32,
     chasing_late: bool,
-    standard_shift: f32,
 ) -> ThrowRoutine {
     if !in_attacking_third {
         return ThrowRoutine::ShortRecycle;
@@ -570,8 +567,8 @@ pub fn pick_throw_routine(
         }
         return ThrowRoutine::ShortRecycle;
     }
-    let weapon = ThrowAppetite::weapon(long_throws_0_20, standard_shift);
-    let target = ThrowAppetite::target(aerial_advantage_0_1, standard_shift);
+    let weapon = ThrowAppetite::weapon(long_throws_0_20);
+    let target = ThrowAppetite::target(aerial_advantage_0_1);
     if weapon * target >= ThrowAppetite::bar(chasing_late) {
         ThrowRoutine::LongBox
     } else {
@@ -610,19 +607,17 @@ impl ThrowAppetite {
     ///
     /// The band is centred so the population that actually throws one is
     /// the population that threw one under the old bar: this removes the
-    /// cliff, it does not fill the league with Rory Delaps. Priced
-    /// against the division, because "a long throw" means a throw longer
-    /// than the ones around it.
+    /// cliff, it does not fill the league with Rory Delaps.
     #[inline]
-    pub fn weapon(long_throws_0_20: f32, standard_shift: f32) -> f32 {
-        Self::smoothstep(0.55, 0.95, (long_throws_0_20 / 20.0) - standard_shift)
+    pub fn weapon(long_throws_0_20: f32) -> f32 {
+        Self::smoothstep(0.55, 0.95, long_throws_0_20 / 20.0)
     }
 
     /// …and it is worth aiming at a man in proportion to how much of an
     /// aerial threat he is.
     #[inline]
-    pub fn target(aerial_advantage_0_1: f32, standard_shift: f32) -> f32 {
-        Self::smoothstep(0.30, 0.70, aerial_advantage_0_1 - standard_shift)
+    pub fn target(aerial_advantage_0_1: f32) -> f32 {
+        Self::smoothstep(0.30, 0.70, aerial_advantage_0_1)
     }
 
     /// Chasing a game late is the classic reason to throw one into the
@@ -1032,52 +1027,46 @@ mod tests {
     fn long_throw_needs_the_third_the_arm_and_a_target() {
         // Off the attacking third — never long, whoever is throwing.
         assert_eq!(
-            pick_throw_routine(20.0, false, 0.80, true, 0.0),
+            pick_throw_routine(20.0, false, 0.80, true),
             ThrowRoutine::ShortRecycle
         );
         // A specialist with a real target in there throws it.
         assert_eq!(
-            pick_throw_routine(18.0, true, 0.70, false, 0.0),
+            pick_throw_routine(18.0, true, 0.70, false),
             ThrowRoutine::LongBox
         );
         // Same arm, nobody worth aiming at — recycle.
         assert_eq!(
-            pick_throw_routine(18.0, true, 0.20, false, 0.0),
+            pick_throw_routine(18.0, true, 0.20, false),
             ThrowRoutine::ShortRecycle
         );
         // Ordinary thrower, good target — recycle.
         assert_eq!(
-            pick_throw_routine(8.0, true, 0.70, false, 0.0),
+            pick_throw_routine(8.0, true, 0.70, false),
             ThrowRoutine::ShortRecycle
         );
     }
 
     /// The point of removing the bar: the SAME arm answers differently
-    /// depending on what is in the box and on the division. A cliff on
-    /// the raw attribute cannot do either.
+    /// depending on what is in the box. A cliff on the raw attribute
+    /// cannot.
     #[test]
-    fn the_same_arm_reads_the_target_and_the_division() {
+    fn the_same_arm_reads_the_target() {
         // 14.5/20 is inside the band, so the target decides it.
         assert_eq!(
-            pick_throw_routine(14.5, true, 0.75, false, 0.0),
+            pick_throw_routine(14.5, true, 0.75, false),
             ThrowRoutine::LongBox,
             "elite target"
         );
         assert_eq!(
-            pick_throw_routine(14.5, true, 0.50, false, 0.0),
+            pick_throw_routine(14.5, true, 0.50, false),
             ThrowRoutine::ShortRecycle,
             "ordinary target"
         );
-        // 14.0 is just under the bar at the calibration division…
+        // 14.0 is just under the bar.
         assert_eq!(
-            pick_throw_routine(14.0, true, 0.75, false, 0.0),
+            pick_throw_routine(14.0, true, 0.75, false),
             ThrowRoutine::ShortRecycle
-        );
-        // …and a genuine weapon three tiers down, where the same
-        // absolute arm out-throws everything around it.
-        assert_eq!(
-            pick_throw_routine(14.0, true, 0.75, false, -0.25),
-            ThrowRoutine::LongBox
         );
     }
 
@@ -1087,8 +1076,8 @@ mod tests {
     fn long_throw_appetite_is_monotone_in_the_attribute() {
         let mut seen_long = false;
         for lt in 1..=40 {
-            let long = pick_throw_routine(lt as f32 * 0.5, true, 0.70, false, 0.0)
-                == ThrowRoutine::LongBox;
+            let long =
+                pick_throw_routine(lt as f32 * 0.5, true, 0.70, false) == ThrowRoutine::LongBox;
             if seen_long {
                 assert!(
                     long,
@@ -1106,16 +1095,16 @@ mod tests {
     #[test]
     fn chasing_late_lowers_the_bar_without_inventing_an_arm() {
         assert_eq!(
-            pick_throw_routine(14.0, true, 0.60, false, 0.0),
+            pick_throw_routine(14.0, true, 0.60, false),
             ThrowRoutine::ShortRecycle
         );
         assert_eq!(
-            pick_throw_routine(14.0, true, 0.60, true, 0.0),
+            pick_throw_routine(14.0, true, 0.60, true),
             ThrowRoutine::LongBox
         );
         // A man who cannot throw it that far still cannot when chasing.
         assert_eq!(
-            pick_throw_routine(3.0, true, 0.60, true, 0.0),
+            pick_throw_routine(3.0, true, 0.60, true),
             ThrowRoutine::ShortRecycle
         );
     }

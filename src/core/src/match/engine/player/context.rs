@@ -1,6 +1,7 @@
 use crate::PlayerPositionType;
 use crate::r#match::common_states::ChasePath;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionContest;
+use crate::r#match::engine::ball::ball::motion::Reception;
 use crate::r#match::engine::ball::ball::{
     Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, RunUpPhase,
 };
@@ -874,6 +875,9 @@ pub struct BallMetadata {
     notified_len: u8,
 
     pub ownership_duration: u32,
+    /// How the ball reached the man who last touched it — what a
+    /// first-time strike is struck off (`Poise::first_time`).
+    pub reception: Option<Reception>,
 
     recent_buf: [u32; 5],
     recent_len: u8,
@@ -1053,6 +1057,7 @@ impl BallMetadata {
         self.current_owner = field.ball.current_owner;
         self.last_owner = field.ball.previous_owner;
         self.ownership_duration = field.ball.ownership_duration;
+        self.reception = field.ball.reception;
 
         self.notified_len = field.ball.take_ball_notified_players.len().min(4) as u8;
         for (i, &id) in field
@@ -1137,6 +1142,7 @@ impl From<&MatchField> for BallMetadata {
             notified_buf: [0; 4],
             notified_len: 0,
             ownership_duration: 0,
+            reception: None,
             recent_buf: [0; 5],
             recent_len: 0,
             cached_shot_target: None,

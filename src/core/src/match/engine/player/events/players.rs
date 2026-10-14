@@ -6,7 +6,7 @@ use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
-use crate::r#match::engine::ball::ball::motion::SpinModel;
+use crate::r#match::engine::ball::ball::motion::{Carrier, SpinModel};
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GoalOrigin, PlayerReach,
     PossessionSource,
@@ -29,7 +29,6 @@ use crate::r#match::engine::psychology::{
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::engine::zones::Progression;
 use crate::r#match::events::{Event, EventCollection};
@@ -574,15 +573,7 @@ impl PassSkills {
     /// numbers without each call site having to apply the band itself.
     /// `minute` should be the current match minute (0..=120). Use
     /// `MatchContext::total_match_time / 60_000` to derive it.
-    /// `standard_shift` measures every read against the standard of
-    /// football in this match rather than against a fixed 0-20 scale —
-    /// see `MatchStandard`. The targeting error these feed is compared
-    /// with the receiver's absolute claim radius, so read raw the pass
-    /// lands 7.3u from its target at the bottom of the pyramid and 2.5u
-    /// at the top while the radius never moves, and possession dies
-    /// before it reaches the final third in the lower divisions.
-    fn from_player(player: &MatchPlayer, minute: u32, standard_shift: f32) -> Self {
-        let peer = |v: f32| v - standard_shift;
+    fn from_player(player: &MatchPlayer, minute: u32) -> Self {
         let tech = EffSkillCtx::technical(minute);
         let mental = EffSkillCtx::mental(minute);
 
@@ -590,26 +581,26 @@ impl PassSkills {
         // range visibly separates: a skill-1 player now lands at 0.05
         // (raw) rather than being lifted to the same 0.10 as a skill-2.
         // Flair was already unfloored.
-        let passing = (peer(effective_skill(player, player.skills.technical.passing, tech) / 20.0))
+        let passing = (effective_skill(player, player.skills.technical.passing, tech) / 20.0)
             .clamp(0.02, 1.0);
         let technique =
-            (peer(effective_skill(player, player.skills.technical.technique, tech) / 20.0))
+            (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
                 .clamp(0.02, 1.0);
-        let vision = (peer(effective_skill(player, player.skills.mental.vision, mental) / 20.0))
+        let vision = (effective_skill(player, player.skills.mental.vision, mental) / 20.0)
             .clamp(0.02, 1.0);
         let composure =
-            (peer(effective_skill(player, player.skills.mental.composure, mental) / 20.0))
+            (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
                 .clamp(0.02, 1.0);
         let concentration =
-            (peer(effective_skill(player, player.skills.mental.concentration, mental) / 20.0))
+            (effective_skill(player, player.skills.mental.concentration, mental) / 20.0)
                 .clamp(0.02, 1.0);
-        let flair = (peer(effective_skill(player, player.skills.mental.flair, mental) / 20.0))
+        let flair = (effective_skill(player, player.skills.mental.flair, mental) / 20.0)
             .clamp(0.0, 1.0);
         let long_shots =
-            (peer(effective_skill(player, player.skills.technical.long_shots, tech) / 20.0))
+            (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
                 .clamp(0.02, 1.0);
         let crossing =
-            (peer(effective_skill(player, player.skills.technical.crossing, tech) / 20.0))
+            (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
                 .clamp(0.02, 1.0);
         // Availability factor — independent of `effective_skill`'s
         // condition handling. Captures chronic fitness (long-term shape)
@@ -1109,9 +1100,8 @@ impl FoulResolver {
             bravery_sum += d.skills.mental.bravery;
             positioning_sum += d.skills.mental.positioning;
         }
-        let shift = MatchStandard::shift(context);
-        let avg_bravery = MatchStandard::peer(bravery_sum / wall_n as f32 / 20.0, shift);
-        let avg_positioning = MatchStandard::peer(positioning_sum / wall_n as f32 / 20.0, shift);
+        let avg_bravery = (bravery_sum / wall_n as f32 / 20.0).clamp(0.0, 1.0);
+        let avg_positioning = (positioning_sum / wall_n as f32 / 20.0).clamp(0.0, 1.0);
 
         // Taker error: 1.0 - finishing skill (proxy — the lower the
         // taker's finishing, the more often they hit the wall).
@@ -1119,7 +1109,7 @@ impl FoulResolver {
             .players
             .iter()
             .find(|p| p.id == shooter_id)
-            .map(|p| 1.0 - MatchStandard::peer(p.skills.technical.finishing / 20.0, shift))
+            .map(|p| 1.0 - (p.skills.technical.finishing / 20.0).clamp(0.0, 1.0))
             .unwrap_or(0.5);
 
         let p = wall_block_prob(avg_positioning, avg_bravery, taker_error, band);
@@ -1209,7 +1199,12 @@ impl PlayerEventDispatcher {
         match_data: &mut ResultMatchPositionData,
     ) -> Vec<Event> {
         #[cfg(feature = "match-logs")]
-        let census = (event.census_slot(), field.ball.position);
+        let census = (
+            event.census_slot(),
+            field.ball.position,
+            field.ball.velocity,
+            field.ball.current_owner,
+        );
         // `TakeBall` was never logged — it sets no ball state at all and
         // fires every tick for every chaser.
         let described = (context.logging_enabled && !matches!(event, PlayerEvent::TakeBall(_)))
@@ -1229,12 +1224,29 @@ impl PlayerEventDispatcher {
         }
         #[cfg(feature = "match-logs")]
         {
+            use crate::r#match::engine::ball::ball::arrival_diag::ArrivalCensus;
+            use crate::r#match::engine::ball::ball::strike_diag::GrantPath;
             use crate::r#match::engine::ball::ball::teleport::TeleportCensus;
-            let (slot, before) = census;
+            let (slot, before, velocity, owner) = census;
             TeleportCensus::note_event(
                 slot,
                 TeleportCensus::magnitude(before, field.ball.position),
             );
+            // Whichever handler handed the ball over, it is booked from
+            // where the ball was before the handler ran.
+            if let Some(taker) = field.ball.current_owner.filter(|&id| Some(id) != owner)
+                && field.ball.awaiting_restart.is_none()
+                && let Some(man) = field.get_player(taker).map(|p| p.position)
+            {
+                field.ball.granted_at = field.ball.current_tick_cached;
+                field.ball.arrival = Some(ArrivalCensus::open(
+                    GrantPath::EVENT,
+                    before,
+                    velocity,
+                    field.ball.last_step,
+                    man,
+                ));
+            }
         }
         out
     }
@@ -1634,8 +1646,6 @@ impl PlayerEventDispatcher {
                     // The passer's own pricing of this lane, as
                     // `PassEvaluator::calculate_interception_risk` does it.
                     let minute = sc::minute_from_ticks(context.current_tick());
-                    let shift =
-                        crate::r#match::engine::teamplay::standard::MatchStandard::shift(context);
                     let pace = Ball::pass_pace(length, &context.conditions);
                     let delivery = field
                         .get_player(passer_id)
@@ -1662,7 +1672,6 @@ impl PlayerEventDispatcher {
                             arrives,
                             read,
                             p.max_speed_with_condition_cached(),
-                            shift,
                         );
                         if miss < InterceptionContest::REACH {
                             risk = risk.max(InterceptionContest::chance(
@@ -1672,7 +1681,6 @@ impl PlayerEventDispatcher {
                                 1.0,
                                 read,
                                 delivery,
-                                shift,
                                 InterceptionContest::is_set_for_it(perp),
                             ));
                         }
@@ -2290,7 +2298,7 @@ impl PlayerEventDispatcher {
         let minute = sc::minute_from_ms(context.total_match_time);
         let kept = match field.players.iter().find(|p| p.id == player_id) {
             Some(tackler) => {
-                let control = sc::defensive_duel(tackler, minute) - MatchStandard::shift(context);
+                let control = sc::defensive_duel(tackler, minute);
                 field
                     .ball
                     .on_tackle_won(tackler, control, carrier_velocity, &context.rng)
@@ -2298,15 +2306,16 @@ impl PlayerEventDispatcher {
             None => true,
         };
         if kept {
-            Self::secure_ball_for(player_id, field);
-            if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
-                field.ball.note_possession(team_id);
+            if Self::secure_ball_for(player_id, field) {
+                if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
+                    field.ball.note_possession(team_id);
+                }
+                // The one acquisition that never passes through the
+                // ball-event dispatcher, so it labels itself.
+                field
+                    .ball
+                    .note_possession_source(player_id, PossessionSource::Tackle);
             }
-            // The one acquisition that never passes through the ball-event
-            // dispatcher, so it labels itself.
-            field
-                .ball
-                .note_possession_source(player_id, PossessionSource::Tackle);
         } else if let Some(p) = dispossessed_id.and_then(|id| field.get_player_mut(id)) {
             // Knocked off him all the same — `secure_ball_for` tells the
             // loser on the kept branch.
@@ -2607,24 +2616,14 @@ impl PlayerEventDispatcher {
                     + s.mental.composure * 0.20
                     + s.mental.anticipation * 0.15
                     + s.mental.decisions * 0.15;
-                // …measured against the standard of football in this
-                // match. The note at `flat_touch_composite` already names
-                // this curve as "one of the three channels through which
-                // a squad's skill level reaches the SCORELINE, and by far
-                // the widest": `(1-c)^2.5` and `(1-c)^2` on a composite
-                // running 0.29 in the fourth tier against 0.78 at the
-                // top fails the same reception 34% of the time at one end
-                // of the pyramid and 2.5% at the other, against a real
-                // 8-15 miscontrols a team that does not move between
-                // divisions at all. Every one is a loose ball, and in the
-                // defending third it is a chance conceded.
-                //
-                // The composite is a weight-1 linear blend, so subtracting
-                // `MatchStandard::shift` is exact and is zero at the
-                // calibration division — the 5×/0.55 titration above is
-                // untouched where it was measured. `OF_TOUCH_FLAT` stays
-                // as the harder control that pins the composite outright.
-                let comp01 = (composite / 20.0 - MatchStandard::shift(context)).clamp(0.0, 1.0);
+                // The note at `flat_touch_composite` names this curve as one
+                // of the channels through which a squad's skill level
+                // reaches the SCORELINE: read against the whole game it
+                // failed the same reception 34% of the time in the fourth
+                // tier and 2.5% at the top. The squads are measured against
+                // the standard of the match (`MatchStandard::measure`), so
+                // it does not; `OF_TOUCH_FLAT` pins the composite outright.
+                let comp01 = (composite / 20.0).clamp(0.0, 1.0);
                 let pos = p.position;
                 let team = p.team_id;
                 /// How close an opponent has to be to make a reception
@@ -3159,7 +3158,7 @@ impl PlayerEventDispatcher {
         let passer_position = player.position;
         let passer_side = player.side;
         let passer_team_id = player.team_id;
-        let skills = PassSkills::from_player(player, minute, MatchStandard::shift(context));
+        let skills = PassSkills::from_player(player, minute);
 
         // Calculate overall quality for accuracy - affected by condition
         let overall_quality = skills.overall_quality();
@@ -3253,10 +3252,9 @@ impl PlayerEventDispatcher {
         //   20 → 0.03 m    16 → 0.13 m    14 → 0.22 m
         //   10 → 0.44 m     6 → 0.70 m     1 → 1.03 m
         //
-        // `MatchStandard::shift` keeps this peer-relative, so a
-        // fourth-tier passer is judged against fourth-tier football and
-        // the pyramid stays flat — the spread is WITHIN a match, which
-        // is where it was missing. `OF_PASS_SPREAD=<f32>` overrides.
+        // The squads are measured against the standard of the match, so
+        // a fourth-tier passer is judged against fourth-tier football and
+        // the spread is WITHIN a match. `OF_PASS_SPREAD=<f32>` overrides.
         //
         // ⚠ This curve is NOT what makes passing skill matter, and
         // nothing here should be titrated as if it were.
@@ -3298,12 +3296,7 @@ impl PlayerEventDispatcher {
             let delivery = if field.ball.pass_origin_restart == PassOriginRestart::Corner {
                 field
                     .get_player(event_model.from_player_id)
-                    .map_or(skills.crossing, |taker| {
-                        MatchStandard::peer(
-                            sc::set_piece_delivery(taker, minute),
-                            MatchStandard::shift(context),
-                        )
-                    })
+                    .map_or(skills.crossing, |taker| sc::set_piece_delivery(taker, minute))
             } else {
                 skills.crossing
             };
@@ -4267,8 +4260,10 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        if !Self::secure_ball_for(player_id, field) {
+            return;
+        }
         Self::resolve_pending_pass_on_control(player_id, field, context);
-        Self::secure_ball_for(player_id, field);
         if let Some(team_id) = field.get_player(player_id).map(|p| p.team_id) {
             field.ball.note_possession(team_id);
         }
@@ -4495,31 +4490,37 @@ impl PlayerEventDispatcher {
         }
     }
 
-    // Snaps the ball to the winner's feet and zeros velocity — prevents
-    // residual velocity from carrying it into the winner's own goal
-    // after a tackle/interception/block.
-    fn secure_ball_for(player_id: u32, field: &mut MatchField) {
-        // **Nobody wins a tackle on a ball over his head.**
-        //
-        // This is the chokepoint for `GainBall`, `TacklingBall` and
-        // `BallOwnerChange`, and it is deliberately exempt from
-        // `can_take_possession`'s HORIZONTAL cap: beyond
-        // `MAX_OWNER_TRACK_DISTANCE` it writes the ball to the winner's
-        // feet rather than refusing, because refusing there changes the
-        // calibrated tackle and interception rates (see
-        // `reception_diag::SECURE_OUT_OF_REACH`, which is how that stays
-        // visible). The VERTICAL axis is not that kind of question. It is
-        // not a rate, it is whether the action is physically possible,
-        // and it applies on every path — see
+    /// A won ball goes to `player_id` — the chokepoint for `GainBall`,
+    /// `TacklingBall` and `BallOwnerChange`. Inside his touch it is a touch
+    /// where the ball is, leaving the contact at his pace; inside the
+    /// owner-tracking cap it is his to collect and keeps its own motion;
+    /// beyond that there is no ball for him to have won and the grant is
+    /// refused. Returns whether he got it.
+    fn secure_ball_for(player_id: u32, field: &mut MatchField) -> bool {
+        let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
+            return false;
+        };
+        // **Nobody wins a tackle on a ball over his head** — not a rate but
+        // whether the action is physically possible, on every path. See
         // [`PlayerReach::under_ceiling`].
-        if let Some(player) = field.players.iter().find(|p| p.id == player_id)
-            && !PlayerReach::under_ceiling(&field.ball, player)
-        {
+        if !PlayerReach::under_ceiling(&field.ball, player) {
             #[cfg(feature = "match-logs")]
             crate::r#match::engine::ball::ball::ownership::reception_diag::GRANT_OUT_OF_REACH
                 .fetch_add(1, Ordering::Relaxed);
-            return;
+            return false;
         }
+        // A grant to somebody who was never at the ball. It used to be
+        // written to his feet; it stays visible as
+        // `reception_diag::SECURE_OUT_OF_REACH`.
+        let gap = (player.position.x - field.ball.position.x)
+            .hypot(player.position.y - field.ball.position.y);
+        if gap > crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SECURE_OUT_OF_REACH
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let touch = PlayerReach::can_touch(&field.ball, player).then(|| Carrier::of(player));
         // You cannot take the ball out of a goalkeeper's gloves.
         //
         // `held_in_hands` was enforced on the ownership layer — the claim
@@ -4543,53 +4544,18 @@ impl PlayerEventDispatcher {
         // are "somebody won it at their feet", which is not something that
         // can happen to a ball nobody is allowed to touch.
         if field.ball.held_in_hands {
-            return;
+            return false;
         }
         #[cfg(feature = "match-logs")]
         if field.ball.cached_shot_target.is_some() {
             crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_CLAIMED
                 .fetch_add(1, Ordering::Relaxed);
         }
-        // ⚠ **The ball is not moved to him. He is given a ball he can
-        // reach, and it comes to him.**
-        //
-        // This used to be an unconditional `ball.position = player.position;
-        // z = 0`, and it is the chokepoint every tackle, gain-ball and
-        // owner-change goes through — so it was the single most FREQUENT
-        // relocation in the engine. Measured over 40 matches at level 14
-        // on the whole-tick census: **41 a match at a mean of 1.1 m**,
-        // 1176 of them large enough for a replay to show, split
-        // `TacklingBall` 29/match, `GainBall` 8.6/match, `CommitFoul`
-        // 3.4/match. Nothing before now could see it: the ball's own
-        // per-stage census is closed by the time the player layer runs.
-        //
-        // Nothing has to be written, because two pieces of machinery
-        // already do the job between them:
-        //
-        // * a ball beyond his feet is his to collect — the TakeBall
-        //   override sends him to it (`should_force_takeball`), so a
-        //   typical 6u tackle gap is a stride he takes, not a pull;
-        // * `check_ball_ownership`'s "owner too far" test only strips
-        //   possession from a ball that is MOVING (`ball_speed_sq >
-        //   MIN_VELOCITY_FOR_DISTANCE_CHECK`) and moving AWAY, and the
-        //   line below zeroes the velocity. So the settle window this
-        //   needs already exists; the snap was hiding it.
-        //
-        // Beyond `MAX_OWNER_TRACK_DISTANCE` the tracking gives up and
-        // disowns instead — the stranded-ball failure — so the far tail
-        // keeps the write. That is a grant to somebody who was never at
-        // the ball, which is its own bug and stays visible as one.
-        if let Some(player) = field.players.iter().find(|p| p.id == player_id) {
-            let gap = (player.position.x - field.ball.position.x)
-                .hypot(player.position.y - field.ball.position.y);
-            if gap > crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE {
-                #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::ownership::reception_diag::SECURE_OUT_OF_REACH
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                field.ball.position = player.position;
-                field.ball.position.z = 0.0;
-            }
-        }
+        // ⚠ **The ball is never moved to him.** This used to be an
+        // unconditional `ball.position = player.position; z = 0` — 41
+        // relocations a match at a mean of 1.1 m, the most frequent in the
+        // engine. A ball beyond his touch is his to collect: the TakeBall
+        // override sends him to it (`should_force_takeball`).
         // He has the ball, so a throw-in in progress is over — and this
         // path records no touch, which is the only reason it has to say
         // so itself. See `Ball::settle_throw_in`.
@@ -4611,13 +4577,16 @@ impl PlayerEventDispatcher {
             loser.on_dispossessed(tick);
         }
         field.ball.pass_target_player_id = None;
-        field.ball.velocity = Vector3::zeros();
+        if let Some(carrier) = touch {
+            field.ball.touch(player_id, carrier);
+        }
         field.ball.flags.in_flight_state = 0;
         field.ball.cached_shot_target = None;
         // Won at the feet — a tackle, an interception, a block. The
         // caught-ball path re-raises this immediately for the one case
         // that is genuinely a catch.
         field.ball.held_in_hands = false;
+        true
     }
 
     /// The frame a strike is judged against: the centre of the goal the
@@ -4732,8 +4701,8 @@ impl PlayerEventDispatcher {
         ///
         /// ⚠ **It had drifted, and it was charging everybody.** The
         /// constant read 0.622 against a measured **0.550** — the
-        /// `execution_skill` blend has moved since (`peer()` now prices
-        /// every band against `MatchStandard`, and headers execute on
+        /// `execution_skill` blend has moved since (every band is read
+        /// against the standard of the match, and headers execute on
         /// `header_finish`). The harness did print the mean, but three
         /// lines down inside the finishing-tier block's `if` and worded
         /// as advice to a future change ("centre any accuracy quality
@@ -4949,7 +4918,6 @@ impl PlayerEventDispatcher {
             // shot: `heading` won the aerial duel and then `finishing`
             // struck the ball.
             shot_type: shoot_event_model.shot_type,
-            standard_shift: MatchStandard::shift(context),
         };
         let profile = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
@@ -5924,6 +5892,19 @@ impl PlayerEventDispatcher {
         // projected crossing point is known — it is a function of WHERE
         // the ball is going, which this point in the handler does not
         // know yet.
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::arrival_diag::ShotTiming;
+            let now = context.current_tick();
+            let since_grant = (field.ball.current_owner == Some(shoot_event_model.from_player_id))
+                .then(|| now.saturating_sub(field.ball.granted_at));
+            let buckets = ShotTiming::buckets(
+                since_grant,
+                now.saturating_sub(field.ball.last_release_tick),
+            );
+            ShotTiming::note_shot(buckets);
+            field.ball.shot_timing = Some(buckets);
+        }
         field.ball.last_shot_shooter_id = Some(shoot_event_model.from_player_id);
         field.ball.last_shot_struck_tick = context.current_tick();
         // His strike is the ball's last touch. A header or a volley is
@@ -6151,7 +6132,6 @@ impl PlayerEventDispatcher {
                             &GoalkeeperSkillInputs {
                                 minute: sc::minute_from_ms(context.total_match_time),
                                 condition_pct: k.player_attributes.condition_percentage() as f32,
-                                standard_shift: MatchStandard::keeper_shift(context),
                             },
                         )
                         .positioning
@@ -6709,11 +6689,11 @@ impl PlayerEventDispatcher {
         let dx = drop.x - keeper_pos.x;
         let dy = drop.y - keeper_pos.y;
         let dist = (dx * dx + dy * dy).sqrt().max(1.0);
-        ball.position = keeper_pos;
-        ball.position.z = 0.0;
+        // The spill leaves from where he got a glove to it, not from his
+        // body: a failed touch happens where the ball is.
         ball.velocity.x = dx / dist * drop_speed;
         ball.velocity.y = dy / dist * drop_speed;
-        ball.velocity.z = 0.0;
+        ball.sink_to_ground();
         ball.current_owner = None;
         ball.previous_owner = Some(player_id);
         ball.pass_target_player_id = None;
@@ -7981,7 +7961,7 @@ impl PlayerEventDispatcher {
         // height being put on the floor.
         //
         // The height needs nothing written: the taker owns the ball from
-        // here, and `move_to`'s `carry_toward` walks it down at 10 cm a
+        // here, and the carry walks it down at 10 cm a
         // tick. Same rule, same reason, as `Ball::award_goal_kick`, whose
         // doc-comment records the identical mistake on the identical axis.
         ball.position.x = restart_pos.x;

@@ -12,7 +12,6 @@ use crate::r#match::engine::ball::ball::{Ball, BallRoll, GRAVITY_PER_TICK};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
@@ -346,14 +345,14 @@ impl SaveModel {
     /// measured population difficulty this turns `HOLD_BASE` into the
     /// realised hold rate.
     pub(crate) const HOLD_DIFFICULTY: f32 = 1.30;
-    /// Population mean of `scaled_handling` — the peer-shifted value the
-    /// hold terms read, NOT the raw 1-20 attribute and NOT 0.5.
+    /// Population mean of `scaled_handling` — the value the hold terms
+    /// read, NOT the raw 1-20 attribute and NOT 0.5.
     ///
     /// ⚠ Measured, from the `KEEPER HANDLING` block in `dev_match stats`,
     /// which prints it beside the raw mean for exactly this purpose.
-    /// `MatchStandard::keeper_shift` already re-centres a keeper against
-    /// the goalkeeping standard of his match, so this sits near the middle
-    /// by construction — but "near" is not "at", and an uncentred quality
+    /// The squads are measured against the goalkeeping standard of the
+    /// match, so this sits near the middle by construction — but "near"
+    /// is not "at", and an uncentred quality
     /// term does not add a skill axis, it silently recalibrates the split.
     /// Re-fit it from the harness if the shift or the scaling moves.
     pub(crate) const POPULATION_HANDLING: f32 = 0.530;
@@ -1223,19 +1222,10 @@ impl Ball {
         // Concentration acts on the catch / parry split — focused
         // keepers catch cleaner, distracted ones parry into danger.
         let concentration = effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx);
-        // …each measured against the standard of goalkeeping in this
-        // match, so a keeper is compared with the football he is playing
-        // in rather than with a fixed 1-20 scale. See `MatchStandard` and
-        // the note at `base_reach` below for the measurement that forced
-        // it. Applied here, at the normalisation, so the reach, the pace
-        // penalty and the catch/parry split all agree about how good he
-        // is.
-        let gk_shift = MatchStandard::keeper_shift(context);
-        let peer = |v: f32| (v - gk_shift).clamp(0.0, 1.0);
-        let scaled_handling = peer(((handling - 1.0) / 19.0).max(0.0));
-        let scaled_reflexes = peer(((reflexes - 1.0) / 19.0).max(0.0));
-        let scaled_agility = peer(((agility - 1.0) / 19.0).max(0.0));
-        let scaled_concentration = peer(((concentration - 1.0) / 19.0).max(0.0));
+        let scaled_handling = ((handling - 1.0) / 19.0).clamp(0.0, 1.0);
+        let scaled_reflexes = ((reflexes - 1.0) / 19.0).clamp(0.0, 1.0);
+        let scaled_agility = ((agility - 1.0) / 19.0).clamp(0.0, 1.0);
+        let scaled_concentration = ((concentration - 1.0) / 19.0).clamp(0.0, 1.0);
         // …and the two that decide what an UNHELD ball does. `punching` had
         // no path to the save outcome at all — it reached only
         // `GoalkeeperSkillProfile::parry_control` and the punch decision in
@@ -1244,8 +1234,8 @@ impl Ball {
         // hold anything did nothing on the shots he could not hold.
         let punching = effective_skill(keeper, keeper.skills.goalkeeping.punching, tech_ctx);
         let strength = effective_skill(keeper, keeper.skills.physical.strength, expl_ctx);
-        let scaled_punching = peer(((punching - 1.0) / 19.0).max(0.0));
-        let scaled_strength = peer(((strength - 1.0) / 19.0).max(0.0));
+        let scaled_punching = ((punching - 1.0) / 19.0).clamp(0.0, 1.0);
+        let scaled_strength = ((strength - 1.0) / 19.0).clamp(0.0, 1.0);
 
         // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
         // (half-goal 29u = 3.66m matches real 3.66m). Every keeper, even a
@@ -1282,11 +1272,11 @@ impl Ball {
         // the contest multiplier was already flat across that whole
         // sweep, so what remained was the geometry.
         //
-        // `MatchStandard::keeper_shift` reads the two attributes against
-        // the goalkeeping standard of the match. Zero at the calibration
-        // division, so the 23/8/4 numbers above are untouched where they
-        // were fitted; within a division the agile keeper still reaches
-        // further than the heavy-legged one.
+        // The squads are measured against the goalkeeping standard of the
+        // match at kickoff (`MatchStandard::measure`), so the 23/8/4
+        // numbers above are untouched where they were fitted; within a
+        // division the agile keeper still reaches further than the
+        // heavy-legged one.
         // Intercept 23 → 20 on 2026-08-24, half of the re-derivation the
         // move onto the ball's real crossing forced. The other half is
         // the close-range band, now [`KeeperSpread::SPREAD`]. The SLOPE
@@ -1811,11 +1801,14 @@ impl Ball {
             // him meanwhile — `held_in_hands` is raised below and
             // `check_ball_ownership` returns on it — and `move_to` will not
             // disown it for the distance either, for the same reason.
+            #[cfg(feature = "match-logs")]
+            {
+                StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+                self.open_arrival(GrantPath::CONTEST, keeper.position);
+            }
             self.velocity = Vector3::zeros();
             self.spin = Vector3::zeros();
             self.current_owner = Some(keeper_id);
-            #[cfg(feature = "match-logs")]
-            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 200;
             // Read off the KEEPER, not the contact point, and the two are

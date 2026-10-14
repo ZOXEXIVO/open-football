@@ -236,9 +236,7 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
     //
     // Both ceilings, read off the type rather than guessed: the deadline
     // itself, plus the window in which a taker still standing over the
-    // ball re-stamps its origin. A flat 400 sat 20 ticks INSIDE
-    // `MAX_TICKS` and released only because the divisions this fixture
-    // generates had not been reaching the clamp.
+    // ball re-stamps its origin.
     //
     // Every man the corner pinned has to be let go at some point in that
     // window, not be free at its end: a corner punched out for a throw-in
@@ -246,7 +244,7 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
     m.walk_the_corner_in();
     let mut held: Vec<u32> = m.pinned().iter().map(|p| p.id).collect();
     let mut shape_released = false;
-    for _ in 0..(CornerDeadline::SETUP_MAX_TICKS + CornerDeadline::MAX_TICKS) as usize + 50 {
+    for _ in 0..(CornerDeadline::SETUP_MAX_TICKS + CornerDeadline::TICKS) as usize + 50 {
         m.tick();
         held.retain(|id| {
             m.field

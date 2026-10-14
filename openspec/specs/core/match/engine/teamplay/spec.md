@@ -47,3 +47,25 @@ The same rule SHALL apply on every part of the pitch and to every player who clo
 #### Scenario: The position does not walk with the level
 - **WHEN** an equally matched wide carrier and closer meet in the same situation at a low and at a high level of football
 - **THEN** the closer steers for the same position at both levels
+
+### Requirement: Short-handed team shape
+When a team is reduced below eleven players by a sending-off or an injury with no change available, the team SHALL re-anchor its shape to a formation for the remaining number of players chosen by the coach's situational logic (sacrificing the role the situation can most afford), SHALL keep that shape across the half-time and extra-time ends swap, and the coach's in-match evaluation SHALL read the player-count deficit as an input to instruction and formation choices.
+
+#### Scenario: Red card reshapes the side
+- **WHEN** a side's forward is sent off in the 30th minute while the match is level
+- **THEN** the remaining ten re-anchor to a ten-player formation, the vacated role is not left empty, and the same ten-player shape is in force after half time
+
+#### Scenario: Coach reads the deficit
+- **WHEN** a side is a player down and leading
+- **THEN** the coach's instruction evaluation treats the deficit as pressure to protect rather than push, independent of the minute gate that governs score reactions
+
+### Requirement: Offside-trap step-up
+A back line holding its line SHALL be able to step up together to leave an attacker offside at the moment a pass is about to be played, with the decision driven by the line's organisation and anticipation, the keeper's organising voice and the pairing chemistry, and with a failure mode in which a late or uncoordinated step-up plays the attacker onside with a clear run.
+
+#### Scenario: Coordinated line springs the trap
+- **WHEN** a well-organised back line with high chemistry reads an imminent through ball to an attacker on the shoulder of the last defender
+- **THEN** the line steps up together before the ball is played and the attacker is left in an offside position
+
+#### Scenario: Poorly organised line is caught out
+- **WHEN** a disorganised back line attempts the same step-up and one defender is late
+- **THEN** the attacker is played onside behind the line and the attempt is recorded as a failed trap

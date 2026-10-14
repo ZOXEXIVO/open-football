@@ -61,20 +61,6 @@ pub struct ShotSkillInputs {
     ///   `technique` and `balance` as though he had hit it with his
     ///   instep.
     pub shot_type: ShotType,
-    /// How far the standard of football in this match sits from the
-    /// division these curves were fitted in — see
-    /// [`crate::r#match::engine::teamplay::standard::MatchStandard`].
-    ///
-    /// Subtracted from every skill read below, and it is the other half
-    /// of the goalkeeper's own centring. The two axes have to move
-    /// together or the goal total tilts: measured over
-    /// `dev_match levels 300 4 20 2`, shots on target ran **26.4% at
-    /// level 4 to 42.5% at level 20** against a real ~33% flat, and saves
-    /// per shot on target ran 56.6% to 70.7% against a real ~68% flat.
-    /// The two errors were cancelling in the scoreline while each was
-    /// wrong on its own, and flattening either alone walks the goals off
-    /// their target.
-    pub standard_shift: f32,
 }
 
 /// Unified shooting profile — drives every shot quality decision.
@@ -176,25 +162,23 @@ impl ShotSkillProfile {
         let agility_eff = effective_skill(player, s.physical.agility, expl);
         let strength_eff = effective_skill(player, s.physical.strength, expl);
 
-        // Normalised skill bands, each measured against the standard of
-        // football in this match — see `ShotSkillInputs::standard_shift`.
-        // The curves below are convex, `poor_penalty` and `elite_lift`
-        // are smoothsteps on absolute pivots (0.45/0.15 and 0.70/0.95),
-        // and `POPULATION_EXECUTION` compares the result against one
-        // division's measured mean, so read absolutely the whole striking
-        // model prices the league rather than the striker.
-        let peer = |v: f32| (norm01(v) - inputs.standard_shift).clamp(0.0, 1.0);
-        let finishing01 = peer(finishing_eff);
-        let technique01 = peer(technique_eff);
-        let first_touch01 = peer(first_touch_eff);
-        let long_shots01 = peer(long_shots_eff);
-        let composure01 = peer(composure_eff);
-        let decisions01 = peer(decisions_eff);
-        let concentration01 = peer(concentration_eff);
-        let _anticipation01 = peer(anticipation_eff);
-        let balance01 = peer(balance_eff);
-        let agility01 = peer(agility_eff);
-        let strength01 = peer(strength_eff);
+        // Normalised skill bands. The curves below are convex,
+        // `poor_penalty` and `elite_lift` are smoothsteps on absolute
+        // pivots (0.45/0.15 and 0.70/0.95), and `POPULATION_EXECUTION`
+        // compares the result against one division's measured mean — all
+        // of which is why the squads are measured against the standard of
+        // the match at kickoff (`MatchStandard::measure`).
+        let finishing01 = norm01(finishing_eff);
+        let technique01 = norm01(technique_eff);
+        let first_touch01 = norm01(first_touch_eff);
+        let long_shots01 = norm01(long_shots_eff);
+        let composure01 = norm01(composure_eff);
+        let decisions01 = norm01(decisions_eff);
+        let concentration01 = norm01(concentration_eff);
+        let _anticipation01 = norm01(anticipation_eff);
+        let balance01 = norm01(balance_eff);
+        let agility01 = norm01(agility_eff);
+        let strength01 = norm01(strength_eff);
 
         // Headline penalties / lifts. The "headline" skill for a shooter is
         // finishing — the smoothstep around it controls the heavy-handed
@@ -260,28 +244,14 @@ impl ShotSkillProfile {
         // because meeting a cross cleanly and steering it down is a
         // specialist action too — and the one the engine was resolving
         // on the striker's instep.
-        //
-        // `header_finish` and `penalty_execution` are weight-1 linear
-        // blends of `n(skill)`, so `peer`-ing them against the standard of
-        // football in this match is exact and is zero at the calibration
-        // division — same argument as `receiving_first_touch`, and
-        // required because `execution_skill` feeds absolute anchors
-        // (`0.50 + execution*0.85` and friends) further down.
-        // `dead_ball_strike` is curved, so it peers each attribute before
-        // the curve instead.
         let header = HeaderStrike::armed() && inputs.shot_type.is_header();
         let header_execution = || {
-            let skill01 =
-                (sc::header_finish(player, inputs.minute) - inputs.standard_shift).clamp(0.0, 1.0);
+            let skill01 = sc::header_finish(player, inputs.minute);
             pow_curve(skill01, 1.45)
         };
         let execution_skill = match inputs.shot_type {
-            ShotType::Penalty => (sc::penalty_execution(player, inputs.minute)
-                - inputs.standard_shift)
-                .clamp(0.0, 1.0),
-            ShotType::DirectFreeKick => {
-                sc::dead_ball_strike(player, inputs.minute, inputs.standard_shift)
-            }
+            ShotType::Penalty => sc::penalty_execution(player, inputs.minute),
+            ShotType::DirectFreeKick => sc::dead_ball_strike(player, inputs.minute),
             _ if header => header_execution(),
             _ => open_play_execution,
         };

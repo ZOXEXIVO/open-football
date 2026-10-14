@@ -13,7 +13,6 @@ use crate::Tactics;
 use crate::r#match::MatchCoach;
 use crate::r#match::RollingTeamMetrics;
 use crate::r#match::engine::engine::*;
-use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -447,17 +446,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             context.away_skill_aggregates = away_skills.finalize();
             context.last_skill_aggregate_tick = current_tick;
             context.skill_aggregates_dirty = false;
-            // First pass only — the standard of football in a fixture is
-            // a property of the squads that turned up, not of how tired
-            // they are by the 80th minute. See `MatchStandard`. The moment
-            // it is read is the moment each starter's nerves can be.
-            let first_read = context.standard.is_none();
-            MatchStandard::latch(context);
-            if first_read {
-                for p in field.players.iter().filter(|p| !p.off_pitch) {
-                    context.seed_psychology(p);
-                }
-            }
             let moment = context.pressure_moment();
             context
                 .psychology
@@ -520,8 +508,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 context.environment.crowd_intensity * context.environment.home_advantage
             },
             press_ceiling: 1.0 + context.conditions.high_press_intensity_cap,
-            standard_shift: MatchStandard::shift(context),
-            standard_gk_shift: MatchStandard::keeper_shift(context),
         };
         TeamTacticalState::refresh(
             &mut context.tactical_home,

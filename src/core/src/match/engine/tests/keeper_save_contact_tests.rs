@@ -18,7 +18,7 @@ use crate::r#match::goalkeepers::states::GoalkeeperPunchingState;
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
+    Ball, GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
     ResultMatchPositionData, ShotTarget, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
     events::{Event, EventCollection},
@@ -182,8 +182,8 @@ fn a_shot_still_in_front_of_the_keeper_is_adjudicated() {
 /// The catch resolves anywhere inside the reach `SaveModel::wedge` prices —
 /// up to four metres — and used to be written onto the keeper's own
 /// coordinate at `carry_height` in the same tick, on both axes at once.
-/// `Ball::move_to_with_players` now draws it in at `BALL_TRACK_SPEED` and
-/// lifts it at `CARRY_RATE`, and must not disown it for the distance on the
+/// The carry now brings it in at a hand's pace (`Ball::HANDS_BOUND`) and
+/// lifts it at 10 cm a tick, and must not disown it for the distance on the
 /// way.
 #[test]
 fn a_ball_taken_at_full_stretch_is_drawn_in_rather_than_teleported() {
@@ -210,12 +210,14 @@ fn a_ball_taken_at_full_stretch_is_drawn_in_rather_than_teleported() {
     let players = field.players.clone();
     let mut previous = field.ball.position;
     let mut ticks_to_hand = None;
-    for tick in 0..60 {
+    for tick in 0..120 {
         field.ball.move_to_with_players(&players);
-        let step = (field.ball.position - previous).magnitude();
+        let step = field.ball.position - previous;
         assert!(
-            step < 2.0,
-            "the ball jumped {step:.2} units in one tick on the way into his hands"
+            step.x.abs() <= Ball::HANDS_BOUND + 1e-4
+                && step.y.abs() <= Ball::HANDS_BOUND + 1e-4
+                && step.z.abs() <= 0.1 + 1e-4,
+            "the ball jumped {step:?} in one tick on the way into his hands"
         );
         previous = field.ball.position;
         assert_eq!(
@@ -232,8 +234,8 @@ fn a_ball_taken_at_full_stretch_is_drawn_in_rather_than_teleported() {
     }
     let arrived = ticks_to_hand.expect("the ball must end up in his hands");
     assert!(
-        arrived >= 8,
-        "a three-metre gather took {arrived} ticks — that is a teleport with extra steps"
+        (8..=100).contains(&arrived),
+        "a three-metre gather took {arrived} ticks — a teleport, or longer than a second"
     );
 }
 

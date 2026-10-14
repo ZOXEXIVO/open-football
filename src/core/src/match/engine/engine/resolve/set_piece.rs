@@ -432,12 +432,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
         let held = now.saturating_sub(shape.armed_tick);
-        let deadline = if CornerDeadline::armed() {
-            shape.deadline_ticks
-        } else {
-            CornerDeadline::CALIBRATION_TICKS
-        };
-        if corner_still_live && held < deadline {
+        if corner_still_live && held < CornerDeadline::TICKS {
             return;
         }
         // `corner_still_live` here means nothing ended it — the deadline

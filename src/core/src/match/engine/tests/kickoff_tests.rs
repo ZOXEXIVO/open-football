@@ -64,6 +64,29 @@ const HEIGHT: usize = 545;
 const KICKOFF_SCAN_BOUND: u32 = 200;
 
 fn squad(team_id: u32, base_id: u32) -> MatchSquad {
+    let mut skills = PlayerSkills::default();
+    skills.physical.pace = 14.0;
+    skills.physical.acceleration = 14.0;
+    skills.physical.agility = 14.0;
+    skills.physical.stamina = 14.0;
+    skills.physical.natural_fitness = 14.0;
+    skills.physical.jumping = 14.0;
+    skills.technical.passing = 14.0;
+    skills.technical.first_touch = 14.0;
+    squad_with(team_id, base_id, skills)
+}
+
+/// Every attribute of every man at `level`.
+fn everybody_at(level: f32) -> PlayerSkills {
+    let mut skills = PlayerSkills::default();
+    skills.technical.raise_floor(level);
+    skills.mental.raise_floor(level);
+    skills.physical.raise_floor(level);
+    skills.goalkeeping.raise_floor(level);
+    skills
+}
+
+fn squad_with(team_id: u32, base_id: u32, skills: PlayerSkills) -> MatchSquad {
     let birth = NaiveDate::from_ymd_opt(1998, 5, 1).unwrap();
     let main_squad = T4231
         .iter()
@@ -74,15 +97,6 @@ fn squad(team_id: u32, base_id: u32) -> MatchSquad {
                 current_ability: 150,
                 ..Default::default()
             };
-            let mut skills = PlayerSkills::default();
-            skills.physical.pace = 14.0;
-            skills.physical.acceleration = 14.0;
-            skills.physical.agility = 14.0;
-            skills.physical.stamina = 14.0;
-            skills.physical.natural_fitness = 14.0;
-            skills.physical.jumping = 14.0;
-            skills.technical.passing = 14.0;
-            skills.technical.first_touch = 14.0;
             let player = PlayerBuilder::new()
                 .id(base_id + index as u32)
                 .full_name(FullName::new(
@@ -346,13 +360,70 @@ fn a_match_reports_the_standard_it_was_played_at() {
         MatchEngineConfig::seeded(0x0F00_0031),
     );
 
-    // The latch reads both elevens on the first aggregate pass, after the
-    // crowd has had its say, so it sits beside the bare reading, not on it.
+    // Read off the two elevens as they arrive, before they are measured
+    // against it.
     assert!(
-        (result.standard_of_football - read).abs() < 0.03,
+        (result.standard_of_football - read).abs() < 1e-6,
         "result {} against a kickoff reading of {}",
         result.standard_of_football,
         read
     );
     assert_ne!(result.standard_of_football, MatchStandard::CALIBRATION);
+}
+
+/// **Equal sides read the same at both ends of the pyramid.** Two squads
+/// a whole generator apart — the means of levels 4 and 18, 8.1 points —
+/// come out of the measurement as the same footballers to within the
+/// half a point the composite reading leaves (it tracks a uniform shift
+/// at ~0.95, not 1), while the standard each pair brought is still
+/// reported as itself.
+#[test]
+fn equal_squads_measure_the_same_at_both_ends_of_the_pyramid() {
+    let measured = |level: f32| {
+        let mut home = squad_with(1, 100, everybody_at(level));
+        let mut away = squad_with(2, 200, everybody_at(level));
+        let reading = MatchStandard::measure(&mut home, &mut away);
+        (
+            reading.outfield,
+            home.main_squad[5].skills,
+            away.main_squad[10].skills,
+        )
+    };
+    let (bottom, bottom_mid, bottom_fwd) = measured(5.9);
+    let (top, top_mid, top_fwd) = measured(14.0);
+    assert!(
+        top - bottom > 0.3,
+        "the two pairs brought {bottom} and {top}"
+    );
+    for (low, high) in [(bottom_mid, top_mid), (bottom_fwd, top_fwd)] {
+        for (name, a, b) in [
+            ("passing", low.technical.passing, high.technical.passing),
+            ("tackling", low.technical.tackling, high.technical.tackling),
+            ("decisions", low.mental.decisions, high.mental.decisions),
+            (
+                "off_the_ball",
+                low.mental.off_the_ball,
+                high.mental.off_the_ball,
+            ),
+            ("pace", low.physical.pace, high.physical.pace),
+            ("strength", low.physical.strength, high.physical.strength),
+        ] {
+            assert!(
+                (a - b).abs() < 0.5,
+                "{name}: {a} at the bottom, {b} at the top"
+            );
+        }
+    }
+}
+
+/// …and a mismatch keeps its edge: both sides move by the same amount,
+/// so the better one is exactly as much better as he arrived.
+#[test]
+fn a_mismatch_keeps_its_edge_through_the_measurement() {
+    let mut home = squad_with(1, 100, everybody_at(12.0));
+    let mut away = squad_with(2, 200, everybody_at(8.0));
+    MatchStandard::measure(&mut home, &mut away);
+    let gap =
+        home.main_squad[5].skills.technical.passing - away.main_squad[5].skills.technical.passing;
+    assert!((gap - 4.0).abs() < 1e-4, "gap {gap}");
 }

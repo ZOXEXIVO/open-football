@@ -34,8 +34,7 @@
 //! `SetPieceHold` in the state dispatcher, and attacking the delivery
 //! belongs to the states themselves.
 
-use crate::r#match::engine::teamplay::standard::MatchStandard;
-use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
+use crate::r#match::{MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 use std::env::var;
@@ -141,95 +140,23 @@ pub struct CornerShapeHold {
     /// does his own delivery, so "anybody else has touched it" is the
     /// clean test for first contact.
     pub taker_id: u32,
-    /// Longest the shape may pin anybody once the ball has actually left
-    /// the taker, in engine ticks. **Latched at the award**, priced
-    /// against the standard of football in this match — see
-    /// [`CornerDeadline::ticks`].
-    ///
-    /// A property of the fixture rather than of the tick, for the same
-    /// reason `MatchStandard` latches at kickoff, and carried here so the
-    /// station sweep does not need a `MatchContext` it has never had.
-    pub deadline_ticks: u64,
 }
 
-/// **How long a corner takes, in the division it is being played in.**
-///
-/// The shape's delivery deadline. It was a flat 2.5 s for every match in
-/// the pyramid, sized off what a corner physically takes: the flight from
-/// the flag to the far post, plus the moment somebody attacks it.
-///
-/// Both halves of that are slower football at a lower standard, and the
-/// harness's own corner columns say so — measured over
-/// `dev_match levels 150 4 20 4`, the share of corners whose shape was
-/// released by the DEADLINE rather than by somebody touching the ball ran
-///
-/// ```text
-///   level    4      8     12     16     20
-///   deadline 81%   75%   71%    61%    56%
-/// ```
-///
-/// A fourth-tier box therefore empties before the cross is attacked four
-/// times in five, and a top-flight box a little over half the time. That
-/// is the shape of an absolute constant pricing the DIVISION, which is
-/// what [`MatchStandard`] exists to remove — and the corner is where the
-/// engine keeps most of its remaining ones.
-///
-/// # The pricing is ONE-SIDED, and that was measured the hard way
-///
-/// The first cut scaled symmetrically, `× (1 - shift)`: longer below the
-/// calibration division and shorter above it. It did not flatten the
-/// gradient, it turned it over —
-///
-/// ```text
-///   level        4     8    12    16    20
-///   symmetric   43%   53%   55%   60%   64%
-/// ```
-///
-/// — because shortening the window above calibration buys nothing and
-/// costs shape, so the top of the pyramid started emptying its box more
-/// often than the bottom. This is a BACKSTOP. Its whole job is to be the
-/// thing that never fires; the football is supposed to end the corner.
-/// A backstop only ever needs to be LONGER where the football is slower,
-/// so the scale is floored at 1.0 and the calibration division and
-/// everything above it keep the 2.5 s they were fitted with.
-///
-/// The clamp is wide enough to leave the whole generator inside it and
-/// exists only so a synthetic fixture cannot ask for a six-second corner.
-///
-/// [`MatchStandard`]: crate::r#match::engine::teamplay::standard::MatchStandard
+/// **How long a corner takes.** The shape's delivery deadline, sized off
+/// what a corner physically takes: the flight from the flag to the far
+/// post, plus the moment somebody attacks it. A BACKSTOP — its whole job
+/// is to be the thing that never fires; the football is supposed to end
+/// the corner.
 pub struct CornerDeadline;
 
 impl CornerDeadline {
-    /// The deadline in the calibration division, in 10 ms engine ticks.
-    pub const CALIBRATION_TICKS: u64 = 250;
-    /// Longest any division's deadline may be. Public so a test that has
-    /// to outwait the pin asks the ceiling rather than guessing at it —
-    /// `corner_setup_tests` waited 400 ticks against this 420 and passed
-    /// only because the divisions it happened to generate never reached
-    /// the clamp.
-    pub const MAX_TICKS: u64 = 420;
+    /// Longest the shape may pin anybody once the ball has actually left
+    /// the taker, in 10 ms engine ticks.
+    pub const TICKS: u64 = 250;
 
-    /// Latched once, at the award.
-    pub fn ticks(context: &MatchContext) -> u64 {
-        if !Self::armed() {
-            return Self::CALIBRATION_TICKS;
-        }
-        Self::ticks_for_shift(MatchStandard::shift(context))
-    }
-
-    /// The deadline for a given distance from the calibration division.
-    /// Split out from [`Self::ticks`] so the one-sided property can be
-    /// pinned without standing up a whole `MatchContext`.
-    pub fn ticks_for_shift(shift: f32) -> u64 {
-        let scale = (1.0 - shift).clamp(1.0, 1.8);
-        ((Self::CALIBRATION_TICKS as f32 * scale).round() as u64)
-            .clamp(Self::CALIBRATION_TICKS, Self::MAX_TICKS)
-    }
-
-    /// `OF_CORNER_DEADLINE_OFF=1` restores the flat 2.5 s from the award
-    /// tick — the pre-2026-08-26 engine. The A/B control for both halves
-    /// of this channel (the pricing here and the re-anchor onto the
-    /// STRIKE in `clear_expired_corner_stations`).
+    /// `OF_CORNER_DEADLINE_OFF=1` counts the deadline from the award tick
+    /// — the pre-2026-08-26 engine. The A/B control for the re-anchor onto
+    /// the STRIKE in `clear_expired_corner_stations`.
     #[inline]
     pub fn armed() -> bool {
         static ON: OnceLock<bool> = OnceLock::new();
@@ -694,46 +621,6 @@ impl CornerGeometry {
             self.flag.y - self.near * 18.0,
             0.0,
         )
-    }
-}
-
-#[cfg(test)]
-mod deadline_tests {
-    use super::*;
-
-    /// The backstop is only ever LONGER where the football is slower.
-    /// The first cut scaled both ways and turned the divisional gradient
-    /// over instead of flattening it — see [`CornerDeadline`].
-    #[test]
-    fn the_deadline_is_never_shorter_than_the_calibration_division() {
-        for shift in [-0.45, -0.29, -0.10, 0.0, 0.05, 0.18, 0.45] {
-            assert!(
-                CornerDeadline::ticks_for_shift(shift) >= CornerDeadline::CALIBRATION_TICKS,
-                "shift {shift} shortened the backstop"
-            );
-        }
-    }
-
-    #[test]
-    fn a_weaker_division_gets_a_longer_corner() {
-        let fourth_tier = CornerDeadline::ticks_for_shift(-0.29);
-        let calibration = CornerDeadline::ticks_for_shift(0.0);
-        assert!(fourth_tier > calibration, "{fourth_tier} vs {calibration}");
-        assert_eq!(calibration, CornerDeadline::CALIBRATION_TICKS);
-    }
-
-    /// Monotone, and bounded — a synthetic fixture with no real squad
-    /// behind it cannot ask for a six-second corner.
-    #[test]
-    fn the_deadline_is_monotone_and_bounded() {
-        let mut prev = CornerDeadline::ticks_for_shift(0.45);
-        for step in 0..40 {
-            let shift = 0.45 - step as f32 * 0.025;
-            let now = CornerDeadline::ticks_for_shift(shift);
-            assert!(now >= prev, "not monotone at shift {shift}");
-            assert!(now <= 420, "unbounded at shift {shift}: {now}");
-            prev = now;
-        }
     }
 }
 
