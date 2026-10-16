@@ -21,10 +21,10 @@
 //!
 //! # The model
 //!
-//! Short goal kicks are taken as they were: he walks to the ball and rolls
-//! it to a full-back from standing, which is what a keeper playing out does.
-//! A LONG one is a ceremony, owned by the restart the same way a corner's
-//! wait-for-the-box is:
+//! Short goal kicks are taken as they were: he walks to the ball, puts it
+//! down and plays it from standing, which is what a keeper playing out
+//! does. A LONG one is a ceremony, owned by the restart the same way a
+//! corner's wait-for-the-box is:
 //!
 //! 1. **Placing.** He reaches the ball. The decision to go long is taken
 //!    here, once, on the same inputs `Standing` always used — his kicking
@@ -35,7 +35,9 @@
 //!    ball and [`Self::RUN_UP_SIDE`] to the side of it: a run at an angle,
 //!    which is how a ball is struck long.
 //! 3. **Set.** He stands on the mark for [`Self::SCAN_TICKS`], looking up
-//!    the pitch. The pause is the ceremony's whole point from the stands.
+//!    the pitch, and until the restart's set-up is formed — the opponents
+//!    out of his area, his side in its shape (`Ball::set_up`). The pause is
+//!    the ceremony's whole point from the stands.
 //! 4. **Running.** He runs at the ball at his chase pace, ownership is
 //!    handed over as he reaches it, and `Kicking` strikes it on the next
 //!    tick — the run ends in the kick.
@@ -45,6 +47,7 @@
 //! the instant kick.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{MatchPlayer, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -61,9 +64,9 @@ impl KeeperGoalKick {
     /// He is on his mark within this. 5u = 0.6 m — wider than
     /// `Arrive`'s own deadzone so a man settling beside the mark counts.
     pub const MARK_REACH: f32 = 5.0;
-    /// How long he stands on the mark, in engine ticks. 150 = 1.5 s: long
-    /// enough to be a pause, short enough that a match with ten of them
-    /// does not stall behind the keeper.
+    /// How long he stands on the mark at the least, in engine ticks.
+    /// 150 = 1.5 s: long enough to be a pause. What keeps him there past
+    /// it is the set-up, not this.
     pub const SCAN_TICKS: u64 = 150;
     /// Longest the walk back may take before the restart stops waiting
     /// for it and treats him as set where he stands. 300 = 3 s for a
@@ -191,6 +194,19 @@ impl KeeperGoalKick {
         } else {
             Self::goes_long_from_ctx(ctx)
         }
+    }
+
+    /// The state that kicks the goal kick he has been handed and not yet
+    /// kicked, whatever state he was in when it was handed to him: long
+    /// off the run-up, or short from the spot. `None` for any other ball.
+    pub fn release_state(ctx: &StateProcessingContext) -> Option<GoalkeeperState> {
+        (ctx.tick_context.ball.goal_kick_taker == Some(ctx.player.id)).then(|| {
+            if Self::decided_long(ctx) {
+                GoalkeeperState::Kicking
+            } else {
+                GoalkeeperState::Distributing
+            }
+        })
     }
 
     /// Where he takes his run from: behind the ball, toward his own goal,

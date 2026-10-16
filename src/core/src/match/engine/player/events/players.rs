@@ -1,11 +1,16 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::PlayerTrait;
 use crate::r#match::engine::ball::ball::AwaitedRestart;
+use crate::r#match::engine::ball::ball::RestartQuiet;
 use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::flight_diag::FlightDiag;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::goal_kick_diag::{
+    GoalKickCensus, GoalKickRelease,
+};
 use crate::r#match::engine::ball::ball::motion::{Carrier, SpinModel};
 use crate::r#match::engine::ball::ball::{
     AerialReach, Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GoalOrigin, PlayerReach,
@@ -1473,6 +1478,12 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
+                #[cfg(feature = "match-logs")]
+                GoalKickCensus::note_intent(
+                    &mut field.ball.goal_kick_track,
+                    pass_event_model.from_player_id,
+                    GoalKickRelease::intent_of(pass_event_model.reason),
+                );
                 // You can only kick a ball you can reach — across the
                 // grass, and up the vertical axis. Without the first, a
                 // player in a passing state rewrote the ball's velocity
@@ -2012,6 +2023,12 @@ impl PlayerEventDispatcher {
                 Self::handle_take_ball_event(player_id, field);
             }
             PlayerEvent::ClearBall(clearer_id, velocity) => {
+                #[cfg(feature = "match-logs")]
+                GoalKickCensus::note_intent(
+                    &mut field.ball.goal_kick_track,
+                    clearer_id,
+                    GoalKickRelease::Clearance,
+                );
                 Self::strike_clearance(
                     clearer_id,
                     velocity,
@@ -8059,6 +8076,7 @@ impl PlayerEventDispatcher {
                 .unwrap_or(AwaitedRestart::PATIENCE_TICKS),
             settled_tick: None,
             hold: None,
+            quiet: RestartQuiet::default(),
         });
         // No explicit `TakeMe` here, and none is needed: this handler has
         // no `EventCollection`, and `tick_awaited_restart`'s own nudge

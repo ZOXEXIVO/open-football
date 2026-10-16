@@ -5,7 +5,9 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart, PhaseOrigin};
+use crate::r#match::engine::ball::ball::{
+    AwaitedRestart, PassOriginRestart, PhaseOrigin, RestartQuiet,
+};
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::{DeadTime, PlayingTime, Score};
@@ -218,6 +220,7 @@ fn awaited(origin: PassOriginRestart, tick: u64) -> AwaitedRestart {
         patience_ticks: AwaitedRestart::PATIENCE_TICKS,
         settled_tick: None,
         hold: None,
+        quiet: RestartQuiet::default(),
     }
 }
 

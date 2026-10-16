@@ -399,3 +399,34 @@ Each player's trait-driven movement bias (cutting inside, hugging the touchline,
 #### Scenario: Inverted winger cuts inside
 - **WHEN** a wide player with a cut-inside trait receives the ball wide with space infield
 - **THEN** their chosen run direction is biased infield relative to an identical player without the trait
+
+### Requirement: A goalkeeper takes a goal kick with his feet
+A goalkeeper taking a goal kick SHALL NOT handle the ball, whether it is waiting on the spot or has just been handed to him by the restart. Handling SHALL be illegal for a goal kick until it has been kicked (Law 16), wherever he is in his own area. While the restart waits he SHALL stand over the ball rather than trying to catch or gather it. When the restart hands him the ball he SHALL kick it, using the short-or-long decision made when he placed it: long off his run-up, or short with his feet from the spot. A goal kick SHALL never become a hand possession, so it SHALL never be thrown, never count as a keeper gather, and never draw the keeper-hold time-wasting delay or the hands limit.
+
+#### Scenario: He stands over the waiting ball
+- **WHEN** the keeper has reached a goal kick and the restart is still waiting
+- **THEN** he stays over the ball and never enters a catch or a pick-up on it
+
+#### Scenario: A short goal kick is played from the spot
+- **WHEN** the restart hands the keeper a goal kick that he decided to play short
+- **THEN** he passes it from the spot with his feet, with no hand possession and no throw
+
+#### Scenario: A long goal kick is struck off the run-up
+- **WHEN** the restart hands the keeper a goal kick that he decided to play long
+- **THEN** he strikes it at the end of his run-up, with no hand possession
+
+#### Scenario: Handling an unplayed goal kick is refused
+- **WHEN** the keeper is in any state that would take the ball in his hands while it is a goal kick that has not yet been kicked
+- **THEN** handling is judged illegal and he plays the ball with his feet instead
+
+#### Scenario: The ball is handled again once the goal kick is played
+- **WHEN** a goal kick has been kicked and the ball later comes back to the keeper inside his area by a route the Laws allow him to handle
+- **THEN** handling is legal again, exactly as it is for any other ball
+
+#### Scenario: No goal kick is thrown
+- **WHEN** a batch of level-14 matches is played
+- **THEN** no goal kick is released by a throw or from the keeper's hands, compared with 70% of goal kicks before this change
+
+#### Scenario: A wasted goal kick is delayed once
+- **WHEN** a side leading late in the match takes a goal kick under a time-wasting instruction
+- **THEN** the restart is held for the goal kick's time-wasting delay only, and no keeper-hold delay follows it

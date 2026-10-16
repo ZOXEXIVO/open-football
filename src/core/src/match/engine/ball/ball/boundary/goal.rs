@@ -8,7 +8,7 @@ use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RunOff};
+use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RestartQuiet, RunOff};
 use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
@@ -482,6 +482,7 @@ impl Ball {
             patience_ticks: AwaitedRestart::patience_for(walk),
             settled_tick: None,
             hold: None,
+            quiet: RestartQuiet::default(),
         });
         events.add_ball_event(BallEvent::TakeMe(gk_id));
     }
@@ -833,6 +834,7 @@ impl Ball {
                     patience_ticks: AwaitedRestart::patience_for(fetch),
                     settled_tick: None,
                     hold: None,
+                    quiet: RestartQuiet::default(),
                 });
                 events.add_ball_event(BallEvent::TakeMe(taker_id));
             } else {

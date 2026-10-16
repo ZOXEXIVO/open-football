@@ -3,6 +3,8 @@ use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::PassOriginRestart;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::goal_kick_diag;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 
@@ -119,6 +121,14 @@ impl Ball {
         self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
         self.settle_set_piece_kicker();
+        #[cfg(feature = "match-logs")]
+        goal_kick_diag::GoalKickCensus::follow(
+            &mut self.goal_kick_track,
+            self.held_in_hands,
+            self.cached_shot_target.as_ref(),
+            players,
+            self.current_tick_cached,
+        );
         #[cfg(feature = "match-logs")]
         let owner_at_entry = self.current_owner;
         #[cfg(feature = "match-logs")]
@@ -755,6 +765,14 @@ impl Ball {
         self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
         self.settle_set_piece_kicker();
+        #[cfg(feature = "match-logs")]
+        goal_kick_diag::GoalKickCensus::follow(
+            &mut self.goal_kick_track,
+            self.held_in_hands,
+            self.cached_shot_target.as_ref(),
+            players,
+            self.current_tick_cached,
+        );
         // See `Ball::update`. `update_light` carries no `StageProbe` at
         // all, so before this the light tick — about half of them — was
         // outside every relocation census there was.

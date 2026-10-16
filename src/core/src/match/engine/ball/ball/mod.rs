@@ -47,8 +47,8 @@ pub use flight::{
 // the dev harness, same as `ownership::reception_diag`.
 pub use restarts::{
     AwaitedRestart, CornerWalk, DeadBall, FoulWalk, GoalKickRunUp, GoalOrigin, OffsideLine,
-    OffsideSnapshot, PassOriginRestart, PhaseOrigin, RestartHold, RunUpPhase, ThrowIn, awaited,
-    offside, stall,
+    OffsideSnapshot, PassOriginRestart, PhaseOrigin, RestartHold, RestartQuiet, RunUpPhase,
+    ThrowIn, awaited, offside, stall,
 };
 // The woodwork's own per-tick ball trace, and the whole-tick relocation
 // census. `flight_diag` below only sees `Ball::update`; `teleport` sees
@@ -56,8 +56,8 @@ pub use restarts::{
 // the set pieces live.
 #[cfg(feature = "match-logs")]
 pub use diagnostics::{
-    arrival_diag, assist_diag, block_diag, flight_diag, frame_trace, knock_diag, lane_diag,
-    strike_diag, teleport,
+    arrival_diag, assist_diag, block_diag, flight_diag, frame_trace, goal_kick_diag, knock_diag,
+    lane_diag, strike_diag, teleport,
 };
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
@@ -188,6 +188,10 @@ pub struct Ball {
     pub granted_at: u64,
     #[cfg(feature = "match-logs")]
     pub shot_timing: Option<(usize, usize)>,
+    /// The goal kick being waited for or followed — see
+    /// [`goal_kick_diag`]. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub goal_kick_track: Option<goal_kick_diag::GoalKickTrack>,
     /// The ball's planar travel over its last move, the "step before" an
     /// arrival is judged against. Diagnostic only.
     #[cfg(feature = "match-logs")]
@@ -521,6 +525,12 @@ pub struct Ball {
     ///
     /// [`SetPieceKick`]: crate::r#match::common_states::SetPieceKick
     pub set_piece_kicker: Option<u32>,
+    /// **The man handed a goal kick he has not yet kicked.** Law 16 puts
+    /// the ball in play once it is kicked and clearly moves, and until
+    /// then nobody may handle it, the taker included: a keeper still in
+    /// `Catching` when the restart handed it to him used to catch it, hold
+    /// it and throw it. Read by the handling verdict.
+    pub goal_kick_taker: Option<u32>,
     /// Where and when the throw-in in progress was taken from, so the
     /// census can say how far it travelled and how long he held it.
     #[cfg(feature = "match-logs")]
@@ -766,6 +776,9 @@ pub enum HandlingVerdict {
     BackPass,
     /// He has already released it and nobody else has touched it since.
     SecondTouch,
+    /// A goal kick he has been handed and not yet kicked (Law 16). It goes
+    /// back into play off his boot.
+    Restart,
 }
 
 impl HandlingVerdict {
@@ -952,6 +965,8 @@ impl Ball {
             #[cfg(feature = "match-logs")]
             shot_timing: None,
             #[cfg(feature = "match-logs")]
+            goal_kick_track: None,
+            #[cfg(feature = "match-logs")]
             last_step: Vector3::zeros(),
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
@@ -1022,6 +1037,7 @@ impl Ball {
             kickoff_taker: None,
             kickoff_partner: None,
             set_piece_kicker: None,
+            goal_kick_taker: None,
             #[cfg(feature = "match-logs")]
             throw_in_spot: Vector3::new(x, y, 0.0),
             #[cfg(feature = "match-logs")]
@@ -1083,6 +1099,12 @@ impl Ball {
         self.last_release_player_id = Some(player_id);
         self.last_release_position = position;
         self.last_release_tick = tick;
+        #[cfg(feature = "match-logs")]
+        goal_kick_diag::GoalKickCensus::note_release(
+            &mut self.goal_kick_track,
+            player_id,
+            self.held_in_hands,
+        );
         // Any release puts the ball back in open play — it is no longer in
         // anyone's gloves. `from_hands` is stamped separately by the
         // goalkeeper release paths.
@@ -1102,6 +1124,9 @@ impl Ball {
         if self.kickoff_taker == Some(player_id) {
             self.kickoff_taker = None;
             self.kickoff_partner = None;
+        }
+        if self.goal_kick_taker == Some(player_id) {
+            self.goal_kick_taker = None;
         }
     }
 
@@ -1518,6 +1543,12 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         {
             self.last_touch_position = self.position;
+            goal_kick_diag::GoalKickCensus::note_touch(
+                &mut self.goal_kick_track,
+                team_id,
+                controlled,
+                tick,
+            );
             if let Some(census) = self.lane_census.take() {
                 census.close(team_id);
             }
@@ -1572,6 +1603,9 @@ impl Ball {
         if self.kickoff_taker.is_some_and(|taker| taker != player_id) {
             self.kickoff_taker = None;
             self.kickoff_partner = None;
+        }
+        if self.goal_kick_taker.is_some_and(|taker| taker != player_id) {
+            self.goal_kick_taker = None;
         }
         // Somebody else has been on the ball — whatever the last releaser
         // did is history, and their re-collect bar lifts.
@@ -1670,6 +1704,7 @@ impl Ball {
         self.kickoff_taker = None;
         self.kickoff_partner = None;
         self.set_piece_kicker = None;
+        self.goal_kick_taker = None;
         self.last_touch_was_deliberate_kick = false;
         // …and the goal-kick ceremony, whichever leg it was on. A new dead
         // ball starts it from scratch.
@@ -1962,6 +1997,7 @@ impl Ball {
         self.kickoff_taker = None;
         self.kickoff_partner = None;
         self.set_piece_kicker = None;
+        self.goal_kick_taker = None;
         self.offside_snapshot = None;
         self.last_completed_pass_passer_id = None;
         self.last_completed_pass_receiver_id = None;

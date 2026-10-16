@@ -20,7 +20,7 @@ pub mod stall;
 
 pub use awaited::{
     AwaitedRestart, GoalKickRunUp, GoalOrigin, PassOriginRestart, PhaseOrigin, RestartHold,
-    RunUpPhase,
+    RestartQuiet, RunUpPhase,
 };
 pub use offside::{OffsideLine, OffsideSnapshot};
 pub use restart::{CornerWalk, DeadBall, FoulWalk, ThrowIn};

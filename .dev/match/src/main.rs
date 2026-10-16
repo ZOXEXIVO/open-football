@@ -5794,6 +5794,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::strike_diag::StrikeCensus::reset();
     core::arrival_diag::ArrivalCensus::reset();
     core::arrival_diag::ShotTiming::reset();
+    core::goal_kick_diag::GoalKickCensus::reset();
     core::teleport::TeleportCensus::reset();
     core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
@@ -10555,6 +10556,197 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     x[22] as f64 / 100.0 * 0.125
                 );
             }
+        }
+    }
+
+    // ── GOAL KICKS ─────────────────────────────────────────────────────
+    // Where a goal kick's wait goes, what the keeper does while it waits,
+    // whether the other twenty-one are standing still, and how it is put
+    // back into play. See `goal_kick_diag`.
+    {
+        use core::goal_kick_diag::{GoalKickCensus, GoalKickRelease};
+        let g = GoalKickCensus::snapshot();
+        if g.kicks > 0 {
+            let kicks = g.kicks as f64;
+            let secs = |ticks: u64| ticks as f64 / 100.0 / kicks;
+            let share = |n: u64| n as f64 * 100.0 / kicks;
+            println!();
+            println!(
+                "--- GOAL KICKS ({:.1} per match) --- from the first dead-ball tick to the hand-over",
+                kicks / n_matches as f64
+            );
+            let phases: Vec<String> = GoalKickCensus::PHASES
+                .iter()
+                .zip(g.phase_ticks.iter())
+                .map(|(name, &ticks)| format!("{name} {:.1}", secs(ticks)))
+                .collect();
+            println!(
+                "  wait {:.1} s = {}   (real ~22 s from the ball going out)",
+                secs(g.wait_ticks),
+                phases.join(", ")
+            );
+            println!(
+                "  handed over on the set-up before the 20 s ceiling {:.0}%, at the ceiling {:.0}%, by the backstop teleport {:.0}%",
+                share(g.on_setup),
+                share(g.at_ceiling),
+                share(g.teleported)
+            );
+            let states = |counts: &[u64]| {
+                let total = counts.iter().sum::<u64>().max(1) as f64;
+                let mut rows: Vec<(usize, u64)> = counts
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|(_, n)| *n > 0)
+                    .collect();
+                rows.sort_by(|a, b| b.1.cmp(&a.1));
+                rows.iter()
+                    .take(6)
+                    .map(|(slot, n)| {
+                        format!(
+                            "{} {:.0}%",
+                            GoalKickCensus::slot_name(*slot),
+                            *n as f64 * 100.0 / total
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            println!(
+                "  keeper while he is at the spot: {}",
+                states(&g.wait_state)
+            );
+            println!(
+                "  keeper on the hand-over tick:   {}",
+                states(&g.handover_state)
+            );
+            let releases: Vec<String> = GoalKickRelease::NAMES
+                .iter()
+                .zip(g.release.iter())
+                .filter(|(_, n)| **n > 0)
+                .map(|(name, &n)| format!("{name} {:.0}%", share(n)))
+                .collect();
+            println!("  released by: {}", releases.join(", "));
+            println!(
+                "  became a hand possession: {} ({:.0}%)   (MUST be 0 — Law 16)",
+                g.handled,
+                share(g.handled)
+            );
+            let median = {
+                let mut seen = 0;
+                let mut bin = 0;
+                for (i, n) in g.still_hist.iter().enumerate() {
+                    seen += n;
+                    if seen * 2 >= g.kicks {
+                        bin = i;
+                        break;
+                    }
+                }
+                (bin as u64 * GoalKickCensus::STILL_BIN_TICKS) as f64 / 100.0
+            };
+            let over_3s: u64 = g.still_hist.iter().skip(6).sum();
+            println!(
+                "  longest stretch with the other 21 still (1 s mean < 0.5 m/s): mean {:.1} s, median {:.1} s, over 3 s on {:.0}%",
+                secs(g.still_ticks),
+                median,
+                share(over_3s)
+            );
+            let hist = |counts: &[u64]| {
+                let total = counts.iter().sum::<u64>().max(1) as f64;
+                let mut labels: Vec<String> = GoalKickCensus::SPEED_EDGES
+                    .iter()
+                    .map(|edge| format!("<{edge}"))
+                    .collect();
+                labels.push(format!(
+                    ">={}",
+                    GoalKickCensus::SPEED_EDGES[GoalKickCensus::SPEED_EDGES.len() - 1]
+                ));
+                labels
+                    .iter()
+                    .zip(counts.iter())
+                    .map(|(label, n)| format!("{label} {:.0}%", *n as f64 * 100.0 / total))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            };
+            println!(
+                "  his outfield team-mates while he is at the spot, ground covered over 250 ms, m/s:"
+            );
+            println!("    mean speed    {}", hist(&g.mean_speed_hist));
+            println!("    fastest man   {}", hist(&g.max_speed_hist));
+            println!(
+                "  an opponent inside his penalty area on {:.0}% of the at-spot ticks, {:.2} of them on average when there is",
+                g.opponent_in_area_ticks as f64 * 100.0 / g.at_spot_ticks.max(1) as f64,
+                g.opponents_in_area as f64 / g.opponent_in_area_ticks.max(1) as f64
+            );
+            {
+                let total = g.intruder_depth_hist.iter().sum::<u64>().max(1) as f64;
+                let mut edges: Vec<String> = GoalKickCensus::DEPTH_EDGES
+                    .iter()
+                    .map(|e| format!("<{e} m"))
+                    .collect();
+                edges.push(">= 8 m".to_string());
+                let depth: Vec<String> = edges
+                    .iter()
+                    .zip(g.intruder_depth_hist.iter())
+                    .map(|(label, n)| format!("{label} {:.0}%", *n as f64 * 100.0 / total))
+                    .collect();
+                println!(
+                    "    how far inside the 18-yard line they stand: {}",
+                    depth.join("  ")
+                );
+                let mut by_state = g.intruder_state.clone();
+                by_state.sort_by(|a, b| b.1.cmp(&a.1));
+                let all = PlayerState::all();
+                let states: Vec<String> = by_state
+                    .iter()
+                    .take(6)
+                    .map(|(id, n)| {
+                        let name = all
+                            .iter()
+                            .find(|s| s.compact_id() == *id)
+                            .map_or_else(|| id.to_string(), |s| s.to_string());
+                        format!("{name} {:.0}%", *n as f64 * 100.0 / total)
+                    })
+                    .collect();
+                println!("    their states: {}", states.join(", "));
+                println!(
+                    "    nobody more than a stride (1 m) inside it on {:.0}% of the at-spot ticks",
+                    g.clear_by_a_stride_ticks as f64 * 100.0 / g.at_spot_ticks.max(1) as f64
+                );
+                let mut fast = g.fast_mate_state.clone();
+                fast.sort_by(|a, b| b.1.cmp(&a.1));
+                let fast_total = fast.iter().map(|(_, n)| n).sum::<u64>().max(1) as f64;
+                let fast_states: Vec<String> = fast
+                    .iter()
+                    .take(6)
+                    .map(|(id, n)| {
+                        let name = all
+                            .iter()
+                            .find(|s| s.compact_id() == *id)
+                            .map_or_else(|| id.to_string(), |s| s.to_string());
+                        format!("{name} {:.0}%", *n as f64 * 100.0 / fast_total)
+                    })
+                    .collect();
+                println!(
+                    "  his fastest team-mate, when he is covering over 2 m/s, is in: {}",
+                    fast_states.join(", ")
+                );
+            }
+            println!(
+                "  side quiet for 1 s with nobody a stride inside the area, before the 20 s ceiling:"
+            );
+            for (i, (label, _, _)) in GoalKickCensus::QUIET_BOUNDS.iter().enumerate() {
+                println!(
+                    "    {label:<18} {:>4.0}% of kicks, {:.1} s after he reached the ball",
+                    share(g.quiet_reached[i]),
+                    g.quiet_ticks[i] as f64 / 100.0 / g.quiet_reached[i].max(1) as f64
+                );
+            }
+            println!(
+                "  led to: possession lost within 10 s {:.0}%, a shot conceded within 15 s {:.1}%",
+                share(g.lost),
+                share(g.shot)
+            );
         }
     }
 

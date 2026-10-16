@@ -433,6 +433,8 @@ pub use crate::r#match::engine::ball::ball::flight_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::frame_trace;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::goal_kick_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::knock_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::ownership::reception_diag;

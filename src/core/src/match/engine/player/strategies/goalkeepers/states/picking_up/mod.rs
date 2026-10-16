@@ -70,6 +70,11 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
                     GoalkeeperState::Clearing,
                 ));
             }
+            HandlingVerdict::Restart => {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    KeeperFeetDecision::without_hands(ctx),
+                ));
+            }
         }
 
         // 3. Approach phase. The state is entered from up to ~10u out, so

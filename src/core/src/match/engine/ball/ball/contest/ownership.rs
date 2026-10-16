@@ -9,6 +9,7 @@ use crate::r#match::engine::ball::ball::flight::motion::Carrier;
 use crate::r#match::engine::ball::ball::flight::roll::BallRoll;
 use crate::r#match::engine::ball::ball::{
     AerialReach, AwaitedRestart, Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, PlayerReach,
+    RestartQuiet,
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
@@ -991,6 +992,7 @@ impl Ball {
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
             settled_tick: None,
             hold: None,
+            quiet: RestartQuiet::default(),
         });
         events.add_ball_event(BallEvent::TakeMe(taker_id));
     }

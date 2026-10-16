@@ -99,3 +99,34 @@ A side leading late in the match SHALL be able to drag out its own restarts (thr
 #### Scenario: Persistent time-wasting is booked
 - **WHEN** a leading side's cumulative restart delay in a period exceeds the referee's tolerance
 - **THEN** the next delayed restart carries a probability of a yellow card for the taker that grows with the referee's strictness and the number of prior offences
+
+### Requirement: A goal kick is taken once its set-up is formed
+Once the taker has reached the ball, a goal kick SHALL wait for a short placing beat and then SHALL be taken as soon as its set-up is formed. The set-up is formed when no opponent is inside the taker's penalty area (Law 16) and the taker's side has stopped moving into position. The wait SHALL NOT be a fixed duration that the state of the pitch cannot shorten. A ceiling SHALL bound the wait so that a set-up that never forms cannot stall the match; the ceiling is no shorter than the previous fixed wait (20 s from the taker reaching the ball). A goal kick taken off a run-up SHALL start its run on the same test, after the taker's look up from his mark. A leading side's time-wasting delay SHALL still apply on top, as the time-wasting requirement describes.
+
+#### Scenario: Kicked once the picture is set
+- **WHEN** the keeper has reached a goal kick, no opponent is inside his penalty area, and his team-mates have been still for a second
+- **THEN** the goal kick is taken within the placing beat of that moment, well before 20 s have passed since he reached the ball
+
+#### Scenario: An opponent in the area holds the kick
+- **WHEN** an opponent is still inside the taker's penalty area after the placing beat has passed
+- **THEN** the goal kick is not taken until he has left the area or the ceiling expires
+
+#### Scenario: Still arranging holds the kick
+- **WHEN** the taker's team-mates are still moving into position after the placing beat has passed
+- **THEN** the goal kick is not taken until they have stopped moving or the ceiling expires
+
+#### Scenario: A set-up already formed still has its placing beat
+- **WHEN** the set-up is already formed on the tick the keeper reaches the ball
+- **THEN** the goal kick is not taken on that tick, but once the placing beat has passed
+
+#### Scenario: A set-up that never forms is bounded
+- **WHEN** the set-up does not form after the keeper reaches the ball
+- **THEN** the goal kick is taken no later than the ceiling
+
+#### Scenario: The run-up starts when the picture is set
+- **WHEN** the keeper has chosen to go long and is standing on his run-up mark, and the set-up becomes formed after his look up
+- **THEN** he starts his run at that point rather than at the end of a fixed wait
+
+#### Scenario: No frozen picture at goal kicks
+- **WHEN** a batch of level-14 matches is played
+- **THEN** the median longest stretch during a goal kick in which every other player stands still is at most 2 s, compared with 5.3–8.7 s before this change

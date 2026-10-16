@@ -1038,6 +1038,9 @@ pub struct BallMetadata {
     /// The goal kick in his possession was placed for a LONG kick. See
     /// `KeeperGoalKick::decided_long`.
     pub goal_kick_long: bool,
+    /// The man handed a goal kick he has not yet kicked
+    /// (`Ball::goal_kick_taker`).
+    pub goal_kick_taker: Option<u32>,
 }
 
 impl BallMetadata {
@@ -1095,6 +1098,7 @@ impl BallMetadata {
         self.hands_since_tick = field.ball.hands_since_tick;
         self.throw_taker = field.ball.throw_in_taker;
         self.kickoff_taker = field.ball.kickoff_taker;
+        self.goal_kick_taker = field.ball.goal_kick_taker;
         self.kickoff_partner = field.ball.kickoff_partner;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
         self.restarting_team = field
@@ -1171,6 +1175,7 @@ impl From<&MatchField> for BallMetadata {
             restart_mark: None,
             restart_set: false,
             goal_kick_long: false,
+            goal_kick_taker: None,
         };
         meta.update(field);
         meta

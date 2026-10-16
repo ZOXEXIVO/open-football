@@ -1,7 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision, KeeperGoalKick,
-    KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
+    KeeperGoalKick, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
@@ -27,21 +27,6 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // [`KeeperFeetDecision`]. His but beyond his feet is still the
         // chase: nothing draws it to him (`Ball::move_to`).
         if ctx.ball().mine_to_play() {
-            // A GOAL KICK is a dead ball from the floor: the hands are out
-            // of it, and the only choice is the one made when he placed it
-            // — long off the run-up, or short from standing. This used to
-            // fall through to `KeeperFeetDecision`, which under press
-            // chose `Gather`, and a keeper picked his own goal kick up.
-            // See `KeeperGoalKick`.
-            if ctx.ball().is_goal_kick_restart() {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    if KeeperGoalKick::decided_long(ctx) {
-                        GoalkeeperState::Kicking
-                    } else {
-                        GoalkeeperState::Distributing
-                    },
-                ));
-            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 KeeperFeetDecision::state_for(ctx),
             ));
@@ -86,8 +71,14 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             return Some(KeeperSmother::commit(ctx, &attempt));
         }
 
-        // Transition to Catching when ball is very close and not owned
-        if ctx.ball().distance() < 3.0 && !ctx.ball().is_owned() {
+        // Close enough to gather — if it is his to gather, the question
+        // every other door into a claim asks. A dead ball is nobody's, so
+        // the man waiting over his own goal kick stays here instead of
+        // catching it and then catching it again when it is handed to him.
+        if ctx.ball().distance() < 3.0
+            && !ctx.ball().is_owned()
+            && KeeperBallClaim::is_favourite(ctx)
+        {
             Self::note_exit(ctx, 5);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,

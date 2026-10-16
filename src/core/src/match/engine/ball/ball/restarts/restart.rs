@@ -14,9 +14,11 @@ use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::block_diag::PassBlockCensus;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::goal_kick_diag::GoalKickCensus;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{
-    AwaitedRestart, Ball, GoalKickRunUp, PhaseOrigin, RestartHold, RunOff, RunUpPhase,
+    AwaitedRestart, Ball, GoalKickRunUp, PhaseOrigin, RestartHold, RestartQuiet, RunOff, RunUpPhase,
 };
 use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::engine::officiating::restart_shape::RestartShape;
@@ -236,6 +238,7 @@ impl Ball {
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
             settled_tick: None,
             hold: None,
+            quiet: RestartQuiet::default(),
         });
         // Send him. `TakeMe` is the engine's existing "go and get the
         // ball" signal (`MatchPlayer::run_for_ball`), so the taker runs
@@ -303,6 +306,21 @@ impl Ball {
                 ) >= AwaitedRestart::CORNER_BOX_TARGET,
                 AwaitedRestart::CORNER_SETUP_CEILING,
             ),
+            // The opponents out of his area and his side in its shape —
+            // the side's motion is the restart's to remember, where they
+            // stand is the shape's to judge.
+            PassOriginRestart::GoalKick => (
+                restart.quiet.settled()
+                    && RestartShape::formed(
+                        restart.origin,
+                        players,
+                        taker,
+                        restart.spot,
+                        goal_x,
+                        self.field_height,
+                    ),
+                AwaitedRestart::GOAL_KICK_SETUP_CEILING,
+            ),
             origin if origin.keeps_opponents_off() => (
                 RestartShape::formed(
                     origin,
@@ -341,6 +359,7 @@ impl Ball {
             patience_ticks: AwaitedRestart::patience_for(walk),
             settled_tick: None,
             hold: Some(hold),
+            quiet: RestartQuiet::default(),
         });
     }
 
@@ -386,6 +405,20 @@ impl Ball {
             self.goal_kick_run_up = None;
             return;
         };
+        #[cfg(feature = "match-logs")]
+        if await_state.origin == PassOriginRestart::GoalKick {
+            let goal_x = self.attacked_goal_x(await_state.spot);
+            GoalKickCensus::note_wait(
+                &mut self.goal_kick_track,
+                &await_state,
+                taker,
+                players,
+                context.current_tick(),
+                await_state.routine_ticks(context.restart_hurry(taker.team_id)),
+                goal_x,
+                self.field_height,
+            );
+        }
 
         // ── STILL RUNNING OUT ────────────────────────────────────────
         //
@@ -525,16 +558,44 @@ impl Ball {
         let now = context.current_tick();
         let settled_at = (arrived && await_state.take_from.is_none())
             .then(|| *await_state.settled_tick.get_or_insert(now));
+        // **A goal kick is put down, not held** (Law 16 has it kicked off
+        // the grass). The ball he carried in from the run-off is placed
+        // where it is once it is at his feet, so placing it moves it
+        // nowhere, and it lies there for the rest of the wait.
+        let at_his_feet = Vector3::new(
+            taker.position.x - self.position.x,
+            taker.position.y - self.position.y,
+            0.0,
+        )
+        .norm()
+            <= PICKUP_RATE;
+        if settled_at.is_some()
+            && await_state.carrying
+            && at_his_feet
+            && await_state.origin == PassOriginRestart::GoalKick
+        {
+            await_state.carrying = false;
+            await_state.spot = Vector3::new(self.position.x, self.position.y, 0.0);
+        }
         let routine = await_state.routine_ticks(context.restart_hurry(taker.team_id));
         let routine_done = await_state
             .settled_tick
             .is_some_and(|at| now.saturating_sub(at) >= routine);
+        // The shape, read once: the run-up's last leg and the wait over the
+        // ball both end on it.
+        if await_state.settled_tick.is_some() {
+            await_state.quiet.observe(players, taker, now);
+        }
+        let (formed, ceiling) = self.set_up(&await_state, players, taker);
+        let expired = await_state
+            .settled_tick
+            .is_some_and(|at| now.saturating_sub(at) >= routine + ceiling);
 
         // **The goal kick's run-up.** He has reached the ball; if he is
         // going long he places it, walks back to his mark, stands there
-        // for the rest of his routine and runs in — and the restart holds
-        // for the whole of it, the same way the corner below holds for the
-        // box. Each leg resets the clock like the corner does: the walk
+        // until his routine is done and the set-up is formed, and runs in —
+        // and the restart holds for the whole of it, the same way the
+        // corner below holds for the box. Each leg resets the clock like the corner does: the walk
         // back is the restart working, not the taker taking too long. See
         // `KeeperGoalKick`.
         //
@@ -595,6 +656,7 @@ impl Ball {
                     RunUpPhase::Set => {
                         if now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS
                             || !routine_done
+                            || !(formed || expired)
                         {
                             await_state.awarded_tick = now;
                             self.awaiting_restart = Some(await_state);
@@ -639,7 +701,8 @@ impl Ball {
         }
 
         // **He stands over it, and a corner waits for the box, a free kick
-        // or a penalty for the opponents to stand off.**
+        // or a penalty for the opponents to stand off, a goal kick for them
+        // to leave the area and his side to get into shape.**
         //
         // Every restart has its routine first — see
         // [`PassOriginRestart::set_routine_ticks`] — and the side the clock
@@ -667,10 +730,12 @@ impl Ball {
         //
         // See [`AwaitedRestart::settled_tick`].
         if let Some(settled_at) = settled_at {
-            let (formed, ceiling) = self.set_up(&await_state, players, taker);
-            let holding = now.saturating_sub(settled_at);
-            let expired = holding >= routine + ceiling;
-            if !routine_done || (!formed && !expired) {
+            // A run-up under way ends in the kick: the set-up it started
+            // on is not asked again when he reaches the ball.
+            let running = self
+                .goal_kick_run_up
+                .is_some_and(|run_up| run_up.phase == RunUpPhase::Running);
+            if !routine_done || (!formed && !expired && !running) {
                 // No `TakeMe`: he is standing over the ball, not
                 // running at it, and the nudge would restart a chase
                 // he has already finished.
@@ -680,8 +745,13 @@ impl Ball {
             }
             #[cfg(feature = "match-logs")]
             if await_state.origin == PassOriginRestart::Corner {
-                RestartCensus::note_corner_setup_wait(holding, expired && !formed);
+                RestartCensus::note_corner_setup_wait(
+                    now.saturating_sub(settled_at),
+                    expired && !formed,
+                );
             }
+            #[cfg(not(feature = "match-logs"))]
+            let _ = settled_at;
         }
 
         if !arrived && waited < await_state.patience_ticks {
@@ -778,7 +848,17 @@ impl Ball {
             return;
         }
         #[cfg(feature = "match-logs")]
-        RestartCensus::note_restart_taken(waited, arrived);
+        {
+            RestartCensus::note_restart_taken(waited, arrived);
+            if await_state.origin == PassOriginRestart::GoalKick {
+                GoalKickCensus::note_handed(
+                    &mut self.goal_kick_track,
+                    taker,
+                    context.current_tick(),
+                    arrived,
+                );
+            }
+        }
         context.tally.note_restart(await_state.origin);
 
         self.awaiting_restart = None;
@@ -818,6 +898,10 @@ impl Ball {
             context.current_tick(),
             true,
         );
+        // Stamped after the pick-up touch for the throw's reason below.
+        if await_state.origin == PassOriginRestart::GoalKick {
+            self.goal_kick_taker = Some(await_state.taker_id);
+        }
         // **The throw is his until somebody else plays it** — Law 15, and
         // the reason it has to be stamped here rather than at the award is
         // that this is the tick he actually gets the ball. Stamped AFTER

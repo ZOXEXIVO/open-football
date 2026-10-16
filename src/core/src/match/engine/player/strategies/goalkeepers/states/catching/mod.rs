@@ -10,9 +10,9 @@
 
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperPenaltyStance,
-    KeeperSetPosition, KeeperShotDive, KeeperShotReaction, KeeperShotSave, KeeperSmother,
-    KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperFeetDecision,
+    KeeperPenaltyStance, KeeperSetPosition, KeeperShotDive, KeeperShotReaction, KeeperShotSave,
+    KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -60,9 +60,9 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             // every save from range (goals went 2.3 â 4.0 a match).
             //
             // Illegal means he plays it with his feet, which is what a
-            // keeper receiving a back-pass actually does. `Clearing` is the
-            // honest default: he is on the ball, usually with a forward
-            // bearing down.
+            // keeper receiving a back-pass actually does, and a goal kick
+            // he has just been handed is kicked. `KeeperFeetDecision` owns
+            // which: the same answer every other door gets.
             if !ctx.ball().handling_verdict().is_legal() {
                 // ...and he has to actually GET it, with his feet. This
                 // branch emitted no event at all, so it handed `Clearing` a
@@ -75,12 +75,15 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 // exits to Standing and ReturningToGoal -- about 140 dead
                 // entries a match and not one ball cleared. `GainBall` is
                 // foot control, which is what a keeper playing a back-pass
-                // takes.
-                let mut result =
-                    StateChangeResult::with_goalkeeper_state(GoalkeeperState::Clearing);
-                result
-                    .events
-                    .add_player_event(PlayerEvent::GainBall(ctx.player.id));
+                // takes. A ball already his needs no taking.
+                let mut result = StateChangeResult::with_goalkeeper_state(
+                    KeeperFeetDecision::without_hands(ctx),
+                );
+                if !ctx.player.has_ball(ctx) {
+                    result
+                        .events
+                        .add_player_event(PlayerEvent::GainBall(ctx.player.id));
+                }
                 return Some(result);
             }
 

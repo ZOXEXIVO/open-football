@@ -27,10 +27,25 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, RunOff};
-use crate::r#match::engine::result::Score;
+use crate::r#match::engine::ball::ball::{
+    AwaitedRestart, HandlingVerdict, PassOriginRestart, RestartQuiet, RunOff, RunUpPhase,
+};
+use crate::r#match::engine::coach::CoachInstruction;
+use crate::r#match::engine::engine::FootballEngine;
+use crate::r#match::engine::officiating::restart_shape::RestartShape;
+use crate::r#match::engine::result::{DeadTime, Score};
+use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::goalkeepers::states::{
+    GoalkeeperCatchingState, GoalkeeperStandingState, GoalkeeperTakeBallState,
+};
+use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
-    MatchContext, MatchField, MatchPlayerCollection, PlayerSide, events::EventCollection,
+    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, MatchRng, PlayerSide,
+    ResultMatchPositionData, StateProcessingContext, StateProcessingHandler,
+    events::EventCollection,
 };
 use nalgebra::Vector3;
 
@@ -634,5 +649,575 @@ fn a_dead_ball_is_never_the_keepers_to_claim() {
         !KeeperBallClaim::is_favourite(&dead),
         "he claimed a dead ball — nobody is favourite for one, it belongs \
          to whoever was awarded the restart"
+    );
+}
+
+// ── A goal kick is kicked ─────────────────────────────────────────────
+//
+// Measured before this (`dev_match stats 300 14 14`): the keeper sat in
+// `Catching` beside his own placed goal kick for 64% of the wait, and on
+// the tick the restart handed it to him the catch went through — 60% of
+// goal kicks became a hand possession, held another 3.4 s and thrown.
+
+/// One whole-field tick, the way a match runs it.
+fn tick(field: &mut MatchField, context: &mut MatchContext) {
+    let mut data = ResultMatchPositionData::empty();
+    let mut tick_context = GameTickContext::new(field, &context.players);
+    FootballEngine::<840, 545>::game_tick(field, context, &mut data, &mut tick_context);
+    context.increment_time();
+}
+
+/// A keeper who plays his goal kicks short: no leg, all touch.
+fn short_kicker(field: &mut MatchField, gk: u32) {
+    let keeper = field
+        .get_player_mut(gk)
+        .expect("the keeper is on the pitch");
+    keeper.skills.goalkeeping.kicking = 1.0;
+    keeper.skills.goalkeeping.passing = 20.0;
+    keeper.skills.goalkeeping.first_touch = 20.0;
+    keeper.skills.mental.composure = 20.0;
+}
+
+/// What happened to one goal kick ticked on the ball alone.
+struct Driven {
+    keeper: u32,
+    /// The tick he reached the ball, and the tick it was handed to him.
+    reached: u64,
+    handed: u64,
+    /// The tick his run-up started, for a long one.
+    ran: Option<u64>,
+}
+
+/// The home keeper's goal kick, ticked on the ball alone: the shot goes
+/// wide and he is stood on the ball — or on his mark — for each leg, and
+/// `meddle` moves anybody else, ticks since he reached the ball in hand,
+/// until the restart hands it to him.
+fn drive_goal_kick(
+    field: &mut MatchField,
+    context: &mut MatchContext,
+    gk: u32,
+    mut meddle: impl FnMut(&mut MatchField, u64),
+) -> Driven {
+    shoot_wide(field, context, 240.0);
+    let mut events = EventCollection::with_capacity(8);
+    let mut ran = None;
+    let mut reached = None;
+    for _ in 0..4000 {
+        let Some(restart) = field.ball.awaiting_restart else {
+            return Driven {
+                keeper: gk,
+                reached: reached.expect("he never reached the ball"),
+                handed: context.current_tick(),
+                ran,
+            };
+        };
+        reached = reached.or(restart.settled_tick);
+        let target = match field.ball.goal_kick_run_up {
+            Some(run_up) if run_up.phase != RunUpPhase::Running => run_up.mark,
+            Some(_) => {
+                ran.get_or_insert(context.current_tick());
+                restart.spot
+            }
+            None => restart.spot,
+        };
+        field.get_player_mut(gk).unwrap().position = Vector3::new(target.x, target.y, 0.0);
+        if let Some(at) = reached {
+            meddle(field, context.current_tick().saturating_sub(at));
+        }
+        context.increment_time();
+        let players = field.players.clone();
+        field
+            .ball
+            .tick_awaited_restart(context, &players, &mut events);
+    }
+    panic!("the goal kick was never handed over");
+}
+
+/// [`drive_goal_kick`] for a keeper who plays it short, with nobody
+/// interfering. Returns his id.
+fn hand_over_goal_kick(field: &mut MatchField, context: &mut MatchContext) -> u32 {
+    let gk = keeper_at(field, Vector3::new(20.0, 272.0, 0.0));
+    short_kicker(field, gk);
+    drive_goal_kick(field, context, gk, |_, _| {}).keeper
+}
+
+fn team_of(field: &MatchField, id: u32) -> u32 {
+    field.get_player(id).expect("on the pitch").team_id
+}
+
+#[test]
+fn a_goal_kick_is_his_until_he_plays_it() {
+    let (mut field, mut context) = kickoff();
+    let gk = hand_over_goal_kick(&mut field, &mut context);
+    let tick = context.current_tick();
+    assert_eq!(
+        field.ball.current_owner,
+        Some(gk),
+        "the restart hands the ball to its taker"
+    );
+    assert_eq!(
+        field.ball.goal_kick_taker,
+        Some(gk),
+        "…and it is a goal kick he has not kicked yet"
+    );
+    field.ball.record_touch(gk, team_of(&field, gk), tick, true);
+    assert_eq!(
+        field.ball.goal_kick_taker,
+        Some(gk),
+        "his own touch on it is not the kick"
+    );
+    let at = field.ball.position;
+    field.ball.note_release(gk, at, tick);
+    assert_eq!(
+        field.ball.goal_kick_taker, None,
+        "he has kicked it, so it is in play"
+    );
+}
+
+#[test]
+fn anybody_elses_touch_ends_the_goal_kick() {
+    let (mut field, mut context) = kickoff();
+    hand_over_goal_kick(&mut field, &mut context);
+    let (other, team) = attacker(&field);
+    field
+        .ball
+        .record_touch(other, team, context.current_tick(), true);
+    assert_eq!(
+        field.ball.goal_kick_taker, None,
+        "the ball has been played by somebody else — it is in play whoever kicked it"
+    );
+}
+
+#[test]
+fn an_unplayed_goal_kick_may_not_be_handled() {
+    let (mut field, mut context) = kickoff();
+    let gk = hand_over_goal_kick(&mut field, &mut context);
+    {
+        let tick_context = GameTickContext::new(&field, &context.players);
+        let keeper = field.get_player(gk).unwrap();
+        let ctx = StateProcessingContext {
+            in_state_time: 0,
+            player: keeper,
+            context: &context,
+            tick_context: &tick_context,
+        };
+        assert_eq!(
+            ctx.ball().handling_verdict(),
+            HandlingVerdict::Restart,
+            "a goal kick in his own six-yard box read as a ball he may pick up"
+        );
+    }
+
+    // He plays it, and an opponent's shot brings it back to him.
+    let tick = context.current_tick();
+    let at = field.ball.position;
+    field.ball.note_release(gk, at, tick);
+    field.ball.current_owner = None;
+    let (shooter, team) = attacker(&field);
+    field.ball.record_touch(shooter, team, tick + 1, true);
+    let tick_context = GameTickContext::new(&field, &context.players);
+    let keeper = field.get_player(gk).unwrap();
+    let ctx = StateProcessingContext {
+        in_state_time: 0,
+        player: keeper,
+        context: &context,
+        tick_context: &tick_context,
+    };
+    assert_eq!(
+        ctx.ball().handling_verdict(),
+        HandlingVerdict::Legal,
+        "once the goal kick has been played the ball is a ball like any other"
+    );
+}
+
+/// **Whatever he is doing when it is handed to him, he kicks it.**
+///
+/// `Catching` is the state the measurement caught him in; `Standing` and
+/// `TakeBall` are the other two he waits in. Each used to answer on its
+/// own, and only two of them knew it was a goal kick.
+#[test]
+fn whatever_state_he_is_in_the_hand_over_is_kicked() {
+    for long in [false, true] {
+        for waiting in [
+            GoalkeeperState::Catching,
+            GoalkeeperState::Standing,
+            GoalkeeperState::TakeBall,
+        ] {
+            let (mut field, mut context) = kickoff();
+            let gk = hand_over_goal_kick(&mut field, &mut context);
+            field.ball.goal_kick_long = long;
+            field.get_player_mut(gk).unwrap().transition_to(
+                PlayerState::Goalkeeper(waiting),
+                TransitionSource::EventHandler,
+            );
+            let tick_context = GameTickContext::new(&field, &context.players);
+            let keeper = field.get_player(gk).unwrap();
+            let ctx = StateProcessingContext {
+                in_state_time: 0,
+                player: keeper,
+                context: &context,
+                tick_context: &tick_context,
+            };
+            // `Catching` rolls for the ball, so give it the draws.
+            let change = (0..200)
+                .find_map(|_| {
+                    match waiting {
+                        GoalkeeperState::Catching => {
+                            GoalkeeperCatchingState::default().process(&ctx)
+                        }
+                        GoalkeeperState::Standing => {
+                            GoalkeeperStandingState::default().process(&ctx)
+                        }
+                        _ => GoalkeeperTakeBallState::default().process(&ctx),
+                    }
+                    .filter(|change| change.state.is_some())
+                })
+                .unwrap_or_else(|| panic!("{waiting} never answered the hand-over"));
+            let kick = if long {
+                GoalkeeperState::Kicking
+            } else {
+                GoalkeeperState::Distributing
+            };
+            assert_eq!(
+                change.state,
+                Some(PlayerState::Goalkeeper(kick)),
+                "{waiting}, handed a {} goal kick",
+                if long { "long" } else { "short" }
+            );
+            let mut events = change.events;
+            assert!(
+                !events
+                    .drain()
+                    .any(|event| matches!(event, Event::PlayerEvent(PlayerEvent::CaughtBall(_)))),
+                "{waiting} caught his own goal kick"
+            );
+            assert!(!field.ball.held_in_hands);
+        }
+    }
+}
+
+/// **The whole goal kick, on the real engine: he stands over a ball on the
+/// grass, and he kicks it.**
+#[test]
+fn the_keeper_waits_over_his_goal_kick_and_kicks_it_off_the_grass() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    short_kicker(&mut field, gk);
+    shoot_wide(&mut field, &context, 240.0);
+
+    let mut handed = false;
+    let mut waited = 0;
+    let mut last_state = None;
+    for _ in 0..6000 {
+        last_state = Some(field.get_player(gk).unwrap().state);
+        tick(&mut field, &mut context);
+        assert!(
+            !field.ball.held_in_hands,
+            "the goal kick went into his gloves"
+        );
+        match field.ball.awaiting_restart {
+            Some(restart) => {
+                let Some(at) = restart.settled_tick else {
+                    continue;
+                };
+                waited += 1;
+                let state = field.get_player(gk).unwrap().state;
+                assert_eq!(
+                    state,
+                    PlayerState::Goalkeeper(GoalkeeperState::TakeBall),
+                    "waiting over his goal kick in {state}"
+                );
+                if context.current_tick().saturating_sub(at) > 30 {
+                    assert!(
+                        field.ball.position.z < 0.05,
+                        "the ball is {:.2} m up — a goal kick is placed on the grass",
+                        field.ball.position.z
+                    );
+                }
+            }
+            None => {
+                handed = true;
+                if field.ball.goal_kick_taker != Some(gk) {
+                    break;
+                }
+            }
+        }
+    }
+    assert!(handed, "the goal kick was never handed over");
+    assert!(
+        waited > 0,
+        "the test is vacuous unless he waited at the spot"
+    );
+    assert_eq!(
+        field.ball.last_release_player_id,
+        Some(gk),
+        "somebody other than the keeper played his goal kick"
+    );
+    assert!(
+        matches!(
+            last_state,
+            Some(PlayerState::Goalkeeper(
+                GoalkeeperState::Distributing | GoalkeeperState::Kicking
+            ))
+        ),
+        "the goal kick was released from {last_state:?}, not by a pass off the floor"
+    );
+}
+
+/// **A wasted goal kick is wasted once.** The delay a leading side drags it
+/// out by still applies; the keeper-hold delay that used to follow it —
+/// because the goal kick had become a hand possession — does not.
+#[test]
+fn a_wasted_goal_kick_is_delayed_once() {
+    let (mut field, mut context) = kickoff();
+    context.score.increment_home_goals();
+    context.total_match_time = 85 * 60_000;
+    context.coach_home.instruction = CoachInstruction::WasteTime;
+    context.rng = MatchRng::from_seed(0x60A1);
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    assert_eq!(
+        team_of(&field, gk),
+        field.home_team_id,
+        "the test needs the side that is ahead to be taking the goal kick"
+    );
+    short_kicker(&mut field, gk);
+    shoot_wide(&mut field, &context, 240.0);
+
+    let mut delayed = false;
+    for _ in 0..9000 {
+        tick(&mut field, &mut context);
+        let keeper = field.get_player(gk).unwrap();
+        assert!(
+            !field.ball.held_in_hands
+                && keeper.state != PlayerState::Goalkeeper(GoalkeeperState::HoldingBall),
+            "the goal kick became a hand possession, which is what drew the second delay"
+        );
+        match field.ball.awaiting_restart {
+            Some(restart) => {
+                delayed |= restart
+                    .hold
+                    .is_some_and(|hold| hold.reason == DeadTime::Delay);
+            }
+            None if field.ball.goal_kick_taker != Some(gk) => break,
+            None => {}
+        }
+    }
+    assert!(delayed, "the side ahead did not drag its goal kick out");
+    assert_eq!(field.ball.last_release_player_id, Some(gk));
+}
+
+// ── Taken when the set-up is formed ───────────────────────────────────
+//
+// Measured before this (`dev_match stats 300 14 14`): every goal kick
+// waited a fixed 20 s from the keeper reaching the ball, and in 78% of
+// them there was a stretch of 3 s or more — 7.0 s on average — with all
+// twenty-one others standing still.
+
+/// A keeper who plays his goal kicks long, with nobody near him to give
+/// it to short.
+fn long_kicker(field: &mut MatchField, gk: u32) {
+    let side = field.get_player(gk).unwrap().side;
+    let keeper = field
+        .get_player_mut(gk)
+        .expect("the keeper is on the pitch");
+    keeper.skills.goalkeeping.kicking = 20.0;
+    keeper.skills.goalkeeping.passing = 1.0;
+    keeper.skills.goalkeeping.first_touch = 1.0;
+    keeper.skills.mental.composure = 1.0;
+    for p in field
+        .players
+        .iter_mut()
+        .filter(|p| p.side == side && p.id != gk)
+    {
+        p.position.x = 300.0;
+    }
+}
+
+/// A home outfielder who is not the keeper.
+fn team_mate(field: &MatchField, gk: u32) -> u32 {
+    let team = team_of(field, gk);
+    field
+        .players
+        .iter()
+        .find(|p| {
+            p.team_id == team && p.id != gk && !p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| p.id)
+        .expect("the home side has outfielders")
+}
+
+#[test]
+fn a_goal_kick_is_formed_once_nobody_is_a_stride_inside_the_area() {
+    let (mut field, _context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    let spot = Vector3::new(20.0, 272.0, 0.0);
+    let formed = |field: &MatchField| {
+        let taker = field.get_player(gk).unwrap();
+        RestartShape::formed(
+            PassOriginRestart::GoalKick,
+            &field.players,
+            taker,
+            spot,
+            0.0,
+            545.0,
+        )
+    };
+    assert!(formed(&field), "nobody of theirs is anywhere near his area");
+    let (intruder, _) = attacker(&field);
+    field.get_player_mut(intruder).unwrap().position = Vector3::new(100.0, 272.0, 0.0);
+    assert!(
+        !formed(&field),
+        "a man four metres inside the area holds the goal kick"
+    );
+    field.get_player_mut(intruder).unwrap().position = Vector3::new(127.0, 272.0, 0.0);
+    assert!(
+        formed(&field),
+        "a man standing on the 18-yard line is out of the area for the referee"
+    );
+}
+
+#[test]
+fn a_side_still_getting_into_shape_is_not_quiet() {
+    let (mut field, _context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    let mate = team_mate(&field, gk);
+    let look = |field: &MatchField, quiet: &mut RestartQuiet, tick: u64| {
+        let taker = field.get_player(gk).unwrap().clone();
+        quiet.observe(&field.players, &taker, tick);
+    };
+
+    let mut still = RestartQuiet::default();
+    for tick in 0..150 {
+        look(&field, &mut still, tick);
+    }
+    assert!(still.settled(), "a side standing in its shape is quiet");
+
+    let mut jogging = RestartQuiet::default();
+    for tick in 0..400 {
+        field.get_player_mut(mate).unwrap().position.y = 50.0 + tick as f32 * 0.6;
+        look(&field, &mut jogging, tick);
+    }
+    assert!(
+        !jogging.settled(),
+        "a man still running to his place is not a set side"
+    );
+
+    // A man holding his slot steers back and forth across it: his velocity
+    // reads a jog and he goes nowhere.
+    let mut holding = RestartQuiet::default();
+    for tick in 0..150 {
+        let p = field.get_player_mut(mate).unwrap();
+        p.position.y = if tick % 2 == 0 { 200.0 } else { 200.5 };
+        p.velocity = Vector3::new(0.0, 0.5, 0.0);
+        look(&field, &mut holding, tick);
+    }
+    assert!(
+        holding.settled(),
+        "dither on the spot was read as the side still moving — the test is ground covered"
+    );
+}
+
+#[test]
+fn a_set_goal_kick_is_taken_after_the_placing_beat_and_not_before() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    short_kicker(&mut field, gk);
+    let driven = drive_goal_kick(&mut field, &mut context, gk, |_, _| {});
+    let beat = PassOriginRestart::GoalKick.set_routine_ticks();
+    let waited = driven.handed - driven.reached;
+    assert!(
+        waited >= beat,
+        "taken {waited} ticks after he reached it — before he had put it down and looked up"
+    );
+    assert!(
+        waited < beat + 50,
+        "a goal kick with its side set and its area clear waited {waited} ticks"
+    );
+}
+
+#[test]
+fn a_goal_kick_whose_side_never_settles_is_taken_at_the_ceiling() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    short_kicker(&mut field, gk);
+    let mate = team_mate(&field, gk);
+    let driven = drive_goal_kick(&mut field, &mut context, gk, |field, since| {
+        let swing = ((since % 400) as f32 - 200.0).abs();
+        field.get_player_mut(mate).unwrap().position.y = 50.0 + swing * 0.6;
+    });
+    let ceiling =
+        PassOriginRestart::GoalKick.set_routine_ticks() + AwaitedRestart::GOAL_KICK_SETUP_CEILING;
+    let waited = driven.handed - driven.reached;
+    assert_eq!(
+        ceiling, 2000,
+        "the ceiling is the fixed wait every goal kick used to have"
+    );
+    assert!(
+        (ceiling..ceiling + 10).contains(&waited),
+        "a goal kick whose side never stopped moving waited {waited} ticks, not {ceiling}"
+    );
+}
+
+#[test]
+fn an_opponent_in_the_area_holds_the_goal_kick_until_he_leaves() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    short_kicker(&mut field, gk);
+    let (intruder, _) = attacker(&field);
+    const LEAVES: u64 = 600;
+    let driven = drive_goal_kick(&mut field, &mut context, gk, |field, since| {
+        field.get_player_mut(intruder).unwrap().position = if since < LEAVES {
+            Vector3::new(100.0, 272.0, 0.0)
+        } else {
+            Vector3::new(300.0, 272.0, 0.0)
+        };
+    });
+    let waited = driven.handed - driven.reached;
+    assert!(
+        waited >= LEAVES,
+        "taken {waited} ticks in, with a man still four metres inside the area"
+    );
+    assert!(
+        waited < LEAVES + 50,
+        "he left at {LEAVES} and the kick waited until {waited}"
+    );
+}
+
+#[test]
+fn the_run_up_starts_when_the_picture_is_set() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    long_kicker(&mut field, gk);
+    let driven = drive_goal_kick(&mut field, &mut context, gk, |_, _| {});
+    let ran = driven
+        .ran
+        .expect("the test needs him to go long — he never took a run-up");
+    let off_the_mark = ran - driven.reached;
+    assert!(
+        off_the_mark >= PassOriginRestart::GoalKick.set_routine_ticks(),
+        "he ran in {off_the_mark} ticks after reaching the ball, before his placing beat"
+    );
+    assert!(
+        off_the_mark < 400,
+        "with the side set and the area clear he stood on his mark for {off_the_mark} ticks"
+    );
+}
+
+#[test]
+fn an_opponent_in_the_area_holds_the_run_up_on_its_mark() {
+    let (mut field, mut context) = kickoff();
+    let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
+    long_kicker(&mut field, gk);
+    let (intruder, _) = attacker(&field);
+    let driven = drive_goal_kick(&mut field, &mut context, gk, |field, _| {
+        field.get_player_mut(intruder).unwrap().position = Vector3::new(100.0, 272.0, 0.0);
+    });
+    let ran = driven
+        .ran
+        .expect("the test needs him to go long — he never took a run-up");
+    assert!(
+        ran - driven.reached >= 2000,
+        "he ran in {} ticks after reaching the ball with a man still inside the area",
+        ran - driven.reached
     );
 }

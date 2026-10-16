@@ -5,7 +5,9 @@
 
 use super::goal_celebration_tests::squad;
 use crate::club::player::traits::PlayerTrait;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, PassChainEntry, PassOriginRestart};
+use crate::r#match::engine::ball::ball::{
+    AwaitedRestart, Ball, PassChainEntry, PassOriginRestart, RestartQuiet,
+};
 use crate::r#match::engine::coach::CoachInstruction;
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::officiating::management::{Dissent, TimeWastingRestart};
@@ -272,6 +274,7 @@ fn home_throw_in_ready(field: &mut MatchField, context: &MatchContext) -> u32 {
                 .saturating_sub(PassOriginRestart::ThrowIn.set_routine_ticks()),
         ),
         hold: None,
+        quiet: RestartQuiet::default(),
     });
     taker
 }

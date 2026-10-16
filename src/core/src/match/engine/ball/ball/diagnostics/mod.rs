@@ -24,6 +24,8 @@
 //! * [`arrival_diag`] — what a grant does to the ball's motion: pace in
 //!   and out, the gap it is taken at, and whether the step after it is a
 //!   reversal or a write.
+//! * [`goal_kick_diag`] — where a goal kick's wait goes, what the keeper
+//!   does while it waits, and how it is put back into play.
 
 #[cfg(feature = "match-logs")]
 pub mod arrival_diag;
@@ -35,6 +37,8 @@ pub mod block_diag;
 pub mod flight_diag;
 #[cfg(feature = "match-logs")]
 pub mod frame_trace;
+#[cfg(feature = "match-logs")]
+pub mod goal_kick_diag;
 #[cfg(feature = "match-logs")]
 pub mod knock_diag;
 #[cfg(feature = "match-logs")]

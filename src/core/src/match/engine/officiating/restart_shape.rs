@@ -34,6 +34,11 @@ impl RestartShape {
     /// Close enough to his station to count as on it: `Arrive` settles a
     /// man within three units of the point.
     const ON_STATION: f32 = 8.0;
+    /// A man on the 18-yard line is out of the area for the referee: one
+    /// stride, 1 m. Measured at goal kicks, an opponent stood inside the
+    /// area on 82% of the waiting ticks and 97% of them less than a metre
+    /// in — walked to the line, let go, and back on it.
+    const LINE_TOLERANCE: f32 = 8.0;
     /// Shoulder to shoulder in a wall.
     const WALL_SPACING: f32 = 5.0;
     /// 16.5 m and 40.32 m: the penalty area's depth and width.
@@ -72,7 +77,8 @@ impl RestartShape {
     }
 
     /// The opponents have stood off a free kick or a penalty as the laws
-    /// require and its wall is up, so it may be taken.
+    /// require and its wall is up, or are out of the area at a goal kick
+    /// (Law 16), so it may be taken.
     pub fn formed(
         origin: PassOriginRestart,
         players: &[MatchPlayer],
@@ -83,6 +89,11 @@ impl RestartShape {
     ) -> bool {
         if origin == PassOriginRestart::Penalty {
             return Self::area_clear(players, taker, spot, goal_x, field_height);
+        }
+        if origin == PassOriginRestart::GoalKick {
+            return Self::opponents(players, taker).all(|p| {
+                Self::inside_area_by(p.position, goal_x, field_height) <= Self::LINE_TOLERANCE
+            });
         }
         Self::opponents(players, taker).all(|p| {
             p.tactical_position.current_position.is_goalkeeper()
@@ -120,6 +131,23 @@ impl RestartShape {
                 })
             })
             .collect()
+    }
+
+    /// How far inside the penalty area at `goal_x` a man stands, from its
+    /// nearest edge; zero or less outside it.
+    fn inside_area_by(position: Vector3<f32>, goal_x: f32, field_height: f32) -> f32 {
+        let from_goal_line = (position.x - goal_x).abs();
+        let behind_the_line = if goal_x > 0.0 {
+            position.x > goal_x
+        } else {
+            position.x < goal_x
+        };
+        if behind_the_line {
+            return -from_goal_line;
+        }
+        let front = Self::AREA_DEPTH - from_goal_line;
+        let side = Self::AREA_WIDTH * 0.5 - (position.y - field_height * 0.5).abs();
+        front.min(side).min(from_goal_line)
     }
 
     /// Nobody but the taker and the keeper he faces is in the area or

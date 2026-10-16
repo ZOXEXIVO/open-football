@@ -212,6 +212,9 @@ impl<'b> BallOperationsImpl<'b> {
     /// `ReturningToGoal`, eight doors in all — is covered by construction.
     pub fn handling_verdict(&self) -> HandlingVerdict {
         let keeper = self.ctx.player;
+        if self.ctx.tick_context.ball.goal_kick_taker == Some(keeper.id) {
+            return HandlingVerdict::Restart;
+        }
         if !self.in_own_penalty_area() {
             return HandlingVerdict::OutsideArea;
         }

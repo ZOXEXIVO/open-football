@@ -30,7 +30,7 @@ use crate::Tactics;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::{PlayerPosition, PlayerPositions};
 use crate::club::team::tactics::MatchTacticType;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart};
+use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart, RestartQuiet};
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::substitutions::Substitutions;
@@ -694,6 +694,7 @@ fn a_change_waits_for_the_ball_to_be_dead() {
         patience_ticks: 500,
         settled_tick: None,
         hold: None,
+        quiet: RestartQuiet::default(),
     });
     assert!(
         !Substitutions::play_is_stopped(&field),

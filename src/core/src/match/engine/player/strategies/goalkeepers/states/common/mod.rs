@@ -1252,8 +1252,12 @@ impl KeeperFeetDecision {
 
     /// The state to hand a foot possession to when the hands are barred.
     /// Split out because `GoalkeeperHoldingState` needs the answer as a
-    /// state rather than as a choice.
+    /// state rather than as a choice. A goal kick he has been handed is
+    /// not a choice at all: it is the kick he placed it for.
     pub fn without_hands(ctx: &StateProcessingContext) -> GoalkeeperState {
+        if let Some(kick) = KeeperGoalKick::release_state(ctx) {
+            return kick;
+        }
         match Self::without_hands_choice(ctx) {
             FeetChoice::Clear => GoalkeeperState::Clearing,
             _ => GoalkeeperState::Distributing,
@@ -1263,6 +1267,9 @@ impl KeeperFeetDecision {
     /// The whole decision as a state, for the sites that just want to be
     /// told where to go next.
     pub fn state_for(ctx: &StateProcessingContext) -> GoalkeeperState {
+        if let Some(kick) = KeeperGoalKick::release_state(ctx) {
+            return kick;
+        }
         match Self::choose(ctx) {
             FeetChoice::Gather => GoalkeeperState::PickingUpBall,
             FeetChoice::PlayOut => GoalkeeperState::Distributing,

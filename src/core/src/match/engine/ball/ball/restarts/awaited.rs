@@ -1,3 +1,4 @@
+use crate::r#match::MatchPlayer;
 use crate::r#match::engine::result::DeadTime;
 use nalgebra::Vector3;
 
@@ -87,12 +88,16 @@ impl PassOriginRestart {
     /// the protests at a penalty. Real restarts run about 10 s for a
     /// throw-in, 22 for a goal kick, 27 for a corner, 25 for a direct free
     /// kick and a minute for a penalty; the fetch and the walk into the
-    /// shape are simulated and measured 4-14 s of that. A long goal kick's
-    /// run-up is spent inside its routine, not after it.
+    /// shape are simulated and measured 4-14 s of that.
+    ///
+    /// A goal kick's is only the placing: he puts it down and looks up.
+    /// The rest of its wait is the side getting into shape, which is
+    /// simulated — see [`AwaitedRestart::GOAL_KICK_SETUP_CEILING`]. A fixed
+    /// 20 s here left everybody standing for the last 7 of them.
     pub fn set_routine_ticks(self) -> u64 {
         match self {
             PassOriginRestart::ThrowIn => 400,
-            PassOriginRestart::GoalKick => 2000,
+            PassOriginRestart::GoalKick => 250,
             PassOriginRestart::Corner => 1500,
             PassOriginRestart::DirectFreeKick => 1800,
             PassOriginRestart::IndirectFreeKick => 1100,
@@ -360,9 +365,11 @@ pub struct AwaitedRestart {
     ///
     /// # Why a corner needs a leg the other restarts do not
     ///
-    /// Every other restart is ready when the taker is: a throw-in needs a
-    /// thrower and a ball, a goal kick needs a keeper. A CORNER needs five
-    /// runners in the box, and they are 60-80 m away when it is awarded.
+    /// A throw-in is ready when the taker is: it needs a thrower and a
+    /// ball. A CORNER needs five runners in the box, and they are 60-80 m
+    /// away when it is awarded. A free kick and a penalty wait for the
+    /// opponents to stand off, and a goal kick for them to leave the area
+    /// and for his own side to stop getting into shape.
     ///
     /// Taking the kick the moment the taker was ready is what kept the
     /// walked corner switched off: measured over 60 matches at level 14,
@@ -381,6 +388,84 @@ pub struct AwaitedRestart {
     /// taken — the referee booking somebody, or a side slowing its own
     /// restart down — until a given tick. See [`RestartHold`].
     pub hold: Option<RestartHold>,
+    /// Whether the taker's side has stopped getting into shape. See
+    /// [`RestartQuiet`].
+    pub quiet: RestartQuiet,
+}
+
+/// **Whether the taker's side has stopped getting into shape**, read off
+/// the ground its outfielders cover while he is at the spot.
+///
+/// Ground covered, not `MatchPlayer::velocity`: a man holding his slot
+/// steers back and forth across it, so his velocity reads a jog while he
+/// goes nowhere. Measured at goal kicks, the fastest team-mate's velocity
+/// read 3 m/s or more on 53% of the waiting ticks while the replay showed
+/// the side standing still.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RestartQuiet {
+    marks: [(u32, f32, f32); Self::MARKS],
+    marked: usize,
+    looked_at: u64,
+    since: Option<u64>,
+}
+
+impl RestartQuiet {
+    const MARKS: usize = 16;
+    /// How often he looks: 250 ms spans the back-and-forth of a man
+    /// holding his slot, so it cancels out.
+    pub const SAMPLE_TICKS: u64 = 25;
+    /// Quiet is the side averaging under 0.5 m/s, the census's "standing
+    /// still" — so the kick comes as the picture goes still.
+    pub const PACE: f32 = 0.04;
+    /// …held for a second.
+    pub const HOLD_TICKS: u64 = 100;
+
+    /// One look at the taker's outfield team-mates, every
+    /// [`Self::SAMPLE_TICKS`].
+    pub fn observe(&mut self, players: &[MatchPlayer], taker: &MatchPlayer, now: u64) {
+        if self.marked > 0 && now.saturating_sub(self.looked_at) < Self::SAMPLE_TICKS {
+            return;
+        }
+        let window = now.saturating_sub(self.looked_at).max(1) as f32;
+        let mut marks = [(0, 0.0, 0.0); Self::MARKS];
+        let mut marked = 0;
+        let (mut covered, mut seen) = (0.0, 0);
+        for p in players
+            .iter()
+            .filter(|p| {
+                p.team_id == taker.team_id
+                    && p.id != taker.id
+                    && !p.off_pitch
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .take(Self::MARKS)
+        {
+            if let Some(&(_, x, y)) = self.marks[..self.marked].iter().find(|m| m.0 == p.id) {
+                covered += (p.position.x - x).hypot(p.position.y - y) / window;
+                seen += 1;
+            }
+            marks[marked] = (p.id, p.position.x, p.position.y);
+            marked += 1;
+        }
+        let first_look = self.marked == 0;
+        self.marks = marks;
+        self.marked = marked;
+        self.looked_at = now;
+        if first_look {
+            return;
+        }
+        if seen == 0 || covered / (seen as f32) < Self::PACE {
+            self.since.get_or_insert(now);
+        } else {
+            self.since = None;
+        }
+    }
+
+    /// Quiet for [`Self::HOLD_TICKS`] at the last look.
+    pub fn settled(&self) -> bool {
+        self.since
+            .is_some_and(|since| self.looked_at.saturating_sub(since) >= Self::HOLD_TICKS)
+    }
 }
 
 /// **A restart that may not be taken yet**, and why. The ball is dead for
@@ -509,6 +594,13 @@ impl AwaitedRestart {
     /// 15 s: a backstop for a man who cannot get out of the way, not the
     /// wait itself.
     pub const RETREAT_CEILING: u64 = 1500;
+
+    /// Longest a goal kick may be held waiting for its set-up once he has
+    /// placed it, in engine ticks: with the placing beat, the 20 s every
+    /// goal kick used to wait. The side reads quiet with the area clear
+    /// before it on 83% of goal kicks, a mean of 11.6 s after he reaches
+    /// the ball; a set-up that never forms is taken when it always was.
+    pub const GOAL_KICK_SETUP_CEILING: u64 = 1750;
 
     /// How far inside the line the carrier has to be before the restart is
     /// handed to him, in game units. 2 u = 25 cm.

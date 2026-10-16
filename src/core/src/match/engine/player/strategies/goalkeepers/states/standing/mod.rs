@@ -1,7 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperAppetite, KeeperBallClaim,
-    KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperGoalKick,
-    KeeperOneOnOne, KeeperRestPosition, KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
+    KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperOneOnOne,
+    KeeperRestPosition, KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -89,22 +89,10 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         }
 
         // If goalkeeper has the ball, put it back in play (never run with
-        // it). A GOAL KICK is a dead ball from the floor, so the hands are
-        // out of play and the choice is short-pass versus long kick — the
-        // keeper's kicking ability and how far the opposition have pushed
-        // up decide which. Everything else (a claim, a back-pass) routes
-        // through Distributing, whose own logic picks the outlet.
+        // it). [`KeeperFeetDecision`] answers a goal kick he has been
+        // handed as well as every open-play ball.
         if ctx.player.has_ball(ctx) {
-            if ctx.ball().is_goal_kick_restart() {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    if KeeperGoalKick::decided_long(ctx) {
-                        GoalkeeperState::Kicking
-                    } else {
-                        GoalkeeperState::Distributing
-                    },
-                ));
-            }
-            // …and in open play the FIRST question is whether to pick it
+            // In open play the FIRST question is whether to pick it
             // up. This branch went straight to `Distributing` — a foot
             // pass — for every possession that was not a goal kick, so a
             // keeper who had just smothered at a striker's feet stood on
