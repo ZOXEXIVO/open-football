@@ -234,8 +234,7 @@ impl Lineup {
     ///
     /// Every beat of the ceremony is held on it — which is part of what keeps
     /// the move unbroken: nothing ever has to change lens.
-    const FRONT_LENS: f32 =
-        0.66 / (CameraZoom::STEP * CameraZoom::STEP * CameraZoom::STEP);
+    const FRONT_LENS: f32 = 0.66 / (CameraZoom::STEP * CameraZoom::STEP * CameraZoom::STEP);
     /// **How fast the pass crosses the line, in metres a second.**
     ///
     /// The ceremony is wall-clock — the playhead is parked for all of it, so
@@ -316,7 +315,11 @@ impl Lineup {
         commands.insert_resource(Lineup {
             // A document with nobody in it, or a page that asked for no
             // ceremony, is over before it starts.
-            act: if row.len() < 2 { Act::Done } else { Act::Waiting },
+            act: if row.len() < 2 {
+                Act::Done
+            } else {
+                Act::Waiting
+            },
             row,
             ..default()
         });
@@ -1149,7 +1152,11 @@ mod tests {
         let lineup = walked_out();
         let speed = |at: f32| {
             let dt = 0.004;
-            lineup.shot_at(at + dt).stand.distance(lineup.shot_at(at).stand) / dt
+            lineup
+                .shot_at(at + dt)
+                .stand
+                .distance(lineup.shot_at(at).stand)
+                / dt
         };
         let approach = lineup.approach_seconds();
         let swing = lineup.swing_seconds();
@@ -1243,8 +1250,7 @@ mod tests {
         for stand in &lineup.row {
             let mut passed = false;
             for step in 0..=2_000 {
-                let shot =
-                    lineup.shot_at(from + lineup.walk_seconds() * step as f32 / 2_000.0);
+                let shot = lineup.shot_at(from + lineup.walk_seconds() * step as f32 / 2_000.0);
                 if shot.stand.z < Lineup::ROW_Z && (shot.aim.x - stand.at.x).abs() < 0.5 {
                     passed = true;
                 }

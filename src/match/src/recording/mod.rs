@@ -9,3 +9,6 @@
 pub(crate) mod loader;
 pub(crate) mod playback;
 pub(crate) mod replay;
+
+#[cfg(test)]
+mod motion_tests;

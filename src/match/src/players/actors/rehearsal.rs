@@ -29,6 +29,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 
+mod locomotion_review;
+mod review_capture;
+
 /// One recording, one world, the real systems in the order the app runs them.
 pub(crate) struct Rehearsal {
     world: World,
@@ -41,6 +44,7 @@ pub(crate) struct Rehearsal {
     changed: usize,
     /// Match seconds a drawn frame covers, as the speed chip sets it.
     speed: f32,
+    frame_ms: f64,
     now: f64,
     pub start: f64,
     pub until: f64,
@@ -54,6 +58,16 @@ impl Rehearsal {
         let (start, until) = tracks.ball.span()?;
         let keepers = Chunk::keepers(&mut tracks, start);
         let sides = Chunk::sides(&mut tracks, start);
+        Some(Self::from_tracks(tracks, start, until, &keepers, &sides))
+    }
+
+    fn from_tracks(
+        tracks: ReplayTracks,
+        start: f64,
+        until: f64,
+        keepers: &[u32],
+        sides: &HashMap<u32, bool>,
+    ) -> Rehearsal {
         let mut ids: Vec<u32> = tracks.players.keys().copied().collect();
         ids.sort_unstable();
 
@@ -100,7 +114,7 @@ impl Rehearsal {
             ("pose", world.register_system(Actors::pose_joints)),
             ("end", world.register_system(Playback::end_frame)),
         ];
-        Some(Rehearsal {
+        Rehearsal {
             world,
             ball,
             players,
@@ -108,10 +122,11 @@ impl Rehearsal {
             laps: Vec::new(),
             changed: 0,
             speed: 1.0,
+            frame_ms: Self::FRAME_MS,
             now: start,
             start,
             until,
-        })
+        }
     }
 
     /// Hangs a body on every man, as [`Actors::take_the_field`] does, and adds
@@ -185,12 +200,20 @@ impl Rehearsal {
 
     /// One frame of play.
     pub fn tick(&mut self) {
-        self.now += Self::FRAME_MS * f64::from(self.speed);
+        self.now += self.frame_ms * f64::from(self.speed);
         let mut playback = self.world.resource_mut::<Playback>();
         playback.time_ms = self.now;
         playback.playing = true;
-        playback.advanced_ms = Self::FRAME_MS * f64::from(self.speed);
+        playback.advanced_ms = self.frame_ms * f64::from(self.speed);
         self.run();
+    }
+
+    fn at_fps(&mut self, fps: f64) {
+        assert!(fps.is_finite() && fps > 0.0);
+        self.frame_ms = 1000.0 / fps;
+        self.world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f64(1.0 / fps));
     }
 
     /// One frame with the playhead stopped, as the transport bar's pause has it.

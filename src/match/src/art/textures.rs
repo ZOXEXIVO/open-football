@@ -487,8 +487,8 @@ impl Face {
         // for the whole match.
         shade *= 1.0 - 0.34 * Textures::smooth((down - Self::CHIN + 0.020) / 0.060);
         // The brow ridge, which catches the light…
-        shade *= 1.0
-            + 0.06 * Textures::smooth(1.0 - (down - Self::BROW).abs() / 0.030) * (1.0 - turned);
+        shade *=
+            1.0 + 0.06 * Textures::smooth(1.0 - (down - Self::BROW).abs() / 0.030) * (1.0 - turned);
         // …the cheekbone under the eye, which catches it too…
         shade *= 1.0 + 0.05 * Self::blob(turn - 0.30, down - Self::EYES - 0.055, 0.22, 0.045);
         // …and the hollow of the cheek below that.
@@ -503,7 +503,10 @@ impl Face {
 
         // The socket first: a soft shadow for the eye to sit in. Without one,
         // two white almonds on a flat plane read as buttons.
-        let socket = Textures::shade(base, 0.16 * Self::blob(sideways, rise + 0.008, 0.115, 0.075));
+        let socket = Textures::shade(
+            base,
+            0.16 * Self::blob(sideways, rise + 0.008, 0.115, 0.075),
+        );
 
         // The opening: a lens, wider than it is tall and pointed at both
         // corners, which is the shape that still says *eye* at ten texels
@@ -582,24 +585,27 @@ impl Face {
             // fade only where the nose does, the hollow reaches from the brow
             // to the lip as a dark stripe under each eye, and a face with two
             // of those is a face that has been crying.
-            0.10
-                * along
+            0.10 * along
                 * Textures::smooth(along.min(1.0 - along) * 3.4)
                 * Textures::smooth(1.0 - (turn - Self::BESIDE_NOSE).abs() / 0.060),
         );
         colour = Textures::shade(
             colour,
-            0.16
-                * Self::blob(
-                    turn - Self::NOSE_WIDE * 0.86,
-                    down - Self::NOSTRILS + 0.006,
-                    0.075,
-                    0.022,
-                ),
+            0.16 * Self::blob(
+                turn - Self::NOSE_WIDE * 0.86,
+                down - Self::NOSTRILS + 0.006,
+                0.075,
+                0.022,
+            ),
         );
         Textures::shade(
             colour,
-            0.24 * Self::blob(turn, down - Self::NOSTRILS - 0.012, Self::NOSE_WIDE * 1.15, 0.026),
+            0.24 * Self::blob(
+                turn,
+                down - Self::NOSTRILS - 0.012,
+                Self::NOSE_WIDE * 1.15,
+                0.026,
+            ),
         )
     }
 
@@ -623,7 +629,12 @@ impl Face {
         // line does.
         Textures::shade(
             colour,
-            0.16 * Self::blob(turn, down - Self::MOUTH - 0.050, Self::MOUTH_WIDE * 0.80, 0.022),
+            0.16 * Self::blob(
+                turn,
+                down - Self::MOUTH - 0.050,
+                Self::MOUTH_WIDE * 0.80,
+                0.022,
+            ),
         )
     }
 
@@ -806,7 +817,10 @@ impl CrowdPalette {
         let column = pick as usize % self.heads;
         let span = 1.0 / self.tiles();
         let inset = span * 0.5 / self.tile;
-        let (left, right) = (column as f32 * span + inset, (column + 1) as f32 * span - inset);
+        let (left, right) = (
+            column as f32 * span + inset,
+            (column + 1) as f32 * span - inset,
+        );
         let across = 0.5 + 0.5 * turn.signum() * turn.abs().clamp(0.0, 1.0).sqrt();
 
         // The drawn heads are the TOP half of the sheet and the flat colours
@@ -2855,7 +2869,6 @@ impl Textures {
         images.add(Self::mipped(WIDTH, HEIGHT, data))
     }
 
-
     /// Every colour a spectator is painted in, as one strip of flat swatches.
     ///
     /// **A palette rather than a set of materials, and a texture rather than
@@ -3039,8 +3052,7 @@ impl Textures {
                     3 => 1.0,
                     _ => 0.0,
                 },
-                hat: (person % 3 == 1)
-                    .then(|| coat(HATS[person / 3 % HATS.len()])),
+                hat: (person % 3 == 1).then(|| coat(HATS[person / 3 % HATS.len()])),
             })
             .collect();
 
@@ -3208,7 +3220,6 @@ impl Textures {
         hash = hash.wrapping_mul(2_246_822_519);
         ((hash ^ (hash >> 13)) % 1024) as f32 / 1023.0
     }
-
 
     /// White throughout, with `alpha` sampled on the distance from the centre —
     /// 0 at the middle of the image, 1 at the edge of the inscribed circle.
@@ -3731,11 +3742,9 @@ mod tests {
             let (left, right) = (person as f32 / tiles, (person + 1) as f32 / tiles);
             // Right round the head and from the crown to under the collar —
             // the whole wrap, not just the part a face is drawn on.
-            let corners = [-1.0f32, -0.5, 0.0, 0.5, 1.0]
-                .into_iter()
-                .flat_map(|turn| {
-                    [0.0f32, 0.5, 1.0].map(|down| palette.head_uv(person, turn, down))
-                });
+            let corners = [-1.0f32, -0.5, 0.0, 0.5, 1.0].into_iter().flat_map(|turn| {
+                [0.0f32, 0.5, 1.0].map(|down| palette.head_uv(person, turn, down))
+            });
             for corner in corners {
                 assert!(
                     corner.x > left && corner.x < right,
@@ -3746,7 +3755,11 @@ mod tests {
                 // the faces are drawn in. The bottom half is flat colour, and
                 // a face that dipped into it would be half a portrait and half
                 // a paint chip.
-                assert!(corner.y > 0.0 && corner.y < 0.5, "face {person} at v {}", corner.y);
+                assert!(
+                    corner.y > 0.0 && corner.y < 0.5,
+                    "face {person} at v {}",
+                    corner.y
+                );
             }
             // The nose is the middle of the tile and the back of the head is
             // both its edges — the wrap's whole contract, and the one thing

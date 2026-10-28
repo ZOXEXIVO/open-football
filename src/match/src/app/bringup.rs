@@ -53,10 +53,10 @@
 use crate::app::bill::MemoryBill;
 use crate::app::config::ViewerConfig;
 use crate::app::quality::{Footprint, Quality};
-use crate::scene::pitch::Stands;
 use crate::players::actors::{PlayerActor, Undressed};
 use crate::players::body::Grain;
 use crate::recording::loader::ChunkLoader;
+use crate::scene::pitch::Stands;
 use bevy::prelude::*;
 
 /// How far through the bring-up the scene is.

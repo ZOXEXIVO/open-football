@@ -831,20 +831,14 @@ impl Portraits {
         portraits: Option<Res<Portraits>>,
         config: Res<ViewerConfig>,
         actors: Query<(Entity, &PlayerActor)>,
-        mut skin: Query<
-            (&Flesh, &mut MeshMaterial3d<StandardMaterial>),
-            Without<DressedFlesh>,
-        >,
+        mut skin: Query<(&Flesh, &mut MeshMaterial3d<StandardMaterial>), Without<DressedFlesh>>,
         // The merged limbs — cloth and skin on one sheet — move the same way
         // the bare parts above do, except that their destination is the
         // wardrobe's sheet for the same strip in the new tone rather than a
         // ramp entry. The `Without` filters are what let the two queries
         // borrow the same component: no part carries both markers, but only
         // the filters can say so to the scheduler.
-        mut dressed: Query<
-            (&DressedFlesh, &mut MeshMaterial3d<StandardMaterial>),
-            Without<Flesh>,
-        >,
+        mut dressed: Query<(&DressedFlesh, &mut MeshMaterial3d<StandardMaterial>), Without<Flesh>>,
         mut hair: Query<(&Thatch, &mut Visibility)>,
         mut wardrobe: Option<ResMut<Wardrobe>>,
         mut materials: ResMut<Assets<StandardMaterial>>,

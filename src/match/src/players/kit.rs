@@ -602,15 +602,14 @@ impl Wardrobe {
         // [`Swatch::ROUGHNESS`] and ride every sheet as texels, so a merged
         // shirt keeps reading as knit and a sock as terry inside one
         // material. See [`Self::cloth`] for why they all sit that high.
-        let wear =
-            [0, 1, 2, 3].map(|index| {
-                [
-                    strips[index].shirt,
-                    strips[index].trim,
-                    strips[index].shorts,
-                    strips[index].socks,
-                ]
-            });
+        let wear = [0, 1, 2, 3].map(|index| {
+            [
+                strips[index].shirt,
+                strips[index].trim,
+                strips[index].shorts,
+                strips[index].socks,
+            ]
+        });
         let roughness_sheet = images.add(Self::roughness_image());
         // The kit sheets carry a mid-table complexion in their skin slot. No
         // cloth-only merge ever points a vertex there — it exists so the slot
@@ -740,12 +739,7 @@ impl Wardrobe {
     fn roughness_image() -> Image {
         let mut texels = Vec::with_capacity(Swatch::SPAN * 4);
         for slot in 0..Swatch::SPAN {
-            texels.extend_from_slice(&[
-                0,
-                (Swatch::ROUGHNESS[slot] * 255.0).round() as u8,
-                0,
-                255,
-            ]);
+            texels.extend_from_slice(&[0, (Swatch::ROUGHNESS[slot] * 255.0).round() as u8, 0, 255]);
         }
         Image::new(
             Extent3d {
@@ -1115,13 +1109,19 @@ mod tests {
                 && (painted.green - worn.green).abs() < 0.005
                 && (painted.blue - worn.blue).abs() < 0.005
         };
-        assert!(close(texel(Swatch::Shirt), strip.shirt), "the shirt drifted");
+        assert!(
+            close(texel(Swatch::Shirt), strip.shirt),
+            "the shirt drifted"
+        );
         assert!(close(texel(Swatch::Trim), strip.trim), "the trim drifted");
         assert!(
             close(texel(Swatch::Shorts), strip.shorts),
             "the shorts drifted"
         );
-        assert!(close(texel(Swatch::Socks), strip.socks), "the socks drifted");
+        assert!(
+            close(texel(Swatch::Socks), strip.socks),
+            "the socks drifted"
+        );
         assert!(
             close(texel(Swatch::Skin), Complexion::tone(Palette::SKIN[3])),
             "the skin drifted"

@@ -278,12 +278,7 @@ onmessage = async (event) => {
     /// Hands one chunk to the worker, hiring it on the first call. False when
     /// there is no worker to be had, in which case the caller parses on this
     /// thread exactly as every machine did before there was a workshop.
-    fn commission(
-        inbox: &Arc<Mutex<Vec<Delivery>>>,
-        index: usize,
-        url: &str,
-        debug: bool,
-    ) -> bool {
+    fn commission(inbox: &Arc<Mutex<Vec<Delivery>>>, index: usize, url: &str, debug: bool) -> bool {
         WORKSHOP.with(|shop| {
             let mut shop = shop.borrow_mut();
             let Some(workshop) = shop.get_or_insert_with(|| Self::hire(inbox, debug)) else {
@@ -295,10 +290,7 @@ onmessage = async (event) => {
                 let _ = js_sys::Reflect::set(&order, &wasm_bindgen::JsValue::from_str(key), &value);
             };
             set("index", wasm_bindgen::JsValue::from_f64(index as f64));
-            set(
-                "url",
-                wasm_bindgen::JsValue::from_str(&Self::absolute(url)),
-            );
+            set("url", wasm_bindgen::JsValue::from_str(&Self::absolute(url)));
             if workshop.worker.post_message(&order).is_err() {
                 *shop = Some(None);
                 return false;
@@ -328,7 +320,8 @@ onmessage = async (event) => {
     /// worker answers `ok: false` for those — degrades to a failed chunk
     /// rather than a wrong one.
     fn unpack(data: wasm_bindgen::JsValue, debug: bool) -> Delivery {
-        let take = |name: &str| js_sys::Reflect::get(&data, &wasm_bindgen::JsValue::from_str(name)).ok();
+        let take =
+            |name: &str| js_sys::Reflect::get(&data, &wasm_bindgen::JsValue::from_str(name)).ok();
         let index = match take("index").and_then(|value| value.as_f64()) {
             Some(index) if index >= 0.0 => index as usize,
             // No index means the answer cannot be attributed to a request;
@@ -336,7 +329,10 @@ onmessage = async (event) => {
             // `pump`, where failing silently here would strand a real one.
             _ => usize::MAX,
         };
-        if !take("ok").and_then(|value| value.as_bool()).unwrap_or(false) {
+        if !take("ok")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+        {
             return Delivery::ChunkFailed(index);
         }
 
@@ -367,8 +363,12 @@ onmessage = async (event) => {
             .unwrap_or_default();
 
         if debug {
-            let bytes = take("bytes").and_then(|value| value.as_f64()).unwrap_or(0.0);
-            let parse = take("parse").and_then(|value| value.as_f64()).unwrap_or(0.0);
+            let bytes = take("bytes")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+            let parse = take("parse")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
             FrameCost::announce_woven(index, bytes as usize, parse as f32);
         }
 

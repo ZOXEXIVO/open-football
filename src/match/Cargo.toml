@@ -35,7 +35,7 @@ shared = { path = "../shared" }
 # `default_font` is deliberately absent: it compiles in `FiraMono-subset.ttf`,
 # which cannot spell half the squad list. `Typeface` fills the same slot with the
 # faces the web UI uses — see `fonts/README.md`.
-bevy = { version = "0.20.0", default-features = false, features = [
+bevy = { version = "0.20.1", default-features = false, features = [
     "async_executor",
     # FXAA, and only FXAA of the four it carries. It is what stands in for
     # multisampling on hardware that cannot pay for multisampling — see
@@ -165,7 +165,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 # player's samples a few frames later. See `ChunkPayload`, which explains why
 # a chunk of JSON — 1.35 MB gzipped, 4.4 MB in the parser — read between two
 # animation frames is the single worst thing that happens in this viewer.
-serde_json = { version = "1.0.151", features = ["raw_value"] }
+serde_json = { version = "1.0.154", features = ["raw_value"] }
 console_error_panic_hook = "0.1.7"
 
 # `opt-level = "z"` over `3`: the replay viewer is not compute bound (a few

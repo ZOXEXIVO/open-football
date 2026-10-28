@@ -1,5 +1,5 @@
 use crate::scene::field::Field;
-use bevy::prelude::{Resource, error};
+use bevy::prelude::{Resource, Vec3, error};
 use serde::de::{Error as DeError, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
@@ -322,7 +322,113 @@ const RECORDER_TOLERANCE_M: f32 = 0.0375;
 /// which used to be drawn as a man skating the length of the field.
 const TELEPORT_SPEED: f32 = 45.0;
 
+/// Animation evidence in world metres/second. It never changes the sampled path.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Motion {
+    pub velocity: Vec3,
+    pub placed: bool,
+}
+
 impl Track {
+    /// Read the recorder's placement decisions between drawn frames. A high
+    /// playback rate can make a cut look slow when averaged over the frame.
+    pub(crate) fn placed_between(&self, from_ms: f64, to_ms: f64) -> bool {
+        if self.samples.len() < 2 || to_ms <= from_ms {
+            return false;
+        }
+        let first = self.locate(from_ms, self.cursor);
+        let last = self.locate(to_ms, first);
+        (first..last).any(|i| {
+            let a = self.samples[i];
+            let b = self.samples[i + 1];
+            b.t > a.t
+                && a.metres_to(b) > 0.0
+                && Self::travel_ms(a, b, self.samples.get(i + 2).copied()).is_none()
+        })
+    }
+
+    pub(crate) fn position_read(&self, time_ms: f64) -> Option<[f32; 3]> {
+        let mut cursor = self.cursor;
+        self.sample(time_ms, &mut cursor)
+    }
+
+    /// A time-weighted local velocity, bounded to loaded, contiguous travel.
+    /// No cursor is changed: animation must not disturb playback or kick lookahead.
+    pub(crate) fn motion_at(&self, time_ms: f64, clip_start: f64, clip_end: f64) -> Motion {
+        if self.samples.len() < 2 || time_ms < clip_start || time_ms > clip_end {
+            return Motion::default();
+        }
+        if time_ms > self.samples.last().unwrap().t as f64 {
+            return Motion::default();
+        }
+        let index = self
+            .locate(time_ms, self.cursor)
+            .min(self.samples.len() - 2);
+        let from = self.samples[index];
+        let Some(to) = self.samples.get(index + 1).copied() else {
+            return Motion::default();
+        };
+        let over = Self::travel_ms(from, to, self.samples.get(index + 2).copied());
+        let Some(over) = over else {
+            return Motion {
+                placed: true,
+                ..Motion::default()
+            };
+        };
+        // A heartbeat followed by a step does not authorize moving early.
+        if time_ms < to.t as f64 - over {
+            return Motion::default();
+        }
+        let mut start = (time_ms - 120.0).max(clip_start);
+        let mut end = (time_ms + 60.0).min(clip_end);
+        // At most 17 intervals, regardless of recording size/density.
+        let lo = index.saturating_sub(8);
+        let hi = (index + 8).min(self.samples.len() - 2);
+        for i in (lo..index).rev() {
+            let a = self.samples[i];
+            let b = self.samples[i + 1];
+            if Self::travel_ms(a, b, self.samples.get(i + 2).copied()).is_none() {
+                start = start.max(b.t as f64);
+                break;
+            }
+        }
+        for i in index + 1..=hi {
+            let a = self.samples[i];
+            let b = self.samples[i + 1];
+            if Self::travel_ms(a, b, self.samples.get(i + 2).copied()).is_none() {
+                end = end.min(a.t as f64);
+                break;
+            }
+        }
+        let mut distance = Vec3::ZERO;
+        let mut duration = 0.0;
+        for i in lo..=hi {
+            let a = self.samples[i];
+            let b = self.samples[i + 1];
+            let Some(over) = Self::travel_ms(a, b, self.samples.get(i + 2).copied()) else {
+                continue;
+            };
+            let begin = (a.t as f64).max(start);
+            let finish = (b.t as f64).min(end);
+            if finish <= begin {
+                continue;
+            }
+            let depart = b.t as f64 - over;
+            let moving = (finish - begin.max(depart)).max(0.0);
+            distance += Vec3::new(b.x - a.x, 0.0, b.y - a.y)
+                * Field::METERS_PER_UNIT
+                * (moving / over) as f32;
+            duration += finish - begin;
+        }
+        Motion {
+            velocity: if duration > 0.0 {
+                distance * (1000.0 / duration) as f32
+            } else {
+                Vec3::ZERO
+            },
+            placed: false,
+        }
+    }
     /// Fold a chunk's samples in. Chunks normally arrive in playback order, in
     /// which case this is an append; seeking can pull them in out of order, so
     /// fall back to a merge that keeps the timeline sorted.

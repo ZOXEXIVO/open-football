@@ -16,6 +16,11 @@ pub(crate) struct Plant {
 }
 
 impl Plant {
+    #[cfg(test)]
+    pub(super) fn held_spot(&self) -> Option<Vec3> {
+        self.holding.then_some(self.at)
+    }
+
     /// Under this the stride has a sole on the grass: a standing man's boot
     /// rests 17 mm up, a hair over the 15 mm `census_contact` reads.
     const GROUND: f32 = 0.02;
@@ -72,6 +77,10 @@ impl PlayerActor {
     /// held, and neither foot of a man off them. What it leaves in
     /// [`Gait::hold`] the hips and knees draw.
     pub(super) fn plant_feet(&mut self, root: &Transform, match_delta: f32, reset: bool) {
+        // The final pose includes the body/action layers updated after the
+        // locomotion substeps. Refit the same contacts to that pose without
+        // advancing their release clock or making a second contact decision.
+        let refreshing = match_delta == 0.0;
         if reset {
             self.plants = [None; 2];
         }
@@ -86,6 +95,11 @@ impl PlayerActor {
             let leg = legs[index];
             let striking = self.pose.power + self.pose.trap + self.pose.header > 0.02
                 && side * self.pose.foot > 0.0;
+            if striking || off_his_feet {
+                self.plants[index] = None;
+                self.pose.hold[index] = Hold::default();
+                continue;
+            }
             let sole = carriage.transform_point(leg.sole);
             let down = sole.y < Plant::GROUND && !striking && !off_his_feet;
             let other_stepping = self.plants[1 - index].is_some_and(|plant| plant.stepping);
@@ -94,7 +108,7 @@ impl PlayerActor {
             // to the swing, instead of being drawn there along the turf.
             let reached = self.plants[index].map(|plant| {
                 let spot = Vec3::new(plant.at.x, plant.at.y.max(sole.y), plant.at.z);
-                let most = Plant::FOLDS * match_delta;
+                let most = Plant::FOLDS * if refreshing { 1.0 / 120.0 } else { match_delta };
                 leg.reach(
                     &posture,
                     carriage.rotation.inverse() * (spot - carriage.translation),
@@ -114,25 +128,32 @@ impl PlayerActor {
                     Vec2::new(plant.at.x - sole.x, plant.at.z - sole.z).length() > Plant::STRAY;
                 twist.abs() < Plant::TWIST && !strayed && misses < Plant::SLACK
             };
-            let plant = match self.plants[index] {
-                Some(plant) if plant.holding && down && kept(&plant) => Some(plant),
-                // A standing man has no stride to lift the foot, so it is
-                // stepped up; a striding one's stride lifts it.
-                Some(plant) if plant.holding => Some(Plant {
-                    holding: false,
-                    stepping: down && standing,
-                    ..plant
-                }),
-                Some(plant) => {
-                    let lasts = if plant.stepping {
-                        Plant::STEP
-                    } else {
-                        Plant::LETS_GO
-                    };
-                    let weight = plant.weight - match_delta / lasts;
-                    (weight > 0.0).then_some(Plant { weight, ..plant })
+            let plant = if refreshing {
+                self.plants[index]
+            } else {
+                match self.plants[index] {
+                    Some(plant) if plant.holding && down && kept(&plant) => Some(plant),
+                    // A standing man has no stride to lift the foot, so it is
+                    // stepped up; a striding one's stride lifts it.
+                    Some(plant) if plant.holding => Some(Plant {
+                        holding: false,
+                        // A stride that has not lifted an unreachable plant yet
+                        // needs a corrective toe-off too; fading its hold along
+                        // the grass otherwise draws a sliding support foot.
+                        stepping: down,
+                        ..plant
+                    }),
+                    Some(plant) => {
+                        let lasts = if plant.stepping {
+                            Plant::STEP
+                        } else {
+                            Plant::LETS_GO
+                        };
+                        let weight = plant.weight - match_delta / lasts;
+                        (weight > 0.0).then_some(Plant { weight, ..plant })
+                    }
+                    None => None,
                 }
-                None => None,
             };
             self.plants[index] = plant
                 // Chased into the swing, the spot behind him wrenches the
@@ -145,7 +166,7 @@ impl PlayerActor {
                     ..plant
                 })
                 .or_else(|| {
-                    down.then_some(Plant {
+                    (down && !refreshing).then_some(Plant {
                         at: sole,
                         yaw: self.heading,
                         turn: Vec3::ZERO,

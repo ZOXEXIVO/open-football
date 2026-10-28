@@ -216,8 +216,8 @@ impl Stature {
         // Who turned up for THIS one. The ordinary gate is what the club draws
         // across a season, so a fixture the whole city wants to see is already
         // averaged in with the ones nobody does — this puts the swing back.
-        let gap = ((venue.visitor as f32 - venue.reputation as f32) / Self::PULL_SPAN)
-            .clamp(-1.0, 1.0);
+        let gap =
+            ((venue.visitor as f32 - venue.reputation as f32) / Self::PULL_SPAN).clamp(-1.0, 1.0);
         let pull = if gap > 0.0 {
             Self::PULL_UP
         } else {
@@ -1512,7 +1512,11 @@ impl Seat {
     /// hang straight down, which is exactly the arm most of a stand has.
     fn limb(&self, at: Vec3, along: Vec3, thick: f32) -> Ring {
         let along = self.axis(along).normalize_or(Vec3::NEG_Y);
-        let seed = if along.y.abs() < 0.86 { Vec3::Y } else { Vec3::Z };
+        let seed = if along.y.abs() < 0.86 {
+            Vec3::Y
+        } else {
+            Vec3::Z
+        };
         let across = along.cross(seed).normalize_or(Vec3::X);
         Ring {
             centre: self.point(at),
@@ -1945,12 +1949,12 @@ mod tests {
     fn the_ladder_spreads_the_worlds_grounds_across_it() {
         // (gate, the band of rows it should land in, out of 34)
         for (gate, low, high) in [
-            (500u32, 5usize, 8usize),    // p10 — a village club
-            (1_500, 6, 11),              // p25
-            (4_000, 11, 17),             // p50
-            (14_000, 21, 28),            // p75 — Lokomotiv's neighbourhood
-            (25_700, 29, 34),            // p90
-            (42_600, 34, 34),            // p97 — every row there is
+            (500u32, 5usize, 8usize), // p10 — a village club
+            (1_500, 6, 11),           // p25
+            (4_000, 11, 17),          // p50
+            (14_000, 21, 28),         // p75 — Lokomotiv's neighbourhood
+            (25_700, 29, 34),         // p90
+            (42_600, 34, 34),         // p97 — every row there is
         ] {
             let rows = Stature::of(&venue(gate * 2, gate, 8_000, false)).rows(34);
             assert!(
@@ -1973,11 +1977,11 @@ mod tests {
     fn the_grass_is_the_last_thing_a_club_lets_go() {
         // (gate, reputation, the band `keeping` should land in)
         for (gate, reputation, low, high) in [
-            (620u32, 2_100u16, 0.00f32, 0.05f32),  // a non-league club
-            (1_500, 4_200, 0.15, 0.45),            // p25
-            (4_000, 4_800, 0.45, 0.70),            // p50 — a proper pitch
-            (14_000, 6_500, 0.80, 0.95),           // p75 — Lokomotiv's
-            (50_000, 9_500, 0.99, 1.00),           // the top of the game
+            (620u32, 2_100u16, 0.00f32, 0.05f32), // a non-league club
+            (1_500, 4_200, 0.15, 0.45),           // p25
+            (4_000, 4_800, 0.45, 0.70),           // p50 — a proper pitch
+            (14_000, 6_500, 0.80, 0.95),          // p75 — Lokomotiv's
+            (50_000, 9_500, 0.99, 1.00),          // the top of the game
         ] {
             let stature = Stature::of(&venue(gate * 2, gate, reputation, false));
             let keeping = stature.keeping();
@@ -2212,7 +2216,10 @@ mod tests {
             away_end_away > 0.35,
             "only {away_end_away} of the away end came dressed for it"
         );
-        assert!(side_home < 0.2, "{side_home} of the main stand is in colours");
+        assert!(
+            side_home < 0.2,
+            "{side_home} of the main stand is in colours"
+        );
 
         assert_eq!(side_away, 0.0, "visitors got into the main stand");
         assert_eq!(home_end_away, 0.0, "visitors got into the home end");
@@ -2394,7 +2401,8 @@ mod tests {
         ) = (
             mesh.attribute(Mesh::ATTRIBUTE_POSITION),
             mesh.attribute(Mesh::ATTRIBUTE_UV_0),
-        ) else {
+        )
+        else {
             panic!("the crowd carries no positions or no uvs");
         };
 
@@ -2423,7 +2431,10 @@ mod tests {
              corners"
         );
         // …and the corners are not bare. A kop thins, it does not stop.
-        assert!(corners > 0.05, "the corners came out empty of colour: {corners}");
+        assert!(
+            corners > 0.05,
+            "the corners came out empty of colour: {corners}"
+        );
     }
 
     /// **An end fills from behind the goal and from the back, not evenly.**
@@ -2671,18 +2682,17 @@ mod tests {
 
         let patches: Vec<f32> = census.iter().flatten().map(|n| *n as f32).collect();
         let mean = patches.iter().sum::<f32>() / patches.len() as f32;
-        let spread = (patches.iter().map(|n| (n - mean).powi(2)).sum::<f32>()
-            / patches.len() as f32)
-            .sqrt()
-            / mean;
+        let spread =
+            (patches.iter().map(|n| (n - mean).powi(2)).sum::<f32>() / patches.len() as f32).sqrt()
+                / mean;
 
         // What the SAME census would come to if every place were drawn
         // independently — which is what this replaced, and what a lazy
         // "assert it varies at all" would happily pass. Binomial: the relative
         // spread of a patch of `places`, each taken with probability `p`.
         let run = terrace.length - Crowd::REACH * 2.0 * (1.0 + Crowd::SPREAD);
-        let places = (run / Crowd::SPACING).floor() / ACROSS as f32 * terrace.rows as f32
-            / UP as f32;
+        let places =
+            (run / Crowd::SPACING).floor() / ACROSS as f32 * terrace.rows as f32 / UP as f32;
         let p = stature.occupancy();
         let null = ((1.0 - p) / (p * places)).sqrt();
 
@@ -2756,7 +2766,11 @@ mod tests {
             if seed < 2 {
                 deepest = deepest.max(bank.step(bank.rows - 1).x + bank.tread);
             }
-            let stand = if seed < 2 { Stand::Side } else { Stand::HomeEnd };
+            let stand = if seed < 2 {
+                Stand::Side
+            } else {
+                Stand::HomeEnd
+            };
             vertices += Crowd::fill(&bank, full, stand, &palette, seed as u32 + 1, Throng::FULL)
                 .expect("a full bank holds a crowd")
                 .count_vertices();

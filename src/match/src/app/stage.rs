@@ -903,14 +903,14 @@ mod tests {
     #[test]
     fn every_canvas_is_held_to_the_ceiling() {
         for (width, height) in [
-            (780, 1200),   // iPhone in portrait, in the page
-            (1179, 2556),  // iPhone, chrome gone
-            (2360, 1328),  // iPad in landscape
-            (2732, 2048),  // iPad Pro, chrome gone
-            (2702, 1520),  // 14-inch Retina laptop, in the page
-            (3456, 2234),  // 16-inch Retina laptop, fullscreen
-            (3840, 2160),  // a 4K panel
-            (5120, 2880),  // a 5K panel — the canvas alone is over the ceiling
+            (780, 1200),  // iPhone in portrait, in the page
+            (1179, 2556), // iPhone, chrome gone
+            (2360, 1328), // iPad in landscape
+            (2732, 2048), // iPad Pro, chrome gone
+            (2702, 1520), // 14-inch Retina laptop, in the page
+            (3456, 2234), // 16-inch Retina laptop, fullscreen
+            (3840, 2160), // a 4K panel
+            (5120, 2880), // a 5K panel — the canvas alone is over the ceiling
         ] {
             let window = canvas(width, height);
             let size = UVec2::new(width, height);
@@ -962,7 +962,7 @@ mod tests {
     /// A small canvas is not cut at all. An iPhone in portrait is far under
     /// the ceiling and should be drawn at its own resolution.
     #[test]
-    fn a_phone_sized_canvas_is_not_cut(){
+    fn a_phone_sized_canvas_is_not_cut() {
         let window = canvas(780, 1200);
         assert_eq!(
             Stage::on(0, UVec2::new(780, 1200), 1).wanted(&window, DESKTOP),

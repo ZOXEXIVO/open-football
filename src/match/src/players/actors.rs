@@ -38,6 +38,8 @@ pub struct PlayerActor {
     previous: Option<Vec3>,
     /// Smoothed facing, in radians about the world Y axis.
     heading: f32,
+    /// Angular momentum of the body, in radians per match second.
+    heading_rate: f32,
     /// Position in the run cycle, in radians. Advanced by ground covered rather
     /// than by time, so the feet keep pace with the turf at any playback speed.
     phase: f32,
@@ -1449,7 +1451,9 @@ impl Actors {
     /// the census pop bar on chunk 9, 1,156 sprung. The lag costs ~5% more
     /// skating soles.
     const OPEN_SPRING: Spring = Spring {
-        period: 0.15,
+        // Hip opening was still the sharpest trunk impulse during ordinary
+        // direction changes. Let the pelvis carry the turn across a footfall.
+        period: 0.24,
         damping: 1.0,
     };
     /// **How far off square he has to be going before a side-step stops
@@ -1860,7 +1864,7 @@ impl Actors {
     /// quarter of a second, which is what separates a man looking at
     /// something from a camera panning to it.
     const LOOK_SPRING: Spring = Spring {
-        period: 0.42,
+        period: 0.55,
         damping: 0.55,
     };
     /// Seconds of match time over which effort is gathered and, once he
@@ -3536,6 +3540,8 @@ impl Actors {
         aftermath: Res<Aftermath>,
         lineup: Res<Lineup>,
         time: Res<Time>,
+        tracks: Option<Res<ReplayTracks>>,
+        spans: Option<Res<crate::recording::playback::RecordedSpans>>,
         mut actors: Query<(&mut PlayerActor, &mut Transform, &Visibility)>,
     ) {
         let clock = playback.match_delta(lineup.on(), time.delta_secs());
@@ -3549,7 +3555,6 @@ impl Actors {
         // time.
         let match_delta = clock.max(1e-4);
         // Exponential catch-up, framerate independent.
-        let turn = 1.0 - (-match_delta / Self::TURN_RESPONSE).exp();
         let pace = 1.0 - (-match_delta / Self::PACE_RESPONSE).exp();
         // Slower than either, because a man's shoulders drop over about half
         // a second and his arms come up over about the same. Snapping the
@@ -3569,6 +3574,7 @@ impl Actors {
             }
 
             let position = transform.translation;
+            let appeared = actor.previous.is_none();
             let step = match actor.previous {
                 Some(previous) if !playback.seeked => position - previous,
                 _ => Vec3::ZERO,
@@ -3599,73 +3605,21 @@ impl Actors {
             // …and the same step as a VECTOR, which is what the cadence is
             // read off — see [`PlayerActor::tread`]. Across a teleport the
             // filter is handed its own output, so nothing moves.
-            let teleported = observed > Self::TELEPORT;
+            let teleported = observed > Self::TELEPORT
+                || tracks
+                    .as_ref()
+                    .and_then(|tracks| tracks.players.get(&actor.id))
+                    .is_some_and(|track| {
+                        track.placed_between(
+                            playback.time_ms - f64::from(clock) * 1000.0,
+                            playback.time_ms,
+                        )
+                    });
             let observed = if teleported { actor.speed } else { observed };
-            // Driving off the mark, or pulling up. A footballer accelerating
-            // is bent forward over his own feet and one stopping dead has his
-            // heels out in front of him, and both are constant — a player
-            // changes pace far more often than he changes direction.
-            //
-            // Read off the smoothing itself, and ahead of the line that
-            // advances it: an
-            // exponential filter's output climbs at exactly (input − output)
-            // over its response time, so the gap between what he is doing this
-            // frame and what he has been doing IS his acceleration. Dividing
-            // the same gap by the frame time instead — which is the obvious
-            // way to write it — makes the answer eleven times too big at
-            // 60 fps and a different number again at any other rate.
-            // Seconds of MATCH time this frame covered, for everything that
-            // is a property of the body rather than of the viewer: a trunk
-            // settles in match time, so it settles eight times as fast on
-            // screen at 8x, which is what a replay at 8x is.
-            // …and the same step as the LEGS are told it: the ground gained
-            // past the leash, as a velocity. See [`PlayerActor::gain_ground`]
-            // and [`PlayerActor::tread`]. Across a seek or a teleport the
-            // leash is simply put down again where he is.
-            let stepping = actor.gain_ground(position, playback.seeked || teleported) / match_delta;
-            actor.gather_pace(stepping, pace, match_delta, playback.seeked);
-
-            // **WHICH WAY HE IS ACTUALLY GOING.**
-            //
-            // Not one frame's displacement, which is what the heading used
-            // to be read from and is the reported "they spin around like
-            // toy tops". The recording quantises to 0.1 game units (1.25 cm)
-            // and drops a sample until the player has covered 0.3 (3.75 cm),
-            // so at 60 fps a single frame's step is *below the resolution of
-            // the data it is derived from*: the direction between two
-            // interpolated points carries an angular error of order
-            // `atan(1.25 / 3.75)` — eighteen degrees — and it re-rolls every
-            // time the playhead crosses a sample boundary, which at a jog is
-            // every second or third frame.
-            //
-            // Measured over a real chunk (now `rehearsal::census_facing`): a mean
-            // of **136 deg/s of yaw across every player-frame, with 12.5% of
-            // frames turning faster than a full revolution per second**, and
-            // 89% of it in this branch. The players were not turning; the
-            // arithmetic was.
-            //
-            // A body's heading follows its MOMENTUM. Smoothing the travel
-            // vector — rather than the heading it produces — is the honest
-            // fix: it bridges the sample boundaries the noise lives on,
-            // shrinks through a genuine change of direction (which is
-            // physically right, a man slows to turn), and leaves the
-            // heading integrator free to be responsive.
-            //
-            // Off the leash as well, for the same reason: a man the engine
-            // is holding on a spot has no direction, and reading one off
-            // the jitter turned him to face each twitch of it.
-            let travelling = if playback.seeked {
-                Vec3::ZERO
-            } else {
-                stepping
-            };
-            let settling = if playback.seeked {
-                1.0
-            } else {
-                1.0 - (-match_delta / Self::TRAVEL_RESPONSE).exp()
-            };
-            let was = actor.travel;
-            actor.travel = was + (travelling - was) * settling;
+            let reset = playback.seeked || teleported || appeared;
+            if reset {
+                actor.reset_locomotion(position);
+            }
 
             // Did he just hit it? The ball has to be leaving him at pace and
             // from within reach. Requiring it to be moving AWAY is what tells
@@ -3750,7 +3704,7 @@ impl Actors {
             let landed = !playback.seeked
                 && actor.previous_height > Self::AIRBORNE_FEET
                 && actor.height <= Self::AIRBORNE_FEET;
-            let airborne = actor.track_flight(match_delta, launch, observed, playback.seeked);
+            let airborne = actor.track_flight(match_delta, launch, observed, reset);
             // And which way, recomputed every frame he is up there — for
             // exactly the reason it looks as though it should be latched.
             //
@@ -3780,101 +3734,40 @@ impl Actors {
                 actor.flight += Vec3::new(step.x, 0.0, step.z);
             }
 
-            let facing = Self::facing(&actor, &ball, position, step, gathering || heedless);
-            let mut turn_signal = 0.0_f32;
-            // …and how far round he actually came this frame, in radians,
-            // signed to his right — the yaw the standing man steps round
-            // with. See [`Gait::pivot`].
-            let mut yawed = 0.0_f32;
-            if let Some(facing) = Vec3::new(facing.x, 0.0, facing.z).try_normalize() {
-                // Rotating about Y by `atan2(x, z)` carries +Z onto the facing,
-                // and the model is built looking down +Z.
-                let wanted = facing.x.atan2(facing.z);
-                let swing = (wanted - actor.heading + PI).rem_euclid(TAU) - PI;
-                let mut applied = swing * if playback.seeked { 1.0 } else { turn };
-                // …but no faster than a body can. See `PIVOT_RATE`: the
-                // catch-up above is proportional and therefore unbounded,
-                // and the bound is the whole difference between a man
-                // arcing round and a man rotating on the spot. Measured in
-                // MATCH time so the cap is the same at 1x and at 8x.
-                if !playback.seeked {
-                    let eased = (actor.speed / Self::SPRINT).clamp(0.0, 1.0);
-                    let ceiling = (Self::PIVOT_RATE.0
-                        + (Self::PIVOT_RATE.1 - Self::PIVOT_RATE.0) * eased)
-                        * match_delta;
-                    applied = applied.clamp(-ceiling, ceiling);
-                    // Once committed, the trunk follows its launch rather
-                    // than swivelling after the ball as it passes the gloves.
-                    applied *= 1.0 - actor.extended();
-                }
-                actor.heading += applied;
-                yawed = applied;
-                // In radians per second of match time, normalised against a
-                // hard change of direction, so the lean is the same at any
-                // frame rate or playback speed.
-                let rate = applied / match_delta;
-                turn_signal = (rate / Self::HARD_TURN).clamp(-1.0, 1.0);
-            }
-            actor.bank_into(turn_signal, match_delta, playback.seeked);
-            let facing = Quat::from_rotation_y(actor.heading);
-            if transform.rotation != facing {
-                transform.rotation = facing;
-            }
-
-            // **Which way he is going, relative to which way he is pointed.**
-            //
-            // For everybody who turns to face his run this is straight ahead
-            // and every term it drives collapses to the plain forward cycle.
-            // It exists for the man it does not collapse for: a goalkeeper
-            // stays square to the play, and measured over a recorded match
-            // 47% of the frames in which he is moving with the ball inside
-            // forty metres are travelling BACKWARDS and 19% ACROSS himself.
-            // Drawn as a forward run cycle, that is a man being slid about on
-            // the grass — which is exactly how it was reported.
-            //
-            // Taken after this frame's turn, because the frame it is measured
-            // in is the one the pose is built in.
+            let bounds = spans
+                .as_ref()
+                .and_then(|spans| {
+                    spans
+                        .spans()
+                        .iter()
+                        .copied()
+                        .find(|(a, b)| playback.time_ms >= *a && playback.time_ms <= *b)
+                })
+                .unwrap_or((f64::NEG_INFINITY, f64::INFINITY));
+            let track = tracks
+                .as_ref()
+                .and_then(|tracks| tracks.players.get(&actor.id));
+            actor.advance_locomotion(
+                track,
+                bounds,
+                playback.time_ms,
+                match_delta,
+                &ball,
+                &mut transform,
+                step,
+                gathering || heedless,
+                reset,
+            );
             let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
             let sideways = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
             if airborne && !actor.bounce {
                 actor.tip = actor.flight.try_normalize().map_or(Vec2::ZERO, |going| {
                     Vec2::new(going.dot(sideways), going.dot(forward)) * actor.flat
                 });
-                // A take-off nothing saw coming has its side chosen on the
-                // first frame the flight has a direction to choose it by.
                 if actor.side == 0.0 {
                     actor.choose_side();
                 }
             }
-            let going = Vec3::new(actor.travel.x, 0.0, actor.travel.z);
-            let wanted_course = match going.try_normalize() {
-                // Below a shuffle there is no course to speak of and the
-                // amplitudes it drives are all but zero anyway; pointing it
-                // forward keeps a standing player out of a half-step.
-                Some(way) if actor.speed > Self::STEPPING * 0.5 => {
-                    Vec2::new(way.dot(sideways), way.dot(forward))
-                }
-                _ => Vec2::Y,
-            };
-            // Smoothed, and deliberately NOT renormalised afterwards. A
-            // change of direction takes a body time, and while it is
-            // happening the course is genuinely shorter than one — which
-            // shrinks the step, which is what a man turning does. Left
-            // unsmoothed, a keeper reversing across his line swapped the
-            // direction of his side-step inside a frame.
-            let settle = if playback.seeked {
-                1.0
-            } else {
-                1.0 - (-match_delta / Self::COURSE_RESPONSE).exp()
-            };
-            let was = actor.course;
-            actor.course = (was + (wanted_course - was) * settle).clamp_length_max(1.0);
-
-            // **And how much of that he takes with his legs turned rather
-            // than with a side-step.** Taken here rather than at the pose,
-            // because the stride model has to see the same answer the legs
-            // are drawn at or the cadence and the amplitude stop agreeing.
-            actor.open_legs(match_delta, playback.seeked);
 
             // Idle cycle runs on the clock, not on ground covered, because it
             // exists precisely for the player who is covering none.
@@ -4054,7 +3947,6 @@ impl Actors {
             // at the same pace all took the same number of steps to do it,
             // which is most of what "lacks variety" means. Cadence is the
             // thing an eye picks a runner out by.
-            actor.take_steps(match_delta, yawed, playback.seeked);
             // …the weight coming down through his knees as he arrives, and
             // how tired the running he has just done has left him.
             actor.absorb(landed, match_delta, playback.seeked);
@@ -4068,7 +3960,7 @@ impl Actors {
             // than rebuilding it. See [`PlayerActor::pose`].
             actor.pose = actor.gait();
             actor.posture = Posture::of(&actor.pose);
-            actor.plant_feet(&transform, match_delta, playback.seeked || teleported);
+            actor.plant_feet(&transform, 0.0, false);
         }
     }
 
@@ -4886,6 +4778,7 @@ impl PlayerActor {
             besieged: 0.0,
             previous: None,
             heading: 0.0,
+            heading_rate: 0.0,
             // Start everyone at a different point in the run cycle. The
             // phase advances with ground covered, so two players moving at
             // the same speed from the same start stay in step for the whole
@@ -4956,6 +4849,7 @@ impl PlayerActor {
     /// nowhere is zero.
     pub fn stand_to_attention(&mut self, heading: f32) {
         self.at_attention = Some(heading);
+        self.reset_locomotion(Vec3::ZERO);
         self.heading = heading;
         self.previous = None;
         self.speed = 0.0;
@@ -6370,6 +6264,7 @@ mod gesture;
 mod keeper_census;
 mod keeper_dive;
 mod keeper_motion;
+mod locomotion;
 pub(crate) mod pre_roll;
 #[cfg(test)]
 mod rehearsal;
