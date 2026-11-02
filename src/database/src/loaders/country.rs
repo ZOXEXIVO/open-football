@@ -390,5 +390,102 @@ mod tests {
 
         // Going home is always plausible, whatever the league.
         assert_eq!(affinity("cm", "es", "cm"), 1.0);
+
+        // Exercise the production offer builder and acceptance decision, not
+        // just the geography score. Change ONLY the export preference for a
+        // Portuguese player offered a job in Brazil. Fluency (or missing
+        // language data) used to make both offers identical here.
+        use core::club::player::language::{Language, LanguageProfile};
+        use core::country::core::builder::CountryBuilder;
+        use core::transfers::gate::{
+            AppraisalConfig, OfferKind, OfferViewBuilder, PlayerOfferAppraisal, PlayerStance,
+        };
+
+        let buyer = CountryBuilder::new()
+            .id(id("br"))
+            .code("br".into())
+            .slug("brazil".into())
+            .name("Brazil".into())
+            .continent_id(3)
+            .leagues(core::league::LeagueCollection::new(vec![]))
+            .clubs(vec![])
+            .build()
+            .unwrap();
+        let mut changed_profile = map.profile(id("pt")).clone();
+        let preference = changed_profile
+            .export
+            .iter_mut()
+            .find(|row| row.country_id == id("br"))
+            .expect("Portugal's shipped export list includes Brazil");
+        assert!(preference.weight < 0.5);
+        preference.weight = 1.0;
+        let preferred_map = MarketMap::new(
+            HashMap::from([
+                (id("pt"), changed_profile),
+                (id("br"), map.profile(id("br")).clone()),
+            ]),
+            HashMap::from([
+                (id("pt"), map.facts(id("pt")).unwrap().clone()),
+                (id("br"), map.facts(id("br")).unwrap().clone()),
+            ]),
+        );
+        let cfg = AppraisalConfig::default();
+        for language_profile in [
+            LanguageProfile {
+                fluent_mask: Language::country_language_mask("pt"),
+                conversational_mask: 0,
+            },
+            LanguageProfile::default(),
+        ] {
+            let stance = PlayerStance {
+                nationality_country_id: id("pt"),
+                seller_country_id: id("pt"),
+                seller_continent_id: 1,
+                language_profile,
+                ..PlayerStance::neutral()
+            };
+            for kind in [OfferKind::Permanent, OfferKind::Loan] {
+                let mut ordinary = OfferViewBuilder::build(
+                    kind,
+                    &buyer,
+                    1,
+                    &stance,
+                    stance.current_wage,
+                    None,
+                    0.0,
+                    0.5,
+                    &map,
+                );
+                let mut preferred = OfferViewBuilder::build(
+                    kind,
+                    &buyer,
+                    1,
+                    &stance,
+                    stance.current_wage,
+                    None,
+                    0.0,
+                    0.5,
+                    &preferred_map,
+                );
+                assert_eq!(ordinary.language_affinity, 1.0);
+                assert!(ordinary.place_familiarity < preferred.place_familiarity);
+                let assess = |offer: &core::transfers::gate::OfferView| {
+                    PlayerOfferAppraisal::appraise(&stance, offer, 0.0, &cfg)
+                };
+                let ordinary_demand = assess(&ordinary).reservation_wage;
+                let preferred_demand = assess(&preferred).reservation_wage;
+                assert!(ordinary_demand > preferred_demand);
+                let wage = (ordinary_demand as f64 + preferred_demand as f64) / 2.0;
+                ordinary.offered_wage = wage;
+                preferred.offered_wage = wage;
+                assert!(!assess(&ordinary).accepts(), "weak route at the same wage");
+                assert!(
+                    assess(&preferred).accepts(),
+                    "preferred route at the same wage"
+                );
+                ordinary.offered_wage = ordinary_demand as f64 * 1.02;
+                assert!(assess(&ordinary).accepts(), "a preference is not a ban");
+            }
+        }
     }
 }

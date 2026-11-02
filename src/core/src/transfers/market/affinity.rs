@@ -225,10 +225,11 @@ impl MarketAffinity {
     /// as distinct from what the buyer's market knows of him. Used by the
     /// personal-terms appraisal, where the question is whether HE would go.
     ///
-    /// Deliberately the maximum rather than a blend: one strong reason is
-    /// enough. His compatriots go there, or his diaspora lives there, or
-    /// they speak a language he has. Any of the three makes a place
-    /// familiar; needing all three would make every foreign move strange.
+    /// Export preferences and diaspora establish the destination's appeal.
+    /// Language eases the remaining adaptation cost, but cannot erase the
+    /// directional preference: speaking Portuguese does not make Portugal
+    /// to Brazil as attractive as Brazil to Portugal. This also matters for
+    /// missing language profiles, which the language model treats as fluent.
     pub fn player_affinity(
         map: &MarketMap,
         nationality_country_id: u32,
@@ -238,20 +239,16 @@ impl MarketAffinity {
         if nationality_country_id != 0 && nationality_country_id == buyer_country_id {
             return 1.0;
         }
-        // A man who speaks the place fluently already has his one strong
-        // reason; the maximum below cannot beat 1.0, so reading the corridor
-        // first is work with no consequence.
         let language = language_affinity.clamp(0.0, 1.0);
-        if language >= 1.0 {
-            return 1.0;
-        }
         let corridor = map.corridor(nationality_country_id, buyer_country_id);
         let export = corridor.data_export.unwrap_or(corridor.derived.export);
         let diaspora = map.diaspora_link(nationality_country_id, buyer_country_id);
-        export
-            .max(diaspora)
-            .max(language)
-            .clamp(AFFINITY_FLOOR, 1.0)
+        let destination = export.max(diaspora).clamp(AFFINITY_FLOOR, 1.0);
+        // Fluency removes a quarter of the remaining unfamiliarity. The
+        // preference still contributes at least three quarters, and a top
+        // destination stays fully attractive even without the language.
+        const LANGUAGE_RELIEF: f32 = 0.25;
+        (destination + LANGUAGE_RELIEF * language * (1.0 - destination)).clamp(AFFINITY_FLOOR, 1.0)
     }
 
     /// Geometric mean of the two sides when both cards name the corridor;
@@ -720,12 +717,16 @@ mod tests {
     }
 
     #[test]
-    fn a_fluent_speaker_reads_a_place_as_familiar_without_the_corridor() {
+    fn fluency_does_not_erase_a_weak_destination_preference() {
         let map = world();
-        // The short-circuit: nothing the corridor could say beats 1.0, so
-        // fluency answers on its own.
-        assert_eq!(MarketAffinity::player_affinity(&map, RU, CM, 1.0), 1.0);
-        assert!(MarketAffinity::player_affinity(&map, RU, CM, 0.0) < 0.15);
+        let unfamiliar = MarketAffinity::player_affinity(&map, RU, CM, 0.0);
+        let fluent = MarketAffinity::player_affinity(&map, RU, CM, 1.0);
+        assert!(unfamiliar < 0.15);
+        assert!(fluent > unfamiliar && fluent < 0.4);
+        assert!(
+            MarketAffinity::player_affinity(&map, BR, PT, 1.0)
+                > MarketAffinity::player_affinity(&map, PT, BR, 1.0)
+        );
     }
 
     #[test]
@@ -786,11 +787,11 @@ mod tests {
     }
 
     #[test]
-    fn language_alone_makes_a_place_familiar_to_a_player() {
+    fn language_eases_adaptation_without_replacing_country_preferences() {
         let map = world();
         let mute = MarketAffinity::player_affinity(&map, CM, RU, 0.0);
         let speaks = MarketAffinity::player_affinity(&map, CM, RU, 0.8);
         assert!(speaks > mute);
-        assert!(speaks >= 0.8);
+        assert!(speaks < 0.8);
     }
 }

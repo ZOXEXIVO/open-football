@@ -521,7 +521,7 @@ pub struct ConsentReading {
     /// How far he has lowered his sights, 0..1.
     pub resignation: f32,
     /// How familiar the destination is to HIM — his country's export
-    /// corridor, his diaspora, his language, whichever speaks loudest
+    /// corridor or diaspora, with language easing the adaptation cost
     /// ([`MarketAffinity::player_affinity`]). 1.0 for a domestic pair and
     /// for a man going home.
     ///

@@ -246,11 +246,14 @@ fn a_man_going_home_reads_familiar_whatever_the_cards_say() {
         "there is no such thing as a strange homecoming"
     );
     let abroad = MarketAffinity::player_affinity(&map, Geo::HOME, Geo::STRANGER, 0.0);
-    assert!(abroad < 1.0, "and a stranger's country is not home: {abroad}");
-    assert_eq!(
-        MarketAffinity::player_affinity(&map, Geo::HOME, Geo::STRANGER, 1.0),
-        1.0,
-        "a man who speaks the place has his one strong reason"
+    assert!(
+        abroad < 1.0,
+        "and a stranger's country is not home: {abroad}"
+    );
+    let fluent = MarketAffinity::player_affinity(&map, Geo::HOME, Geo::STRANGER, 1.0);
+    assert!(
+        fluent > abroad && fluent < 1.0,
+        "speaking the language helps without replacing the destination preference"
     );
 }
 
