@@ -22,7 +22,7 @@ use super::ledger::{
 use super::types::PlayerStatistics;
 use crate::league::Season;
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 // Type definitions live in `super::ledger` so storage and projection
 // can both depend on them without a module cycle. The projection only
@@ -291,7 +291,7 @@ impl PlayerStatisticsProjection {
         // slice) tells its own story, and stacking a synthetic spell row
         // on it would double-cover the season (and hand the live counter
         // to the wrong row).
-        let occupied_career_years: HashSet<u16> = history
+        let occupied_career_years: FxHashSet<u16> = history
             .season_ledger
             .iter()
             .filter(|e| e.competition_kind.counts_toward_career_history())
@@ -729,8 +729,8 @@ impl PlayerStatisticsProjection {
         // "Premier League U19" — instead of a generic kind label.
         let mut league_source = DominantCompetitionSource::default();
         let mut friendly_source = DominantCompetitionSource::default();
-        let mut per_cup: HashMap<(PlayerStatCompetitionKind, String), PlayerCompetitionStatsRow> =
-            HashMap::new();
+        let mut per_cup: FxHashMap<(PlayerStatCompetitionKind, String), PlayerCompetitionStatsRow> =
+            FxHashMap::default();
         // Stable order for the per-cup rows in the output.
         let mut cup_order: Vec<(PlayerStatCompetitionKind, String)> = Vec::new();
 
@@ -860,7 +860,7 @@ impl PlayerStatisticsProjection {
 
         // (season, team, league) → row. HashMap is fine for grouping;
         // we re-sort the result vector below for stable rendering.
-        let mut rows: HashMap<RowKey, PlayerHistoryRow> = HashMap::new();
+        let mut rows: FxHashMap<RowKey, PlayerHistoryRow> = FxHashMap::default();
         // Stable insertion order for rows that share their sort key
         // (rare, but keeps test output deterministic).
         let mut order: Vec<RowKey> = Vec::new();
@@ -868,14 +868,14 @@ impl PlayerStatisticsProjection {
         // own the spell metadata (is_loan, transfer_fee). Cup / friendly
         // slices carry no loan flag of their own, so they must not
         // overwrite the row's loan label with their hardcoded `false`.
-        let mut latest_league_seq: HashMap<RowKey, u32> = HashMap::new();
+        let mut latest_league_seq: FxHashMap<RowKey, u32> = FxHashMap::default();
         // Summed time-at-club (days within the season window) across the
         // row's League entries — `None` when no entry knows its span
         // (legacy adapters, synthetic rows). Drives the "<40% of the
         // season and never played → collapse" rule below. Loan and
         // non-loan spells at the same (season, team, league) fold into
         // one row, so their coverage sums too.
-        let mut row_coverage: HashMap<RowKey, Option<u16>> = HashMap::new();
+        let mut row_coverage: FxHashMap<RowKey, Option<u16>> = FxHashMap::default();
 
         // The anchor current-season spell is always shown — even at
         // 0 games — so the renderer can say "this is where the player
@@ -1259,8 +1259,8 @@ impl PlayerStatisticsProjection {
         // Wikki row carries real apps and a fee and does have a next-season
         // row, so without this it was promoted above BOTH loans and buried
         // the club he actually plays for.
-        let seasons_ended_on_loan: HashSet<u16> = {
-            let loan_seasons: HashSet<(u16, &str)> = result
+        let seasons_ended_on_loan: FxHashSet<u16> = {
+            let loan_seasons: FxHashSet<(u16, &str)> = result
                 .iter()
                 .filter(|r| r.is_loan)
                 .map(|r| (r.season.start_year, r.team_slug.as_str()))
@@ -1276,10 +1276,10 @@ impl PlayerStatisticsProjection {
                 .collect()
         };
 
-        let continuing_homes: HashSet<(u16, String, String)> = {
+        let continuing_homes: FxHashSet<(u16, String, String)> = {
             // Every (season, club) that has a NON-loan row — the raw "same
             // club appears next season" continuity signal.
-            let non_loan_seasons: HashSet<(u16, &str)> = result
+            let non_loan_seasons: FxHashSet<(u16, &str)> = result
                 .iter()
                 .filter(|r| !r.is_loan)
                 .map(|r| (r.season.start_year, r.team_slug.as_str()))
@@ -1287,7 +1287,7 @@ impl PlayerStatisticsProjection {
             // The subset of those that carry real content (apps or a genuine
             // signing fee). A returned-and-stayed parent proves itself real
             // either now (this row) or in the season it continues into.
-            let non_loan_content_seasons: HashSet<(u16, &str)> = result
+            let non_loan_content_seasons: FxHashSet<(u16, &str)> = result
                 .iter()
                 .filter(|r| {
                     !r.is_loan && (r.statistics.total_games() > 0 || r.transfer_fee.is_some())
@@ -1414,7 +1414,7 @@ impl PlayerStatisticsProjection {
         // Years that already carry SOME row (loan or otherwise) — those
         // are not gaps; the player accounted for that season elsewhere
         // (e.g. a loan-out spell or a different-team row).
-        let occupied_years: std::collections::HashSet<u16> =
+        let occupied_years: rustc_hash::FxHashSet<u16> =
             rows.iter().map(|r| r.season.start_year).collect();
 
         // The career span is bounded by the player's actual rows: we
@@ -1516,12 +1516,12 @@ impl PlayerStatisticsProjection {
     ) -> Vec<PlayerHistoryRowBreakdown> {
         let ledger = Self::build_ledger(history, live, None, current_date);
 
-        let mut breakdowns: HashMap<RowKey, PlayerHistoryRowBreakdown> = HashMap::new();
+        let mut breakdowns: FxHashMap<RowKey, PlayerHistoryRowBreakdown> = FxHashMap::default();
         let mut order: Vec<RowKey> = Vec::new();
         // Mirror the row's "latest League entry wins" rule for the
         // breakdown's is_loan flag, so the row and its breakdown stay
         // in lock-step on the loan label.
-        let mut latest_league_seq: HashMap<RowKey, u32> = HashMap::new();
+        let mut latest_league_seq: FxHashMap<RowKey, u32> = FxHashMap::default();
 
         for entry in ledger {
             let key = RowKey::from_entry(&entry);
@@ -4725,7 +4725,7 @@ mod projection_invariants_tests {
         // through to a single-League stub. Both modes are acceptable;
         // what's NOT acceptable is a row keyed differently from its
         // breakdown.
-        let bd_keys: std::collections::HashSet<(u16, String, String)> = bds
+        let bd_keys: rustc_hash::FxHashSet<(u16, String, String)> = bds
             .iter()
             .map(|b| {
                 (
@@ -4755,7 +4755,7 @@ mod projection_invariants_tests {
         // the latter case isn't masking a real bug, we assert there is
         // no breakdown that surfaces non-zero career-counting stats
         // without a matching row.
-        let row_keys: std::collections::HashSet<(u16, String, String)> = rows
+        let row_keys: rustc_hash::FxHashSet<(u16, String, String)> = rows
             .iter()
             .map(|r| {
                 (

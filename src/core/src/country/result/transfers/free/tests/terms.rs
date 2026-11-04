@@ -117,12 +117,12 @@ impl TermsFixtures {
 
     /// A long-unemployed keeper — pressure high enough that the old
     /// pressure-widened band would have admitted him almost anywhere.
-    fn candidate(player_id: u32, ability: u8, age: u8) -> FreeAgentCandidate {
+    fn candidate(player_id: u32, ability: u8, age: u8) -> FreeAgentCandidate<'static> {
         FreeAgentCandidate {
             player_id,
-            player_name: format!("Free{player_id}"),
+            player_name: format!("Free{player_id}").into(),
             club_id: 0,
-            club_name: "Free Agent".to_string(),
+            club_name: "Free Agent".into(),
             ability,
             potential: ability,
             age,
@@ -130,7 +130,7 @@ impl TermsFixtures {
             days_to_expiry: 0,
             nationality_country_reputation: 5000,
             nationality_region: ScoutingRegion::from_country(1, "en"),
-            nationality_country_code: "en".to_string(),
+            nationality_country_code: "en".into(),
             nationality_continent_id: 1,
             career_pressure: 0.9,
             days_free: 300,

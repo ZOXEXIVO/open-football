@@ -47,7 +47,7 @@ use crate::league::{
 use crate::r#match::{MatchResult, Score};
 use chrono::{Datelike, Duration, NaiveDate};
 use log::debug;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One team's line in a group standings snapshot — enough to seed a
 /// bracket and settle "better regular-season record" questions (final
@@ -179,13 +179,13 @@ pub struct LeaguePlayoff {
     pub series: Vec<PlayoffSeries>,
     /// Seed rank (1 = group winner) per qualified team, frozen at the
     /// draw. Ranks are within the team's own group.
-    pub seed_rank: HashMap<u32, u32>,
+    pub seed_rank: FxHashMap<u32, u32>,
     /// Bracket index per qualified team, frozen at the draw — resolves
     /// which conference a direct qualifier belongs to.
-    pub bracket_of: HashMap<u32, usize>,
+    pub bracket_of: FxHashMap<u32, usize>,
     /// Regular-season points per qualified team, frozen at the draw —
     /// settles cross-bracket hosting.
-    pub regular_points: HashMap<u32, u16>,
+    pub regular_points: FxHashMap<u32, u16>,
     /// Supporters' Shield (best overall regular-season record) for the
     /// current edition — MLS-format playoffs only.
     pub shield_team_id: Option<u32>,
@@ -222,9 +222,9 @@ impl LeaguePlayoff {
             stage,
             season_start_year: 0,
             series: Vec::new(),
-            seed_rank: HashMap::new(),
-            bracket_of: HashMap::new(),
-            regular_points: HashMap::new(),
+            seed_rank: FxHashMap::default(),
+            bracket_of: FxHashMap::default(),
+            regular_points: FxHashMap::default(),
             shield_team_id: None,
             past_champions: Vec::new(),
             shield_history: Vec::new(),
@@ -326,9 +326,9 @@ impl LeaguePlayoff {
         self.league.schedule = Schedule::new();
         self.league.matches = MatchStorage::new();
         self.series = Vec::new();
-        self.seed_rank = HashMap::new();
-        self.bracket_of = HashMap::new();
-        self.regular_points = HashMap::new();
+        self.seed_rank = FxHashMap::default();
+        self.bracket_of = FxHashMap::default();
+        self.regular_points = FxHashMap::default();
         self.shield_team_id = None;
         self.season_start_year = ctx.simulation.date.year();
         self.award_emitted_season_start_year = None;
@@ -679,7 +679,7 @@ impl LeaguePlayoff {
                 // yet — this keeps bye teams (who never appeared in a
                 // series) alive across rounds. Re-pair strongest-vs-
                 // weakest; byes keep falling to the top seeds.
-                let eliminated: HashSet<u32> = self
+                let eliminated: FxHashSet<u32> = self
                     .series
                     .iter()
                     .filter(|s| s.bracket == bracket)

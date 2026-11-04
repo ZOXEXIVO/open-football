@@ -15,13 +15,13 @@ use crate::{TransferInterestSource, TransferInterestStage};
 use chrono::NaiveDate;
 use rustc_hash::FxHashMap;
 use std::cmp::Reverse;
+use std::sync::OnceLock;
 
 use crate::club::player::language::LanguageProfile;
 use crate::club::player::mind::{GoalKind, MindClock};
 use crate::club::player::statistics::StuckCareerScan;
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::pipeline::LoanDestinationPreference;
 use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
@@ -87,39 +87,10 @@ impl PlayerView {
         None
     }
 
-    pub(in crate::transfers) fn find_player_summary_in_country(
-        country: &Country,
-        player_id: u32,
-        date: NaiveDate,
-    ) -> Option<PlayerSummary> {
-        for club in &country.clubs {
-            for team in &club.teams.teams {
-                if let Some(player) = team.players.find(player_id) {
-                    return Some(PlayerView::build_player_summary(
-                        country, club, player, date,
-                    ));
-                }
-            }
-        }
-        None
-    }
-
-    /// Build the market summary for a player already resolved to his club.
-    /// Shared by the country-wide scan above, the per-pass
-    /// [`CountryPlayerLookup`] fast path, and callers that walk rosters
-    /// directly (breakout watch) and therefore never need the scan.
-    pub(in crate::transfers) fn build_player_summary(
-        country: &Country,
-        club: &Club,
-        player: &Player,
-        date: NaiveDate,
-    ) -> PlayerSummary {
-        PlayerView::build_player_summary_ranked(country, club, player, date, None)
-    }
-
-    /// [`Self::build_player_summary`] with an optional precomputed
-    /// [`ClubGroupRanks`] for the club. The per-call fallback re-sorts
-    /// the main team's position group TWICE per summary (rank + best);
+    /// The market summary of a player already resolved to his club, with
+    /// an optional precomputed [`ClubGroupRanks`] for the club. The
+    /// per-call fallback re-sorts the main team's position group TWICE per
+    /// summary (rank + best);
     /// passes that resolve many candidates per club (shortlists,
     /// recommendation re-checks) hand the batched snapshot in instead —
     /// same values by construction (see `ClubGroupRanks`).
@@ -242,8 +213,9 @@ impl PlayerView {
                 .clamp(0.0, 1.0),
             // The parent's own side of a loan, staged where his club is
             // still in scope — a borrowing country cannot read any of
-            // the three from its own borrow.
-            loan_willingness: LoanAssetGuard::willingness_for(club, player, date),
+            // the three from its own borrow. Its view of lending him is
+            // read off the world pool alone.
+            parent_loan: None,
             career_plan: player.mind.career.plan_view(MindClock::day(date)),
             parent_subsidy: player.loan_subsidy(),
             player_name: player.full_name.to_string(),
@@ -258,7 +230,6 @@ impl PlayerView {
             skill_ability,
             observable_level: AbilityEstimator::observable_level(player),
             pathway_stage: player.pathway_stage(),
-            is_development: LoanAssetGuard::development_loan(player, club, date),
             // Sample-size-regressed: this candidate row
             // feeds the same scouting recommendation tier
             // logic as the scouting pipeline above.
@@ -343,23 +314,34 @@ impl PlayerView {
         player_id: u32,
         group: PlayerFieldPositionGroup,
     ) -> u8 {
-        let mut peers: Vec<(u32, u8)> = club
-            .teams
-            .iter()
-            .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
-            .flat_map(|t| t.players.players.iter())
-            .filter(|p| p.position().position_group() == group)
-            .map(|p| (p.id, p.player_attributes.current_ability))
-            .collect();
-        if peers.is_empty() {
+        let peers = || {
+            club.teams
+                .iter()
+                .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
+                .flat_map(|t| t.players.players.iter())
+                .filter(|p| p.position().position_group() == group)
+        };
+        let Some(own) = peers()
+            .find(|p| p.id == player_id)
+            .map(|p| p.player_attributes.current_ability)
+        else {
             return u8::MAX;
+        };
+        // His place in the group sorted best first, ties kept in squad
+        // order: everyone stronger, and every equal listed before him.
+        let mut ahead = 0usize;
+        let mut before_him = true;
+        for p in peers() {
+            if p.id == player_id {
+                before_him = false;
+                continue;
+            }
+            let ca = p.player_attributes.current_ability;
+            if ca > own || (ca == own && before_him) {
+                ahead += 1;
+            }
         }
-        peers.sort_by_key(|p| Reverse(p.1));
-        peers
-            .iter()
-            .position(|(pid, _)| *pid == player_id)
-            .map(|idx| idx.min(u8::MAX as usize - 1) as u8)
-            .unwrap_or(u8::MAX)
+        ahead.min(u8::MAX as usize - 1) as u8
     }
 
     /// Best CA at the given position group across the club's first-team
@@ -465,20 +447,23 @@ impl PlayerView {
     }
 }
 
-/// Per-pass `player_id → club` index for
-/// [`PlayerView::find_player_summary_in_country`]-style lookups.
+/// Per-pass `player_id → club` index for country-wide player lookups, and
+/// the summaries those lookups build.
 ///
 /// The scan walks every club/team in the country PER CANDIDATE, which made
 /// it the single hottest leaf of the transfer pipeline (shortlist builds,
 /// recommendation plausibility re-checks). Passes that resolve many
 /// candidates build this once, then each lookup is a hash probe + a
 /// verified fetch. The hit is verified against the club's roster (mirrors
-/// `resolve_foreign_player_club`'s stale-index guard) and any miss falls
-/// back to the authoritative scan, so results are identical to the scan —
-/// the index is built at pass start and rosters don't move mid-pass, the
-/// fallback is a pure safety net.
+/// `resolve_foreign_player_club`'s stale-index guard).
+///
+/// The passes it serves read the country without changing it and apply
+/// what they decide afterwards, so a player's summary is built the first
+/// time a pass asks for it and read from then on — his name formatted
+/// once, however many clubs weigh him.
 pub(in crate::transfers) struct CountryPlayerLookup {
-    club_idx_by_player: FxHashMap<u32, u32>,
+    /// Club index and summary slot of every rostered player.
+    slot_by_player: FxHashMap<u32, (u32, u32)>,
     /// Per-club [`ClubGroupRanks`], indexed like `Country::clubs`.
     /// Pre-built for every club (one group sort per club — trivial next
     /// to the scans this index serves) so `find_summary` stays `&self`
@@ -486,23 +471,27 @@ pub(in crate::transfers) struct CountryPlayerLookup {
     /// Rosters and CA don't move inside a pass — same freshness
     /// contract as `club_idx_by_player`.
     ranks_by_club: Vec<ClubGroupRanks>,
+    summaries: Vec<OnceLock<Box<PlayerSummary>>>,
 }
 
 impl CountryPlayerLookup {
     pub(in crate::transfers) fn build(country: &Country) -> Self {
-        let mut club_idx_by_player = FxHashMap::default();
+        let mut slot_by_player = FxHashMap::default();
         let mut ranks_by_club = Vec::with_capacity(country.clubs.len());
+        let mut slots = 0u32;
         for (club_idx, club) in country.clubs.iter().enumerate() {
             for team in &club.teams.teams {
                 for player in &team.players.players {
-                    club_idx_by_player.insert(player.id, club_idx as u32);
+                    slot_by_player.insert(player.id, (club_idx as u32, slots));
+                    slots += 1;
                 }
             }
             ranks_by_club.push(ClubGroupRanks::build(club));
         }
         CountryPlayerLookup {
-            club_idx_by_player,
+            slot_by_player,
             ranks_by_club,
+            summaries: (0..slots).map(|_| OnceLock::new()).collect(),
         }
     }
 
@@ -511,31 +500,29 @@ impl CountryPlayerLookup {
         country: &Country,
         player_id: u32,
         date: NaiveDate,
-    ) -> Option<PlayerSummary> {
-        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id)
-            && let Some(club) = country.clubs.get(club_idx as usize)
-            && let Some(player) = PlayerView::find_player_in_club(club, player_id)
-        {
-            return Some(PlayerView::build_player_summary_ranked(
+    ) -> Option<&PlayerSummary> {
+        let &(club_idx, slot) = self.slot_by_player.get(&player_id)?;
+        let club = country.clubs.get(club_idx as usize)?;
+        let player = PlayerView::find_player_in_club(club, player_id)?;
+        Some(self.summaries[slot as usize].get_or_init(|| {
+            Box::new(PlayerView::build_player_summary_ranked(
                 country,
                 club,
                 player,
                 date,
                 self.ranks_by_club.get(club_idx as usize),
-            ));
-        }
-        PlayerView::find_player_summary_in_country(country, player_id, date)
+            ))
+        }))
     }
 
-    /// Indexed counterpart of [`PlayerView::find_player_in_country`],
-    /// with the same verified-hit / scan-fallback contract as
-    /// [`Self::find_summary`].
+    /// Indexed counterpart of [`PlayerView::find_player_in_country`]: a
+    /// verified hit, else the scan.
     pub(in crate::transfers) fn find_player<'a>(
         &self,
         country: &'a Country,
         player_id: u32,
     ) -> Option<&'a Player> {
-        if let Some(&club_idx) = self.club_idx_by_player.get(&player_id)
+        if let Some(&(club_idx, _)) = self.slot_by_player.get(&player_id)
             && let Some(club) = country.clubs.get(club_idx as usize)
             && let Some(player) = PlayerView::find_player_in_club(club, player_id)
         {
@@ -545,17 +532,20 @@ impl CountryPlayerLookup {
     }
 }
 
-/// Per-club snapshot of the main team's position-group CA order —
-/// the batched counterpart of [`PlayerView::position_group_rank`] and
-/// [`PlayerView::best_ca_in_group`]. The pool build used to call
+/// Per-club snapshot of the first team's position-group depth chart, in the
+/// two orders the market reads: by what it can see of each man, and by
+/// current ability — the batched counterpart of
+/// [`PlayerView::position_group_rank`] and
+/// [`PlayerView::best_observable_in_group`]. The pool build used to call
 /// both PER PLAYER, and each call re-collected and re-sorted the whole
 /// group (`O(squad²·log)` per club per tick). One build serves every player
 /// of the club. Same values by construction: identical comparator over the
-/// identical roster sequence (stable sort keeps roster order on CA ties),
-/// `u8::MAX` for anyone not on the main team, `0` best for a missing group
+/// identical roster sequence (roster order breaks ties),
+/// `u8::MAX` for anyone not in the depth chart, `0` best for a missing group
 /// or missing main team.
 pub(in crate::transfers) struct ClubGroupRanks {
     rank_by_player: FxHashMap<u32, u8>,
+    ability_rank_by_player: FxHashMap<u32, u8>,
     best_by_group: [u8; PlayerFieldPositionGroup::COUNT],
     size_by_group: [u8; PlayerFieldPositionGroup::COUNT],
 }
@@ -563,6 +553,7 @@ pub(in crate::transfers) struct ClubGroupRanks {
 impl ClubGroupRanks {
     pub(in crate::transfers) fn build(club: &Club) -> Self {
         let mut rank_by_player = FxHashMap::default();
+        let mut ability_rank_by_player = FxHashMap::default();
         let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
         let mut size_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
         // The FIRST TEAM's own depth chart: the main squad plus the club's
@@ -578,31 +569,41 @@ impl ClubGroupRanks {
             .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
             .collect();
         if !squads.is_empty() {
-            let mut peers_by_group: [Vec<(u32, u8)>; PlayerFieldPositionGroup::COUNT] =
+            let mut peers_by_group: [Vec<(usize, u32, u8, u8)>; PlayerFieldPositionGroup::COUNT] =
                 Default::default();
             for p in squads.iter().flat_map(|t| t.players.players.iter()) {
-                let group = p.position().position_group();
-                peers_by_group[group.index()].push((p.id, AbilityEstimator::observable_level(p)));
+                let peers = &mut peers_by_group[p.position().position_group().index()];
+                peers.push((
+                    peers.len(),
+                    p.id,
+                    AbilityEstimator::observable_level(p),
+                    p.player_attributes.current_ability,
+                ));
             }
             for (group_idx, peers) in peers_by_group.iter_mut().enumerate() {
-                peers.sort_by_key(|p| Reverse(p.1));
-                best_by_group[group_idx] = peers.first().map(|(_, ca)| *ca).unwrap_or(0);
                 size_by_group[group_idx] = peers.len().min(u8::MAX as usize) as u8;
-                for (rank, (pid, _)) in peers.iter().enumerate() {
-                    rank_by_player.insert(*pid, rank.min(u8::MAX as usize - 1) as u8);
+                peers.sort_unstable_by_key(|&(order, _, _, ability)| (Reverse(ability), order));
+                for (rank, &(_, pid, _, _)) in peers.iter().enumerate() {
+                    ability_rank_by_player.insert(pid, rank.min(u8::MAX as usize - 1) as u8);
+                }
+                peers.sort_unstable_by_key(|&(order, _, level, _)| (Reverse(level), order));
+                best_by_group[group_idx] =
+                    peers.first().map(|&(_, _, level, _)| level).unwrap_or(0);
+                for (rank, &(_, pid, _, _)) in peers.iter().enumerate() {
+                    rank_by_player.insert(pid, rank.min(u8::MAX as usize - 1) as u8);
                 }
             }
         }
         ClubGroupRanks {
             rank_by_player,
+            ability_rank_by_player,
             best_by_group,
             size_by_group,
         }
     }
 
-    /// Rank of the player inside his main-team position group (0 = best),
-    /// `u8::MAX` when he isn't on the main team — same contract as
-    /// [`PlayerView::position_group_rank`].
+    /// Rank of the player inside his position group by what the market can
+    /// see of him (0 = best), `u8::MAX` when he isn't in the depth chart.
     pub(in crate::transfers) fn rank(&self, player_id: u32) -> u8 {
         self.rank_by_player
             .get(&player_id)
@@ -610,8 +611,16 @@ impl ClubGroupRanks {
             .unwrap_or(u8::MAX)
     }
 
-    /// Best main-team CA in the group — same contract as
-    /// [`PlayerView::best_ca_in_group`].
+    /// The same by current ability — [`PlayerView::position_group_rank`].
+    pub(in crate::transfers) fn ability_rank(&self, player_id: u32) -> u8 {
+        self.ability_rank_by_player
+            .get(&player_id)
+            .copied()
+            .unwrap_or(u8::MAX)
+    }
+
+    /// Best observable level in the group —
+    /// [`PlayerView::best_observable_in_group`].
     pub(in crate::transfers) fn best(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.best_by_group[group.index()]
     }
@@ -621,5 +630,141 @@ impl ClubGroupRanks {
     /// BEHIND it, rather than folding him into it at an invented rank.
     pub(in crate::transfers) fn group_size(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.size_by_group[group.index()]
+    }
+}
+
+#[cfg(test)]
+mod rank_table_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::shared::Location;
+    use crate::utils::random::engine::RandomEngine;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData,
+        PlayerCollection, PlayerGenerator, PlayerPositionType, StaffCollection, TeamCollection,
+        TeamReputation, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct RankFx;
+
+    impl RankFx {
+        const POSITIONS: [PlayerPositionType; 4] = [
+            PlayerPositionType::Goalkeeper,
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::Striker,
+        ];
+        /// Few distinct abilities, so every group carries ties.
+        const ABILITIES: [u8; 5] = [96, 110, 110, 124, 124];
+
+        fn team(id: u32, team_type: TeamType, first_id: u32, size: u32, date: NaiveDate) -> Team {
+            let names = PeopleNameGeneratorData {
+                first_names: vec!["Rank".to_string()],
+                last_names: vec!["Table".to_string()],
+                nicknames: vec![],
+            };
+            let players = (0..size as usize)
+                .map(|n| {
+                    let position = Self::POSITIONS[(n * 7 + id as usize) % Self::POSITIONS.len()];
+                    let mut player = PlayerGenerator::generate(1, date, position, 10, &names);
+                    player.id = first_id + n as u32;
+                    player.player_attributes.current_ability =
+                        Self::ABILITIES[(n * 3 + id as usize) % Self::ABILITIES.len()];
+                    player
+                })
+                .collect();
+            Team::builder()
+                .id(id)
+                .league_id(Some(1))
+                .club_id(1)
+                .name(format!("Team {id}"))
+                .slug(format!("team-{id}"))
+                .team_type(team_type)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(5000, 5000, 5000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        fn club(teams: Vec<Team>) -> Club {
+            Club::new(
+                1,
+                "Rank FC".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(10),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(teams),
+                ClubFacilities::default(),
+            )
+        }
+    }
+
+    #[test]
+    fn rank_table_matches_the_per_player_lookups() {
+        let _seed = RandomEngine::hold_seed_for_test(0x5EED_0054);
+        let date = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        let clubs = [
+            RankFx::club(vec![
+                RankFx::team(1, TeamType::Main, 1, 26, date),
+                RankFx::team(2, TeamType::U19, 101, 18, date),
+                RankFx::team(3, TeamType::B, 201, 20, date),
+            ]),
+            RankFx::club(vec![
+                RankFx::team(4, TeamType::B, 301, 20, date),
+                RankFx::team(5, TeamType::Main, 401, 23, date),
+            ]),
+            RankFx::club(vec![RankFx::team(6, TeamType::Reserve, 501, 22, date)]),
+        ];
+
+        let mut tied = 0;
+        for club in &clubs {
+            let ranks = ClubGroupRanks::build(club);
+            for group in PlayerFieldPositionGroup::ALL {
+                assert_eq!(
+                    ranks.best(group),
+                    PlayerView::best_observable_in_group(club, group)
+                );
+            }
+            let ranked: Vec<&Player> = club
+                .teams
+                .iter()
+                .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
+                .flat_map(|t| t.players.players.iter())
+                .collect();
+            for player in club.teams.iter().flat_map(|t| t.players.players.iter()) {
+                assert_eq!(
+                    ranks.ability_rank(player.id),
+                    PlayerView::position_group_rank(
+                        club,
+                        player.id,
+                        player.position().position_group()
+                    ),
+                    "player {}",
+                    player.id
+                );
+            }
+            for player in &ranked {
+                tied += ranked
+                    .iter()
+                    .filter(|peer| {
+                        peer.id < player.id
+                            && peer.position().position_group()
+                                == player.position().position_group()
+                            && peer.player_attributes.current_ability
+                                == player.player_attributes.current_ability
+                    })
+                    .count();
+            }
+        }
+        assert!(tied > 0, "the fixture must rank tied abilities");
+        assert_eq!(ClubGroupRanks::build(&clubs[0]).ability_rank(201), u8::MAX);
     }
 }

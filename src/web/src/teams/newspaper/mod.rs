@@ -713,7 +713,7 @@ impl PressDesk {
 
     fn result(data: &SimulatorData, result: &IssueResult, own_team_id: u32) -> ResultView {
         let (opponent_name, opponent_slug) = data
-            .team_data(result.opponent_team_id)
+            .team(result.opponent_team_id)
             .map(|team| (team.name.clone(), team.slug.clone()))
             .unwrap_or_else(|| (String::new(), String::new()));
 
@@ -1200,7 +1200,7 @@ impl StoryComposer {
         // off the schedule exactly as a report's is off the match log.
         if matches!(story.kind.desk(), NewsDesk::Match | NewsDesk::Preview) {
             return data
-                .team_data(story.other_id)
+                .team(story.other_id)
                 .map(|team| (team.name.clone(), team.slug.clone()))
                 .unwrap_or_default();
         }

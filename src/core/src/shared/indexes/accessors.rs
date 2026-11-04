@@ -1,7 +1,4 @@
-use super::TeamData;
-use crate::continent::Continent;
 use crate::country::Country;
-use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::gate::build::TransferPlausibilityBuilder;
@@ -10,9 +7,7 @@ use crate::transfers::pipeline::ClubTransferPlan;
 use crate::transfers::scouting::config::{RealismTarget, ScoutingConfig};
 use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::value::PlayerValuationCalculator;
-use crate::{
-    Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team,
-};
+use crate::{Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff};
 use chrono::NaiveDate;
 use std::cmp::Reverse;
 
@@ -293,175 +288,6 @@ pub struct StaffMonitoringRow {
 }
 
 impl SimulatorData {
-    pub fn continent(&self, id: u32) -> Option<&Continent> {
-        self.continents.iter().find(|c| c.id == id)
-    }
-
-    pub fn continent_mut(&mut self, id: u32) -> Option<&mut Continent> {
-        self.continents.iter_mut().find(|c| c.id == id)
-    }
-
-    pub fn country(&self, id: u32) -> Option<&Country> {
-        self.continents
-            .iter()
-            .flat_map(|c| &c.countries)
-            .find(|c| c.id == id)
-    }
-
-    pub fn country_mut(&mut self, id: u32) -> Option<&mut Country> {
-        self.continents
-            .iter_mut()
-            .flat_map(|c| &mut c.countries)
-            .find(|c| c.id == id)
-    }
-
-    pub fn league(&self, id: u32) -> Option<&League> {
-        if let Some((ci, coi, li)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_league_position(id))
-        {
-            let (ci, coi, li) = (ci as usize, coi as usize, li as usize);
-            if let Some(league) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.leagues.leagues.get(li))
-                && league.id == id
-            {
-                return Some(league);
-            }
-        }
-
-        // Fallback: ID-based walk for stale-index recovery.
-        if let Some(league) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_league_location(id))
-            .and_then(|(league_continent_id, league_country_id)| {
-                self.continent(league_continent_id)
-                    .and_then(|continent| {
-                        continent
-                            .countries
-                            .iter()
-                            .find(|country| country.id == league_country_id)
-                    })
-                    .and_then(|country| {
-                        country
-                            .leagues
-                            .leagues
-                            .iter()
-                            .find(|league| league.id == id)
-                    })
-            })
-        {
-            return Some(league);
-        }
-
-        // Domestic cups live on `Country::domestic_cup`, outside the
-        // positional `leagues` index, so resolve them by a direct scan.
-        // Only the web/global read path reaches here for cups; in-sim cup
-        // lookups go through the country-local `CountryProcessCtx`.
-        if let Some(league) = self
-            .continents
-            .iter()
-            .flat_map(|c| &c.countries)
-            .filter_map(|country| country.domestic_cup.as_ref())
-            .map(|cup| &cup.league)
-            .find(|league| league.id == id)
-        {
-            return Some(league);
-        }
-
-        // Grouped-competition playoffs are stored on `Country::playoffs`,
-        // also outside the positional index.
-        self.continents
-            .iter()
-            .flat_map(|c| &c.countries)
-            .flat_map(|country| &country.playoffs)
-            .map(|pf| &pf.league)
-            .find(|league| league.id == id)
-    }
-
-    pub fn league_mut(&mut self, id: u32) -> Option<&mut League> {
-        if let Some((ci, coi, li)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_league_position(id))
-        {
-            let (ci, coi, li) = (ci as usize, coi as usize, li as usize);
-            let resolved = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.leagues.leagues.get(li))
-                .map(|l| l.id == id)
-                .unwrap_or(false);
-            if resolved {
-                return self.continents[ci].countries[coi]
-                    .leagues
-                    .leagues
-                    .get_mut(li);
-            }
-        }
-
-        // Fallback: ID-based walk for stale-index recovery. The location
-        // index covers both standings leagues and domestic cups (both call
-        // `add_league_location`), so resolve the (continent, country) once
-        // and then take a single mutable borrow — checking the standings
-        // list first and the cup second.
-        let (cont_id, country_id) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_league_location(id))?;
-        let continent = self.continent_mut(cont_id)?;
-        let country = continent
-            .countries
-            .iter_mut()
-            .find(|country| country.id == country_id)?;
-        if let Some(idx) = country.leagues.leagues.iter().position(|l| l.id == id) {
-            return country.leagues.leagues.get_mut(idx);
-        }
-        if country
-            .domestic_cup
-            .as_ref()
-            .is_some_and(|c| c.league.id == id)
-        {
-            return country.domestic_cup.as_mut().map(|c| &mut c.league);
-        }
-        country
-            .playoffs
-            .iter_mut()
-            .find(|p| p.league.id == id)
-            .map(|p| &mut p.league)
-    }
-
-    pub fn team_data(&self, id: u32) -> Option<&TeamData> {
-        self.indexes.as_ref().unwrap().get_team_data(id)
-    }
-
-    pub fn country_by_club(&self, club_id: u32) -> Option<&Country> {
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_location(club_id))
-            .and_then(|(club_continent_id, club_country_id)| {
-                self.continent(club_continent_id).and_then(|continent| {
-                    continent
-                        .countries
-                        .iter()
-                        .find(|country| country.id == club_country_id)
-                })
-            })
-    }
-
-    /// Get the continent a club belongs to
-    pub fn continent_by_club(&self, club_id: u32) -> Option<&Continent> {
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_location(club_id))
-            .and_then(|(continent_id, _)| self.continent(continent_id))
-    }
-
     /// Get all continental competition matches (CL, EL, Conference, Copa
     /// Libertadores) for a club.
     pub fn continental_matches_for_club(&self, club_id: u32) -> Vec<ContinentalMatchRow<'_>> {
@@ -522,374 +348,6 @@ impl SimulatorData {
         }
 
         matches
-    }
-
-    pub fn club(&self, id: u32) -> Option<&Club> {
-        if let Some((ci, coi, cli)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_position(id))
-        {
-            let (ci, coi, cli) = (ci as usize, coi as usize, cli as usize);
-            if let Some(club) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                && club.id == id
-            {
-                return Some(club);
-            }
-        }
-
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_location(id))
-            .and_then(|(club_continent_id, club_country_id)| {
-                self.continent(club_continent_id).and_then(|continent| {
-                    continent
-                        .countries
-                        .iter()
-                        .find(|country| country.id == club_country_id)
-                })
-            })
-            .and_then(|country| country.clubs.iter().find(|club| club.id == id))
-    }
-
-    pub fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
-        if let Some((ci, coi, cli)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_position(id))
-        {
-            let (ci, coi, cli) = (ci as usize, coi as usize, cli as usize);
-            let resolved = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .map(|c| c.id == id)
-                .unwrap_or(false);
-            if resolved {
-                return self.continents[ci].countries[coi].clubs.get_mut(cli);
-            }
-        }
-
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_club_location(id))
-            .and_then(|(club_continent_id, club_country_id)| {
-                self.continent_mut(club_continent_id).and_then(|continent| {
-                    continent
-                        .countries
-                        .iter_mut()
-                        .find(|country| country.id == club_country_id)
-                })
-            })
-            .and_then(|country| country.clubs.iter_mut().find(|club| club.id == id))
-    }
-
-    pub fn team(&self, id: u32) -> Option<&Team> {
-        if let Some((ci, coi, cli, ti)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_team_position(id))
-        {
-            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
-            if let Some(team) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .and_then(|c| c.teams.teams.get(ti))
-                && team.id == id
-            {
-                return Some(team);
-            }
-        }
-
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_team_location(id))
-            .and_then(|(team_continent_id, team_country_id, team_club_id)| {
-                self.continent(team_continent_id)
-                    .and_then(|continent| {
-                        continent
-                            .countries
-                            .iter()
-                            .find(|country| country.id == team_country_id)
-                    })
-                    .and_then(|country| country.clubs.iter().find(|club| club.id == team_club_id))
-                    .and_then(|club| club.teams.find(id))
-            })
-    }
-
-    pub fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
-        if let Some((ci, coi, cli, ti)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_team_position(id))
-        {
-            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
-            let resolved = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .and_then(|c| c.teams.teams.get(ti))
-                .map(|t| t.id == id)
-                .unwrap_or(false);
-            if resolved {
-                return self.continents[ci].countries[coi].clubs[cli]
-                    .teams
-                    .teams
-                    .get_mut(ti);
-            }
-        }
-
-        self.indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_team_location(id))
-            .and_then(|(team_continent_id, team_country_id, team_club_id)| {
-                self.continent_mut(team_continent_id)
-                    .and_then(|continent| {
-                        continent
-                            .countries
-                            .iter_mut()
-                            .find(|country| country.id == team_country_id)
-                    })
-                    .and_then(|country| {
-                        country
-                            .clubs
-                            .iter_mut()
-                            .find(|club| club.id == team_club_id)
-                    })
-                    .and_then(|club| club.teams.find_mut(id))
-            })
-    }
-
-    pub fn player(&self, id: u32) -> Option<&Player> {
-        // Fast path: positional lookup
-        if let Some((ci, coi, cli, ti)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_player_position(id))
-        {
-            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
-            if let Some(player) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .and_then(|c| c.teams.teams.get(ti))
-                .and_then(|t| t.players.find(id))
-            {
-                return Some(player);
-            }
-        }
-
-        // Fallback: brute-force scan (index may be stale after transfers)
-        self.player_brute_force(id)
-    }
-
-    pub fn player_with_team(&self, player_id: u32) -> Option<(&Player, &Team)> {
-        // Fast path: positional lookup
-        if let Some((ci, coi, cli, ti)) = self
-            .indexes
-            .as_ref()
-            .and_then(|idx| idx.get_player_position(player_id))
-        {
-            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
-            if let Some(team) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .and_then(|c| c.teams.teams.get(ti))
-                && let Some(player) = team.players.find(player_id)
-            {
-                return Some((player, team));
-            }
-        }
-
-        // Fallback: brute-force
-        for continent in &self.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    for team in &club.teams.teams {
-                        if let Some(player) = team.players.find(player_id) {
-                            return Some((player, team));
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn player_brute_force(&self, id: u32) -> Option<&Player> {
-        for continent in &self.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    for team in &club.teams.teams {
-                        if let Some(player) = team.players.find(id) {
-                            return Some(player);
-                        }
-                    }
-                }
-                // Also check retired players
-                if let Some(player) = country.retired_players.iter().find(|p| p.id == id) {
-                    return Some(player);
-                }
-                // Also check national team generated (synthetic) players
-                if let Some(player) = country
-                    .national_team
-                    .generated_squad
-                    .iter()
-                    .find(|p| p.id == id)
-                {
-                    return Some(player);
-                }
-            }
-        }
-        // Check free agents pool
-        if let Some(player) = self.free_agents.iter().find(|p| p.id == id) {
-            return Some(player);
-        }
-        None
-    }
-
-    /// Find a retired player by ID across all countries.
-    pub fn retired_player(&self, id: u32) -> Option<&Player> {
-        for continent in &self.continents {
-            for country in &continent.countries {
-                if let Some(player) = country.retired_players.iter().find(|p| p.id == id) {
-                    return Some(player);
-                }
-            }
-        }
-        None
-    }
-
-    pub fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
-        // Phase 1: immutable search for array indices
-        let pos = self.find_player_position(id);
-
-        if let Some((ci, coi, cli, ti)) = pos {
-            // Phase 2: mutable access at known position
-            return self.continents[ci].countries[coi].clubs[cli].teams.teams[ti]
-                .players
-                .find_mut(id);
-        }
-
-        // Check free agents pool
-        self.free_agents.iter_mut().find(|p| p.id == id)
-    }
-
-    pub fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
-        // Fast path: positional lookup. Verify the path still resolves
-        // to a team that contains this player — array indices go stale
-        // when a Vec shrinks (retirement, dissolved club) before the
-        // next index refresh.
-        if let Some((ci, coi, cli, ti)) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_player_position(id))
-        {
-            let (ci, coi, cli, ti) = (ci as usize, coi as usize, cli as usize, ti as usize);
-            if let Some(team) = self
-                .continents
-                .get(ci)
-                .and_then(|c| c.countries.get(coi))
-                .and_then(|c| c.clubs.get(cli))
-                .and_then(|c| c.teams.teams.get(ti))
-                && team.players.contains(id)
-            {
-                return Some((ci, coi, cli, ti));
-            }
-        }
-
-        // Fallback: brute-force scan (index may be stale after transfers)
-        for (ci, continent) in self.continents.iter().enumerate() {
-            for (coi, country) in continent.countries.iter().enumerate() {
-                for (cli, club) in country.clubs.iter().enumerate() {
-                    for (ti, team) in club.teams.iter().enumerate() {
-                        if team.players.contains(id) {
-                            return Some((ci, coi, cli, ti));
-                        }
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Find the array indices (continent, country, club, main team) for a club by ID.
-    pub fn find_club_main_team(&self, club_id: u32) -> Option<(usize, usize, usize, usize)> {
-        for (ci, continent) in self.continents.iter().enumerate() {
-            for (coi, country) in continent.countries.iter().enumerate() {
-                for (cli, club) in country.clubs.iter().enumerate() {
-                    if club.id == club_id {
-                        let ti = club.teams.main_index().unwrap_or(0);
-                        return Some((ci, coi, cli, ti));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Rebuild player indexes after a transfer/loan move.
-    pub fn rebuild_indexes(&mut self) {
-        if let Some(mut indexes) = self.indexes.take() {
-            indexes.refresh_player_indexes(self);
-            self.indexes = Some(indexes);
-        }
-    }
-
-    /// Rebuild indexes only if a transfer actually moved a player today.
-    /// Resets `dirty_player_index` after a successful refresh so the next
-    /// tick starts clean. Walking the world every day is wasteful — this
-    /// is the cheap default the orchestrator should call.
-    pub fn rebuild_indexes_if_dirty(&mut self) {
-        if self.dirty_player_index {
-            self.rebuild_indexes();
-            self.dirty_player_index = false;
-        }
-    }
-
-    pub fn staff_with_team(&self, staff_id: u32) -> Option<(&Staff, &Team)> {
-        // Fast path: indexed lookup
-        if let Some((continent_id, country_id, club_id, team_id)) = self
-            .indexes
-            .as_ref()
-            .and_then(|idx| idx.get_staff_location(staff_id))
-        {
-            let result = self
-                .continent(continent_id)
-                .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
-                .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
-                .and_then(|cl| cl.teams.find(team_id))
-                .and_then(|team| team.staffs.find(staff_id).map(|s| (s, team)));
-
-            if result.is_some() {
-                return result;
-            }
-        }
-
-        // Fallback: brute-force
-        for continent in &self.continents {
-            for country in &continent.countries {
-                for club in &country.clubs {
-                    for team in club.teams.iter() {
-                        if let Some(staff) = team.staffs.find(staff_id) {
-                            return Some((staff, team));
-                        }
-                    }
-                }
-            }
-        }
-        None
     }
 
     /// Detailed monitoring summary for a player. Returns one row per
@@ -1399,8 +857,8 @@ use crate::transfers::scouting::recruitment::{
     RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
 };
 use crate::utils::DateUtils;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 
 /// Holds references to the simulator, club, and pre-computed lookups
 /// used while assembling a `ClubScoutingDashboard`. Build once via
@@ -1410,13 +868,13 @@ pub struct ClubScoutingDashboardBuilder<'a> {
     club: &'a Club,
     today: NaiveDate,
     /// Latest scout vote per player across the meeting history.
-    latest_vote_per_player: HashMap<u32, ScoutVoteChoice>,
+    latest_vote_per_player: FxHashMap<u32, ScoutVoteChoice>,
     /// Latest meeting decision per player.
-    latest_decision_per_player: HashMap<u32, RecruitmentDecisionType>,
+    latest_decision_per_player: FxHashMap<u32, RecruitmentDecisionType>,
     /// Open transfer requests indexed by id, used for monitoring context.
-    request_lookup: HashMap<u32, &'a TransferRequest>,
+    request_lookup: FxHashMap<u32, &'a TransferRequest>,
     /// Scouting assignments indexed by id, used for report context.
-    assignment_lookup: HashMap<u32, &'a ScoutingAssignment>,
+    assignment_lookup: FxHashMap<u32, &'a ScoutingAssignment>,
 }
 
 /// Per-scout accumulator built up while folding monitoring rows; later
@@ -1430,7 +888,7 @@ struct ScoutWorkAccumulator {
     confidence_sum: f32,
     confidence_count: u32,
     last_observed: Option<NaiveDate>,
-    regions: HashSet<ScoutingRegion>,
+    regions: FxHashSet<ScoutingRegion>,
 }
 
 impl<'a> ClubScoutingDashboardBuilder<'a> {
@@ -1440,8 +898,8 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
         // Walk meeting history newest-first so the first hit per player
         // wins for both votes and decisions.
-        let mut latest_vote_per_player = HashMap::new();
-        let mut latest_decision_per_player = HashMap::new();
+        let mut latest_vote_per_player = FxHashMap::default();
+        let mut latest_decision_per_player = FxHashMap::default();
         for meeting in plan.recruitment_meetings.iter().rev() {
             for v in &meeting.player_votes {
                 latest_vote_per_player.entry(v.player_id).or_insert(v.vote);
@@ -1453,9 +911,9 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
             }
         }
 
-        let request_lookup: HashMap<u32, &TransferRequest> =
+        let request_lookup: FxHashMap<u32, &TransferRequest> =
             plan.transfer_requests.iter().map(|r| (r.id, r)).collect();
-        let assignment_lookup: HashMap<u32, &ScoutingAssignment> = plan
+        let assignment_lookup: FxHashMap<u32, &ScoutingAssignment> = plan
             .scouting_assignments
             .iter()
             .map(|a| (a.id, a))
@@ -1602,7 +1060,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
         } else {
             0
         };
-        let mut scout_set: HashSet<u32> = HashSet::new();
+        let mut scout_set: FxHashSet<u32> = FxHashSet::default();
         for m in &active_monitorings {
             scout_set.insert(m.scout_staff_id);
         }
@@ -1627,7 +1085,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
     fn build_scout_workload(&self) -> Vec<ScoutWorkloadRow> {
         let plan = self.plan();
-        let mut workload_map: HashMap<u32, ScoutWorkAccumulator> = HashMap::new();
+        let mut workload_map: FxHashMap<u32, ScoutWorkAccumulator> = FxHashMap::default();
 
         // Seed every scouting-relevant staff on the club so empty rows
         // still show up in the workload table.
@@ -1653,7 +1111,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                         confidence_sum: 0.0,
                         confidence_count: 0,
                         last_observed: None,
-                        regions: HashSet::new(),
+                        regions: FxHashSet::default(),
                     });
             }
         }
@@ -1675,7 +1133,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
                         confidence_sum: 0.0,
                         confidence_count: 0,
                         last_observed: None,
-                        regions: HashSet::new(),
+                        regions: FxHashSet::default(),
                     });
             entry.active += 1;
             if matches!(m.status, ScoutMonitoringStatus::ReportReady) {
@@ -1875,7 +1333,7 @@ impl<'a> ClubScoutingDashboardBuilder<'a> {
 
     fn build_scouting_reports(&self) -> Vec<ScoutingReportRow> {
         let plan = self.plan();
-        let active_report_player_ids: HashSet<u32> =
+        let active_report_player_ids: FxHashSet<u32> =
             plan.scouting_reports.iter().map(|r| r.player_id).collect();
         let mut rows: Vec<ScoutingReportRow> = plan
             .scouting_reports
@@ -2172,8 +1630,8 @@ mod interested_clubs_tests {
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, PlayerSquadStatus, StaffCollection, TeamCollection, TeamReputation, TeamType,
-        TrainingSchedule,
+        PlayerSkills, PlayerSquadStatus, StaffCollection, Team, TeamCollection, TeamReputation,
+        TeamType, TrainingSchedule,
     };
     use chrono::{NaiveDate, NaiveTime};
 
@@ -2329,6 +1787,33 @@ mod interested_clubs_tests {
         fn weak_buyer() -> Club {
             Self::club(SAMBENEDETTESE, "Sambenedettese", 100, 1800, Vec::new())
         }
+    }
+
+    // A roster player the index has not seen yet, sharing an id with a
+    // pooled free agent: the pool answers before any roster is walked.
+    #[test]
+    fn pooled_free_agent_is_read_before_any_roster_walk() {
+        let mut data = Fx::sim(Fx::weak_buyer());
+        let mut pooled = Fx::maximenko();
+        pooled.id = 77;
+        pooled.player_attributes.current_ability = 40;
+        let mut rostered = Fx::maximenko();
+        rostered.id = 77;
+        data.continents[0].countries[0].clubs[0].teams.teams[0]
+            .players
+            .players
+            .push(rostered);
+        data.free_agents.push(pooled);
+
+        assert_eq!(
+            data.player(77).map(|p| p.player_attributes.current_ability),
+            Some(40)
+        );
+        assert_eq!(
+            data.player_mut(77)
+                .map(|p| p.player_attributes.current_ability),
+            Some(40)
+        );
     }
 
     // The bug: a weak lower-league club abroad has the strong first-teamer

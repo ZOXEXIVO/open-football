@@ -3,7 +3,7 @@ use crate::league::player_of_week::PlayerOfTheWeekSelector;
 use crate::world::SimulatorData;
 use chrono::NaiveDate;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Per-league aggregates for a single Monday window, built once and
 /// shared across all four weekly award ticks (Player of the Week, Young
@@ -14,8 +14,8 @@ use std::collections::HashMap;
 /// `CandidateAggregate` (driver of Team of the Week) so the four ticks
 /// reduce to a per-league lookup.
 pub(crate) struct MondayAwardCache {
-    weekly: HashMap<u32, HashMap<u32, WeeklyAggregate>>,
-    candidate: HashMap<u32, HashMap<u32, CandidateAggregate>>,
+    weekly: FxHashMap<u32, FxHashMap<u32, WeeklyAggregate>>,
+    candidate: FxHashMap<u32, FxHashMap<u32, CandidateAggregate>>,
 }
 
 impl MondayAwardCache {
@@ -36,10 +36,10 @@ impl MondayAwardCache {
             })
             .collect();
 
-        let mut weekly: HashMap<u32, HashMap<u32, WeeklyAggregate>> =
-            HashMap::with_capacity(entries.len());
-        let mut candidate: HashMap<u32, HashMap<u32, CandidateAggregate>> =
-            HashMap::with_capacity(entries.len());
+        let mut weekly: FxHashMap<u32, FxHashMap<u32, WeeklyAggregate>> =
+            FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+        let mut candidate: FxHashMap<u32, FxHashMap<u32, CandidateAggregate>> =
+            FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for (lid, w, c) in entries {
             weekly.insert(lid, w);
             candidate.insert(lid, c);
@@ -47,14 +47,14 @@ impl MondayAwardCache {
         MondayAwardCache { weekly, candidate }
     }
 
-    pub(super) fn weekly_for(&self, league_id: u32) -> Option<&HashMap<u32, WeeklyAggregate>> {
+    pub(super) fn weekly_for(&self, league_id: u32) -> Option<&FxHashMap<u32, WeeklyAggregate>> {
         self.weekly.get(&league_id)
     }
 
     pub(super) fn candidate_for(
         &self,
         league_id: u32,
-    ) -> Option<&HashMap<u32, CandidateAggregate>> {
+    ) -> Option<&FxHashMap<u32, CandidateAggregate>> {
         self.candidate.get(&league_id)
     }
 }

@@ -4065,7 +4065,7 @@ impl Default for TeamNewsroom {
 mod tests {
     use super::{NewsStoryKind, NewspaperIssue, PressMood, TeamNewsroom};
     use chrono::NaiveDate;
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     struct Press;
 
@@ -4083,7 +4083,7 @@ mod tests {
 
     #[test]
     fn every_kind_has_its_own_translation_stem() {
-        let stems: HashSet<&str> = NewsStoryKind::ALL
+        let stems: FxHashSet<&str> = NewsStoryKind::ALL
             .iter()
             .map(|kind| kind.key_stem())
             .collect();

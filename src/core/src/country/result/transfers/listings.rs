@@ -26,7 +26,7 @@ use crate::{
 use crate::{PathwayStage, PlayerPlan, TransferItem};
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[cfg_attr(test, derive(Debug))]
 pub(crate) enum ListingDecision {
@@ -270,8 +270,8 @@ impl ListingPass {
     /// loan-out candidate for `Loa`) — so a genuinely-listed player is never
     /// stripped off the market by mistake.
     fn reconcile_stale_market_statuses(country: &mut Country) {
-        let mut transfer_listed: HashSet<u32> = HashSet::new();
-        let mut loan_listed: HashSet<u32> = HashSet::new();
+        let mut transfer_listed: FxHashSet<u32> = FxHashSet::default();
+        let mut loan_listed: FxHashSet<u32> = FxHashSet::default();
         for listing in &country.transfer_market.listings {
             if listing.status != TransferListingStatus::Available {
                 continue;
@@ -291,7 +291,7 @@ impl ListingPass {
             // Owned snapshot so the immutable borrow of `transfer_plan` ends
             // before the mutable walk of `teams` (disjoint `club` fields, but
             // the set outlives the borrow this way).
-            let loan_candidates: HashSet<u32> = club
+            let loan_candidates: FxHashSet<u32> = club
                 .transfer_plan
                 .loan_out_candidates
                 .iter()
@@ -330,7 +330,7 @@ impl ListingPass {
         let _ = date;
         // Pass 1 (read): genuine, still-open seller listings. Synthetic
         // rows and expiring contracts aren't a player waiting on a move.
-        let listed_ids: HashSet<u32> = country
+        let listed_ids: FxHashSet<u32> = country
             .transfer_market
             .listings
             .iter()
@@ -372,7 +372,7 @@ impl ListingPass {
     pub(crate) fn review_stranded_listings(country: &mut Country, date: NaiveDate) {
         // Pass 1 (read): the refused listings, grouped by club, and the
         // market each club sells into.
-        let in_negotiation: HashSet<u32> = country
+        let in_negotiation: FxHashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
@@ -384,7 +384,7 @@ impl ListingPass {
             })
             .map(|n| n.player_id)
             .collect();
-        let mut stranded: HashMap<u32, Vec<StrandedListing>> = HashMap::new();
+        let mut stranded: FxHashMap<u32, Vec<StrandedListing>> = FxHashMap::default();
         for listing in country
             .transfer_market
             .listings
@@ -404,7 +404,7 @@ impl ListingPass {
         if stranded.is_empty() {
             return;
         }
-        let markets: HashMap<u32, StrandedMarket> = country
+        let markets: FxHashMap<u32, StrandedMarket> = country
             .clubs
             .iter()
             .filter(|c| stranded.contains_key(&c.id))
@@ -523,7 +523,7 @@ impl ListingPass {
         country: &Country,
         listings: Vec<PendingListing>,
     ) -> (Vec<PendingListing>, Vec<PendingListing>) {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
 
         const EXEMPT_REASONS: &[&str] = &[
             "dec_reason_player_requested",
@@ -560,8 +560,8 @@ impl ListingPass {
                 .unwrap_or(0)
         };
 
-        let mut groups: HashMap<(u32, PlayerFieldPositionGroup), Vec<PendingListing>> =
-            HashMap::new();
+        let mut groups: FxHashMap<(u32, PlayerFieldPositionGroup), Vec<PendingListing>> =
+            FxHashMap::default();
         let mut off_main: Vec<PendingListing> = Vec::new();
         for listing in capped {
             if let Some(group) = player_group(listing.club_id, listing.player_id) {
@@ -612,7 +612,7 @@ impl ListingPass {
             // pass's own candidates are not "already listed": the board
             // audit stamps the badge the day it decides, so a candidate
             // used to count against his own slot.
-            let in_this_pass: HashSet<u32> = result
+            let in_this_pass: FxHashSet<u32> = result
                 .iter()
                 .chain(group_listings.iter())
                 .map(|l| l.player_id)
@@ -672,7 +672,7 @@ impl ListingPass {
             };
         }
 
-        let mut group_counts: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
+        let mut group_counts: FxHashMap<PlayerFieldPositionGroup, u32> = FxHashMap::default();
         let mut total_ability: u32 = 0;
         let mut total_age: u32 = 0;
         for player in players {

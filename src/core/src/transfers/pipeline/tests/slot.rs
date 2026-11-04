@@ -10,7 +10,7 @@ use crate::{
     MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, RoleFamiliarity,
     TACTICS_POSITIONS,
 };
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 struct SlotFx;
 
@@ -35,7 +35,7 @@ impl SlotFx {
     }
 
     fn player(id: u32, roles: &[PlayerPositionType], ca: u8) -> SquadPlayerInfo {
-        let mut levels: HashMap<PlayerPositionType, u8> = HashMap::new();
+        let mut levels: FxHashMap<PlayerPositionType, u8> = FxHashMap::default();
         for role in roles {
             levels.insert(*role, 20);
         }

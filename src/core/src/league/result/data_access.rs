@@ -30,18 +30,18 @@ use crate::club::board::manager::ManagerMarketTick;
 use crate::country::result::transfers::GlobalFreeAgentSummary;
 use crate::league::League;
 use crate::league::LeagueCollection;
-use crate::shared::indexes::SimulatorDataIndexes;
+use crate::shared::indexes::{CountryLookupIndex, SimulatorDataIndexes};
 use crate::transfers::MarketMap;
 use crate::transfers::TransferListing;
 use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::approach::ApproachPass;
+use crate::utils::random::engine::RandomEngine;
 use crate::world::CountryInfo;
 use crate::world::SimulatorData;
 use crate::{Club, Country, Player, Team};
 use chrono::NaiveDateTime;
 use rustc_hash::FxHashMap;
-use std::collections::HashMap;
 
 /// Read/mutate surface needed by `process_match_results` and friends.
 ///
@@ -58,7 +58,7 @@ use std::collections::HashMap;
 pub trait LeagueProcessAccess {
     fn date(&self) -> NaiveDateTime;
     fn indexes(&self) -> Option<&SimulatorDataIndexes>;
-    fn country_info(&self) -> &HashMap<u32, CountryInfo>;
+    fn country_info(&self) -> &FxHashMap<u32, CountryInfo>;
     fn country(&self, id: u32) -> Option<&Country>;
     fn country_mut(&mut self, id: u32) -> Option<&mut Country>;
     fn country_by_club(&self, club_id: u32) -> Option<&Country>;
@@ -137,7 +137,7 @@ impl LeagueProcessAccess for SimulatorData {
     fn indexes(&self) -> Option<&SimulatorDataIndexes> {
         self.indexes.as_ref()
     }
-    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+    fn country_info(&self) -> &FxHashMap<u32, CountryInfo> {
         &self.country_info
     }
     fn country(&self, id: u32) -> Option<&Country> {
@@ -191,7 +191,7 @@ impl LeagueProcessAccess for SimulatorData {
         if player_count == 0 {
             return None;
         }
-        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let target = (RandomEngine::gen_f32() * player_count as f32) as usize;
         let mut current = 0;
         for continent in &mut self.continents {
             for country in &mut continent.countries {
@@ -236,56 +236,6 @@ impl LeagueProcessAccess for SimulatorData {
     }
 }
 
-/// Per-country positional index for O(1) accessor lookups during the
-/// result-processing fan-out. Maps `player_id`/`team_id`/`club_id` to
-/// the `(club_idx, team_idx, player_idx)` triple inside `Country::clubs`
-/// so `LeagueProcessAccess::player(id)` etc. don't linear-scan
-/// thousands of players per call.
-///
-/// Built once before `LeagueResult::process_local` / `ClubResult::process`
-/// and dropped before any path that mutates rosters (transfer market,
-/// retirements). The accessors validate the slot's `player.id` after
-/// indexing so a stale entry still returns `None` rather than the wrong
-/// player — keeps the index advisory.
-pub struct CountryLookupIndex {
-    pub players: FxHashMap<u32, (u16, u8, u16)>,
-    pub teams: FxHashMap<u32, (u16, u8)>,
-    pub clubs: FxHashMap<u32, u16>,
-}
-
-impl CountryLookupIndex {
-    pub fn build(country: &Country) -> Self {
-        let player_cap: usize = country
-            .clubs
-            .iter()
-            .flat_map(|c| &c.teams.teams)
-            .map(|t| t.players.players.len())
-            .sum();
-        let team_cap: usize = country.clubs.iter().map(|c| c.teams.teams.len()).sum();
-        let mut players = FxHashMap::with_capacity_and_hasher(player_cap, Default::default());
-        let mut teams = FxHashMap::with_capacity_and_hasher(team_cap, Default::default());
-        let mut clubs =
-            FxHashMap::with_capacity_and_hasher(country.clubs.len(), Default::default());
-        for (ci, club) in country.clubs.iter().enumerate() {
-            let ci16 = ci.min(u16::MAX as usize) as u16;
-            clubs.insert(club.id, ci16);
-            for (ti, team) in club.teams.teams.iter().enumerate() {
-                let ti8 = ti.min(u8::MAX as usize) as u8;
-                teams.insert(team.id, (ci16, ti8));
-                for (pi, player) in team.players.players.iter().enumerate() {
-                    let pi16 = pi.min(u16::MAX as usize) as u16;
-                    players.insert(player.id, (ci16, ti8, pi16));
-                }
-            }
-        }
-        CountryLookupIndex {
-            players,
-            teams,
-            clubs,
-        }
-    }
-}
-
 /// Country-local data-access wrapper for the parallel Phase-A pass.
 ///
 /// Owns `&mut Country` (the one country whose results are being
@@ -297,7 +247,7 @@ impl CountryLookupIndex {
 pub struct CountryProcessCtx<'a> {
     pub country: &'a mut Country,
     pub date: NaiveDateTime,
-    pub country_info_ref: &'a HashMap<u32, CountryInfo>,
+    pub country_info_ref: &'a FxHashMap<u32, CountryInfo>,
     pub indexes_ref: Option<&'a SimulatorDataIndexes>,
     pub deferred: &'a mut DeferredGlobalOps,
     /// O(1) lookup index for this country's players/teams/clubs.
@@ -312,7 +262,7 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     fn indexes(&self) -> Option<&SimulatorDataIndexes> {
         self.indexes_ref
     }
-    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+    fn country_info(&self) -> &FxHashMap<u32, CountryInfo> {
         self.country_info_ref
     }
     fn country(&self, id: u32) -> Option<&Country> {
@@ -356,8 +306,8 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn club(&self, id: u32) -> Option<&Club> {
         if let Some(idx) = self.lookup {
-            if let Some(&ci) = idx.clubs.get(&id) {
-                return self.country.clubs.get(ci as usize).filter(|c| c.id == id);
+            if let Some(ci) = idx.club(id) {
+                return self.country.clubs.get(ci).filter(|c| c.id == id);
             }
             return None;
         }
@@ -365,12 +315,8 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn club_mut(&mut self, id: u32) -> Option<&mut Club> {
         if let Some(idx) = self.lookup {
-            if let Some(&ci) = idx.clubs.get(&id) {
-                return self
-                    .country
-                    .clubs
-                    .get_mut(ci as usize)
-                    .filter(|c| c.id == id);
+            if let Some(ci) = idx.club(id) {
+                return self.country.clubs.get_mut(ci).filter(|c| c.id == id);
             }
             return None;
         }
@@ -378,12 +324,12 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn team(&self, id: u32) -> Option<&Team> {
         if let Some(idx) = self.lookup {
-            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+            if let Some((ci, ti)) = idx.team(id) {
                 return self
                     .country
                     .clubs
-                    .get(ci as usize)
-                    .and_then(|c| c.teams.teams.get(ti as usize))
+                    .get(ci)
+                    .and_then(|c| c.teams.teams.get(ti))
                     .filter(|t| t.id == id);
             }
             return None;
@@ -392,12 +338,12 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
         if let Some(idx) = self.lookup {
-            if let Some(&(ci, ti)) = idx.teams.get(&id) {
+            if let Some((ci, ti)) = idx.team(id) {
                 return self
                     .country
                     .clubs
-                    .get_mut(ci as usize)
-                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
+                    .get_mut(ci)
+                    .and_then(|c| c.teams.teams.get_mut(ti))
                     .filter(|t| t.id == id);
             }
             return None;
@@ -406,13 +352,13 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn player(&self, id: u32) -> Option<&Player> {
         if let Some(idx) = self.lookup {
-            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+            if let Some((ci, ti, pi)) = idx.player(id) {
                 return self
                     .country
                     .clubs
-                    .get(ci as usize)
-                    .and_then(|c| c.teams.teams.get(ti as usize))
-                    .and_then(|t| t.players.players.get(pi as usize))
+                    .get(ci)
+                    .and_then(|c| c.teams.teams.get(ti))
+                    .and_then(|t| t.players.players.get(pi))
                     .filter(|p| p.id == id);
             }
             return None;
@@ -421,13 +367,13 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
         if let Some(idx) = self.lookup {
-            if let Some(&(ci, ti, pi)) = idx.players.get(&id) {
+            if let Some((ci, ti, pi)) = idx.player(id) {
                 return self
                     .country
                     .clubs
-                    .get_mut(ci as usize)
-                    .and_then(|c| c.teams.teams.get_mut(ti as usize))
-                    .and_then(|t| t.players.players.get_mut(pi as usize))
+                    .get_mut(ci)
+                    .and_then(|c| c.teams.teams.get_mut(ti))
+                    .and_then(|t| t.players.players.get_mut(pi))
                     .filter(|p| p.id == id);
             }
             return None;
@@ -452,7 +398,7 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
         if player_count == 0 {
             return None;
         }
-        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let target = (RandomEngine::gen_f32() * player_count as f32) as usize;
         let mut current = 0;
         for club in &mut self.country.clubs {
             for team in &mut club.teams.teams {
@@ -543,7 +489,7 @@ pub struct ClubProcessCtx<'a> {
     pub club_idx: u16,
     pub country_id: u32,
     pub date: NaiveDateTime,
-    pub country_info_ref: &'a HashMap<u32, CountryInfo>,
+    pub country_info_ref: &'a FxHashMap<u32, CountryInfo>,
     pub indexes_ref: Option<&'a SimulatorDataIndexes>,
     pub leagues_ref: &'a LeagueCollection,
     /// The domestic cup's underlying league, for id-based lookups —
@@ -562,7 +508,7 @@ impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
     fn indexes(&self) -> Option<&SimulatorDataIndexes> {
         self.indexes_ref
     }
-    fn country_info(&self) -> &HashMap<u32, CountryInfo> {
+    fn country_info(&self) -> &FxHashMap<u32, CountryInfo> {
         self.country_info_ref
     }
     fn country(&self, _id: u32) -> Option<&Country> {
@@ -601,42 +547,32 @@ impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
         }
     }
     fn team(&self, id: u32) -> Option<&Team> {
-        if let Some(&(ci, ti)) = self.lookup.teams.get(&id) {
-            if ci == self.club_idx {
-                return self
-                    .club
-                    .teams
-                    .teams
-                    .get(ti as usize)
-                    .filter(|t| t.id == id);
+        if let Some((ci, ti)) = self.lookup.team(id) {
+            if ci == self.club_idx as usize {
+                return self.club.teams.teams.get(ti).filter(|t| t.id == id);
             }
             return None;
         }
         self.club.teams.teams.iter().find(|t| t.id == id)
     }
     fn team_mut(&mut self, id: u32) -> Option<&mut Team> {
-        if let Some(&(ci, ti)) = self.lookup.teams.get(&id) {
-            if ci == self.club_idx {
-                return self
-                    .club
-                    .teams
-                    .teams
-                    .get_mut(ti as usize)
-                    .filter(|t| t.id == id);
+        if let Some((ci, ti)) = self.lookup.team(id) {
+            if ci == self.club_idx as usize {
+                return self.club.teams.teams.get_mut(ti).filter(|t| t.id == id);
             }
             return None;
         }
         self.club.teams.teams.iter_mut().find(|t| t.id == id)
     }
     fn player(&self, id: u32) -> Option<&Player> {
-        if let Some(&(ci, ti, pi)) = self.lookup.players.get(&id) {
-            if ci == self.club_idx {
+        if let Some((ci, ti, pi)) = self.lookup.player(id) {
+            if ci == self.club_idx as usize {
                 return self
                     .club
                     .teams
                     .teams
-                    .get(ti as usize)
-                    .and_then(|t| t.players.players.get(pi as usize))
+                    .get(ti)
+                    .and_then(|t| t.players.players.get(pi))
                     .filter(|p| p.id == id);
             }
             return None;
@@ -648,14 +584,14 @@ impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
             .find_map(|t| t.players.players.iter().find(|p| p.id == id))
     }
     fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
-        if let Some(&(ci, ti, pi)) = self.lookup.players.get(&id) {
-            if ci == self.club_idx {
+        if let Some((ci, ti, pi)) = self.lookup.player(id) {
+            if ci == self.club_idx as usize {
                 return self
                     .club
                     .teams
                     .teams
-                    .get_mut(ti as usize)
-                    .and_then(|t| t.players.players.get_mut(pi as usize))
+                    .get_mut(ti)
+                    .and_then(|t| t.players.players.get_mut(pi))
                     .filter(|p| p.id == id);
             }
             return None;
@@ -687,7 +623,7 @@ impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
         if player_count == 0 {
             return None;
         }
-        let target = (rand::random::<f32>() * player_count as f32) as usize;
+        let target = (RandomEngine::gen_f32() * player_count as f32) as usize;
         let mut current = 0;
         for team in &mut self.club.teams.teams {
             for player in &mut team.players.players {
@@ -730,7 +666,7 @@ impl<'a> LeagueProcessAccess for ClubProcessCtx<'a> {
 #[derive(Clone, Copy)]
 pub struct WorldSnapshot<'a> {
     pub date: NaiveDateTime,
-    pub country_info: &'a HashMap<u32, CountryInfo>,
+    pub country_info: &'a FxHashMap<u32, CountryInfo>,
     pub indexes: Option<&'a SimulatorDataIndexes>,
     /// World-wide foreign-player pool — every country's transferable
     /// players, walked once before the parallel pass. Each country's

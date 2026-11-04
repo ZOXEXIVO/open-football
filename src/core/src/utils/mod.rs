@@ -12,6 +12,8 @@ pub use date::*;
 pub use estimation::*;
 pub use formatting::*;
 pub use logging::*;
-pub use performance::{PerformanceProfiler, PhaseScope, StageScope};
+pub use performance::{
+    AllocationCount, AllocationProbe, PerformanceProfiler, PhaseScope, StageScope,
+};
 pub use random::*;
 pub use strings::*;

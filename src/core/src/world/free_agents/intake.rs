@@ -10,7 +10,7 @@ use crate::world::SimulatorData;
 use crate::world::bootstrap::ClubIdentity;
 use crate::{Person, Player, PlayerSquadStatus, PlayerStatusType};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 impl SimulatorData {
     /// Move every team-attached player whose main-club contract is `None`
@@ -36,8 +36,7 @@ impl SimulatorData {
     ///
     /// Loanees are skipped (their `contract` is the parent-club contract
     /// and stays `Some` during the loan), as are retired players (already
-    /// removed from team rosters by the retirement pipeline). Sets
-    /// `dirty_player_index` so the next index rebuild picks up the moves.
+    /// removed from team rosters by the retirement pipeline).
     pub fn sweep_released_to_free_agents(&mut self) {
         let date = self.date.date();
         let released: Vec<Player> = self
@@ -45,12 +44,24 @@ impl SimulatorData {
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
             .flat_map_iter(|country| {
+                // Most days nobody leaves: decide that before building
+                // anything for the country.
+                let leaves = |p: &Player| p.contract.is_none() && !p.is_on_loan() && !p.retired;
+                if !country
+                    .clubs
+                    .iter()
+                    .flat_map(|club| club.teams.teams.iter())
+                    .flat_map(|team| team.players.players.iter())
+                    .any(leaves)
+                {
+                    return Vec::new();
+                }
                 // League reputation is needed by `on_release` so the
                 // player carries an accurate market-state snapshot into
                 // the free-agent pool. Pre-collect once per country —
                 // immutable read before the mutable club iteration
                 // takes the borrow.
-                let league_reputations: HashMap<u32, u16> = country
+                let league_reputations: FxHashMap<u32, u16> = country
                     .leagues
                     .leagues
                     .iter()
@@ -75,9 +86,12 @@ impl SimulatorData {
                         .teams
                         .iter()
                         .flat_map(|team| team.players.players.iter())
-                        .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
+                        .filter(|p| leaves(p))
                         .map(|p| p.id)
                         .collect();
+                    if leaving.is_empty() {
+                        continue;
+                    }
                     for player_id in leaving {
                         let cause = SquadDepartures::release_cause(club, player_id);
                         SquadDepartures::notify(club, player_id, cause, date);
@@ -96,7 +110,7 @@ impl SimulatorData {
                             .players
                             .players
                             .iter()
-                            .filter(|p| p.contract.is_none() && !p.is_on_loan() && !p.retired)
+                            .filter(|p| leaves(p))
                             .map(|p| {
                                 let was_released_early = p.statuses.has(PlayerStatusType::Frt);
                                 (p.id, p.full_name.to_string(), was_released_early)
@@ -203,7 +217,6 @@ impl SimulatorData {
             })
             .collect();
         if !released.is_empty() {
-            self.dirty_player_index = true;
             // Scrub the world of stale market state for the departed
             // players: open listings end Cancelled, team transfer lists
             // drop their rows, scouting/shortlist/monitoring interest is

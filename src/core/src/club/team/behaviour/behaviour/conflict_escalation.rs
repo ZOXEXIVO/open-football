@@ -16,12 +16,13 @@
 //! status / relations / events stay owned by the Player module per
 //! [`crate::club`] conventions.
 
-use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
 use super::TeamBehaviour;
 use crate::club::staff::CoachPlayerBond;
+use crate::club::staff::coach::standing::{EvidenceLens, StandingEvidence};
 use crate::club::team::CaptainMediation;
 use crate::club::team::behaviour::TeamBehaviourResult;
 use crate::context::GlobalContext;
+use crate::utils::random::engine::RandomEngine;
 use crate::{Player, PlayerCollection, PlayerStatusType, StaffCollection};
 use chrono::NaiveDate;
 
@@ -104,7 +105,7 @@ impl TeamBehaviour {
             if let Some(player) = players.iter_mut().find(|p| p.id == player_id) {
                 player.on_weekly_conflict_risk(effective_risk);
                 let escalated =
-                    player.roll_conflict_escalation(effective_risk, today, rand::random::<f32>);
+                    player.roll_conflict_escalation(effective_risk, today, RandomEngine::gen_f32);
                 if escalated != ConflictEscalation::None {
                     escalations.push((player_id, escalated));
                 }
@@ -181,7 +182,7 @@ impl Player {
 
     /// Probabilistic escalation rolls — private complaint, Unhappy,
     /// transfer request, public criticism. Takes a `dice` closure so
-    /// production callers pass `rand::random` and tests can pin every
+    /// production callers pass `RandomEngine::gen_f32` and tests can pin every
     /// roll deterministically. Streak is read but never mutated here
     /// unless an escalation actually fires (in which case it resets
     /// so we don't re-escalate next week on the same evidence).

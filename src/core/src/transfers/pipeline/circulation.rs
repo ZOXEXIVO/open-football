@@ -28,7 +28,7 @@ use crate::transfers::market::window::MarketCadence;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::squad::bands::TierBands;
 use crate::transfers::view::player::PlayerView;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use chrono::NaiveDate;
 use log::debug;
@@ -81,10 +81,10 @@ pub(in crate::transfers) struct BuyerScan {
     wage_budget: u32,
     plan_total_budget: f64,
     max_recommend_value: f64,
-    best_in_group: HashMap<PlayerFieldPositionGroup, u8>,
-    open_request_groups: HashSet<PlayerFieldPositionGroup>,
-    aging_groups: HashSet<PlayerFieldPositionGroup>,
-    fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
+    best_in_group: FxHashMap<PlayerFieldPositionGroup, u8>,
+    open_request_groups: FxHashSet<PlayerFieldPositionGroup>,
+    aging_groups: FxHashSet<PlayerFieldPositionGroup>,
+    fit_by_group: FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
 }
 
 impl BuyerScan {
@@ -112,7 +112,7 @@ impl BuyerScan {
         let plan_total_budget = club.transfer_plan.total_budget;
         let max_recommend_value = plan_total_budget * 2.0;
 
-        let mut best_in_group: HashMap<PlayerFieldPositionGroup, u8> = HashMap::new();
+        let mut best_in_group: FxHashMap<PlayerFieldPositionGroup, u8> = FxHashMap::default();
         for p in team.players.players.iter() {
             let g = p.position().position_group();
             let ca = p.player_attributes.current_ability;
@@ -126,7 +126,7 @@ impl BuyerScan {
                 .or_insert(ca);
         }
 
-        let mut open_request_groups: HashSet<PlayerFieldPositionGroup> = HashSet::new();
+        let mut open_request_groups: FxHashSet<PlayerFieldPositionGroup> = FxHashSet::default();
         for r in club.transfer_plan.transfer_requests.iter() {
             if r.status != TransferRequestStatus::Fulfilled
                 && r.status != TransferRequestStatus::Abandoned
@@ -135,7 +135,7 @@ impl BuyerScan {
             }
         }
 
-        let mut aging_groups: HashSet<PlayerFieldPositionGroup> = HashSet::new();
+        let mut aging_groups: FxHashSet<PlayerFieldPositionGroup> = FxHashSet::default();
         for group in [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
@@ -153,7 +153,7 @@ impl BuyerScan {
             }
         }
 
-        let fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
+        let fit_by_group: FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
             PlayerFieldPositionGroup::Midfielder,
@@ -224,7 +224,7 @@ impl MarketCirculation {
         let interested = Self::concretely_pursued(country);
 
         // ── Precompute buyer snapshots once, keyed by club id. ──
-        let buyer_scans: HashMap<u32, BuyerScan> = country
+        let buyer_scans: FxHashMap<u32, BuyerScan> = country
             .clubs
             .iter()
             .filter_map(|c| BuyerScan::build(country, c, date).map(|s| (c.id, s)))
@@ -236,7 +236,7 @@ impl MarketCirculation {
         let price_level = country.settings.pricing.price_level;
 
         // ── Phase 1: collect per-player actions (immutable). ──
-        let mut actions: HashMap<u32, CirculationAction> = HashMap::new();
+        let mut actions: FxHashMap<u32, CirculationAction> = FxHashMap::default();
         let mut to_clear: Vec<u32> = Vec::new();
         let mut scans_done = 0usize;
         let mut scans_skipped_by_cap = 0usize;
@@ -330,12 +330,12 @@ impl MarketCirculation {
     /// Which players is any club already concretely pursuing? Monitoring rows,
     /// shortlist candidates, staff recommendations and live negotiations all
     /// count as "the market has shown interest recently".
-    fn concretely_pursued(country: &Country) -> HashSet<u32> {
+    fn concretely_pursued(country: &Country) -> FxHashSet<u32> {
         // ── Which players is any club already concretely pursuing? ──
         // Monitoring rows, shortlist candidates, staff recommendations,
         // and live negotiations all count as "the market has shown
         // interest recently".
-        let mut interested: HashSet<u32> = HashSet::new();
+        let mut interested: FxHashSet<u32> = FxHashSet::default();
         for club in &country.clubs {
             let plan = &club.transfer_plan;
             for m in &plan.scout_monitoring {
@@ -461,7 +461,7 @@ impl MarketCirculation {
         seller: &Club,
         player: &Player,
         view: &ListedTargetView,
-        buyer_scans: &HashMap<u32, BuyerScan>,
+        buyer_scans: &FxHashMap<u32, BuyerScan>,
         date: NaiveDate,
     ) -> (bool, Vec<AvailabilityBlockReason>) {
         let group = view.position_group;
@@ -508,11 +508,11 @@ impl MarketCirculation {
     fn apply_circulation(
         country: &mut Country,
         date: NaiveDate,
-        actions: &HashMap<u32, CirculationAction>,
+        actions: &FxHashMap<u32, CirculationAction>,
         to_clear: Vec<u32>,
     ) {
         // ── Phase 2: apply (mutable). ──
-        let clear_set: HashSet<u32> = to_clear.into_iter().collect();
+        let clear_set: FxHashSet<u32> = to_clear.into_iter().collect();
         for club in &mut country.clubs {
             for team in &mut club.teams.teams {
                 for player in &mut team.players.players {

@@ -20,8 +20,8 @@ use crate::{
     PlayerPositionType, SkillType, StaffCollection, TrainingFocus,
 };
 use chrono::{Datelike, NaiveDate};
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 /// Pure calculus for the monthly training-direction pass, separated so
 /// the candidate rules can be unit-tested without a full squad sim.
@@ -296,7 +296,7 @@ impl TeamBehaviour {
         }
 
         // Squad shape: contracted, present players per position group.
-        let mut group_counts: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut group_counts: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
         for p in players.players.iter() {
             if p.is_on_loan() || p.contract.is_none() {
                 continue;

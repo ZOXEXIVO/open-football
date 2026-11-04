@@ -272,7 +272,7 @@ pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> b
     // exactly like the automatic sweep's release cleanup.
     ApproachPass::cleanup_player_release_interest(sim, player_id);
 
-    sim.rebuild_indexes();
+    sim.reconcile_indexes();
     true
 }
 
@@ -419,7 +419,7 @@ pub(crate) fn execute_cancel_loan(sim: &mut SimulatorData, player_id: u32) -> bo
         .players
         .add(player);
 
-    sim.rebuild_indexes();
+    sim.reconcile_indexes();
     true
 }
 
@@ -727,7 +727,7 @@ pub(crate) fn execute_transfer(
         .transfer_history
         .push(entry.with_reason(TransferReason::key("signing_reason_manual")));
 
-    sim.rebuild_indexes();
+    sim.reconcile_indexes();
     StatusCode::OK
 }
 
@@ -997,7 +997,7 @@ pub async fn loan_action(
             .transfer_history
             .push(completed);
 
-        sim.rebuild_indexes();
+        sim.reconcile_indexes();
         return StatusCode::OK;
     }
 

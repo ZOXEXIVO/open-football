@@ -158,7 +158,7 @@ impl ClubFinances {
         }
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubFinanceResult {
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> ClubFinanceResult {
         let mut result = ClubFinanceResult::new();
         let club_name = ctx.club.as_ref().expect("no club found").name;
         let club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);

@@ -5,7 +5,7 @@
 //! sits here.
 
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::PlayerFieldPositionGroup;
 use crate::league::awards::player_of_week::PlayerOfTheWeekAward;
@@ -342,11 +342,11 @@ impl CandidateAggregate {
 pub struct AwardAggregator;
 
 impl AwardAggregator {
-    pub fn aggregate<'a, I>(matches: I) -> HashMap<u32, CandidateAggregate>
+    pub fn aggregate<'a, I>(matches: I) -> FxHashMap<u32, CandidateAggregate>
     where
         I: IntoIterator<Item = &'a MatchResult>,
     {
-        let mut out: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut out: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         for m in matches {
             if m.friendly {
                 continue;
@@ -515,7 +515,7 @@ impl TeamOfTheWeekSelector {
     /// gate (a player who featured once last week is still eligible);
     /// season selection should call [`pick_with_min_apps`].
     pub fn pick(
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
     ) -> Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> {
         Self::pick_with_min_apps(scores, 1)
     }
@@ -531,7 +531,7 @@ impl TeamOfTheWeekSelector {
     /// the appearance gate anyway. Weekly TOTW continues to use
     /// [`Self::candidate_score`] directly.
     pub fn pick_with_min_apps(
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         min_apps: u8,
     ) -> Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> {
         Self::pick_with_gates(scores, min_apps, 0.0)
@@ -546,12 +546,12 @@ impl TeamOfTheWeekSelector {
     /// than filling it with a sub-floor candidate; if a position has
     /// no qualifying candidate at all, that slot is simply empty.
     pub fn pick_with_gates(
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         min_apps: u8,
         min_score: f32,
     ) -> Vec<(u32, PlayerFieldPositionGroup, f32, CandidateAggregate)> {
-        let mut by_pos: HashMap<PlayerFieldPositionGroup, Vec<(u32, f32, CandidateAggregate)>> =
-            HashMap::new();
+        let mut by_pos: FxHashMap<PlayerFieldPositionGroup, Vec<(u32, f32, CandidateAggregate)>> =
+            FxHashMap::default();
         for (id, agg) in scores {
             if agg.matches_played < min_apps {
                 continue;
@@ -667,7 +667,7 @@ impl MonthlyAwardSelector {
     /// `tie_break_player_id` is required for the deterministic tiebreak
     /// (lower id wins after score and best-rating).
     pub fn pick_best(
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         league_reputation: u16,
         min_apps: u8,
         eligibility: impl Fn(u32) -> bool,
@@ -768,7 +768,7 @@ mod tests {
 
     #[test]
     fn totw_pick_respects_quotas() {
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         // 3 GKs (only 1 selected)
         for i in 1..=3u32 {
             scores.insert(
@@ -867,7 +867,7 @@ mod tests {
 
     #[test]
     fn monthly_min_apps_gate_filters() {
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         scores.insert(
             1,
             make_agg(PlayerFieldPositionGroup::Forward, 2, 5, 2, 9.0, 2),
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn tots_min_apps_excludes_one_match_wonder() {
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         // One-match elite player: rating 10.0, hat-trick — would win
         // if Team of the Week selector were used directly.
         scores.insert(
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn monthly_eligibility_predicate_filters() {
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         scores.insert(
             1,
             make_agg(PlayerFieldPositionGroup::Forward, 4, 5, 2, 9.0, 3),
@@ -1145,7 +1145,7 @@ mod tests {
         // with the highest output is excluded entirely from the young
         // selection. Implemented here as the ages-by-id map the
         // simulator builds.
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         // Exceptional 21-year-old — would dominate Team of the Week.
         scores.insert(
             21,
@@ -1157,8 +1157,8 @@ mod tests {
             make_agg(PlayerFieldPositionGroup::Forward, 3, 2, 0, 7.4, 1),
         );
 
-        let ages: HashMap<u32, u8> = [(21u32, 21u8), (20u32, 20u8)].into_iter().collect();
-        let young: HashMap<u32, CandidateAggregate> = scores
+        let ages: FxHashMap<u32, u8> = [(21u32, 21u8), (20u32, 20u8)].into_iter().collect();
+        let young: FxHashMap<u32, CandidateAggregate> = scores
             .iter()
             .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
             .map(|(id, a)| (*id, *a))
@@ -1176,7 +1176,7 @@ mod tests {
         // weekly. With min_score = YOUNG_WEEKLY_MIN_SCORE (3.0), a
         // 6.5-avg one-touch midfielder must be filtered out, but a
         // forward with 1 goal + a 7.0-avg week must remain eligible.
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         // Padder: 6.5 avg, no contributions, regressed score lands
         // well under the 3.0 floor.
         scores.insert(
@@ -1207,7 +1207,7 @@ mod tests {
         // `max(10, 25% of typical matches per team)` — for a 20-team
         // league that's ~38 fixtures per team, gate ≈ 10. A
         // single-match elite player must not outrank a regular starter.
-        let mut scores: HashMap<u32, CandidateAggregate> = HashMap::new();
+        let mut scores: FxHashMap<u32, CandidateAggregate> = FxHashMap::default();
         // One-match wonder: rating 10, hat-trick.
         scores.insert(
             1,

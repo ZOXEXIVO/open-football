@@ -22,6 +22,7 @@ pub use home::*;
 
 use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::world::ForeignPool;
 use chrono::{Datelike, NaiveDate, Weekday};
 
 use broadcast::ListingBroadcast;
@@ -48,7 +49,6 @@ use crate::{
     Team,
 };
 use rustc_hash::FxHashMap;
-use std::collections::HashMap;
 
 #[cfg(test)]
 use crate::HappinessEventType;
@@ -99,8 +99,8 @@ impl LoanPipeline {
     /// "1 GK" snapshot and overshoot the depth cap.
     fn pending_incoming_loans_by_club(
         country: &Country,
-    ) -> HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> {
-        let mut map: HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> = HashMap::new();
+    ) -> FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> {
+        let mut map: FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>> = FxHashMap::default();
         for negotiation in country.transfer_market.negotiations.values() {
             if !negotiation.is_loan {
                 continue;
@@ -356,7 +356,7 @@ impl LoanPipeline {
 
     pub fn scan_foreign_loan_market(
         country: &mut Country,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         date: NaiveDate,
         market_map: &MarketMap,
         placement_reach: &PlacementReachIndex,

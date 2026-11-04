@@ -24,6 +24,7 @@ use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::{MatchResult, SquadFixture};
+use crate::utils::PerformanceProfiler;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     HappinessEventType, MatchRuntime, NationalTeamEventContext, NationalTeamEventKind,
@@ -73,9 +74,14 @@ impl WorldNationalCompetitions {
             return Vec::new();
         }
 
-        let prepared = Self::build_squads(continents, &stamped, date);
-        let engine_results = MatchRuntime::engine_pool().play_squads(prepared);
+        let prepared = PerformanceProfiler::phase("0b_national_squads", 1, || {
+            Self::build_squads(continents, &stamped, date)
+        });
+        let engine_results = PerformanceProfiler::phase("0c_national_dispatch", 1, || {
+            MatchRuntime::engine_pool().play_squads(prepared)
+        });
 
+        let results = PerformanceProfiler::phase_scope("0d_national_results", 1);
         let mut collected: Vec<MatchResult> = Vec::with_capacity(engine_results.len());
         for (stamp_idx, raw) in engine_results {
             if let Some(match_result) =
@@ -84,6 +90,7 @@ impl WorldNationalCompetitions {
                 collected.push(match_result);
             }
         }
+        drop(results);
 
         Self::run_phase_transitions(continents);
         Self::report_tournament_endings(continents, &crowned_before);

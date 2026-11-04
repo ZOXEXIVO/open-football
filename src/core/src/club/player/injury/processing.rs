@@ -5,6 +5,7 @@ use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
     InjuryRecoveryEventContext, InjuryRecoveryEvidence, InjuryRecoveryStage,
@@ -27,7 +28,7 @@ impl MedicalStaffQuality {
     fn bonus_day(&self) -> bool {
         // Physio 0.35 → 0% chance, 1.0 → 30% chance — smoothly interpolated
         let chance = (self.physio - 0.3).max(0.0) * 0.45;
-        rand::random::<f32>() < chance
+        RandomEngine::gen_f32() < chance
     }
 
     /// Multiplier on spontaneous injury risk.
@@ -185,7 +186,7 @@ impl Player {
                 medical_multiplier: medical.setback_multiplier(),
                 now,
             });
-            if rand::random::<f32>() < setback_chance
+            if RandomEngine::gen_f32() < setback_chance
                 && let Some(body_part) =
                     BodyPart::from_u8(self.player_attributes.last_injury_body_part)
             {
@@ -234,7 +235,7 @@ impl Player {
                 now,
             });
 
-            if rand::random::<f32>() < injury_chance {
+            if RandomEngine::gen_f32() < injury_chance {
                 let age = DateUtils::age(self.birth_date, now);
                 let injury = InjuryType::random_spontaneous_injury(age, injury_proneness);
                 self.player_attributes.set_injury(injury, age);

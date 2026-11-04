@@ -13,12 +13,15 @@ use crate::club::staff::{
 };
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
+use crate::shared::RosterRevision;
 use crate::shared::fullname::FullName;
-use crate::utils::DateUtils;
+use crate::utils::IntegerUtils;
+use crate::utils::random::engine::RandomEngine;
+use crate::utils::{DateUtils, SlowStep};
 use crate::{
-    CoachFocus, Logging, PersonAttributes, PersonBehaviourState, PlayerFieldPositionGroup,
-    Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub,
-    TeamType, TrainingIntensity, TrainingType,
+    CoachFocus, PersonAttributes, PersonBehaviourState, PlayerFieldPositionGroup, Relations,
+    StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType,
+    TrainingIntensity, TrainingType,
 };
 use chrono::Weekday;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
@@ -156,6 +159,8 @@ pub struct Staff {
     pub dossiers: CoachDossierStore,
 }
 
+/// Staff are edited in place through `staffs`; anything that adds or
+/// removes one goes through the collection, which moves its revision.
 #[derive(Debug, Clone)]
 pub struct StaffCollection {
     pub staffs: Vec<Staff>,
@@ -163,6 +168,8 @@ pub struct StaffCollection {
     pub responsibility: StaffResponsibility,
 
     stub: Staff,
+
+    revision: RosterRevision,
 }
 
 impl StaffCollection {
@@ -171,16 +178,23 @@ impl StaffCollection {
             staffs,
             responsibility: StaffResponsibility::default(),
             stub: StaffStub::build(),
+            revision: RosterRevision::next(),
         }
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> StaffCollectionResult {
+    pub fn revision(&self) -> RosterRevision {
+        self.revision
+    }
+
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> StaffCollectionResult {
         let staff_results = self
             .staffs
             .iter_mut()
             .map(|staff| {
-                let message = &format!("simulate staff: id: {}", staff.id);
-                Logging::estimate_result(|| staff.simulate(ctx.with_staff(Some(staff.id))), message)
+                let step = SlowStep::start();
+                let result = staff.simulate(ctx);
+                step.finish(|| format!("simulate staff: id: {}", staff.id));
+                result
             })
             .collect();
 
@@ -524,6 +538,7 @@ impl StaffCollection {
                 .map(|c| c.position == position)
                 .unwrap_or(false)
         })?;
+        self.revision = RosterRevision::next();
         Some(self.staffs.remove(idx))
     }
 
@@ -533,6 +548,7 @@ impl StaffCollection {
     /// id before the move).
     pub fn take_by_id(&mut self, id: u32) -> Option<Staff> {
         let idx = self.staffs.iter().position(|s| s.id == id)?;
+        self.revision = RosterRevision::next();
         Some(self.staffs.remove(idx))
     }
 
@@ -540,6 +556,16 @@ impl StaffCollection {
     /// pipeline when a free agent or poached coach is signed.
     pub fn push(&mut self, staff: Staff) {
         self.staffs.push(staff);
+        self.revision = RosterRevision::next();
+    }
+
+    /// Keep only the staff `keep` accepts, in their order.
+    pub fn retain(&mut self, keep: impl FnMut(&Staff) -> bool) {
+        let before = self.staffs.len();
+        self.staffs.retain(keep);
+        if self.staffs.len() != before {
+            self.revision = RosterRevision::next();
+        }
     }
 
     /// Best `working_with_youngsters` attribute among staff assigned to
@@ -1000,7 +1026,7 @@ impl Staff {
             + self.staff_attributes.knowledge.tactical_knowledge as u32;
         (skill as f32 / 100.0).clamp(0.0, 1.0)
     }
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> StaffResult {
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> StaffResult {
         let now = ctx.simulation.date;
         let mut result = StaffResult::new(self.id);
 
@@ -1013,7 +1039,6 @@ impl Staff {
         if DateUtils::is_birthday(self.birth_date, now.date()) {
             self.behaviour.try_increase();
             self.job_satisfaction = (self.job_satisfaction + 5.0).min(100.0);
-            result.add_event(StaffMoraleEvent::Birthday);
             self.add_event(StaffEventType::Birthday);
         }
 
@@ -1021,30 +1046,30 @@ impl Staff {
         self.process_contract(&mut result, now);
 
         // Update fatigue based on workload
-        self.update_fatigue(&ctx, &mut result);
+        self.update_fatigue(ctx, &mut result);
 
         // Process training responsibilities
-        self.process_training_duties(&ctx, &mut result);
+        self.process_training_duties(ctx, &mut result);
 
         // Update job satisfaction
-        self.update_job_satisfaction(&ctx, &mut result);
+        self.update_job_satisfaction(ctx);
 
         // Check for burnout or resignation triggers
         self.check_resignation_triggers(&mut result);
 
         // Process relationships with players and other staff
-        self.process_relationships(&ctx, &mut result);
+        self.process_relationships(ctx, &mut result);
 
         // Handle performance evaluation
         if self.should_evaluate_performance(now.date()) {
-            self.evaluate_performance(&ctx, &mut result);
+            self.evaluate_performance(ctx, &mut result);
         }
 
         // Process professional development
-        self.process_professional_development(&ctx, &mut result);
+        self.process_professional_development(ctx, &mut result);
 
         // Scouting duties for scouts
-        self.process_scouting(&ctx, &mut result);
+        self.process_scouting(ctx, &mut result);
 
         // The mind's quiet pass: the weekly goal review and the monthly
         // consolidation that banks what recent episodes meant before
@@ -1160,7 +1185,6 @@ impl Staff {
 
         // High fatigue affects performance and morale
         if self.fatigue > 80.0 {
-            result.add_warning(StaffWarning::HighFatigue);
             self.recent_performance.training_effectiveness *= 0.8;
             self.job_satisfaction -= 2.0;
             self.add_event(StaffEventType::HighFatigue);
@@ -1168,8 +1192,7 @@ impl Staff {
 
         // Extreme fatigue can lead to health issues
         if self.fatigue > 95.0 {
-            result.add_warning(StaffWarning::BurnoutRisk);
-            if rand::random::<f32>() < 0.05 {
+            if RandomEngine::gen_f32() < 0.05 {
                 result.health_issue = Some(HealthIssue::StressRelated);
             }
         }
@@ -1217,7 +1240,7 @@ impl Staff {
         }
     }
 
-    fn update_job_satisfaction(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
+    fn update_job_satisfaction(&mut self, ctx: &GlobalContext<'_>) {
         let mut satisfaction_change = 0.0;
 
         // Positive factors
@@ -1249,13 +1272,6 @@ impl Staff {
         // Apply change with dampening
         self.job_satisfaction =
             (self.job_satisfaction + satisfaction_change * 0.5).clamp(0.0, 100.0);
-
-        // Report significant satisfaction issues
-        if self.job_satisfaction < 30.0 {
-            result.add_warning(StaffWarning::LowMorale);
-        } else if self.job_satisfaction > 80.0 {
-            result.add_event(StaffMoraleEvent::HighSatisfaction);
-        }
     }
 
     /// Net argument at or above which he has decided to go.
@@ -1316,7 +1332,7 @@ impl Staff {
     fn roll_for_resignation(&self, result: &mut StaffResult) {
         let resignation_probability = self.calculate_resignation_probability();
 
-        if resignation_probability > 0.0 && rand::random::<f32>() < resignation_probability {
+        if resignation_probability > 0.0 && RandomEngine::gen_f32() < resignation_probability {
             result.resignation_risk = true;
 
             if resignation_probability > 0.5 {
@@ -1383,10 +1399,7 @@ impl Staff {
         }
 
         // Board/management reaction to performance
-        if self.recent_performance.training_effectiveness < 0.4 {
-            result.add_warning(StaffWarning::PoorPerformance);
-        } else if self.recent_performance.training_effectiveness > 0.8 {
-            result.add_event(StaffMoraleEvent::ExcellentPerformance);
+        if self.recent_performance.training_effectiveness > 0.8 {
             self.job_satisfaction += 5.0;
             self.add_event(StaffEventType::PerformanceExcellent);
         }
@@ -1398,7 +1411,7 @@ impl Staff {
         result: &mut StaffResult,
     ) {
         // Check for license upgrade opportunities
-        if self.should_upgrade_license() && rand::random::<f32>() < 0.01 {
+        if self.should_upgrade_license() && RandomEngine::gen_f32() < 0.01 {
             // Small daily chance
             result.license_upgrade_available = true;
             self.add_event(StaffEventType::LicenseUpgrade);
@@ -1659,9 +1672,9 @@ impl Staff {
         if is_scout {
             // Scouts sharpen judging skills by doing the job.
             // Higher ceiling for Chief Scouts means faster gains at the top end.
-            if rand::random::<f32>() < 0.25 {
+            if RandomEngine::gen_f32() < 0.25 {
                 let improvement = 1;
-                match rand::random::<u8>() % 3 {
+                match IntegerUtils::random(0, 3) {
                     0 => {
                         self.staff_attributes.knowledge.judging_player_ability =
                             (self.staff_attributes.knowledge.judging_player_ability + improvement)
@@ -1683,12 +1696,12 @@ impl Staff {
         }
 
         // Slow improvement over time
-        if rand::random::<f32>() < 0.3 {
+        if RandomEngine::gen_f32() < 0.3 {
             // Small chance of improvement each month
             let improvement = 1;
 
             // Improve a random coaching attribute
-            match rand::random::<u8>() % 6 {
+            match IntegerUtils::random(0, 6) {
                 0 => {
                     self.staff_attributes.coaching.attacking =
                         (self.staff_attributes.coaching.attacking + improvement).min(20)
@@ -1744,21 +1757,6 @@ pub struct StaffTrainingResult {
     pub effectiveness: f32,
     pub session_type: TrainingType,
     pub team_id: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-pub enum StaffWarning {
-    HighFatigue,
-    BurnoutRisk,
-    LowMorale,
-    PoorPerformance,
-}
-
-#[derive(Debug, Clone)]
-pub enum StaffMoraleEvent {
-    Birthday,
-    HighSatisfaction,
-    ExcellentPerformance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1821,7 +1819,7 @@ impl StaffWeekAmongThePlayers {
                 Self::POSITIVE * (Self::POSITIVE_FLOOR + (1.0 - Self::POSITIVE_FLOOR) * warmth),
             ),
         ];
-        let mut roll = rand::random::<f32>();
+        let mut roll = RandomEngine::gen_f32();
         for (event, chance) in odds {
             if roll < chance {
                 return Some(event);

@@ -27,7 +27,7 @@ use crate::{
     PlayerFieldPositionGroup, PlayerSquadStatus,
 };
 use chrono::{Duration, NaiveDate};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// The squad's match sample over a rolling window — this season and the
 /// last completed one — so the honesty cap on a label can read what a
@@ -122,13 +122,13 @@ impl RecentInvolvementSample {
 /// the same man.
 #[derive(Debug, Clone)]
 pub struct SquadLadder {
-    groups: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    groups: FxHashMap<PlayerFieldPositionGroup, Vec<u8>>,
     level: ClubLevelAnchor,
 }
 
 impl SquadLadder {
     pub fn of(team: &Team) -> Self {
-        let mut groups: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut groups: FxHashMap<PlayerFieldPositionGroup, Vec<u8>> = FxHashMap::default();
         for p in team.players.iter() {
             groups
                 .entry(p.position().position_group())
@@ -175,10 +175,8 @@ impl SquadLadder {
         age: u8,
         group: PlayerFieldPositionGroup,
     ) -> PlayerSquadStatus {
-        let mut cas = self.group(group).to_vec();
-        let at = cas.partition_point(|&c| c > ca);
-        cas.insert(at, ca);
-        PlayerSquadStatus::calculate_at_level(ca, age, group, &cas, Some(self.level))
+        let with_him = self.group(group).iter().chain(std::iter::once(&ca));
+        PlayerSquadStatus::calculate_at_level(ca, age, group, with_him, Some(self.level))
     }
 }
 
@@ -386,7 +384,7 @@ impl SquadStatusUpdater {
     /// relabel.
     fn apply_development_labels(team: &mut Team, date: NaiveDate) {
         let team_type = team.team_type;
-        let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut by_group: FxHashMap<PlayerFieldPositionGroup, Vec<u8>> = FxHashMap::default();
         for p in team.players.iter() {
             let g = p.position().position_group();
             by_group

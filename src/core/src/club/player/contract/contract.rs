@@ -142,21 +142,26 @@ impl PlayerSquadStatus {
     /// instead makes the second keeper a backup, while leaving the roomier
     /// outfield groups essentially where they were.
     ///
-    /// `team_cas` is this group's current abilities, sorted descending
-    /// (best first).
-    pub fn calculate(
+    /// `team_cas` is this group's current abilities, in any order: only
+    /// how many there are, how many beat him and their average are read.
+    pub fn calculate<'a, I>(
         player_ca: u8,
         player_age: u8,
         group: PlayerFieldPositionGroup,
-        team_cas: &[u8],
-    ) -> Self {
-        let squad_size = team_cas.len();
+        team_cas: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = &'a u8>,
+        I::IntoIter: Clone,
+    {
+        let team_cas = team_cas.into_iter();
+        let squad_size = team_cas.clone().count();
         if squad_size == 0 {
             return PlayerSquadStatus::FirstTeamRegular;
         }
 
         // Find player's rank in his position group (0 = best).
-        let rank = team_cas.iter().filter(|&&ca| ca > player_ca).count();
+        let rank = team_cas.clone().filter(|&&ca| ca > player_ca).count();
 
         // The starting XI slots at this position are "regular" territory;
         // the best slice of them are key players. Rotation depth beyond the
@@ -218,13 +223,17 @@ impl PlayerSquadStatus {
     /// lowers a label — rank still decides between players who clear it —
     /// and it never manufactures `NotNeeded`, which stays a rank verdict.
     /// Youth labels are untouched.
-    pub fn calculate_at_level(
+    pub fn calculate_at_level<'a, I>(
         player_ca: u8,
         player_age: u8,
         group: PlayerFieldPositionGroup,
-        team_cas: &[u8],
+        team_cas: I,
         level: Option<ClubLevelAnchor>,
-    ) -> Self {
+    ) -> Self
+    where
+        I: IntoIterator<Item = &'a u8>,
+        I::IntoIter: Clone,
+    {
         let by_rank = Self::calculate(player_ca, player_age, group, team_cas);
         Self::cap_at_level(by_rank, player_ca, player_age, group, level)
     }
@@ -282,11 +291,15 @@ impl PlayerSquadStatus {
     /// The two development labels, chosen on how the youngster compares
     /// with the squad he is registered in. The one place both the rank
     /// ladder and the youth-squad path mint them, so they can never drift.
-    fn youth_label(player_ca: u8, team_cas: &[u8]) -> PlayerSquadStatus {
-        if team_cas.is_empty() {
+    fn youth_label<'a>(
+        player_ca: u8,
+        team_cas: impl Iterator<Item = &'a u8> + Clone,
+    ) -> PlayerSquadStatus {
+        let size = team_cas.clone().count();
+        if size == 0 {
             return PlayerSquadStatus::HotProspectForTheFuture;
         }
-        let avg_ca = team_cas.iter().map(|&c| c as u32).sum::<u32>() / team_cas.len() as u32;
+        let avg_ca = team_cas.map(|&c| c as u32).sum::<u32>() / size as u32;
         if (player_ca as u32) >= avg_ca {
             PlayerSquadStatus::HotProspectForTheFuture
         } else {
@@ -334,7 +347,7 @@ impl PlayerSquadStatus {
         // against his U20 team-mates would crown one of them a key player
         // of a squad that has none.)
         if player_age <= 19 {
-            return Self::youth_label(player_ca, team_cas);
+            return Self::youth_label(player_ca, team_cas.iter());
         }
         match current {
             PlayerSquadStatus::KeyPlayer

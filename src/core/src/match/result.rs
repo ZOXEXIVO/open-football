@@ -1,8 +1,9 @@
 use nalgebra::Vector3;
+use rustc_hash::FxHashMap;
 use serde::Serializer;
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Serialize)]
@@ -327,13 +328,13 @@ impl Serialize for PlayerStateEntry {
 #[derive(Debug, Clone)]
 pub struct ResultMatchPositionData {
     ball: Vec<ResultPositionDataItem>,
-    players: HashMap<u32, Vec<ResultPositionDataItem>>,
+    players: FxHashMap<u32, Vec<ResultPositionDataItem>>,
     passes: Vec<PassEventData>,
     events: Vec<MatchEventData>,
     /// Per-player state changes — only populated when track_events is true.
-    player_states: HashMap<u32, Vec<PlayerStateEntry>>,
+    player_states: FxHashMap<u32, Vec<PlayerStateEntry>>,
     /// Fast dedup: last recorded state compact ID per player (avoids String allocation)
-    last_state_ids: HashMap<u32, u16>,
+    last_state_ids: FxHashMap<u32, u16>,
     track_events: bool,
     track_positions: bool,
     scope: RecordingScope,
@@ -346,7 +347,7 @@ pub struct ResultMatchPositionData {
     /// keep working: the last sample recorded for an entity is the back of its
     /// pending queue, or the end of its kept vector when that queue is empty.
     pending_ball: VecDeque<ResultPositionDataItem>,
-    pending_players: HashMap<u32, VecDeque<ResultPositionDataItem>>,
+    pending_players: FxHashMap<u32, VecDeque<ResultPositionDataItem>>,
     /// One entry per moment the engine asked to keep, in the order it asked.
     /// Goals are final; chances are provisional until [`Self::finish_retaining`]
     /// is told which of them the match sheet kept — see [`Clip`].
@@ -490,16 +491,22 @@ impl ResultMatchPositionData {
         let capacity = if track_positions { 44 } else { 0 };
         ResultMatchPositionData {
             ball: Vec::new(),
-            players: HashMap::with_capacity(capacity),
+            players: FxHashMap::with_capacity_and_hasher(capacity, Default::default()),
             passes: Vec::new(),
             events: Vec::new(),
-            player_states: HashMap::with_capacity(if track_events { capacity } else { 0 }),
-            last_state_ids: HashMap::with_capacity(if track_events { capacity } else { 0 }),
+            player_states: FxHashMap::with_capacity_and_hasher(
+                if track_events { capacity } else { 0 },
+                Default::default(),
+            ),
+            last_state_ids: FxHashMap::with_capacity_and_hasher(
+                if track_events { capacity } else { 0 },
+                Default::default(),
+            ),
             track_events,
             track_positions,
             scope: RecordingScope::Full,
             pending_ball: VecDeque::new(),
-            pending_players: HashMap::new(),
+            pending_players: FxHashMap::default(),
             clips: Vec::new(),
             segments: Vec::new(),
             capture_until: None,
@@ -980,7 +987,7 @@ impl ResultMatchPositionData {
         self.open_clip(total_match_time, ClipKind::Closing);
 
         self.pending_ball = VecDeque::new();
-        self.pending_players = HashMap::new();
+        self.pending_players = FxHashMap::default();
         self.capture_until = None;
 
         // A full recording has no clips and no segments — it is all one piece,

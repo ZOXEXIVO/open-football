@@ -1,5 +1,7 @@
 use super::CountryInfo;
 use super::FreeAgentFlowCounters;
+use super::FreeAgentPool;
+use crate::Staff;
 use crate::club::board::manager::ManagerApproach;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
@@ -9,12 +11,11 @@ use crate::shared::SimulatorDataIndexes;
 use crate::transfers::market::map::{CountryTransferProfile, MarketMap};
 use crate::transfers::pipeline::PlayerSummary;
 use crate::utils::random::engine as rng_engine;
-use crate::{Player, Staff};
 use chrono::{Duration, NaiveDateTime};
-use std::collections::HashMap;
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[derive(Clone)]
 pub struct SimulatorData {
     pub continents: Vec<Continent>,
 
@@ -22,11 +23,7 @@ pub struct SimulatorData {
 
     pub indexes: Option<SimulatorDataIndexes>,
 
-    /// Set to true whenever a transfer moves a player between clubs. Checked
-    /// by the simulator to decide whether to rebuild player location indexes.
-    pub dirty_player_index: bool,
-
-    pub free_agents: Vec<Player>,
+    pub free_agents: FreeAgentPool,
 
     /// Coaches/managers/staff between jobs. Populated on sacking and on
     /// natural contract expiry; drained when the manager market signs
@@ -46,7 +43,7 @@ pub struct SimulatorData {
     pub global_competitions: GlobalCompetitions,
 
     /// All countries by id (for nationality lookups — includes countries without active leagues)
-    pub country_info: HashMap<u32, CountryInfo>,
+    pub country_info: FxHashMap<u32, CountryInfo>,
 
     /// The world's transfer geography: every country's corridor card plus
     /// the facts (region, reputation, wage level) the derived fallback and
@@ -96,7 +93,51 @@ pub struct SimulatorData {
     pub free_agent_flow: FreeAgentFlowCounters,
 }
 
+/// A whole-world copy, which the game takes for every processing run and
+/// again each simulated week it publishes. Serially it cost longer than the
+/// simulated day; the countries and the free-agent pool are most of it and
+/// are independent, so they are copied across the pool.
+impl Clone for SimulatorData {
+    fn clone(&self) -> Self {
+        let (continents, free_agents) = rayon::join(
+            || self.continents.par_iter().cloned().collect(),
+            || self.free_agents.clone(),
+        );
+        SimulatorData {
+            continents,
+            date: self.date,
+            indexes: self.indexes.clone(),
+            free_agents,
+            free_agent_staff: self.free_agent_staff.clone(),
+            pending_manager_approaches: self.pending_manager_approaches.clone(),
+            watchlist: self.watchlist.clone(),
+            global_competitions: self.global_competitions.clone(),
+            country_info: self.country_info.clone(),
+            market_map: Arc::clone(&self.market_map),
+            match_store: self.match_store.clone(),
+            daily_world_player_pool: self.daily_world_player_pool.clone(),
+            daily_global_free_agents: self.daily_global_free_agents.clone(),
+            free_agent_flow: self.free_agent_flow.clone(),
+        }
+    }
+}
+
 impl SimulatorData {
+    /// Drop a world with its countries and free agents released across the
+    /// pool, the counterpart of [`Clone`]. Dropping it whole frees the
+    /// object graph on one thread.
+    pub fn release(self) {
+        let SimulatorData {
+            continents,
+            free_agents,
+            ..
+        } = self;
+        rayon::join(
+            || continents.into_par_iter().for_each(Continent::release),
+            || free_agents.release(),
+        );
+    }
+
     /// Build a SimulatorData with the deterministic sim RNG pinned to `seed`.
     /// Passing a non-zero seed makes the util-layer RNG stream reproducible
     /// per worker thread; Rayon scheduling still reorders draws across
@@ -135,7 +176,7 @@ impl SimulatorData {
         global_competitions: GlobalCompetitions,
     ) -> Self {
         // Build country_info from simulation participants
-        let country_info: HashMap<u32, CountryInfo> = continents
+        let country_info: FxHashMap<u32, CountryInfo> = continents
             .iter()
             .flat_map(|cont| &cont.countries)
             .map(|c| {
@@ -165,8 +206,7 @@ impl SimulatorData {
             continents,
             date,
             indexes: None,
-            dirty_player_index: false,
-            free_agents: Vec::new(),
+            free_agents: FreeAgentPool::default(),
             free_agent_staff: Vec::new(),
             pending_manager_approaches: Vec::new(),
             watchlist: Vec::new(),
@@ -179,11 +219,7 @@ impl SimulatorData {
             free_agent_flow: FreeAgentFlowCounters::default(),
         };
 
-        let mut indexes = SimulatorDataIndexes::new();
-
-        indexes.refresh(&data);
-
-        data.indexes = Some(indexes);
+        data.indexes = Some(SimulatorDataIndexes::build(&data));
 
         data.init_league_tables();
         data.seed_player_histories();

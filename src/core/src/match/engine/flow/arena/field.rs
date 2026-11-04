@@ -123,8 +123,8 @@ impl MatchField {
     pub fn new(
         width: usize,
         height: usize,
-        left_team_squad: MatchSquad,
-        right_team_squad: MatchSquad,
+        mut left_team_squad: MatchSquad,
+        mut right_team_squad: MatchSquad,
     ) -> Self {
         let home_team_id = left_team_squad.team_id;
         let away_team_id = right_team_squad.team_id;
@@ -135,11 +135,10 @@ impl MatchField {
         let left_tactics = left_team_squad.tactics.clone();
         let right_tactics = right_team_squad.tactics.clone();
 
-        // Snapshots taken before the squads are consumed by the
-        // player-setup pass. Cheap: the inner memory map is bounded
-        // by the player roster the coach has observed.
-        let home_coach_snapshot = left_team_squad.coach_snapshot.clone();
-        let away_coach_snapshot = right_team_squad.coach_snapshot.clone();
+        // Lifted out before the player-setup pass consumes the squads,
+        // which never reads them.
+        let home_coach_snapshot = left_team_squad.coach_snapshot.take();
+        let away_coach_snapshot = right_team_squad.coach_snapshot.take();
 
         let size = MatchFieldSize::new(width, height);
         let (players_on_field, substitutes) =

@@ -4,12 +4,12 @@ use crate::club::player::statistics::PlayerStatisticsHistoryItem;
 use crate::league::Season;
 use crate::shared::FullName;
 use crate::{
-    MatchTacticType, PersonAttributes, PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition,
-    PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
-    Tactics,
+    MatchTacticType, PersonAttributes, PlayerAttributes, PlayerCollection,
+    PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+    PlayerStatistics, PlayerStatisticsHistory, Tactics,
 };
 use chrono::{Datelike, NaiveDate};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 fn comp_date() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 9, 4).unwrap()
@@ -178,7 +178,7 @@ fn ordinary_break_selects_23_players() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let ctx = comp_ctx();
     let selected =
-        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &HashSet::new());
+        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &FxHashSet::default());
     assert_eq!(selected.len(), 23);
 }
 
@@ -188,7 +188,7 @@ fn tournament_finals_select_26_players() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let ctx = tournament_ctx();
     let selected =
-        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &HashSet::new());
+        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &FxHashSet::default());
     assert_eq!(selected.len(), 26);
 }
 
@@ -217,7 +217,7 @@ fn incumbent_beats_marginally_better_uncapped_in_competitive_window() {
     newbie.assessed_potential = 152; // suppress any youth coach quirk
     newbie.average_rating = 7.0;
 
-    let mut incumbents = HashSet::new();
+    let mut incumbents = FxHashSet::default();
     incumbents.insert(999_u32);
 
     let s_incumbent = NationalTeam::score_candidate(&incumbent, &tactics, &ctx, &incumbents);
@@ -248,7 +248,7 @@ fn clearly_superior_uncapped_beats_incumbent() {
     elite.world_reputation = 7_500;
     elite.goals = 18;
 
-    let mut incumbents = HashSet::new();
+    let mut incumbents = FxHashSet::default();
     incumbents.insert(999_u32);
 
     let s_weak = NationalTeam::score_candidate(&weak_incumbent, &tactics, &ctx, &incumbents);
@@ -279,8 +279,9 @@ fn friendly_mode_favors_u24_high_potential_uncapped_player() {
     let ctx = friendly_ctx();
     let tactics = Tactics::new(MatchTacticType::T442);
 
-    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
-    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
+    let s_prospect =
+        NationalTeam::score_candidate(&prospect, &tactics, &ctx, &FxHashSet::default());
+    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &FxHashSet::default());
     assert!(
         s_prospect > s_veteran,
         "friendly window should favour the U24 prospect ({:.2}) over the veteran ({:.2})",
@@ -306,8 +307,9 @@ fn tournament_mode_favors_experienced_high_cap_player() {
 
     let ctx = tournament_ctx();
     let tactics = Tactics::new(MatchTacticType::T442);
-    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
-    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &HashSet::new());
+    let s_prospect =
+        NationalTeam::score_candidate(&prospect, &tactics, &ctx, &FxHashSet::default());
+    let s_veteran = NationalTeam::score_candidate(&veteran, &tactics, &ctx, &FxHashSet::default());
     assert!(
         s_veteran > s_prospect,
         "tournament should favour the experienced veteran ({:.2}) over the prospect ({:.2})",
@@ -357,7 +359,7 @@ fn role_coverage_selects_left_right_defensive_cover_when_available() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let ctx = comp_ctx();
     let selected =
-        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &HashSet::new());
+        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &FxHashSet::default());
 
     let picked_ids: Vec<u32> = selected
         .iter()
@@ -418,7 +420,7 @@ fn role_coverage_does_not_replace_a_much_stronger_selected_player() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let ctx = comp_ctx();
     let selected =
-        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &HashSet::new());
+        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &FxHashSet::default());
     let picked_ids: Vec<u32> = selected
         .iter()
         .map(|(i, _, _)| candidates[*i].player_id)
@@ -436,9 +438,9 @@ fn every_selected_player_has_a_primary_call_up_reason() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let ctx = comp_ctx();
     let selected =
-        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &HashSet::new());
+        NationalTeam::select_balanced_squad(&candidates, &tactics, &ctx, &FxHashSet::default());
 
-    let known_reasons: HashSet<CallUpReason> = [
+    let known_reasons: FxHashSet<CallUpReason> = [
         CallUpReason::KeyPlayer,
         CallUpReason::CurrentForm,
         CallUpReason::RegularStarter,
@@ -473,7 +475,7 @@ fn synthetic_fallback_still_works_for_weak_countries() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 600,
         elo_rating: 1500,
@@ -493,7 +495,7 @@ fn no_pending_friendly_fixtures_are_created_by_call_up_squad() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 8_000,
         elo_rating: 1500,
@@ -522,7 +524,7 @@ fn foreign_based_players_remain_eligible_for_their_birth_country() {
 fn derive_reasons_returns_position_need_when_flagged() {
     let c = make_candidate(1, 110, PlayerFieldPositionGroup::Defender);
     let ctx = comp_ctx();
-    let (primary, _) = NationalTeam::derive_reasons(&c, true, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, true, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::PositionNeed);
 }
 
@@ -530,7 +532,7 @@ fn derive_reasons_returns_position_need_when_flagged() {
 fn derive_reasons_returns_role_coverage_when_flagged() {
     let c = make_candidate(1, 110, PlayerFieldPositionGroup::Defender);
     let ctx = comp_ctx();
-    let (primary, _) = NationalTeam::derive_reasons(&c, false, true, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, true, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::RoleCoverage);
 }
 
@@ -543,7 +545,7 @@ fn derive_reasons_picks_key_player_for_high_ability_and_world_rep() {
     c.international_apps = 5;
     let ctx = comp_ctx();
     let (primary, secondaries) =
-        NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+        NationalTeam::derive_reasons(&c, false, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::KeyPlayer);
     assert!(!secondaries.contains(&CallUpReason::PositionNeed));
 }
@@ -561,7 +563,7 @@ fn derive_reasons_picks_youth_prospect_for_high_potential_youngsters() {
     c.league_reputation = 400;
     c.position_levels = vec![(PlayerPositionType::Striker, 14)];
     let ctx = comp_ctx();
-    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::YouthProspect);
 }
 
@@ -581,7 +583,7 @@ fn derive_reasons_picks_friendly_experiment_in_friendly_window() {
     c.position_levels = vec![(PlayerPositionType::MidfielderCenter, 14)];
 
     let ctx = friendly_ctx();
-    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::FriendlyExperiment);
 }
 
@@ -599,7 +601,7 @@ fn derive_reasons_picks_tournament_experience_for_capped_veteran() {
     c.league_reputation = 400;
 
     let ctx = tournament_ctx();
-    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::TournamentExperience);
 }
 
@@ -707,7 +709,7 @@ fn call_up_squad_clears_generated_squad_on_subsequent_call() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 5_000,
         elo_rating: 1500,
@@ -740,7 +742,7 @@ fn call_up_squad_preserves_completed_fixtures_when_reselecting() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 5_000,
         elo_rating: 1500,
@@ -788,7 +790,7 @@ fn weak_country_still_gets_squad_but_no_friendlies() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 1_500,
         elo_rating: 1500,
@@ -858,7 +860,7 @@ fn stale_pending_friendlies_are_dropped_on_recall() {
         level: NationalTeamLevel::Senior,
         staff: Vec::new(),
         squad: Vec::new(),
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 1_500,
         elo_rating: 1500,
@@ -898,7 +900,7 @@ fn squad_picks_returns_real_then_synthetic_with_synthetic_depth_reason() {
             primary_reason: CallUpReason::KeyPlayer,
             secondary_reasons: Vec::new(),
         }],
-        generated_squad: Vec::new(),
+        generated_squad: PlayerCollection::new(Vec::new()),
         tactics: Tactics::new(MatchTacticType::T442),
         reputation: 5_000,
         elo_rating: 1500,
@@ -907,7 +909,7 @@ fn squad_picks_returns_real_then_synthetic_with_synthetic_depth_reason() {
 
     let synth_date = NaiveDate::from_ymd_opt(2026, 9, 4).unwrap();
     nt.generated_squad
-        .push(NationalTeam::generate_synthetic_player(
+        .add(NationalTeam::generate_synthetic_player(
             1,
             synth_date,
             PlayerPositionType::Goalkeeper,
@@ -965,8 +967,9 @@ fn u21_scoring_prefers_high_potential_teenager_over_average_21yo() {
     average.assessed_potential = 140;
     average.international_apps = 0;
 
-    let s_prospect = NationalTeam::score_candidate(&prospect, &tactics, &ctx, &HashSet::new());
-    let s_average = NationalTeam::score_candidate(&average, &tactics, &ctx, &HashSet::new());
+    let s_prospect =
+        NationalTeam::score_candidate(&prospect, &tactics, &ctx, &FxHashSet::default());
+    let s_average = NationalTeam::score_candidate(&average, &tactics, &ctx, &FxHashSet::default());
     assert!(
         s_prospect > s_average,
         "U21 blend should rank the high-ceiling 19yo above the average 21yo (prospect={s_prospect}, average={s_average})"
@@ -988,8 +991,10 @@ fn u21_scoring_penalises_senior_capped_players() {
     senior_regular.age = 20;
     senior_regular.international_apps = 15; // -45 penalty
 
-    let s_uncapped = NationalTeam::score_candidate(&uncapped, &tactics, &ctx, &HashSet::new());
-    let s_senior = NationalTeam::score_candidate(&senior_regular, &tactics, &ctx, &HashSet::new());
+    let s_uncapped =
+        NationalTeam::score_candidate(&uncapped, &tactics, &ctx, &FxHashSet::default());
+    let s_senior =
+        NationalTeam::score_candidate(&senior_regular, &tactics, &ctx, &FxHashSet::default());
     assert!(
         s_uncapped > s_senior,
         "a true U21 prospect should outscore an equally-able senior regular"
@@ -1004,7 +1009,7 @@ fn u21_reason_is_elite_prospect_for_high_ceiling() {
     let mut c = make_candidate(1, 120, PlayerFieldPositionGroup::Forward);
     c.age = 18;
     c.assessed_potential = 165;
-    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &HashSet::new());
+    let (primary, _) = NationalTeam::derive_reasons(&c, false, false, &ctx, &FxHashSet::default());
     assert_eq!(primary, CallUpReason::U21EliteProspect);
 }
 
@@ -1015,8 +1020,9 @@ fn senior_scoring_unaffected_by_u21_branch() {
     let tactics = Tactics::new(MatchTacticType::T442);
     let senior_ctx = comp_ctx();
     let c = make_candidate(1, 150, PlayerFieldPositionGroup::Midfielder);
-    let senior_score = NationalTeam::score_candidate(&c, &tactics, &senior_ctx, &HashSet::new());
-    let u21_score = NationalTeam::score_candidate(&c, &tactics, &u21_ctx(), &HashSet::new());
+    let senior_score =
+        NationalTeam::score_candidate(&c, &tactics, &senior_ctx, &FxHashSet::default());
+    let u21_score = NationalTeam::score_candidate(&c, &tactics, &u21_ctx(), &FxHashSet::default());
     // The two blends are different functions; they should not coincide for
     // a mid-tier 27-year-old (sanity that the branch actually diverges).
     assert!((senior_score - u21_score).abs() > f32::EPSILON);

@@ -181,7 +181,7 @@ pub async fn playoff_get_action(
 
     let team_info = |team_id: u32| -> (String, String) {
         simulator_data
-            .team_data(team_id)
+            .team(team_id)
             .map(|d| (d.name.clone(), d.slug.clone()))
             .unwrap_or_default()
     };

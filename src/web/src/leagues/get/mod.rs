@@ -253,11 +253,11 @@ pub async fn league_get_action(
     let mut table_rows: Vec<LeagueTableRow> = league_table
         .iter()
         .map(|t| {
-            let team_data = simulator_data.team_data(t.team_id).unwrap();
+            let team = simulator_data.team(t.team_id).unwrap();
             LeagueTableRow {
                 zone: "",
-                team_name: team_data.name.clone(),
-                team_slug: team_data.slug.clone(),
+                team_name: team.name.clone(),
+                team_slug: team.slug.clone(),
                 played: t.played,
                 win: t.win,
                 draft: t.draft,
@@ -322,20 +322,18 @@ pub async fn league_get_action(
         let annual_rows: Vec<LeagueTableRow> = annual
             .iter()
             .filter_map(|t| {
-                simulator_data
-                    .team_data(t.team_id)
-                    .map(|team_data| LeagueTableRow {
-                        zone: "",
-                        team_name: team_data.name.clone(),
-                        team_slug: team_data.slug.clone(),
-                        played: t.played,
-                        win: t.win,
-                        draft: t.draft,
-                        lost: t.lost,
-                        goal_scored: t.goal_scored,
-                        goal_concerned: t.goal_concerned,
-                        points: t.points,
-                    })
+                simulator_data.team(t.team_id).map(|team| LeagueTableRow {
+                    zone: "",
+                    team_name: team.name.clone(),
+                    team_slug: team.slug.clone(),
+                    played: t.played,
+                    win: t.win,
+                    draft: t.draft,
+                    lost: t.lost,
+                    goal_scored: t.goal_scored,
+                    goal_concerned: t.goal_concerned,
+                    points: t.points,
+                })
             })
             .collect();
         (tournament_label, annual_rows)
@@ -352,9 +350,7 @@ pub async fn league_get_action(
 
     // Build a single fixture view-item for the current tour.
     let map_item = |item: &ScheduleItem| -> LeagueScheduleItem {
-        let home_team_data = simulator_data.team_data(item.home_team_id).unwrap();
         let home_team = simulator_data.team(item.home_team_id).unwrap();
-        let away_team_data = simulator_data.team_data(item.away_team_id).unwrap();
         let away_team = simulator_data.team(item.away_team_id).unwrap();
 
         LeagueScheduleItem {
@@ -421,10 +417,10 @@ pub async fn league_get_action(
                         .collect(),
                 }
             }),
-            home_team_name: home_team_data.name.clone(),
-            home_team_slug: home_team_data.slug.clone(),
-            away_team_name: away_team_data.name.clone(),
-            away_team_slug: away_team_data.slug.clone(),
+            home_team_name: home_team.name.clone(),
+            home_team_slug: home_team.slug.clone(),
+            away_team_name: away_team.name.clone(),
+            away_team_slug: away_team.slug.clone(),
         }
     };
 

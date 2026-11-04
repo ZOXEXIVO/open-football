@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn a_country_prior_alone_buys_but_does_not_find() {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
 
         use crate::transfers::ScoutingRegion;
         use crate::transfers::market::map::{
@@ -474,7 +474,7 @@ mod tests {
         const TR: u32 = 1;
         const BR: u32 = 2;
         const PE: u32 = 3;
-        let mut facts = HashMap::new();
+        let mut facts = FxHashMap::default();
         for (id, code, continent) in [(TR, "tr", 1u32), (BR, "br", 3), (PE, "pe", 3)] {
             facts.insert(
                 id,
@@ -489,7 +489,7 @@ mod tests {
                 },
             );
         }
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         profiles.insert(
             TR,
             CountryTransferProfile {

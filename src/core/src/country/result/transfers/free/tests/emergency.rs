@@ -133,13 +133,13 @@ impl EmergencyFillFixtures {
         age: u8,
         position_group: PlayerFieldPositionGroup,
         same_country: bool,
-    ) -> FreeAgentCandidate {
+    ) -> FreeAgentCandidate<'static> {
         let code = if same_country { "en" } else { "ar" };
         FreeAgentCandidate {
             player_id,
-            player_name: format!("Cand{player_id}"),
+            player_name: format!("Cand{player_id}").into(),
             club_id: 0,
-            club_name: "Free Agent".to_string(),
+            club_name: "Free Agent".into(),
             ability,
             potential: ability.saturating_add(5),
             age,
@@ -147,7 +147,7 @@ impl EmergencyFillFixtures {
             days_to_expiry: 0,
             nationality_country_reputation: if same_country { 5000 } else { 3000 },
             nationality_region: ScoutingRegion::from_country(1, code),
-            nationality_country_code: code.to_string(),
+            nationality_country_code: code.into(),
             nationality_continent_id: 1,
             career_pressure: 0.6,
             days_free: 0,
@@ -177,7 +177,7 @@ impl EmergencyFillFixtures {
         same_country: bool,
         career_pressure: f32,
         reference_reputation: u16,
-    ) -> FreeAgentCandidate {
+    ) -> FreeAgentCandidate<'static> {
         let mut c = Self::candidate(player_id, ability, age, position_group, same_country);
         c.career_pressure = career_pressure;
         c.reference_reputation = reference_reputation;
@@ -249,7 +249,7 @@ fn empty_main_team_generates_emergency_signings_for_each_group() {
     // weighted cluster pick + acceptance roll sequence is independent
     // of how many RNG draws preceding tests consumed (mirrors the
     // seeded sibling tests in this block).
-    RandomEngine::set_seed(0xE11E_C7AB_u64);
+    let _seed = RandomEngine::hold_seed_for_test(0xE11E_C7AB_u64);
     // Empty squad → urgent flag. Emergency pass should produce at
     // least one signing per missing group (GK/DEF/MID/FWD) up to
     // the per-club cap, before the normal request-driven matcher
@@ -320,7 +320,7 @@ fn club_short_one_gk_signs_a_gk_first() {
     // acceptance roll is deterministic regardless of how many RNG draws
     // preceding tests consumed (mirrors the seeded sibling tests above).
     // Without this the outcome is execution-order dependent.
-    RandomEngine::set_seed(0xE11E_C7AB_u64);
+    let _seed = RandomEngine::hold_seed_for_test(0xE11E_C7AB_u64);
     // Squad has 0 GK and a handful of outfield bodies — emergency
     // pass must reach for the goalkeeper before anything else.
     let players: Vec<Player> = (0..8)
@@ -435,7 +435,7 @@ fn underfilled_club_signs_multiple_despite_normal_daily_cap() {
     // weighted cluster pick + acceptance roll sequence stays
     // deterministic regardless of suite position (the cluster pick
     // now draws RNG for multi-candidate slots).
-    RandomEngine::set_seed(0xE11E_C7AB_u64);
+    let _seed = RandomEngine::hold_seed_for_test(0xE11E_C7AB_u64);
     // Squad of 9 (urgent < 11). Normal max_free_agent_signings_per_day
     // is 2; the emergency pass uses a separate per-club cap (5
     // by default) so the underfilled club must be able to sign
@@ -503,7 +503,7 @@ fn zero_transfer_budget_does_not_block_emergency_fill() {
     // independence, not the acceptance roll — with cp 0.6 each
     // candidate accepted only ~40% of the time and all five could
     // decline on an unlucky stream.
-    RandomEngine::set_seed(0x0B0D_6E70);
+    let _seed = RandomEngine::hold_seed_for_test(0x0B0D_6E70);
     // Construct a club whose finance balance is zero / negative —
     // emergency fill should still proceed because free-agent fee
     // is 0 and the emergency pass doesn't gate on transfer budget.
@@ -568,7 +568,7 @@ fn emergency_pass_skips_player_already_signed_in_same_tick() {
         player_id: 900,
         player_name: "Cand900".to_string(),
         from_club_id: 0,
-        from_club_name: "Free Agent".to_string(),
+        from_club_name: "Free Agent".into(),
         to_club_id: 200,
         reason: TransferReason::key("emergency_squad_fill_def"),
         terms: None,
@@ -695,7 +695,7 @@ fn urgent_club_reaches_eleven_in_one_tick_with_plausible_pool() {
     // mercy of whatever earlier tests in the suite drained from
     // the thread-local stream, and one or two unlucky rejects
     // tip the signings count under the 11 floor.
-    RandomEngine::set_seed(0xE11E_C7AB_u64);
+    let _seed = RandomEngine::hold_seed_for_test(0xE11E_C7AB_u64);
 
     // Empty squad + plenty of plausible candidates → adaptive cap
     // lifts to the playable-size floor. The signing budget is
@@ -1196,12 +1196,12 @@ impl CrossRegionFixtures {
         nationality_country_reputation: u16,
         reference_reputation: u16,
         career_pressure: f32,
-    ) -> FreeAgentCandidate {
+    ) -> FreeAgentCandidate<'static> {
         FreeAgentCandidate {
             player_id,
-            player_name: format!("Cand{player_id}"),
+            player_name: format!("Cand{player_id}").into(),
             club_id: 0,
-            club_name: "Free Agent".to_string(),
+            club_name: "Free Agent".into(),
             ability,
             potential: ability.saturating_add(5),
             age,
@@ -1209,7 +1209,7 @@ impl CrossRegionFixtures {
             days_to_expiry: 0,
             nationality_country_reputation,
             nationality_region: ScoutingRegion::from_country(continent_id, code),
-            nationality_country_code: code.to_string(),
+            nationality_country_code: code.to_string().into(),
             nationality_continent_id: continent_id,
             career_pressure,
             days_free: 0,
@@ -1293,7 +1293,7 @@ impl EmergencyMarketFixtures {
     }
 
     fn world() -> MarketMap {
-        let mut facts = HashMap::new();
+        let mut facts = FxHashMap::default();
         for f in [
             Self::facts(Self::RU, "ru", 1, 6500, 900_000),
             Self::facts(Self::TR, "tr", 1, 7000, 900_000),
@@ -1302,7 +1302,7 @@ impl EmergencyMarketFixtures {
         ] {
             facts.insert(f.id, f);
         }
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         profiles.insert(
             Self::TR,
             CountryTransferProfile {
@@ -1343,7 +1343,7 @@ impl EmergencyMarketFixtures {
         group: PlayerFieldPositionGroup,
         days_free: i64,
         career_pressure: f32,
-    ) -> FreeAgentCandidate {
+    ) -> FreeAgentCandidate<'static> {
         let mut candidate = CrossRegionFixtures::candidate(
             player_id,
             72,
@@ -1532,7 +1532,7 @@ fn an_emergency_slot_will_not_sign_a_foreigner_it_cannot_register() {
     // quota does not touch him.
     let mut turk = russian.clone();
     turk.nationality_country_id = EmergencyMarketFixtures::TR;
-    turk.nationality_country_code = "tr".to_string();
+    turk.nationality_country_code = "tr".into();
     assert!(!turkey.would_block_registration(turk.nationality_country_id));
 }
 
@@ -1699,7 +1699,7 @@ fn picker_prefers_domestic_depth_over_higher_ca_foreign() {
     );
     let candidates = vec![russian, algerian];
     let signings: Vec<FreeAgentSigning> = Vec::new();
-    let rejected: HashSet<u32> = HashSet::new();
+    let rejected: FxHashSet<u32> = FxHashSet::default();
     let slot = EmergencyGroupSlot {
         group: PlayerFieldPositionGroup::Defender,
         missing: 1,
@@ -1742,7 +1742,7 @@ fn picker_skips_only_unrealistic_candidates_for_depth() {
     );
     let candidates = vec![russian];
     let signings: Vec<FreeAgentSigning> = Vec::new();
-    let rejected: HashSet<u32> = HashSet::new();
+    let rejected: FxHashSet<u32> = FxHashSet::default();
     let slot = EmergencyGroupSlot {
         group: PlayerFieldPositionGroup::Midfielder,
         missing: 1,
@@ -1959,7 +1959,7 @@ impl DepthPipelineFixtures {
         let code = if same_country { "en" } else { "ar" };
         GlobalFreeAgentSummary {
             player_id,
-            player_name: format!("Pool{player_id}"),
+            player_name: format!("Pool{player_id}").into(),
             ability,
             potential: ability.saturating_add(5),
             age,
@@ -1967,6 +1967,10 @@ impl DepthPipelineFixtures {
             nationality_country_reputation: reference_reputation,
             nationality_continent_id: if same_country { 1 } else { 3 },
             nationality_country_code: code.to_string(),
+            nationality_region: ScoutingRegion::from_country(
+                if same_country { 1 } else { 3 },
+                code,
+            ),
             nationality_country_id: if same_country { 1 } else { 2 },
             career_pressure,
             days_free: 0,
@@ -2156,7 +2160,7 @@ fn depth_slot_stages_pipeline_request_instead_of_direct_signing() {
 
 #[test]
 fn depth_request_creates_pending_personal_terms_negotiation() {
-    RandomEngine::set_seed(0xDE91_07F1);
+    let _seed = RandomEngine::hold_seed_for_test(0xDE91_07F1);
     let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
 
     let (signings, offered, _rejected) =
@@ -2223,7 +2227,7 @@ fn depth_request_creates_pending_personal_terms_negotiation() {
 
 #[test]
 fn low_rep_club_cannot_depth_sign_high_rep_foreign_free_agent() {
-    RandomEngine::set_seed(0x10F_FA11);
+    let _seed = RandomEngine::hold_seed_for_test(0x10F_FA11);
     // 800-rep country, routine pressure, CA-165 foreign star with a
     // 7500 reference reputation: the strict depth gates (tier CA
     // ceiling without overreach + pressure-scaled rep drop) must
@@ -2266,7 +2270,7 @@ fn low_rep_club_cannot_depth_sign_high_rep_foreign_free_agent() {
 
 #[test]
 fn depth_personal_terms_rejection_updates_request_and_shortlist() {
-    RandomEngine::set_seed(0xBAD_7E55);
+    let _seed = RandomEngine::hold_seed_for_test(0xBAD_7E55);
     let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
     DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
     assert!(!country.transfer_market.negotiations.is_empty());
@@ -2307,6 +2311,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
     // band depending on suite composition. Retry across a few seeds:
     // a genuine completion-path regression fails every attempt,
     // while the 1% artifact cannot survive eight (P ≈ 1e-16).
+    let _seed = RandomEngine::hold_seed_for_test(0xD0C7_0001);
     for attempt in 0..8u64 {
         RandomEngine::set_seed(0xD0C7_0001 + attempt);
         let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
@@ -2425,7 +2430,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
 
 #[test]
 fn unmarked_depth_cover_request_keeps_legacy_instant_signing() {
-    RandomEngine::set_seed(0x1E6A_C001);
+    let _seed = RandomEngine::hold_seed_for_test(0x1E6A_C001);
     // A DepthCover request from the weekly evaluation (no
     // EmergencyFreeAgentDepth marker) must keep the legacy instant
     // free-agent path — the staged-negotiation flow is reserved
@@ -2618,7 +2623,7 @@ impl MarketClearingFixtures {
 
     /// Long-tail global-pool candidate for the clearing pass:
     /// domestic journeyman deep in the decay curve.
-    fn long_term_candidate(player_id: u32) -> FreeAgentCandidate {
+    fn long_term_candidate(player_id: u32) -> FreeAgentCandidate<'static> {
         let mut c = EmergencyFillFixtures::candidate(
             player_id,
             70,
@@ -2649,7 +2654,7 @@ impl MarketClearingFixtures {
             config,
             date,
             &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
-            &HashSet::new(),
+            &FxHashSet::default(),
             &mut signings,
             &mut offered,
             &mut rejected,

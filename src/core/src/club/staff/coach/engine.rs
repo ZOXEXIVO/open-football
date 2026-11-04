@@ -74,11 +74,11 @@ pub struct CoachLiveMatchContext {
 /// an engine without pulling the whole staff record across the match
 /// boundary. Squad selection uses [`Self::from_staff`] for convenience.
 pub struct CoachDecisionEngine<'a> {
-    owning_roster: Option<&'a std::collections::HashSet<u32>>,
+    owning_roster: Option<&'a rustc_hash::FxHashSet<u32>>,
     pub memory: &'a CoachMemoryStore,
     pub strategy: CoachStrategy,
     pub profile: &'a CoachProfile,
-    pub player_intents: Option<&'a std::collections::HashMap<u32, super::PlayerMatchIntent>>,
+    pub player_intents: Option<&'a rustc_hash::FxHashMap<u32, super::PlayerMatchIntent>>,
 }
 
 impl<'a> CoachDecisionEngine<'a> {
@@ -98,13 +98,13 @@ impl<'a> CoachDecisionEngine<'a> {
 
     pub fn with_player_intents(
         mut self,
-        intents: &'a std::collections::HashMap<u32, super::PlayerMatchIntent>,
+        intents: &'a rustc_hash::FxHashMap<u32, super::PlayerMatchIntent>,
     ) -> Self {
         self.player_intents = Some(intents);
         self
     }
 
-    pub fn with_owning_roster(mut self, roster: &'a std::collections::HashSet<u32>) -> Self {
+    pub fn with_owning_roster(mut self, roster: &'a rustc_hash::FxHashSet<u32>) -> Self {
         self.owning_roster = Some(roster);
         self
     }

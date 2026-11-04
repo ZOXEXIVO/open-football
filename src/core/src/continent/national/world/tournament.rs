@@ -98,7 +98,7 @@ pub fn apply_global_tournament_result(
         home_team_id: home_country_id,
         away_team_id: away_country_id,
         score,
-        details: Some(raw.clone()),
+        details: Some(raw.copy_without_data_positions()),
         friendly: false,
     }
 }

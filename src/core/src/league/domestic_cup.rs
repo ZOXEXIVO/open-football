@@ -26,7 +26,7 @@ use crate::league::{
 use crate::r#match::{MatchResult, MatchResultOutcome};
 use chrono::{Datelike, Duration, NaiveDate};
 use log::debug;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// One completed edition's result, captured at the instant the next
 /// season's bracket is drawn (while the just-finished bracket is still
@@ -141,7 +141,7 @@ impl DomesticCup {
     /// Order the surviving teams by their original round-one seed so the
     /// next round's byes again fall to the strongest sides.
     fn reseed(seeded_field: &[u32], alive: &[u32]) -> Vec<u32> {
-        let alive_set: HashSet<u32> = alive.iter().copied().collect();
+        let alive_set: FxHashSet<u32> = alive.iter().copied().collect();
         seeded_field
             .iter()
             .copied()
@@ -437,7 +437,7 @@ impl DomesticCup {
             return Vec::new();
         }
         let total_rounds = cup::total_rounds(Self::seeded_participants(clubs).len());
-        let mut team_to_club: HashMap<u32, u32> = HashMap::new();
+        let mut team_to_club: FxHashMap<u32, u32> = FxHashMap::default();
         for club in clubs {
             for team in &club.teams.teams {
                 team_to_club.insert(team.id, club.id);

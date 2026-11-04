@@ -1,7 +1,7 @@
 use crate::world::SimulatorData;
 use crate::{InternationalCalendar, NationalSelectionPolicy, NationalTeam};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 impl SimulatorData {
     /// World-level national-team call-ups. Runs on the opening day of each
@@ -30,10 +30,8 @@ impl SimulatorData {
         // Build a global senior candidate pool (main teams only) and run
         // the per-country call-up in parallel. Pre-distribute candidates
         // so each rayon worker owns its own slice — no shared HashMap.
-        let mut candidates_by_country = NationalTeam::collect_all_candidates_by_country(
-            self.continents.iter().flat_map(|c| c.countries.iter()),
-            date,
-        );
+        let mut candidates_by_country =
+            NationalTeam::collect_all_candidates_by_country(&self.continents, date);
         let senior_work: Vec<_> = self
             .continents
             .iter_mut()
@@ -60,7 +58,7 @@ impl SimulatorData {
         // Collect every player already taken by a senior squad in this
         // window — they're excluded from the U21 pool so the youth side
         // is a genuinely separate set of players, not a senior shadow.
-        let senior_selected: HashSet<u32> = self
+        let senior_selected: FxHashSet<u32> = self
             .continents
             .iter()
             .flat_map(|c| c.countries.iter())
@@ -70,7 +68,7 @@ impl SimulatorData {
         let u21_policy = NationalSelectionPolicy::under21();
         let mut u21_candidates_by_country =
             NationalTeam::collect_all_candidates_by_country_with_policy(
-                self.continents.iter().flat_map(|c| c.countries.iter()),
+                &self.continents,
                 date,
                 &u21_policy,
             );

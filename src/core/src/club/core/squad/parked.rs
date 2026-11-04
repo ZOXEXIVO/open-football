@@ -5,7 +5,7 @@
 //! team he was signed to play for. So this is the one pass that asks a
 //! different question.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::NaiveDate;
 
@@ -65,7 +65,7 @@ impl Club {
         // how many uncommitted players each group has left so the pass
         // stops at a usable XI instead of emptying the squad — the same
         // fielding footprint the youth development-loan pass respects.
-        let mut group_remaining: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut group_remaining: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
         for player in team.players.iter() {
             if player.is_on_loan() || player.contract.is_none() {
                 continue;

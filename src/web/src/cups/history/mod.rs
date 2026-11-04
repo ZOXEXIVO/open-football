@@ -110,12 +110,12 @@ pub async fn cup_history_action(
         for entry in cup.past_champions.iter().rev() {
             winners.insert(entry.champion_team_id);
             let (champion_name, champion_slug) = simulator_data
-                .team_data(entry.champion_team_id)
+                .team(entry.champion_team_id)
                 .map(|d| (d.name.clone(), d.slug.clone()))
                 .unwrap_or_default();
             let (runner_up_name, runner_up_slug) = entry
                 .runner_up_team_id
-                .and_then(|id| simulator_data.team_data(id))
+                .and_then(|id| simulator_data.team(id))
                 .map(|d| (d.name.clone(), d.slug.clone()))
                 .unwrap_or_default();
             let has_runner_up = !runner_up_name.is_empty();

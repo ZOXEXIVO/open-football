@@ -1,4 +1,5 @@
 use crate::league::Season;
+use crate::r#match::Match;
 use chrono::{Duration, NaiveDate, Weekday};
 
 /// Reserved league_id values for continental competitions.
@@ -56,6 +57,14 @@ pub struct ContinentalMatch {
     pub stage: CompetitionStage,
     pub match_id: String,
     pub result: Option<(u8, u8)>,
+}
+
+/// One competition's ties for the day, built and waiting for the
+/// continent's single dispatch: the scheduled rows, and the engine matches
+/// built from them in the same order.
+pub struct ContinentalMatchday {
+    pub todays: Vec<ContinentalMatch>,
+    pub matches: Vec<Match>,
 }
 
 #[derive(Debug, Clone)]

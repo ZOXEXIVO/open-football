@@ -6,8 +6,8 @@
 //! execution applies both, honouring the squad-size guards; and the backfill
 //! tops the first team back up if it is still short.
 
+use rustc_hash::FxHashSet;
 use std::cmp::Reverse;
-use std::collections::HashSet;
 
 use chrono::NaiveDate;
 use log::debug;
@@ -421,7 +421,7 @@ impl Club {
             size[m.from] = size[m.from].saturating_sub(1);
             size[m.to] += 1;
         }
-        let mut moving: HashSet<u32> = moves.iter().map(|m| m.player_id).collect();
+        let mut moving: FxHashSet<u32> = moves.iter().map(|m| m.player_id).collect();
 
         for (home_idx, home) in teams.iter().enumerate() {
             if !home.team_type.is_youth() || home.league_id.is_none() {

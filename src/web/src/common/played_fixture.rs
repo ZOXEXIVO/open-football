@@ -47,13 +47,10 @@ impl PlayedFixture {
             .or_else(|| competition.and_then(|league| league.matches.get(match_id)))
             .is_some();
 
-        let (opponent_name, opponent_slug) = match data.team_data(item.rival_team_id) {
-            Some(rival) => (rival.name.clone(), rival.slug.clone()),
-            None => data
-                .team(item.rival_team_id)
-                .map(|rival| (rival.name.clone(), rival.slug.clone()))
-                .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new())),
-        };
+        let (opponent_name, opponent_slug) = data
+            .team(item.rival_team_id)
+            .map(|rival| (rival.name.clone(), rival.slug.clone()))
+            .unwrap_or_else(|| (i18n.t("unknown").to_string(), String::new()));
 
         let (us, them) = (item.score.0.get(), item.score.1.get());
         let (home_goals, away_goals) = if item.is_home { (us, them) } else { (them, us) };

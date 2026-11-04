@@ -77,7 +77,11 @@ Certain actions can only be resolved at the world level because the two sides ma
 - **THEN** unsettled loan wage shares are settled and long-unemployed free agents are evaluated for retirement; on any other day these steps are skipped
 
 ### Requirement: End-of-tick cleanup settles derived state
-After all of a day's matches (continental and global) have been played, the tick SHALL release any international-duty flags, move players whose contracts were cleared that day into the global free-agent pool, rebuild derived lookup indexes only when something changed that day, and seed career-history records for any player created that day.
+After all of a day's matches (continental and global) have been played, the tick SHALL:
+- release any international-duty flags;
+- move players whose contracts were cleared that day into the global free-agent pool;
+- reconcile the derived lookup indexes against what changed that day, at a cost proportional to the rosters whose membership changed;
+- seed career-history records for any player created that day.
 
 #### Scenario: A released player becomes visible to other countries on a later tick
 - **WHEN** a player's contract is cleared during a tick
@@ -85,7 +89,11 @@ After all of a day's matches (continental and global) have been played, the tick
 
 #### Scenario: Derived indexes are not rebuilt on a no-transfer day
 - **WHEN** no transfer moved a player between clubs during the tick
-- **THEN** the derived index rebuild step is skipped for that tick
+- **THEN** no index is rebuilt from scratch: the cleanup's reconcile walks only the rosters whose membership changed that tick, and when no roster changed it visits no player and no staff member and leaves the indexes unchanged
+
+#### Scenario: Moves without a transfer are reconciled the same day
+- **WHEN** a player changed teams during the tick without any transfer, for example in a squad rebalance between a club's own teams or an academy graduation
+- **THEN** the indexes record his new team after that tick's cleanup, exactly as they would for a transfer
 
 ### Requirement: Weekly, monthly, and yearly honours follow a fixed award order
 On the day of the week designated for weekly honours, the tick SHALL build a shared per-league weekly aggregate once and then run, in order: the young weekly award, the senior weekly award, the young team-of-the-week selection, the senior team-of-the-week selection, and club news generation for the week. Monthly and calendar-boundary honours (monthly awards, league news, season awards, team of the year, and world player of the year) SHALL run after the weekly step, with league news generated only after monthly awards have been finalized.
@@ -101,3 +109,21 @@ On the day of the week designated for weekly honours, the tick SHALL build a sha
 #### Scenario: League news is generated only after monthly awards are finalized
 - **WHEN** the monthly/periodic honours step runs
 - **THEN** league news generation occurs strictly after monthly awards have been computed, so it can report on frozen scoring charts
+
+### Requirement: A continent's club competitions share one dispatch per day
+On a day when any of a continent's club competitions has matches, the tick SHALL build every one of that continent's continental club matches for the day before playing any of them. It SHALL then play them in a single dispatch to the match engine, and SHALL hand each competition back only its own results.
+
+Continents SHALL still settle the day one after another, in the same order. Each continent's continental matches are built from the club state left by the continents settled before it, and are played before that continent's countries settle their transfers.
+
+#### Scenario: Two competitions on the same night
+- **WHEN** the Europa League and the Conference League both have ties on the same day
+- **THEN** all of their matches are played in one dispatch
+- **AND** each competition records only its own results
+
+#### Scenario: A quiet continental day
+- **WHEN** none of a continent's club competitions has a match on the day
+- **THEN** no continental dispatch is made for that continent
+
+#### Scenario: Continents keep their order
+- **WHEN** two continents both have continental club matches on the same day
+- **THEN** the second continent's squads are built only after the first continent has settled its countries' transfers, exactly as before

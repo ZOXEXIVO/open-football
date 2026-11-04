@@ -33,10 +33,22 @@ pub(crate) struct ClubNewsroomTick;
 
 impl ClubNewsroomTick {
     pub(crate) fn run(data: &mut SimulatorData, week_start: NaiveDate, week_end: NaiveDate) {
-        let facts = WeeklyMatchFacts::from_world(data, week_start, week_end);
-        let market = WeeklyMarket::from_world(data, week_start, week_end);
-        let loans = WeeklyLoanWatch::from_world(data, week_end);
-        let dugout = WeeklyDugout::from_world(data);
+        // Each desk only reads the world, so the four gather side by side.
+        let world: &SimulatorData = data;
+        let ((facts, market), (loans, dugout)) = rayon::join(
+            || {
+                rayon::join(
+                    || WeeklyMatchFacts::from_world(world, week_start, week_end),
+                    || WeeklyMarket::from_world(world, week_start, week_end),
+                )
+            },
+            || {
+                rayon::join(
+                    || WeeklyLoanWatch::from_world(world, week_end),
+                    || WeeklyDugout::from_world(world),
+                )
+            },
+        );
 
         let editions: Vec<(u32, u32, NewspaperIssue)> = data
             .continents

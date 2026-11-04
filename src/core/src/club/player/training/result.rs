@@ -7,6 +7,7 @@ use crate::club::player::development::{PositionalSkillCeilings, SkillKey};
 use crate::club::player::injury::InjuryType;
 use crate::league::result::LeagueProcessAccess;
 use crate::utils::DateUtils;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     GoalkeepingGains, HappinessEventCause, HappinessEventContext, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType,
@@ -481,7 +482,7 @@ impl PlayerTrainingResult {
                 medical_multiplier: 1.0,
                 now: current_date,
             });
-            if rand::random::<f32>() < chance {
+            if RandomEngine::gen_f32() < chance {
                 let age = DateUtils::age(player.birth_date, current_date);
                 let condition_pct = player.player_attributes.condition_percentage();
                 let natural_fitness = player.skills.physical.natural_fitness;

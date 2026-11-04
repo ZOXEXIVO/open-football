@@ -23,8 +23,8 @@ use crate::transfers::view::player::PlayerView;
 use chrono::Duration;
 use chrono::NaiveDate;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use super::{
     BuyerContext, BuyerNeedPicture, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
@@ -955,14 +955,14 @@ impl<'a> ClubAdviceScan<'a> {
 
     /// Per-group squad-fit projection at the buying club. Cached because the
     /// listed-star filter would otherwise re-scan the squad once per candidate.
-    fn buyer_fit_by_group(&self) -> HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> {
+    fn buyer_fit_by_group(&self) -> FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot> {
         let country = self.country;
         let club = self.club;
         let date = self.date;
         let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         // Per-group squad-fit projection at the buying club —
         // cached so the filter doesn't re-scan the squad N times.
-        let buyer_fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
+        let buyer_fit_by_group: FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
             PlayerFieldPositionGroup::Midfielder,
@@ -976,12 +976,12 @@ impl<'a> ClubAdviceScan<'a> {
 
     /// Per-group best current ability at the buying club — the bar a listed
     /// target has to clear to be an upgrade rather than another squad player.
-    fn buyer_best_in_group(&self) -> HashMap<PlayerFieldPositionGroup, u8> {
+    fn buyer_best_in_group(&self) -> FxHashMap<PlayerFieldPositionGroup, u8> {
         let team = self.team;
         // Per-group best CA at the buying club — cached so the
         // filter doesn't re-scan the squad N times.
-        let buyer_best_in_group: HashMap<PlayerFieldPositionGroup, u8> = {
-            let mut m: HashMap<PlayerFieldPositionGroup, u8> = HashMap::new();
+        let buyer_best_in_group: FxHashMap<PlayerFieldPositionGroup, u8> = {
+            let mut m: FxHashMap<PlayerFieldPositionGroup, u8> = FxHashMap::default();
             for p in team.players.players.iter() {
                 let g = p.position().position_group();
                 let ca = p.player_attributes.current_ability;
@@ -1102,7 +1102,8 @@ impl<'a> ClubAdviceScan<'a> {
 
                 // Per-group body count on the main team — drives the
                 // "thin at this position" depth signal.
-                let mut group_counts: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+                let mut group_counts: FxHashMap<PlayerFieldPositionGroup, usize> =
+                    FxHashMap::default();
                 for p in team.players.players.iter() {
                     *group_counts
                         .entry(p.position().position_group())

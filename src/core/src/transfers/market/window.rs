@@ -1,5 +1,5 @@
 use chrono::{Datelike, NaiveDate, Weekday};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// How wide the buyer/seller "talks are allowed" window is around the
 /// formal registration window. Real markets quietly start negotiating
@@ -12,7 +12,7 @@ const AGREEMENT_POST_CLOSE_DAYS: i64 = 3;
 
 #[derive(Debug, Clone)]
 pub struct TransferWindowManager {
-    pub windows: HashMap<u32, TransferWindow>, // Keyed by country_id
+    pub windows: FxHashMap<u32, TransferWindow>, // Keyed by country_id
 }
 
 #[derive(Debug, Clone)]
@@ -25,7 +25,7 @@ pub struct TransferWindow {
 impl TransferWindowManager {
     pub fn new() -> Self {
         TransferWindowManager {
-            windows: HashMap::new(),
+            windows: FxHashMap::default(),
         }
     }
 

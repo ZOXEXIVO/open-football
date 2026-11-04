@@ -2,12 +2,12 @@ use crate::league::LeagueTable;
 use crate::r#match::{MatchResult, MatchResultOutcome, Score};
 use chrono::Weekday;
 use log::debug;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct LeagueDynamics {
-    pub team_momentum: HashMap<u32, f32>,
-    pub team_streaks: HashMap<u32, TeamStreak>,
+    pub team_momentum: FxHashMap<u32, f32>,
+    pub team_streaks: FxHashMap<u32, TeamStreak>,
     pub title_race: TitleRace,
     pub relegation_battle: RelegationBattle,
     pub european_race: EuropeanRace,
@@ -24,8 +24,8 @@ impl Default for LeagueDynamics {
 impl LeagueDynamics {
     pub fn new() -> Self {
         LeagueDynamics {
-            team_momentum: HashMap::new(),
-            team_streaks: HashMap::new(),
+            team_momentum: FxHashMap::default(),
+            team_streaks: FxHashMap::default(),
             title_race: TitleRace::default(),
             relegation_battle: RelegationBattle::default(),
             european_race: EuropeanRace::default(),

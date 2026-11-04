@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn double_round_robin_every_pair_exactly_once_for_20_teams() {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
         let teams: Vec<u32> = (1..=20).collect();
         let settings = LeagueSettings {
             season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
@@ -254,9 +254,9 @@ mod tests {
             )
             .unwrap();
 
-        let mut home_count: HashMap<u32, u32> = HashMap::new();
-        let mut away_count: HashMap<u32, u32> = HashMap::new();
-        let mut pair_count: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut home_count: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut away_count: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut pair_count: FxHashMap<(u32, u32), u32> = FxHashMap::default();
         for tour in &tours {
             for item in &tour.items {
                 *home_count.entry(item.home_team_id).or_default() += 1;
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn schedule_handles_odd_team_count_with_byes() {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
         let teams: Vec<u32> = (1..=15).collect();
         let settings = LeagueSettings {
             season_starting_half: DayMonthPeriod::new(1, 8, 30, 12),
@@ -388,9 +388,9 @@ mod tests {
         // Odd team counts produce a bye slot per round; `tours`
         // drops those before they reach a tour. Total matches should be
         // n * (n-1) = 15 * 14 = 210, split across ~30 rounds.
-        let mut home_count: HashMap<u32, u32> = HashMap::new();
-        let mut away_count: HashMap<u32, u32> = HashMap::new();
-        let mut pair_count: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut home_count: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut away_count: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut pair_count: FxHashMap<(u32, u32), u32> = FxHashMap::default();
         for tour in &tours {
             for item in &tour.items {
                 *home_count.entry(item.home_team_id).or_default() += 1;
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn split_season_second_tournament_starts_in_its_own_window() {
         use crate::InternationalCalendar;
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
         // Argentine shape: 15 teams, Apertura Feb-Jun, Clausura from Jul 15.
         let teams: Vec<u32> = (1..=15).collect();
         let settings = LeagueSettings {
@@ -482,7 +482,7 @@ mod tests {
         // Each half is a full single round-robin: 7 games per team per
         // half... i.e. every team plays 14 games per half (7 home+away mix)
         // and meets every opponent once.
-        let mut first_half_games: HashMap<u32, u32> = HashMap::new();
+        let mut first_half_games: FxHashMap<u32, u32> = FxHashMap::default();
         for tour in &tours[..15] {
             for item in &tour.items {
                 *first_half_games.entry(item.home_team_id).or_default() += 1;
@@ -683,8 +683,8 @@ mod tests {
 
     #[test]
     fn a_youth_league_never_shares_a_day_with_its_parent_league() {
-        use std::collections::HashSet;
-        let senior_days: HashSet<NaiveDate> =
+        use rustc_hash::FxHashSet;
+        let senior_days: FxHashSet<NaiveDate> =
             fixtures(CompetitionLevel::Senior, &(1..=16).collect::<Vec<_>>())
                 .iter()
                 .map(|i| i.date.date())

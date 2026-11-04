@@ -1782,7 +1782,7 @@ mod tests {
         let field = make_test_field(home, bench, build_roster(2, 300, adult_birth()), vec![]);
         let memory = CoachMemoryStore::new();
         let profile = CoachProfile::from_staff(&crate::StaffStub::build());
-        let intents = std::collections::HashMap::from([(
+        let intents = rustc_hash::FxHashMap::from_iter([(
             201,
             PlayerMatchIntent {
                 planned_bench: 1.2,

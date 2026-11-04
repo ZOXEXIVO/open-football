@@ -3,6 +3,7 @@ use crate::club::news::{ClubLoanWatch, LoanWatchEntry};
 use crate::world::SimulatorData;
 use crate::{HappinessEventType, Person, Player, PlayerFieldPositionGroup};
 use chrono::NaiveDate;
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 
 /// Every loaned-out player in the world, bucketed under the club that
@@ -20,11 +21,15 @@ impl WeeklyLoanWatch {
     /// changes what a wasted spell means.
     const PROSPECT_AGE: u8 = 23;
 
+    /// Every country reads its own rosters in parallel; the parents'
+    /// columns are filled in world order, as one walk would fill them.
     pub(super) fn from_world(data: &SimulatorData, today: NaiveDate) -> Self {
-        let mut by_parent: FxHashMap<u32, ClubLoanWatch> = FxHashMap::default();
-
-        for continent in &data.continents {
-            for country in &continent.countries {
+        let per_country: Vec<Vec<(u32, LoanWatchEntry)>> = data
+            .continents
+            .par_iter()
+            .flat_map(|continent| continent.countries.par_iter())
+            .map(|country| {
+                let mut loanees: Vec<(u32, LoanWatchEntry)> = Vec::new();
                 for club in &country.clubs {
                     for team in club.teams.iter() {
                         for player in team.players.iter() {
@@ -39,11 +44,17 @@ impl WeeklyLoanWatch {
                             if parent == 0 {
                                 continue;
                             }
-                            by_parent.entry(parent).or_default().players.push(entry);
+                            loanees.push((parent, entry));
                         }
                     }
                 }
-            }
+                loanees
+            })
+            .collect();
+
+        let mut by_parent: FxHashMap<u32, ClubLoanWatch> = FxHashMap::default();
+        for (parent, entry) in per_country.into_iter().flatten() {
+            by_parent.entry(parent).or_default().players.push(entry);
         }
 
         WeeklyLoanWatch { by_parent }

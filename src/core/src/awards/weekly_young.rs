@@ -7,7 +7,7 @@ use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
 use chrono::NaiveDate;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Monday-only Young Player of the Week (age ≤ `YOUNG_WEEKLY_MAX_AGE`).
 /// Mirrors `WeeklyAwardsTick` but filters the candidate set to under-20s
@@ -50,7 +50,7 @@ impl YoungWeeklyAwardsTick {
                 // Score-then-filter: identical scoring to the senior
                 // award, then the eligibility gate runs over the
                 // candidate aggregate to keep the tiebreak deterministic.
-                let mut young: HashMap<u32, WeeklyAggregate> = HashMap::new();
+                let mut young: FxHashMap<u32, WeeklyAggregate> = FxHashMap::default();
                 for (id, agg) in scores {
                     if data
                         .player(*id)

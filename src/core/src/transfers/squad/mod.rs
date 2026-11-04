@@ -29,8 +29,8 @@ pub use standing::CareerRecordSnapshot;
 
 use chrono::NaiveDate;
 use log::debug;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
 
 use crate::club::board::ChairmanAmbition;
 use crate::club::board::mandate::MandateIncumbent;
@@ -379,7 +379,7 @@ impl InvestmentWatch {
         // memory alone is not a lead — it holds up to 120 rows, most of
         // them opponents seen once in a match — so the monitoring board is
         // the filter, indexed once rather than rescanned per memory.
-        let monitored: HashSet<u32> = plan.scout_monitoring.iter().map(|m| m.player_id).collect();
+        let monitored: FxHashSet<u32> = plan.scout_monitoring.iter().map(|m| m.player_id).collect();
         for memory in plan.known_players.iter() {
             if (date - memory.last_seen).num_days() > Self::MEMORY_FRESH_DAYS {
                 continue;
@@ -1064,7 +1064,7 @@ impl SquadReviewPass {
         let squad_average_level = asset_ctx.squad_avg_level();
         // Depth-chart rank per group, from the same observable levels the
         // asset classifier used, so "third choice" means one thing.
-        let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>> = FxHashMap::default();
         for player in players.iter().filter(|p| !p.is_on_loan()) {
             group_levels
                 .entry(player.position().position_group())
@@ -1781,7 +1781,7 @@ mod stalled_prospect_tests {
         TeamCollection,
     };
     use chrono::Duration;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     /// Fixtures for the stalled-prospect pathway sweep. Bundled on a unit
     /// struct per the project's no-free-helpers convention.
@@ -1907,7 +1907,7 @@ mod stalled_prospect_tests {
                 estimated_potential: est_pot,
                 potential_confidence: conf,
                 age: player.age(date),
-                position_levels: HashMap::new(),
+                position_levels: FxHashMap::default(),
                 appearances: official_apps,
                 official_appearances: official_apps,
                 is_injured: false,

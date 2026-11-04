@@ -14,7 +14,7 @@ use crate::InternationalCalendar;
 use crate::league::{ScheduleItem, ScheduleTour};
 use crate::r#match::MatchResultOutcome;
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Largest power of two `<= n`. Returns 0 for `n == 0`.
 pub fn largest_pow2_le(n: usize) -> usize {
@@ -105,7 +105,7 @@ pub fn tie_winner(item: &ScheduleItem) -> Option<u32> {
 pub fn advancing_teams(tours: &[ScheduleTour], round_one_field: &[u32]) -> Option<Vec<u32>> {
     let mut entering: Vec<u32> = round_one_field.to_vec();
     for tour in tours {
-        let mut played: HashSet<u32> = HashSet::with_capacity(tour.items.len() * 2);
+        let mut played: FxHashSet<u32> = FxHashSet::with_capacity_and_hasher(tour.items.len() * 2, Default::default());
         let mut winners: Vec<u32> = Vec::with_capacity(tour.items.len());
         for item in &tour.items {
             played.insert(item.home_team_id);
@@ -236,7 +236,7 @@ mod tests {
     fn no_team_appears_twice_in_a_round() {
         let seeded: Vec<u32> = (1..=13).collect();
         let (pairings, byes) = pair_knockout_round(&seeded);
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         for (h, a) in &pairings {
             assert!(seen.insert(*h), "team {} twice", h);
             assert!(seen.insert(*a), "team {} twice", a);

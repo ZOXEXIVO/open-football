@@ -9,7 +9,7 @@ use crate::transfers::squad::{
     GroupNeed, GroupNeedScan, NeedKind, SuccessionAudit, SuccessionUrgency,
 };
 use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, TACTICS_POSITIONS};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Squads, formations and tier anchors the group-need tests build on.
 struct GroupFx;
@@ -24,7 +24,7 @@ impl GroupFx {
     }
 
     fn squad_player(id: u32, primary: PlayerPositionType, ca: u8) -> SquadPlayerInfo {
-        let mut levels: HashMap<PlayerPositionType, u8> = HashMap::new();
+        let mut levels: FxHashMap<PlayerPositionType, u8> = FxHashMap::default();
         levels.insert(primary, 20);
         SquadPlayerInfo {
             player_id: id,

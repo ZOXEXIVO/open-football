@@ -1423,7 +1423,7 @@ impl Player {
         }
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerResult {
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> PlayerResult {
         self.simulate_with_options(ctx, false)
     }
 
@@ -1433,7 +1433,7 @@ impl Player {
     /// both signals in the same week.
     pub fn simulate_with_options(
         &mut self,
-        ctx: GlobalContext<'_>,
+        ctx: &GlobalContext<'_>,
         skip_natural_development: bool,
     ) -> PlayerResult {
         let now = ctx.simulation.date;
@@ -1651,8 +1651,10 @@ impl Player {
         // Transfer desire based on multiple factors. Build the
         // context once from `GlobalContext` so the transfer-desire
         // path doesn't have to walk the simulator world.
-        let desire_ctx = TransferDesireContext::from_global(self, &ctx);
-        self.process_transfer_desire(&mut result, now.date(), &desire_ctx);
+        if self.may_seek_transfer(now.date()) {
+            let desire_ctx = TransferDesireContext::from_global(self, ctx);
+            self.process_transfer_desire(&mut result, now.date(), &desire_ctx);
+        }
 
         result
     }
@@ -1799,7 +1801,7 @@ impl Player {
 
         let age = DateUtils::age(self.birth_date, now);
 
-        for target_lang in &country_languages {
+        for target_lang in country_languages {
             // Check if player already speaks this language natively
             let already_native = self
                 .languages

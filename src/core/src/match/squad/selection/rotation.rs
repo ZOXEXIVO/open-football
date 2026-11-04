@@ -28,8 +28,8 @@ use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, Tactics, TeamType};
 use chrono::NaiveDate;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 use super::helpers;
 use super::helpers::KeeperAvailability;
@@ -432,7 +432,7 @@ impl MatchInvolvement {
 /// share that priority earns, and the deficit against what the player
 /// has actually been given. Built once per selection pass.
 struct DevelopmentPlan {
-    profiles: HashMap<u32, CandidateProfile>,
+    profiles: FxHashMap<u32, CandidateProfile>,
     /// Mean primary position level (1-20 grade scale) of the team's own
     /// candidates. `position_fit_score` doubles as a quality grade — it
     /// returns the player's positional level — so a guest's fit is
@@ -505,7 +505,8 @@ impl DevelopmentPlan {
     const NEUTRAL_POSITION_LEVEL: f32 = 12.0;
 
     fn build(sel: &DevelopmentSelection<'_>, pool: &[&Player], slots: usize) -> Self {
-        let mut profiles: HashMap<u32, CandidateProfile> = HashMap::with_capacity(pool.len());
+        let mut profiles: FxHashMap<u32, CandidateProfile> =
+            FxHashMap::with_capacity_and_hasher(pool.len(), Default::default());
         if pool.is_empty() {
             return DevelopmentPlan {
                 profiles,

@@ -21,8 +21,8 @@ use crate::r#match::player::MatchPlayer;
 use crate::{MatchTacticType, Person, Player, Tactics, Team, TeamType};
 use chrono::NaiveDate;
 use log::debug;
+use rustc_hash::FxHashSet;
 use std::borrow::Borrow;
-use std::collections::HashSet;
 
 use helpers::*;
 use model::MatchSelectionGameModel;
@@ -258,7 +258,7 @@ impl SquadSelector {
             return available.to_vec();
         }
         let roster = team.players.players();
-        let own_ids: HashSet<u32> = roster.iter().map(|p| p.id).collect();
+        let own_ids: FxHashSet<u32> = roster.iter().map(|p| p.id).collect();
         let band = (25.0 - 15.0 * ctx.match_importance.clamp(0.0, 1.0)).round() as u8;
         let mut starting = Vec::with_capacity(available.len());
         let mut emergency = Vec::new();
@@ -350,12 +350,13 @@ impl SquadSelector {
         // entry path — both their own roster (a B-team player flagged for
         // the first team) and the cross-team reserve pool.
         //
-        // Track membership in a side `HashSet<u32>` so reserve / keeper-
+        // Track membership in a side `FxHashSet<u32>` so reserve / keeper-
         // fallback duplicate checks are O(1) instead of O(n) per probe.
         let team_player_count = team.players.players().len();
         let estimated = team_player_count + reserve_players.len();
         let mut available: Vec<&Player> = Vec::with_capacity(estimated);
-        let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
+        let mut available_ids: FxHashSet<u32> =
+            FxHashSet::with_capacity_and_hasher(estimated, Default::default());
         for &p in team.players.players().iter() {
             if PlayerAvailability::is_available(p, ctx.is_friendly)
                 && Self::eligible_under_rules(p, ctx)
@@ -530,7 +531,7 @@ impl SquadSelector {
         let starting_pool = Self::starting_pool(team, &available, ctx, tactics);
         let main_squad = scx.select_starting_eleven(team.id, &starting_pool);
 
-        let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
+        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
             .iter()
             .filter(|p| !main_squad_ids.contains(&p.id))
@@ -602,12 +603,12 @@ impl SquadSelector {
         main_squad: &[MatchPlayer],
         substitutes: &[MatchPlayer],
     ) -> Vec<u32> {
-        let named: HashSet<u32> = main_squad
+        let named: FxHashSet<u32> = main_squad
             .iter()
             .chain(substitutes.iter())
             .map(|p| p.id)
             .collect();
-        let own: HashSet<u32> = team.players.players().iter().map(|p| p.id).collect();
+        let own: FxHashSet<u32> = team.players.players().iter().map(|p| p.id).collect();
         available
             .iter()
             .map(|p| p.id)
@@ -653,7 +654,8 @@ impl SquadSelector {
         let team_player_count = team.players.players().len();
         let estimated = team_player_count + reserve_players.len();
         let mut available: Vec<&Player> = Vec::with_capacity(estimated);
-        let mut available_ids: HashSet<u32> = HashSet::with_capacity(estimated);
+        let mut available_ids: FxHashSet<u32> =
+            FxHashSet::with_capacity_and_hasher(estimated, Default::default());
         for &p in team.players.players().iter() {
             if PlayerAvailability::is_available(p, ctx.is_friendly)
                 && Self::eligible_under_rules(p, ctx)
@@ -761,7 +763,7 @@ impl SquadSelector {
 
         let main_squad = development.select_starting_eleven(&available);
 
-        let main_squad_ids: HashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
+        let main_squad_ids: FxHashSet<u32> = main_squad.iter().map(|mp| mp.id).collect();
         let remaining: Vec<&Player> = available
             .iter()
             .filter(|p| !main_squad_ids.contains(&p.id))

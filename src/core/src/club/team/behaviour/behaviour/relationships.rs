@@ -7,7 +7,7 @@ use super::TeamBehaviour;
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::{ChangeType, Person, Player, PlayerCollection};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 impl TeamBehaviour {
     /// Reputation dynamics: star players command respect or create tension
@@ -304,7 +304,7 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
         _ctx: &GlobalContext<'_>,
     ) {
-        let mut country_groups: HashMap<u32, Vec<&Player>> = HashMap::new();
+        let mut country_groups: FxHashMap<u32, Vec<&Player>> = FxHashMap::default();
 
         for player in &players.players {
             country_groups

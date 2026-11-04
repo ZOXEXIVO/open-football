@@ -62,112 +62,110 @@ pub enum Language {
 
 impl Language {
     /// Map a country code to its official/primary language(s).
-    pub fn from_country_code(code: &str) -> Vec<Language> {
+    pub fn from_country_code(code: &str) -> &'static [Language] {
         match code {
             // Western Europe
-            "gb" | "ie" | "sc" | "wa" | "ei" => vec![Language::English],
-            "es" => vec![Language::Spanish],
-            "fr" => vec![Language::French],
-            "de" | "at" | "ch" | "li" => vec![Language::German],
-            "it" | "sm" => vec![Language::Italian],
-            "pt" => vec![Language::Portuguese],
-            "nl" => vec![Language::Dutch],
-            "be" => vec![Language::Dutch, Language::French],
-            "lu" => vec![Language::French, Language::German],
-            "ad" | "mc" | "gi" => vec![Language::Spanish],
-            "mt" => vec![Language::English],
+            "gb" | "ie" | "sc" | "wa" | "ei" => &[Language::English],
+            "es" => &[Language::Spanish],
+            "fr" => &[Language::French],
+            "de" | "at" | "ch" | "li" => &[Language::German],
+            "it" | "sm" => &[Language::Italian],
+            "pt" => &[Language::Portuguese],
+            "nl" => &[Language::Dutch],
+            "be" => &[Language::Dutch, Language::French],
+            "lu" => &[Language::French, Language::German],
+            "ad" | "mc" | "gi" => &[Language::Spanish],
+            "mt" => &[Language::English],
 
             // Scandinavia
-            "se" => vec![Language::Swedish],
-            "no" => vec![Language::Norwegian],
-            "dk" | "fo" => vec![Language::Danish],
-            "fi" => vec![Language::Finnish],
-            "is" => vec![Language::Icelandic],
+            "se" => &[Language::Swedish],
+            "no" => &[Language::Norwegian],
+            "dk" | "fo" => &[Language::Danish],
+            "fi" => &[Language::Finnish],
+            "is" => &[Language::Icelandic],
 
             // Eastern Europe
-            "pl" => vec![Language::Polish],
-            "cz" => vec![Language::Czech],
-            "sk" => vec![Language::Slovak],
-            "hu" => vec![Language::Hungarian],
-            "ro" | "md" => vec![Language::Romanian],
-            "bg" => vec![Language::Bulgarian],
-            "rs" => vec![Language::Serbian],
-            "hr" => vec![Language::Croatian],
-            "si" => vec![Language::Slovenian],
-            "ba" => vec![Language::Bosnian],
-            "al" | "mk" => vec![Language::Albanian],
-            "gr" | "cy" => vec![Language::Greek],
-            "ee" | "lv" | "lt" => vec![Language::Russian],
-            "ua" => vec![Language::Ukrainian],
-            "ru" | "by" => vec![Language::Russian],
-            "ge" => vec![Language::Georgian],
-            "am" => vec![Language::Armenian],
-            "az" => vec![Language::Azerbaijani],
-            "kz" | "kg" | "uz" | "tj" | "tm" => vec![Language::Russian],
-            "me" => vec![Language::Serbian],
+            "pl" => &[Language::Polish],
+            "cz" => &[Language::Czech],
+            "sk" => &[Language::Slovak],
+            "hu" => &[Language::Hungarian],
+            "ro" | "md" => &[Language::Romanian],
+            "bg" => &[Language::Bulgarian],
+            "rs" => &[Language::Serbian],
+            "hr" => &[Language::Croatian],
+            "si" => &[Language::Slovenian],
+            "ba" => &[Language::Bosnian],
+            "al" | "mk" => &[Language::Albanian],
+            "gr" | "cy" => &[Language::Greek],
+            "ee" | "lv" | "lt" => &[Language::Russian],
+            "ua" => &[Language::Ukrainian],
+            "ru" | "by" => &[Language::Russian],
+            "ge" => &[Language::Georgian],
+            "am" => &[Language::Armenian],
+            "az" => &[Language::Azerbaijani],
+            "kz" | "kg" | "uz" | "tj" | "tm" => &[Language::Russian],
+            "me" => &[Language::Serbian],
 
             // Turkey & Middle East
-            "tr" => vec![Language::Turkish],
-            "il" => vec![Language::Hebrew],
-            "ir" => vec![Language::Persian],
+            "tr" => &[Language::Turkish],
+            "il" => &[Language::Hebrew],
+            "ir" => &[Language::Persian],
             "sa" | "ae" | "qa" | "kw" | "bh" | "om" | "jo" | "lb" | "iq" | "ye" | "eg" | "dz"
-            | "ma" | "tn" | "ly" | "sd" | "ps" | "mr" => vec![Language::Arabic],
+            | "ma" | "tn" | "ly" | "sd" | "ps" | "mr" => &[Language::Arabic],
 
             // South America
-            "br" => vec![Language::Portuguese],
+            "br" => &[Language::Portuguese],
             "ar" | "co" | "cl" | "uy" | "py" | "pe" | "ec" | "bo" | "ve" | "mx" | "sv" | "gt"
-            | "hn" | "ni" | "cr" | "pa" | "cu" | "do" | "pr" => vec![Language::Spanish],
-            "gy" | "sr" | "gf" => vec![Language::English],
+            | "hn" | "ni" | "cr" | "pa" | "cu" | "do" | "pr" => &[Language::Spanish],
+            "gy" | "sr" | "gf" => &[Language::English],
 
             // North America & Caribbean
             "us" | "ca" | "jm" | "tt" | "bb" | "bs" | "bz" | "ag" | "dm" | "gd" | "kn" | "lc"
-            | "vc" | "ky" | "bm" | "vi" | "ai" | "ms" | "vg" | "tc" => vec![Language::English],
-            "ht" | "gp" | "mq" | "mf" => vec![Language::French],
-            "aw" => vec![Language::Dutch],
+            | "vc" | "ky" | "bm" | "vi" | "ai" | "ms" | "vg" | "tc" => &[Language::English],
+            "ht" | "gp" | "mq" | "mf" => &[Language::French],
+            "aw" => &[Language::Dutch],
 
             // East Asia
-            "jp" => vec![Language::Japanese],
-            "kr" | "kp" => vec![Language::Korean],
-            "cn" | "hk" | "mo" | "tw" => vec![Language::Chinese],
+            "jp" => &[Language::Japanese],
+            "kr" | "kp" => &[Language::Korean],
+            "cn" | "hk" | "mo" | "tw" => &[Language::Chinese],
 
             // Southeast Asia
-            "th" => vec![Language::Thai],
-            "vn" => vec![Language::Vietnamese],
-            "id" => vec![Language::Indonesian],
-            "my" | "sg" | "bn" => vec![Language::Malay],
-            "ph" | "mm" | "kh" | "la" => vec![Language::English],
+            "th" => &[Language::Thai],
+            "vn" => &[Language::Vietnamese],
+            "id" => &[Language::Indonesian],
+            "my" | "sg" | "bn" => &[Language::Malay],
+            "ph" | "mm" | "kh" | "la" => &[Language::English],
 
             // South Asia
-            "in" | "pk" | "bd" | "lk" | "np" | "mv" => vec![Language::Hindi],
-            "af" => vec![Language::Persian],
+            "in" | "pk" | "bd" | "lk" | "np" | "mv" => &[Language::Hindi],
+            "af" => &[Language::Persian],
 
             // Oceania
             "au" | "nz" | "fj" | "pg" | "sb" | "vu" | "ws" | "to" | "ck" | "as" | "gu" | "fm"
-            | "ki" | "tv" | "mp" => vec![Language::English],
-            "nc" | "wf" => vec![Language::French],
+            | "ki" | "tv" | "mp" => &[Language::English],
+            "nc" | "wf" => &[Language::French],
 
             // Africa — English-speaking
             "ng" | "gh" | "ke" | "tz" | "ug" | "za" | "zw" | "zm" | "bw" | "mw" | "sl" | "lr"
-            | "gm" | "mu" | "sz" | "ls" | "na" | "rw" => vec![Language::English],
+            | "gm" | "mu" | "sz" | "ls" | "na" | "rw" => &[Language::English],
 
             // Africa — French-speaking
             "ci" | "cm" | "sn" | "ml" | "bf" | "ne" | "td" | "cf" | "cg" | "ga" | "bj" | "tg"
-            | "gw" | "gq" | "dj" | "bi" | "mg" | "km" | "yt" | "re" | "st" => {
-                vec![Language::French]
-            }
+            | "gw" | "gq" | "dj" | "bi" | "mg" | "km" | "yt" | "re" | "st" => &[Language::French],
 
             // Africa — Portuguese-speaking
-            "ao" | "mz" | "cv" => vec![Language::Portuguese],
+            "ao" | "mz" | "cv" => &[Language::Portuguese],
 
             // Africa — Arabic
             // (already handled above: eg, dz, ma, tn, ly, sd, mr)
 
             // Africa — East (Swahili region, also English)
-            "et" | "so" => vec![Language::Swahili],
+            "et" | "so" => &[Language::Swahili],
 
             // Africa — South Africa also has Afrikaans
             // (za already mapped to English above)
-            _ => vec![Language::English], // fallback
+            _ => &[Language::English], // fallback
         }
     }
 

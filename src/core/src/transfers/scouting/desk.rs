@@ -32,7 +32,7 @@ use crate::transfers::market::knowledge::ClubMarketKnowledge;
 use crate::transfers::market::map::MarketMap;
 use crate::transfers::market::window::TransferCalendar;
 use crate::utils::{FloatUtils, IntegerUtils};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -269,7 +269,7 @@ impl ScoutMarketDesk {
         /// wins only when the club's own map is thin.
         const EXPLORATION_WEIGHT: f32 = 0.5;
 
-        let mut wanted: HashMap<u32, f32> = HashMap::new();
+        let mut wanted: FxHashMap<u32, f32> = FxHashMap::default();
         let mut want = |country_id: u32, weight: f32| {
             if country_id == 0 || country_id == club_country_id {
                 return;
@@ -354,7 +354,7 @@ impl ScoutMarketDesk {
     /// interesting; the specialist is what turns that into a corridor.
     fn markets_being_watched(club: &Club, club_country_id: u32) -> Vec<u32> {
         let plan = &club.transfer_plan;
-        let watching: HashSet<u32> = plan
+        let watching: FxHashSet<u32> = plan
             .scout_monitoring
             .iter()
             .filter(|row| row.is_active_interest())
@@ -481,7 +481,7 @@ impl ScoutMarketDesk {
     /// him — the club keeps only its own half, the ledger. Never below a
     /// working department.
     fn retire_aged_scouts(club: &mut Club, date: NaiveDate) {
-        let mut retired: HashSet<u32> = HashSet::new();
+        let mut retired: FxHashSet<u32> = FxHashSet::default();
         for team in club.teams.teams.iter_mut() {
             let scouts = team
                 .staffs
@@ -503,7 +503,7 @@ impl ScoutMarketDesk {
                 .filter(|s| Self::is_chief_scout(s))
                 .count();
             let mut allowed_removals = scouts - Self::MIN_SCOUTS;
-            team.staffs.staffs.retain(|staff| {
+            team.staffs.retain(|staff| {
                 if allowed_removals == 0 || !Self::is_scout(staff) {
                     return true;
                 }

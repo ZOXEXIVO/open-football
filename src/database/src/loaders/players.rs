@@ -458,22 +458,27 @@ impl PlayersOdb {
     /// authoritative loan relationship on every lookup that hits it first
     /// (player page renders "Contracted to <borrower>" instead of the loan
     /// banner). Keep the record carrying loan info — it's the parent's
-    /// canonical listing.
+    /// canonical listing. Records keep the order they were exported in —
+    /// a map's iteration order would deal every club's roster out
+    /// differently on every run.
     fn dedupe_by_id(players: Vec<OdbPlayer>) -> Vec<OdbPlayer> {
-        let mut by_id: HashMap<u32, OdbPlayer> = HashMap::with_capacity(players.len());
+        let mut slot_of: HashMap<u32, usize> = HashMap::with_capacity(players.len());
+        let mut kept: Vec<OdbPlayer> = Vec::with_capacity(players.len());
         for p in players {
-            match by_id.entry(p.id) {
+            match slot_of.entry(p.id) {
                 std::collections::hash_map::Entry::Vacant(e) => {
-                    e.insert(p);
+                    e.insert(kept.len());
+                    kept.push(p);
                 }
-                std::collections::hash_map::Entry::Occupied(mut e) => {
-                    if p.loan.is_some() && e.get().loan.is_none() {
-                        e.insert(p);
+                std::collections::hash_map::Entry::Occupied(e) => {
+                    let slot = &mut kept[*e.get()];
+                    if p.loan.is_some() && slot.loan.is_none() {
+                        *slot = p;
                     }
                 }
             }
         }
-        by_id.into_values().collect()
+        kept
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {

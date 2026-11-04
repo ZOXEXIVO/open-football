@@ -419,7 +419,7 @@ impl PlayerHappiness {
     ///   2. **Partner cooldown**: standard per-`(type, partner_id)`
     ///      gate via `has_recent_event_with_partner` so a chronic
     ///      friction pair doesn't refire its row every weekly tick.
-    ///   3. **Emit**: push the event.
+    ///   3. **Emit**: build the context and push the event.
     ///
     /// Returns `true` only if the event was actually pushed. Both gate
     /// rejects return `false` so callers can short-circuit any
@@ -431,20 +431,26 @@ impl PlayerHappiness {
         event_type: HappinessEventType,
         magnitude: f32,
         partner_player_id: u32,
-        context: HappinessEventContext,
+        context: impl FnOnce() -> HappinessEventContext,
         partner_cooldown_days: u16,
         max_same_tick: u8,
     ) -> bool {
-        if self.same_tick_event_count(&event_type) >= max_same_tick as usize {
+        if self.same_tick_event_count(&event_type) >= max_same_tick as usize
+            || self.has_recent_event_with_partner(
+                &event_type,
+                partner_player_id,
+                partner_cooldown_days,
+            )
+        {
             return false;
         }
-        self.add_event_with_partner_context_and_cooldown(
+        self.add_event_full(
             event_type,
             magnitude,
-            partner_player_id,
-            context,
-            partner_cooldown_days,
-        )
+            Some(partner_player_id),
+            Some(context()),
+        );
+        true
     }
 
     /// Cooldown-gated, partner-aware counterpart of

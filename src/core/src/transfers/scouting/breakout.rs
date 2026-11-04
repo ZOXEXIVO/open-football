@@ -27,7 +27,7 @@
 //! Per project convention everything is a method on a struct (no free
 //! functions) and every type is reached through a `use` at the file header.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::{Country, Player, PlayerFieldPositionGroup};
 
@@ -183,9 +183,9 @@ pub(in crate::transfers) struct LeaguePerformanceLookup {
     /// player_id → 1-indexed rank on his league's scoring chart (top group
     /// only). Absent when the player has no goals or sits outside the
     /// tracked group.
-    scoring_rank: HashMap<u32, u8>,
+    scoring_rank: FxHashMap<u32, u8>,
     /// player_id → recent individual-award weight (season + recent months).
-    award_points: HashMap<u32, f32>,
+    award_points: FxHashMap<u32, f32>,
 }
 
 impl LeaguePerformanceLookup {
@@ -200,7 +200,7 @@ impl LeaguePerformanceLookup {
 
     pub(in crate::transfers) fn build(country: &Country) -> Self {
         // ── Scoring chart per league ──
-        let mut by_league: HashMap<u32, Vec<(u32, u16)>> = HashMap::new();
+        let mut by_league: FxHashMap<u32, Vec<(u32, u16)>> = FxHashMap::default();
         for club in &country.clubs {
             for team in &club.teams.teams {
                 let Some(league_id) = team.league_id else {
@@ -216,7 +216,7 @@ impl LeaguePerformanceLookup {
                 }
             }
         }
-        let mut scoring_rank: HashMap<u32, u8> = HashMap::new();
+        let mut scoring_rank: FxHashMap<u32, u8> = FxHashMap::default();
         for (_league_id, mut chart) in by_league {
             // Goals desc, lower id as the deterministic tiebreak — mirrors
             // `LeagueStatistics::update_player_rankings`.
@@ -227,8 +227,8 @@ impl LeaguePerformanceLookup {
         }
 
         // ── Recent individual-award weight per league ──
-        let mut award_points: HashMap<u32, f32> = HashMap::new();
-        let add = |map: &mut HashMap<u32, f32>, id: u32, weight: f32| {
+        let mut award_points: FxHashMap<u32, f32> = FxHashMap::default();
+        let add = |map: &mut FxHashMap<u32, f32>, id: u32, weight: f32| {
             *map.entry(id).or_insert(0.0) += weight;
         };
         for league in &country.leagues.leagues {

@@ -1,5 +1,6 @@
 use crate::MatchRuntime;
 use crate::club::academy::result::ClubAcademyResult;
+use crate::club::team::NearestFixtures;
 use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
 use crate::context::GlobalContext;
 use crate::context::{HomeLeagueTable, TournamentClocks};
@@ -12,18 +13,19 @@ use crate::league::LeagueBuildOutput;
 use crate::league::LeagueCollection;
 use crate::league::LeaguePendingState;
 use crate::league::result::{
-    ClubProcessCtx, CountryLookupIndex, CountryProcessCtx, DeferredContractInteraction,
-    DeferredGlobalOps, StagedClubOps, WorldSnapshot,
+    ClubProcessCtx, CountryProcessCtx, DeferredContractInteraction, DeferredGlobalOps,
+    StagedClubOps, WorldSnapshot,
 };
 use crate::league::simulation::matchday::MatchdayCommitments;
 use crate::league::{CompetitionLevel, FixtureRest, KickoffClock, OpenedMatchday, Schedule};
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
+use crate::shared::CountryLookupIndex;
 use crate::transfers::market::TransferMarket;
 use crate::transfers::market::map::CountryTransferProfile;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::utils::PerformanceProfiler;
-use crate::{Club, ClubResult, Player, PlayerResult};
+use crate::{Club, ClubResult, Player, PlayerCollection, PlayerResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -41,7 +43,7 @@ use crate::league::LeagueResult;
 use crate::league::LeagueTableResult;
 use crate::league::LeagueTableRow;
 use crate::league::playoff::{GroupStanding, LeaguePlayoff, StandingRow};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// State stashed between [`Country::simulate_build`] and
 /// [`Country::simulate_process`] for one tick. The build pass mutates
@@ -139,7 +141,11 @@ pub struct Country {
     /// falls to [`crate::transfers::CorridorPrior::derive`].
     pub transfer_profile: CountryTransferProfile,
 
-    pub retired_players: Vec<Player>,
+    pub retired_players: PlayerCollection,
+
+    /// Positions of this country's players, teams and clubs for its own
+    /// result fan-out, kept between ticks and reconciled before each use.
+    pub lookup: CountryLookupIndex,
 
     /// `start_year` of the most recent season for which the per-player
     /// statistics snapshot has fired. `None` before the first
@@ -383,7 +389,7 @@ impl Country {
         commitments: &ContinentalCommitments,
         today: NaiveDate,
     ) {
-        let continental: HashMap<u32, &[NaiveDate]> = self
+        let continental: FxHashMap<u32, &[NaiveDate]> = self
             .clubs
             .iter()
             .filter(|club| !commitments.dates(club.id).is_empty())
@@ -405,7 +411,7 @@ impl Country {
             return;
         }
 
-        let mut busy: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        let mut busy: FxHashMap<u32, Vec<NaiveDate>> = FxHashMap::default();
         for (_, schedule) in self.competitive_schedules() {
             for item in schedule.tours.iter().flat_map(|t| &t.items) {
                 let day = item.date.date();
@@ -515,7 +521,7 @@ impl Country {
         // instead of re-filtering the whole country's team list once per
         // league. On a deep pyramid that inner filter was the league loop's
         // own O(leagues x teams).
-        let mut teams_by_league: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut teams_by_league: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
         for team in self.clubs.iter().flat_map(|c| &c.teams.teams) {
             if let Some(league_id) = team.league_id {
                 teams_by_league.entry(league_id).or_default().push(team.id);
@@ -686,7 +692,7 @@ impl Country {
 
         // Group results by league_id so each league/cup gets its own
         // ordered slice.
-        let mut by_league: HashMap<u32, Vec<MatchResult>> = HashMap::new();
+        let mut by_league: FxHashMap<u32, Vec<MatchResult>> = FxHashMap::default();
         for mr in match_results {
             by_league.entry(mr.league_id).or_default().push(mr);
         }
@@ -853,9 +859,8 @@ impl Country {
         // and player in the country, dominating wall-time on big
         // countries. Drop before `simulate_transfer_market_local`
         // since the transfer pipeline mutates rosters.
-        let lookup = PerformanceProfiler::stage("country_lookup_index", 3, || {
-            CountryLookupIndex::build(self)
-        });
+        let mut lookup = std::mem::take(&mut self.lookup);
+        PerformanceProfiler::stage("country_lookup_reconcile", 3, || lookup.reconcile(self));
         for lr in league_results {
             let league_id = lr.league_id;
             if lr.match_results.is_some() {
@@ -1032,13 +1037,12 @@ impl Country {
             }
         }
 
-        // Drop the lookup index before the transfer market runs — the
-        // pipeline mutates rosters (signings, free agents) and the
-        // index would go stale.
+        // The transfer market below moves players; the lookup goes back to
+        // the country and is reconciled before its next use.
         drop(merge);
         drop(stage);
 
-        drop(lookup);
+        self.lookup = lookup;
 
         // Phase 1d (NEW PARALLEL PATH): run the country-local transfer
         // market pipeline here. The heavy work — scouting, negotiations,
@@ -1097,7 +1101,7 @@ impl Country {
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
         let prologue = PerformanceProfiler::stage_scope("country_club_prologue", 3);
         // Build team_id → (position, league_size, total_matches, matches_played, tier, league_rep)
-        let mut team_league_info: HashMap<u32, (u8, u8, u8, u8, u8, u16)> = HashMap::new();
+        let mut team_league_info: FxHashMap<u32, (u8, u8, u8, u8, u8, u16)> = FxHashMap::default();
         for league in &self.leagues.leagues {
             if league.friendly {
                 continue;
@@ -1193,9 +1197,7 @@ impl Country {
     /// drive the MD-1/MD-2 training rhythm. Cheap: scales O(fixtures)
     /// per league once a tick.
     fn refresh_team_fixture_windows(&mut self, today: NaiveDate) {
-        use std::collections::HashMap;
-        let mut upcoming_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
-        let mut recent_map: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        let mut nearest: FxHashMap<u32, NearestFixtures> = FxHashMap::default();
         // Cup ties count toward fixture congestion just like league games,
         // so fold the cup's bracket into the same window maps.
         let cup_schedule = self.domestic_cup.as_ref().map(|c| &c.league.schedule);
@@ -1211,26 +1213,33 @@ impl Country {
                 for item in &tour.items {
                     let d = item.date.date();
                     if d > today && item.result.is_none() {
-                        upcoming_map.entry(item.home_team_id).or_default().push(d);
-                        upcoming_map.entry(item.away_team_id).or_default().push(d);
+                        nearest
+                            .entry(item.home_team_id)
+                            .or_default()
+                            .offer_upcoming(d);
+                        nearest
+                            .entry(item.away_team_id)
+                            .or_default()
+                            .offer_upcoming(d);
                     } else if d <= today && item.result.is_some() {
-                        recent_map.entry(item.home_team_id).or_default().push(d);
-                        recent_map.entry(item.away_team_id).or_default().push(d);
+                        nearest
+                            .entry(item.home_team_id)
+                            .or_default()
+                            .offer_recent(d);
+                        nearest
+                            .entry(item.away_team_id)
+                            .or_default()
+                            .offer_recent(d);
                     }
                 }
             }
         }
         for club in &mut self.clubs {
             for team in &mut club.teams.teams {
-                let mut up = upcoming_map.remove(&team.id).unwrap_or_default();
-                up.sort_unstable();
-                up.truncate(4);
-                let mut rec = recent_map.remove(&team.id).unwrap_or_default();
-                rec.sort_unstable_by(|a, b| b.cmp(a));
-                rec.truncate(4);
-                team.fixture_window.refreshed = Some(today);
-                team.fixture_window.upcoming = up;
-                team.fixture_window.recent = rec;
+                team.fixture_window = nearest
+                    .remove(&team.id)
+                    .unwrap_or_default()
+                    .into_window(today);
             }
         }
     }
@@ -1251,7 +1260,7 @@ pub(crate) mod fixture_calendar_tests {
         TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{NaiveDateTime, NaiveTime};
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     fn names() -> PeopleNameGeneratorData {
         PeopleNameGeneratorData {
@@ -1393,7 +1402,7 @@ pub(crate) mod fixture_calendar_tests {
             .and_hms_opt(0, 0, 0)
             .unwrap();
         let ctx = GlobalContext::new(SimulationContext::new(date)).with_country(1);
-        let country_info = HashMap::new();
+        let country_info = FxHashMap::default();
         let market_map = MarketMap::default();
         let placement_reach = PlacementReachIndex::default();
         let world = WorldSnapshot {
@@ -1409,7 +1418,7 @@ pub(crate) mod fixture_calendar_tests {
         let (matches, _) = country.simulate_build(&ctx, world);
         assert_eq!(matches.len(), 6, "both divisions play on opening day");
 
-        let mut named: HashSet<u32> = HashSet::new();
+        let mut named: FxHashSet<u32> = FxHashSet::default();
         for m in &matches {
             for squad in [&m.home_squad, &m.away_squad] {
                 for p in squad.main_squad.iter().chain(&squad.substitutes) {
@@ -1580,7 +1589,7 @@ pub(crate) mod fixture_calendar_tests {
         use chrono::{Datelike, Timelike, Weekday};
 
         let mut country = september_country();
-        let before: HashMap<String, NaiveDateTime> = country.leagues.leagues[0]
+        let before: FxHashMap<String, NaiveDateTime> = country.leagues.leagues[0]
             .schedule
             .tours
             .iter()

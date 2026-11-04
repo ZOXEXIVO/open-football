@@ -16,8 +16,8 @@ use super::model::{
 use super::role_duty::{OpponentMatchupScorer, RoleDutyFitScorer, TacticalDuty};
 use super::scoring::{ScoringEngine, SlotScoreBreakdown};
 use super::{CupStage, DomesticCupContext, SelectionCompetition, SelectionPolicy};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 
 /// Minimum role fit (0..1) a substitute must clear to be chosen for a specific
 /// bench role when the pool has a surplus of options (see `select_substitutes`).
@@ -376,7 +376,7 @@ impl SelectionScoringContext<'_> {
         used_ids: &mut Vec<u32>,
         available: &[&Player],
     ) {
-        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
+        let player_by_id: FxHashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
 
         for _ in 0..COHESION_SWAP_MAX_PASSES {
             let mut swapped = false;
@@ -408,7 +408,7 @@ impl SelectionScoringContext<'_> {
                 let current_base = self.starting_slot_score(current, slot, available);
                 let current_cohesion = self.engine.cohesion_bonus(current, &others, slot, group);
 
-                let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+                let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
 
                 // Best swap = the largest net gain among eligible candidates.
                 let mut best: Option<(&Player, f32)> = None;
@@ -478,7 +478,7 @@ impl SelectionScoringContext<'_> {
         if self.game_model.is_none() {
             return;
         }
-        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
+        let player_by_id: FxHashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
         let pass = BalanceSwapPass::standard();
         let is_cup_early = matches!(self.competition, SelectionCompetition::DomesticCup { .. })
             && self.match_importance < 0.5;
@@ -500,7 +500,7 @@ impl SelectionScoringContext<'_> {
 
             let group = slot.position_group();
             let current_base = self.starting_slot_score(current, slot, available);
-            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+            let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
 
             let mut best: Option<(&Player, f32, f32)> = None;
             for cand in available.iter().copied() {
@@ -592,7 +592,7 @@ impl SelectionScoringContext<'_> {
 
         // Player lookup by id — both for re-scoring starters and for the
         // established / force / position checks the swap loop runs.
-        let player_by_id: HashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
+        let player_by_id: FxHashMap<u32, &Player> = available.iter().map(|p| (p.id, *p)).collect();
 
         let is_non_established = |p: &Player| !self.engine.is_established(p);
         let count_non_established = |sq: &[MatchPlayer]| -> usize {
@@ -619,7 +619,7 @@ impl SelectionScoringContext<'_> {
 
             // Eligible replacements: non-established, not GK, not recovering,
             // condition >=70, currently on the bench (not in the XI).
-            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+            let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
             let bench_pool: Vec<&Player> = available
                 .iter()
                 .copied()
@@ -896,7 +896,7 @@ impl SelectionScoringContext<'_> {
         // Bench full — swap the most expendable outfield substitute for the
         // keeper so a structural keeper slot is never lost to an outfield
         // luxury option.
-        let player_by_id: HashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
+        let player_by_id: FxHashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
         let Some(idx) = self.lowest_value_outfield_sub(subs, &player_by_id) else {
             return;
         };
@@ -922,7 +922,7 @@ impl SelectionScoringContext<'_> {
     fn lowest_value_outfield_sub(
         &self,
         subs: &[MatchPlayer],
-        player_by_id: &HashMap<u32, &Player>,
+        player_by_id: &FxHashMap<u32, &Player>,
     ) -> Option<usize> {
         let is_key = |p: &Player| self.engine.is_established(p);
 
@@ -967,7 +967,7 @@ impl SelectionScoringContext<'_> {
         remaining: &[&Player],
         min_count: usize,
     ) {
-        let player_by_id: HashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
+        let player_by_id: FxHashMap<u32, &Player> = remaining.iter().map(|p| (p.id, *p)).collect();
         let is_non_est_outfield =
             |p: &Player| -> bool { !p.positions.is_goalkeeper() && !self.engine.is_established(p) };
 
@@ -984,7 +984,7 @@ impl SelectionScoringContext<'_> {
                 return;
             }
 
-            let used_set: HashSet<u32> = used_ids.iter().copied().collect();
+            let used_set: FxHashSet<u32> = used_ids.iter().copied().collect();
             let candidate = remaining
                 .iter()
                 .copied()
@@ -1115,67 +1115,77 @@ impl SelectionScoringContext<'_> {
         // (player, slot) pair across many bitmask states, and `starting_slot_score`
         // — including the future-aware pathway pass — isn't free, so caching it
         // keeps the assignment cost flat instead of multiplying by 2^slots.
-        let score_matrix: Vec<Vec<f32>> = pool
+        let slot_count = slots.len();
+        let score_matrix: Vec<f32> = pool
             .iter()
-            .map(|p| {
+            .flat_map(|p| {
                 slots
                     .iter()
                     .map(|&slot| self.starting_slot_score(p, slot, available))
-                    .collect()
             })
             .collect();
 
-        let slot_count = slots.len();
+        // One byte per (player, mask) records the move that reached it: the
+        // slot taken, or the skip. The mask it came from follows from that,
+        // and only two rows of scores are ever live.
+        const UNREACHED: u8 = u8::MAX;
+        const SKIPPED: u8 = u8::MAX - 1;
         let full_mask = (1usize << slot_count) - 1;
+        let states = full_mask + 1;
         let neg_inf = f32::NEG_INFINITY;
-        let mut dp = vec![vec![neg_inf; full_mask + 1]; pool.len() + 1];
-        let mut prev = vec![vec![None; full_mask + 1]; pool.len() + 1];
-        dp[0][0] = 0.0;
+        let mut dp = vec![neg_inf; states];
+        let mut next = vec![neg_inf; states];
+        let mut moves = vec![UNREACHED; (pool.len() + 1) * states];
+        dp[0] = 0.0;
 
-        for (i, _player) in pool.iter().enumerate() {
+        for i in 0..pool.len() {
+            next.fill(neg_inf);
+            let row = (i + 1) * states;
             for mask in 0..=full_mask {
-                let current = dp[i][mask];
+                let current = dp[mask];
                 if !current.is_finite() {
                     continue;
                 }
 
                 // Skip transition — suppressed for a pinned player so the DP
                 // can never leave a force-selected starter out of the XI.
-                if !must_place[i] && current > dp[i + 1][mask] {
-                    dp[i + 1][mask] = current;
-                    prev[i + 1][mask] = Some((mask, None));
+                if !must_place[i] && current > next[mask] {
+                    next[mask] = current;
+                    moves[row + mask] = SKIPPED;
                 }
 
-                for (slot_idx, _slot) in slots.iter().enumerate() {
+                for slot_idx in 0..slot_count {
                     let bit = 1usize << slot_idx;
                     if mask & bit != 0 {
                         continue;
                     }
-                    let score = score_matrix[i][slot_idx];
+                    let score = score_matrix[i * slot_count + slot_idx];
                     let new_mask = mask | bit;
                     let candidate = current + score;
-                    if candidate > dp[i + 1][new_mask] {
-                        dp[i + 1][new_mask] = candidate;
-                        prev[i + 1][new_mask] = Some((mask, Some(slot_idx)));
+                    if candidate > next[new_mask] {
+                        next[new_mask] = candidate;
+                        moves[row + new_mask] = slot_idx as u8;
                     }
                 }
             }
+            std::mem::swap(&mut dp, &mut next);
         }
 
-        if !dp[pool.len()][full_mask].is_finite() {
+        if !dp[full_mask].is_finite() {
             return Vec::new();
         }
 
         let mut assigned: Vec<Option<&'p Player>> = vec![None; slot_count];
         let mut mask = full_mask;
         for i in (1..=pool.len()).rev() {
-            let Some((previous_mask, selected_slot)) = prev[i][mask] else {
-                break;
-            };
-            if let Some(slot_idx) = selected_slot {
-                assigned[slot_idx] = Some(pool[i - 1]);
+            match moves[i * states + mask] {
+                UNREACHED => break,
+                SKIPPED => {}
+                slot_idx => {
+                    assigned[slot_idx as usize] = Some(pool[i - 1]);
+                    mask &= !(1usize << slot_idx);
+                }
             }
-            mask = previous_mask;
         }
 
         assigned

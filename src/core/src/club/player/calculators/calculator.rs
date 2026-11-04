@@ -508,9 +508,9 @@ impl PlayerValueCalculator {
 
         // Versatility bonus: players with multiple qualified positions are more valuable.
         // Formation-slot variants (DCL/DCR for DC, MCL/MCR for MC) don't count.
-        let positions = player.positions.positions();
-        let unique_base_positions = positions
-            .iter()
+        let unique_base_positions = player
+            .positions
+            .playable()
             .filter(|p| {
                 !matches!(
                     p,

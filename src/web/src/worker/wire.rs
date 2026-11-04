@@ -17,10 +17,7 @@ use core::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills,
 use serde::{Deserialize, Serialize};
 
 /// Wire image of a `MatchSquad`. Captain / vice / penalty-taker /
-/// free-kick-taker are stored as player ids and resolved against the
-/// rebuilt main_squad on the worker side — sending the full
-/// `MatchPlayer` clones the engine actually uses would just duplicate
-/// data already on the wire.
+/// free-kick-taker travel as the player ids the squad holds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SquadWire {
     pub team_id: u32,
@@ -169,10 +166,10 @@ impl SquadWire {
             tactics: s.tactics.clone(),
             main_squad: s.main_squad.iter().map(PlayerWire::from_player).collect(),
             substitutes: s.substitutes.iter().map(PlayerWire::from_player).collect(),
-            captain_id: s.captain_id.as_ref().map(|p| p.id),
-            vice_captain_id: s.vice_captain_id.as_ref().map(|p| p.id),
-            penalty_taker_id: s.penalty_taker_id.as_ref().map(|p| p.id),
-            free_kick_taker_id: s.free_kick_taker_id.as_ref().map(|p| p.id),
+            captain_id: s.captain_id,
+            vice_captain_id: s.vice_captain_id,
+            penalty_taker_id: s.penalty_taker_id,
+            free_kick_taker_id: s.free_kick_taker_id,
             selection_omissions: s.selection_omissions.clone(),
         }
     }
@@ -199,18 +196,14 @@ impl SquadWire {
             .into_iter()
             .map(PlayerWire::into_player)
             .collect();
-        let lookup = |maybe_id: Option<u32>| -> Option<MatchPlayer> {
-            maybe_id.and_then(|id| main.iter().find(|p| p.id == id).cloned())
-        };
-
         MatchSquad {
             team_id,
             team_name,
             tactics,
-            captain_id: lookup(captain_id),
-            vice_captain_id: lookup(vice_captain_id),
-            penalty_taker_id: lookup(penalty_taker_id),
-            free_kick_taker_id: lookup(free_kick_taker_id),
+            captain_id,
+            vice_captain_id,
+            penalty_taker_id,
+            free_kick_taker_id,
             main_squad: main,
             substitutes: subs,
             selection_omissions,

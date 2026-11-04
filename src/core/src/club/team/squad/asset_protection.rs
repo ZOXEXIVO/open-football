@@ -62,7 +62,7 @@
 //! is reached through a `use` at the file header (no inline paths), per
 //! project convention.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::NaiveDate;
 
@@ -218,7 +218,7 @@ pub struct SquadAssetContext {
     /// position group on the senior squad. Used for rank ("how many at my
     /// position are strictly better in the coach's eyes") and the group
     /// average. Never the hidden CA. Order within a group is irrelevant.
-    group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>>,
     /// Mean observable level of the senior squad — the "team level" the
     /// classifier measures a player's assessed level against.
     squad_avg_level: u8,
@@ -250,7 +250,7 @@ pub struct SquadAssetContext {
     /// two best forwards at the club is one of the two best forwards at
     /// the club, and a classifier that ranked him only against seniors he
     /// is not filed with read him as nobody.
-    youth_group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    youth_group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>>,
 }
 
 impl SquadAssetContext {
@@ -358,7 +358,7 @@ impl SquadAssetContext {
         players: &PlayerCollection,
         club_level: Option<ClubLevelAnchor>,
     ) -> Self {
-        let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>> = FxHashMap::default();
         let mut reputations: Vec<i16> = Vec::new();
         let mut level_sum: u32 = 0;
         let mut ca_sum: u32 = 0;
@@ -397,7 +397,7 @@ impl SquadAssetContext {
             top_quartile_reputation,
             evidence,
             club_level,
-            youth_group_levels: HashMap::new(),
+            youth_group_levels: FxHashMap::default(),
         }
     }
 

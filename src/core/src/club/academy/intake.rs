@@ -3,6 +3,7 @@ use crate::Player;
 use crate::academy::result::ProduceYouthPlayersResult;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     AcademyGenerationContext, AcademyIntakeState, PlayerFieldPositionGroup, PlayerGenerator,
     PlayerPositionType,
@@ -510,7 +511,7 @@ impl<'a> CandidateScorer<'a> {
             }
         };
 
-        let hidden = rand::random::<f32>() * 100.0;
+        let hidden = RandomEngine::gen_f32() * 100.0;
 
         0.45 * pa + 0.25 * ca + 0.10 * personality_0_100 + 0.10 * position_need + 0.10 * hidden
     }
@@ -551,7 +552,7 @@ impl EliteSelectionGate {
                 true
             } else {
                 let p = 0.35_f32.powi(self.world_class_seen as i32);
-                if rand::random::<f32>() < p {
+                if RandomEngine::gen_f32() < p {
                     self.world_class_seen += 1;
                     self.elite_seen += 1;
                     true
@@ -565,7 +566,7 @@ impl EliteSelectionGate {
                 true
             } else {
                 let p = 0.55_f32.powi(self.elite_seen as i32);
-                if rand::random::<f32>() < p {
+                if RandomEngine::gen_f32() < p {
                     self.elite_seen += 1;
                     true
                 } else {
@@ -667,7 +668,7 @@ mod tests {
     fn intake_age_distribution_covers_13_through_16() {
         // Realism: a "year 14" intake must mix ages 13/14/15/16 rather
         // than minting every prospect at exactly age 14.
-        let mut buckets: std::collections::HashMap<u8, usize> = Default::default();
+        let mut buckets: rustc_hash::FxHashMap<u8, usize> = Default::default();
         for _ in 0..1000 {
             let age = IntakeAgeDistribution::Annual.sample();
             *buckets.entry(age).or_insert(0) += 1;

@@ -28,6 +28,10 @@
 //!   half the phase and 2 for the rest; only the second is a straggler tail
 //!   worth attacking.
 //!
+//! A binary that wraps the global allocator can lend it as an
+//! [`AllocationProbe`]; every phase and stage row then also counts the
+//! allocations, reallocations and bytes requested while it ran.
+//!
 //! Enable with `OF_PERFORMANCE` and run the world-sim harness:
 //!
 //! ```text
@@ -43,4 +47,4 @@ mod clock;
 mod profiler;
 mod sampler;
 
-pub use profiler::{PerformanceProfiler, PhaseScope, StageScope};
+pub use profiler::{AllocationCount, AllocationProbe, PerformanceProfiler, PhaseScope, StageScope};

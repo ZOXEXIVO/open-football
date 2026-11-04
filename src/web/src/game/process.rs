@@ -11,12 +11,13 @@ use core::SimulationResult;
 use core::SimulatorData;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::runtime::Handle;
 use tokio::sync::{RwLock, Semaphore};
-use tokio::task::{JoinSet, spawn_blocking};
+use tokio::task::{JoinHandle, JoinSet, spawn_blocking};
 
 #[derive(Deserialize)]
 pub struct ProcessQuery {
@@ -71,6 +72,30 @@ pub async fn game_process_action(
     StatusCode::OK
 }
 
+/// A day's replays, baking while the next day simulates. At most one day is
+/// in flight, so a long holiday never piles up recordings, and `finish`
+/// comes before every publish and before the request returns, so nothing is
+/// shown ahead of the files its matches point at.
+#[derive(Default)]
+struct ReplayBaking {
+    in_flight: Option<JoinHandle<()>>,
+}
+
+impl ReplayBaking {
+    fn hand_over(&mut self, handle: &Handle, bake: impl Future<Output = ()> + Send + 'static) {
+        self.finish(handle);
+        self.in_flight = Some(handle.spawn(bake));
+    }
+
+    fn finish(&mut self, handle: &Handle) {
+        if let Some(bake) = self.in_flight.take()
+            && let Err(err) = handle.block_on(bake)
+        {
+            error!("baking a day's replays failed: {err}");
+        }
+    }
+}
+
 /// One processing run behind `POST /api/game/process`: simulates an owned
 /// deep copy of the world on a blocking thread and publishes snapshots
 /// into the shared slot without stalling readers.
@@ -86,6 +111,7 @@ impl ProcessingRun {
     /// week and once at the end.
     fn execute(self, mut simulator_data: SimulatorData, days: u32) {
         let mut days_since_sync: u32 = 0;
+        let mut baking = ReplayBaking::default();
 
         for _ in 0..days {
             // Check cancellation before each day
@@ -97,7 +123,7 @@ impl ProcessingRun {
                 .handle
                 .block_on(FootballSimulator::simulate(&mut simulator_data));
             if result.has_match_results() && MatchRuntime::recordings_mode() {
-                self.handle.block_on(Self::write_match_results(result));
+                baking.hand_over(&self.handle, Self::write_match_results(result));
             }
 
             // During multi-day runs (e.g. holiday), publish progress every
@@ -106,10 +132,12 @@ impl ProcessingRun {
             days_since_sync += 1;
             if days_since_sync >= 7 {
                 days_since_sync = 0;
+                baking.finish(&self.handle);
                 simulator_data = self.publish_progress(simulator_data);
             }
         }
 
+        baking.finish(&self.handle);
         self.cancel_flag.store(false, Ordering::SeqCst);
         self.publish_final(simulator_data);
     }
@@ -125,7 +153,7 @@ impl ProcessingRun {
         self.i18n.set_date(world.date);
         let published = Arc::new(world);
         let previous = self.swap(Arc::clone(&published));
-        drop(previous);
+        Self::release(previous);
         Arc::unwrap_or_clone(published)
     }
 
@@ -134,7 +162,15 @@ impl ProcessingRun {
     fn publish_final(&self, world: SimulatorData) {
         self.i18n.set_date(world.date);
         let previous = self.swap(Arc::new(world));
-        drop(previous);
+        Self::release(previous);
+    }
+
+    /// Free an outgoing world across the pool when this run holds the last
+    /// handle to it. A reader still holding one frees it later, as before.
+    fn release(previous: Option<Arc<SimulatorData>>) {
+        if let Some(world) = previous.and_then(Arc::into_inner) {
+            world.release();
+        }
     }
 
     /// Swap `next` into the shared slot and hand the previous world back to
@@ -192,4 +228,50 @@ pub async fn game_processing_status_action(
 pub async fn game_cancel_action(State(state): State<GameAppData>) -> StatusCode {
     state.cancel_flag.store(true, Ordering::SeqCst);
     StatusCode::OK
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReplayBaking;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
+    use tokio::runtime::Runtime;
+
+    fn day_of_baking(written: &Arc<AtomicU32>) -> impl Future<Output = ()> + Send + 'static {
+        let written = Arc::clone(written);
+        async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            written.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_new_day_waits_for_the_previous_days_replays() {
+        let runtime = Runtime::new().unwrap();
+        let written = Arc::new(AtomicU32::new(0));
+        let mut baking = ReplayBaking::default();
+
+        baking.hand_over(runtime.handle(), day_of_baking(&written));
+        baking.hand_over(runtime.handle(), day_of_baking(&written));
+
+        assert_eq!(written.load(Ordering::SeqCst), 1, "only one day may be in flight");
+        baking.finish(runtime.handle());
+        assert_eq!(written.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn finishing_leaves_nothing_unwritten() {
+        let runtime = Runtime::new().unwrap();
+        let written = Arc::new(AtomicU32::new(0));
+        let mut baking = ReplayBaking::default();
+
+        for _ in 0..3 {
+            baking.hand_over(runtime.handle(), day_of_baking(&written));
+        }
+        baking.finish(runtime.handle());
+
+        assert_eq!(written.load(Ordering::SeqCst), 3);
+        baking.finish(runtime.handle());
+    }
 }

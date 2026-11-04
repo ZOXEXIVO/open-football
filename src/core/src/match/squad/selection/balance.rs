@@ -1,7 +1,7 @@
 use crate::Player;
 use crate::club::PlayerPositionType;
 use crate::r#match::player::MatchPlayer;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::model::{MatchSelectionGameModel, TacticalObjective};
 
@@ -112,7 +112,7 @@ pub struct LineupBalanceScorer;
 impl LineupBalanceScorer {
     pub fn evaluate(
         squad: &[MatchPlayer],
-        player_by_id: &HashMap<u32, &Player>,
+        player_by_id: &FxHashMap<u32, &Player>,
     ) -> LineupBalanceReading {
         let mut def_sum = 0.0;
         let mut def_count = 0.0;
@@ -230,7 +230,7 @@ impl LineupBalanceScorer {
 
     pub fn score(
         squad: &[MatchPlayer],
-        player_by_id: &HashMap<u32, &Player>,
+        player_by_id: &FxHashMap<u32, &Player>,
         objective: TacticalObjective,
     ) -> f32 {
         let r = Self::evaluate(squad, player_by_id);

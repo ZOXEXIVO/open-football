@@ -6,7 +6,7 @@ use crate::league::{ChartsDesk, League};
 use crate::world::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// The monthly press run for the divisions themselves.
 ///
@@ -203,7 +203,7 @@ impl LeagueNewsroomTick {
 /// up then.
 #[derive(Default)]
 struct DivisionSides {
-    side_of: HashMap<u32, u32>,
+    side_of: FxHashMap<u32, u32>,
 }
 
 impl DivisionSides {

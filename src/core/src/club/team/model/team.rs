@@ -182,8 +182,8 @@ impl Team {
 
         TeamResult::new(
             self.id,
-            self.players.simulate(player_ctx.with_player(None)),
-            self.staffs.simulate(ctx.with_staff(None)),
+            self.players.simulate(&player_ctx),
+            self.staffs.simulate(&ctx),
             self.behaviour.simulate(
                 &mut self.players,
                 &mut self.staffs,

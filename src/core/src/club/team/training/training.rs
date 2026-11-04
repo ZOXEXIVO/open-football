@@ -10,7 +10,7 @@ use crate::{
 };
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Weekday};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Deterministic pseudo-random roll in `[0.0, 1.0)` for an unordered pair
 /// of player ids on a given date. Same pair + date always returns the same
@@ -113,8 +113,6 @@ impl TeamTraining {
             return result;
         }
 
-        // Get the current training plan
-        let current_weekday = date.weekday();
         let coach = team.staffs.training_coach(&team.team_type);
 
         // Determine periodization phase based on season progress
@@ -140,7 +138,7 @@ impl TeamTraining {
         } else {
             Self::matches_last_7_days(team, date)
         };
-        let weekly_plan = WeeklyTrainingPlan::generate_for_date(
+        let sessions = WeeklyTrainingPlan::sessions_for_date(
             today,
             prev_match_date,
             next_match_date,
@@ -149,13 +147,10 @@ impl TeamTraining {
             &Self::get_coach_philosophy(coach),
         );
 
-        // Execute today's training sessions
-        if let Some(sessions) = weekly_plan.sessions.get(&current_weekday) {
-            for session in sessions {
-                let session_results =
-                    Self::execute_training_session(team, session, date, facility_quality);
-                result.player_results.extend(session_results);
-            }
+        for session in &sessions {
+            let session_results =
+                Self::execute_training_session(team, session, date, facility_quality);
+            result.player_results.extend(session_results);
         }
 
         // Apply team cohesion effects
@@ -235,16 +230,17 @@ impl TeamTraining {
     /// keeper specialist within a couple of seasons.
     fn accrue_coach_specialization(
         team: &mut Team,
-        coach_by_player: &HashMap<u32, (u32, f32)>,
+        coach_by_player: &FxHashMap<u32, (u32, f32)>,
         fallback_coach_id: u32,
         participant_ids: &[u32],
+        roster_index: &[Option<usize>],
     ) {
         // Which coach ran which group today. One day each, however many
         // players were in the group — what matters is whether he ran it.
         let mut ran: Vec<(u32, PlayerFieldPositionGroup)> = Vec::new();
-        for pid in participant_ids {
-            if let Some(player) = team.players.find(*pid) {
-                let group = player.position().position_group();
+        for (pid, index) in participant_ids.iter().zip(roster_index) {
+            if let Some(index) = *index {
+                let group = team.players.players[index].position().position_group();
                 let coach_id = coach_by_player
                     .get(pid)
                     .map(|(id, _)| *id)
@@ -329,6 +325,12 @@ impl TeamTraining {
             .iter()
             .map(|r| r.player_id)
             .collect();
+        // Where each participant stands on the roster, resolved once for
+        // every pass below.
+        let roster_index: Vec<Option<usize>> = participant_ids
+            .iter()
+            .map(|&id| team.players.players.iter().position(|p| p.id == id))
+            .collect();
 
         // Per-pair bonding/friction. The old "+0.01 across the board" was
         // unrealistic — striker rivals don't bond at the same rate as a
@@ -338,7 +340,13 @@ impl TeamTraining {
         // when the chance passes a per-pair pseudo-random threshold.
         // Determinism: chance comparison uses a seeded function of the two
         // ids so tests stay stable across runs.
-        Self::apply_pairwise_bonding(team, &participant_ids, training_results, sim_date);
+        Self::apply_pairwise_bonding(
+            team,
+            &participant_ids,
+            &roster_index,
+            training_results,
+            sim_date,
+        );
 
         // Coach-player relationship updates based on training quality.
         // Must be the SAME coach who ran the sessions (`training_coach`),
@@ -350,14 +358,15 @@ impl TeamTraining {
         // Resolved per player, not per squad: a keeper's coach is the
         // goalkeeping specialist, so his rapport has to accrue with the man
         // he actually spends the morning with.
-        let coach_for = |player_id: u32| -> Option<(u32, f32)> {
-            let group = team.players.find(player_id)?.position().position_group();
+        let coach_for = |index: usize| -> (u32, f32) {
+            let group = team.players.players[index].position().position_group();
             let coach = team.staffs.training_coach_for(&team.team_type, group);
-            Some((coach.id, coach.recent_performance.training_effectiveness))
+            (coach.id, coach.recent_performance.training_effectiveness)
         };
-        let coach_by_player: HashMap<u32, (u32, f32)> = participant_ids
+        let coach_by_player: FxHashMap<u32, (u32, f32)> = participant_ids
             .iter()
-            .filter_map(|&id| coach_for(id).map(|c| (id, c)))
+            .zip(&roster_index)
+            .filter_map(|(&id, index)| index.map(|index| (id, coach_for(index))))
             .collect();
         let session_coach = team.staffs.training_coach(&team.team_type);
         let coach_id = session_coach.id;
@@ -366,13 +375,15 @@ impl TeamTraining {
         // Rapport accrual: every participant spent a day with the coach.
         // Small positive drift + shared_days increment, even if no other
         // events fire this tick.
-        for &player_id in &participant_ids {
+        for (&player_id, index) in participant_ids.iter().zip(&roster_index) {
             let with = coach_by_player
                 .get(&player_id)
                 .map(|(id, _)| *id)
                 .unwrap_or(coach_id);
-            if let Some(player) = team.players.find_mut(player_id) {
-                player.rapport.accrue_training_day(with, sim_date, 1);
+            if let Some(index) = *index {
+                team.players.players[index]
+                    .rapport
+                    .accrue_training_day(with, sim_date, 1);
             }
         }
 
@@ -380,7 +391,13 @@ impl TeamTraining {
         // group covered in this session. Over hundreds of sessions a coach
         // organically becomes a "midfield specialist" or "striker clinic"
         // without any manual assignment.
-        Self::accrue_coach_specialization(team, &coach_by_player, coach_id, &participant_ids);
+        Self::accrue_coach_specialization(
+            team,
+            &coach_by_player,
+            coach_id,
+            &participant_ids,
+            &roster_index,
+        );
 
         // Calculate average morale change across training results
         let total_morale: f32 = training_results
@@ -397,18 +414,18 @@ impl TeamTraining {
         // Positive training session: update coach-player relationships —
         // each player's with the coach who actually took him.
         if avg_morale > 0.0 {
-            for &player_id in &participant_ids {
+            for (&player_id, index) in participant_ids.iter().zip(&roster_index) {
                 let (with, effectiveness) = coach_by_player
                     .get(&player_id)
                     .copied()
                     .unwrap_or((coach_id, coach_effectiveness));
                 let relationship_boost = 0.01 + effectiveness * 0.02; // 0.01 to 0.03
-                if let Some(player) = team.players.find_mut(player_id) {
+                if let Some(index) = *index {
                     let change = RelationshipChange::positive(
                         ChangeType::CoachingSuccess,
                         relationship_boost,
                     );
-                    player
+                    team.players.players[index]
                         .relations
                         .update_staff_relationship(with, change, sim_date);
                 }
@@ -426,13 +443,16 @@ impl TeamTraining {
     fn apply_pairwise_bonding(
         team: &mut Team,
         participant_ids: &[u32],
+        roster_index: &[Option<usize>],
         training_results: &TeamTrainingResult,
         sim_date: NaiveDate,
     ) {
         // Index morale changes by player id so we don't iterate the result
         // vector once per pair.
-        let mut morale_change: HashMap<u32, f32> =
-            HashMap::with_capacity(training_results.player_results.len());
+        let mut morale_change: FxHashMap<u32, f32> = FxHashMap::with_capacity_and_hasher(
+            training_results.player_results.len(),
+            Default::default(),
+        );
         for r in &training_results.player_results {
             morale_change.insert(r.player_id, r.effects.morale_change);
         }
@@ -441,6 +461,7 @@ impl TeamTraining {
         // mutations afterwards without aliasing the player borrow.
         struct Snap {
             id: u32,
+            index: usize,
             position_group: PlayerFieldPositionGroup,
             primary_lang: Option<Language>,
             languages: Vec<(Language, u8)>,
@@ -452,8 +473,10 @@ impl TeamTraining {
 
         let snaps: Vec<Snap> = participant_ids
             .iter()
-            .filter_map(|id| {
-                let p = team.players.find(*id)?;
+            .zip(roster_index)
+            .filter_map(|(id, index)| {
+                let index = (*index)?;
+                let p = &team.players.players[index];
                 let group = p.position().position_group();
                 let primary_lang = p
                     .languages
@@ -479,6 +502,7 @@ impl TeamTraining {
                         });
                 Some(Snap {
                     id: *id,
+                    index,
                     position_group: group,
                     primary_lang,
                     languages,
@@ -493,7 +517,7 @@ impl TeamTraining {
         // Pairwise pass — collect changes first, then apply, so we don't
         // hold a long mutable borrow on `team`.
         struct Effect {
-            from: u32,
+            from: usize,
             to: u32,
             relation_change: f32, // signed magnitude on the level axis
             bond: bool,
@@ -579,13 +603,13 @@ impl TeamTraining {
                     }
                     mag = mag.clamp(0.08, 0.25);
                     effects.push(Effect {
-                        from: a.id,
+                        from: a.index,
                         to: b.id,
                         relation_change: mag,
                         bond: true,
                     });
                     effects.push(Effect {
-                        from: b.id,
+                        from: b.index,
                         to: a.id,
                         relation_change: mag,
                         bond: true,
@@ -603,13 +627,13 @@ impl TeamTraining {
                     }
                     mag = mag.clamp(0.10, 0.35);
                     effects.push(Effect {
-                        from: a.id,
+                        from: a.index,
                         to: b.id,
                         relation_change: -mag,
                         bond: false,
                     });
                     effects.push(Effect {
-                        from: b.id,
+                        from: b.index,
                         to: a.id,
                         relation_change: -mag,
                         bond: false,
@@ -628,96 +652,98 @@ impl TeamTraining {
         const FRICTION_EVENT_THRESHOLD: f32 = 0.25;
         const PAIR_COOLDOWN_DAYS: u16 = 14;
         for eff in effects {
-            if let Some(player) = team.players.find_mut(eff.from) {
-                let change_type = if eff.bond {
-                    ChangeType::TrainingBonding
-                } else {
-                    ChangeType::TrainingFriction
-                };
-                player.relations.update_with_type(
-                    eff.to,
-                    eff.relation_change,
-                    change_type,
-                    sim_date,
-                );
+            let player = &mut team.players.players[eff.from];
+            let change_type = if eff.bond {
+                ChangeType::TrainingBonding
+            } else {
+                ChangeType::TrainingFriction
+            };
+            player
+                .relations
+                .update_with_type(eff.to, eff.relation_change, change_type, sim_date);
 
-                let mag_abs = eff.relation_change.abs();
-                let qualifies = if eff.bond {
-                    mag_abs >= BOND_EVENT_THRESHOLD
-                } else {
-                    mag_abs >= FRICTION_EVENT_THRESHOLD
-                };
-                if !qualifies {
-                    continue;
-                }
-                let snapshot = player
-                    .relations
+            let mag_abs = eff.relation_change.abs();
+            let qualifies = if eff.bond {
+                mag_abs >= BOND_EVENT_THRESHOLD
+            } else {
+                mag_abs >= FRICTION_EVENT_THRESHOLD
+            };
+            if !qualifies {
+                continue;
+            }
+            let relations = &player.relations;
+            let snapshot = || {
+                relations
                     .get_player(eff.to)
-                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect));
-                if eff.bond {
-                    let mag = 0.6;
-                    let mut ctx = HappinessEventContext::new(
-                        HappinessEventCause::TrainingPartnership,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::TrainingGround,
-                    )
-                    .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
-                    .with_follow_up(HappinessEventFollowUp::TrendImproving);
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        ctx = ctx
-                            .with_relationship_levels(level, level)
-                            .with_relationship_axes(trust, friendship, prof);
-                    }
-                    player
-                        .happiness
-                        .try_add_partner_context_with_same_tick_budget(
-                            HappinessEventType::TeammateBonding,
-                            mag,
-                            eff.to,
-                            ctx,
-                            PAIR_COOLDOWN_DAYS,
-                            PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
-                        );
-                } else {
-                    let mag = -0.8;
-                    let mut ctx = HappinessEventContext::new(
-                        HappinessEventCause::TrainingFriction,
-                        HappinessEventSeverity::from_magnitude(mag),
-                        HappinessEventScope::TrainingGround,
-                    )
-                    .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
-                    .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
-                    .with_teammate_conflict_context(
-                        TeammateConflictContext::new(
-                            TeammateConflictReason::TrainingStandards,
-                            ConflictLocation::TrainingGround,
-                        ),
+                    .map(|r| (r.level, r.trust, r.friendship, r.professional_respect))
+            };
+            if eff.bond {
+                let mag = 0.6;
+                player
+                    .happiness
+                    .try_add_partner_context_with_same_tick_budget(
+                        HappinessEventType::TeammateBonding,
+                        mag,
+                        eff.to,
+                        || {
+                            let mut ctx = HappinessEventContext::new(
+                                HappinessEventCause::TrainingPartnership,
+                                HappinessEventSeverity::from_magnitude(mag),
+                                HappinessEventScope::TrainingGround,
+                            )
+                            .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                            .with_follow_up(HappinessEventFollowUp::TrendImproving);
+                            if let Some((level, trust, friendship, prof)) = snapshot() {
+                                ctx = ctx
+                                    .with_relationship_levels(level, level)
+                                    .with_relationship_axes(trust, friendship, prof);
+                            }
+                            ctx
+                        },
+                        PAIR_COOLDOWN_DAYS,
+                        PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
                     );
-                    if let Some((level, trust, friendship, prof)) = snapshot {
-                        ctx = ctx
-                            .with_relationship_levels(level, level)
-                            .with_relationship_axes(trust, friendship, prof);
-                        if trust <= 35.0 {
-                            ctx = ctx.with_evidence(HappinessEventEvidence::LowTrust);
-                        }
-                        if level <= -25.0 {
-                            ctx = ctx
-                                .with_evidence(HappinessEventEvidence::AlreadyStrainedRelationship);
-                        } else if level.abs() < 25.0 {
-                            ctx = ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
-                        }
-                    }
-                    player
-                        .happiness
-                        .try_add_partner_context_with_same_tick_budget(
-                            HappinessEventType::ConflictWithTeammate,
-                            mag,
-                            eff.to,
-                            ctx,
-                            PAIR_COOLDOWN_DAYS,
-                            PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
-                        );
-                }
+            } else {
+                let mag = -0.8;
+                player
+                    .happiness
+                    .try_add_partner_context_with_same_tick_budget(
+                        HappinessEventType::ConflictWithTeammate,
+                        mag,
+                        eff.to,
+                        || {
+                            let mut ctx = HappinessEventContext::new(
+                                HappinessEventCause::TrainingFriction,
+                                HappinessEventSeverity::from_magnitude(mag),
+                                HappinessEventScope::TrainingGround,
+                            )
+                            .with_evidence(HappinessEventEvidence::TrainingStandardsMismatch)
+                            .with_follow_up(HappinessEventFollowUp::LikelyToSettle)
+                            .with_teammate_conflict_context(TeammateConflictContext::new(
+                                TeammateConflictReason::TrainingStandards,
+                                ConflictLocation::TrainingGround,
+                            ));
+                            if let Some((level, trust, friendship, prof)) = snapshot() {
+                                ctx = ctx
+                                    .with_relationship_levels(level, level)
+                                    .with_relationship_axes(trust, friendship, prof);
+                                if trust <= 35.0 {
+                                    ctx = ctx.with_evidence(HappinessEventEvidence::LowTrust);
+                                }
+                                if level <= -25.0 {
+                                    ctx = ctx.with_evidence(
+                                        HappinessEventEvidence::AlreadyStrainedRelationship,
+                                    );
+                                } else if level.abs() < 25.0 {
+                                    ctx =
+                                        ctx.with_evidence(HappinessEventEvidence::WeakExistingBond);
+                                }
+                            }
+                            ctx
+                        },
+                        PAIR_COOLDOWN_DAYS,
+                        PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
+                    );
             }
         }
     }
@@ -845,7 +871,7 @@ pub enum TrainingIntensity {
 
 #[derive(Debug, Clone)]
 pub struct WeeklyTrainingPlan {
-    pub sessions: HashMap<Weekday, Vec<TrainingSession>>,
+    pub sessions: FxHashMap<Weekday, Vec<TrainingSession>>,
     pub match_days: Vec<Weekday>,
     pub periodization_phase: PeriodizationPhase,
 }
@@ -901,7 +927,7 @@ impl WeeklyTrainingPlan {
         phase: PeriodizationPhase,
         coach_philosophy: &CoachingPhilosophy,
     ) -> Self {
-        let mut sessions = HashMap::new();
+        let mut sessions = FxHashMap::default();
         let match_days = vec![next_match_day, previous_match_day]
             .into_iter()
             .flatten()
@@ -1064,7 +1090,7 @@ impl WeeklyTrainingPlan {
         phase: PeriodizationPhase,
         philosophy: &CoachingPhilosophy,
     ) -> Self {
-        let mut sessions = HashMap::new();
+        let mut sessions = FxHashMap::default();
         let match_days = vec![
             next_match.map(|d| d.weekday()),
             previous_match.map(|d| d.weekday()),
@@ -1072,17 +1098,15 @@ impl WeeklyTrainingPlan {
         .into_iter()
         .flatten()
         .collect();
-        // Two competitive matches inside the week around today is the
-        // canonical congestion threshold for top-flight schedules.
-        let congested = fixtures_this_week >= 2;
+        let congested = Self::is_congested(fixtures_this_week);
 
-        let today_sessions = Self::sessions_for_real_date(
+        let today_sessions = Self::sessions_for_date(
             today,
             previous_match,
             next_match,
+            fixtures_this_week,
             phase,
             philosophy,
-            congested,
         );
         for &day in &[
             Weekday::Mon,
@@ -1108,6 +1132,32 @@ impl WeeklyTrainingPlan {
             match_days,
             periodization_phase: phase,
         }
+    }
+
+    /// Today's slot of [`Self::generate_for_date`] on its own — all the
+    /// training pipeline executes.
+    pub fn sessions_for_date(
+        today: NaiveDate,
+        previous_match: Option<NaiveDate>,
+        next_match: Option<NaiveDate>,
+        fixtures_this_week: u8,
+        phase: PeriodizationPhase,
+        philosophy: &CoachingPhilosophy,
+    ) -> Vec<TrainingSession> {
+        Self::sessions_for_real_date(
+            today,
+            previous_match,
+            next_match,
+            phase,
+            philosophy,
+            Self::is_congested(fixtures_this_week),
+        )
+    }
+
+    /// Two competitive matches inside the week around today is the
+    /// canonical congestion threshold for top-flight schedules.
+    fn is_congested(fixtures_this_week: u8) -> bool {
+        fixtures_this_week >= 2
     }
 
     /// Pick the right band of sessions for `today` based on real

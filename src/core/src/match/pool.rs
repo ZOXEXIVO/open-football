@@ -4,7 +4,8 @@ use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::{Match, MatchDispatcherRegistry, MatchResult, MatchResultRaw, SquadFixture};
 use rayon::ThreadPool;
 use rayon::ThreadPoolBuilder;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rayon::iter::{ParallelBridge, ParallelIterator};
+use std::cmp::Reverse;
 
 pub struct MatchPlayEnginePool {
     pool: ThreadPool,
@@ -36,8 +37,7 @@ impl MatchPlayEnginePool {
     /// process the rest. Functionally identical to the local branch of
     /// `play()`; existing call sites should keep calling `play()`.
     pub fn play_local(&self, matches: Vec<Match>) -> Vec<MatchResult> {
-        self.pool
-            .install(|| matches.into_par_iter().map(|m| m.play()).collect())
+        self.play_longest_first(matches, |m| m.fixture.expected_length(), Match::play)
     }
 
     /// Squad-only counterpart to [`play_local`]. Same semantics —
@@ -61,8 +61,7 @@ impl MatchPlayEnginePool {
             },
             None => matches,
         };
-        self.pool
-            .install(|| matches.into_par_iter().map(|m| m.play()).collect())
+        self.play_local(matches)
     }
 
     /// Play raw squad-vs-squad matches — the national-team fixtures, the
@@ -84,14 +83,55 @@ impl MatchPlayEnginePool {
     /// fixture than a league game.
     fn play_squads_here(&self, matches: Vec<SquadFixture>) -> Vec<(usize, MatchResultRaw)> {
         let recordings = MatchRuntime::recordings_mode();
-        self.pool.install(|| {
-            matches
-                .into_par_iter()
-                .map(|(idx, home, away, fixture)| {
-                    let config = MatchEngineConfig::for_fixture(&fixture, recordings);
-                    (idx, FootballEngine::<840, 545>::play_with_config(home, away, config))
-                })
+        self.play_longest_first(
+            matches,
+            |(_, _, _, fixture)| fixture.expected_length(),
+            |(idx, home, away, fixture)| {
+                let config = MatchEngineConfig::for_fixture(&fixture, recordings);
+                (idx, FootballEngine::<840, 545>::play_with_config(home, away, config))
+            },
+        )
+    }
+
+    /// Play a batch with its longest matches started first, one match per
+    /// unit of work, and hand the results back in the batch's order. A
+    /// worker picks up the next match the moment it frees, so the batch
+    /// ends with the short matches rather than with an extra-time tie that
+    /// happened to sit last.
+    fn play_longest_first<T: Send, R: Send>(
+        &self,
+        items: Vec<T>,
+        expected_length: impl Fn(&T) -> u8,
+        play: impl Fn(T) -> R + Sync + Send,
+    ) -> Vec<R> {
+        let mut ordered: Vec<(usize, T)> = items.into_iter().enumerate().collect();
+        ordered.sort_by_key(|(_, item)| Reverse(expected_length(item)));
+        let mut played: Vec<(usize, R)> = self.pool.install(|| {
+            ordered
+                .into_iter()
+                .par_bridge()
+                .map(|(index, item)| (index, play(item)))
                 .collect()
-        })
+        });
+        played.sort_unstable_by_key(|(index, _)| *index);
+        played.into_iter().map(|(_, result)| result).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MatchPlayEnginePool;
+
+    #[test]
+    fn results_come_back_in_batch_order_whatever_order_they_were_played_in() {
+        let pool = MatchPlayEnginePool::new(4);
+        let lengths = [0u8, 2, 1, 2, 0, 1, 1, 2, 0, 0];
+        let played = pool.play_longest_first(
+            lengths.iter().copied().enumerate().collect(),
+            |(_, length)| *length,
+            |(index, length)| (index, length),
+        );
+        let expected: Vec<(usize, u8)> = lengths.iter().copied().enumerate().collect();
+        assert_eq!(played, expected);
     }
 }

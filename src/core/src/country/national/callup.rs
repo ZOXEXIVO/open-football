@@ -28,19 +28,20 @@
 
 use super::NationalTeam;
 use super::types::{
-    CallUpCandidate, CallUpContext, CallUpReason, CallUpWindowType,
-    NationalCoachProfile, NationalSelectionPolicy, NationalSquadPlayer, NationalTeamLevel,
-    TOURNAMENT_SQUAD_SIZE,
+    CallUpCandidate, CallUpContext, CallUpReason, CallUpWindowType, NationalCoachProfile,
+    NationalSelectionPolicy, NationalSquadPlayer, NationalTeamLevel, TOURNAMENT_SQUAD_SIZE,
 };
 use crate::club::staff::perception::PotentialEstimator;
+use crate::continent::Continent;
 use crate::{
     Country, InternationalCalendar, Player, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerStatistics, PlayerStatusType, Tactics,
 };
 use chrono::{Datelike, NaiveDate};
 use log::{debug, warn};
+use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 
 /// Tactical role grouping used by the role-coverage pass. A national
 /// manager keeps an eye on whether they have left/right cover, a
@@ -106,20 +107,15 @@ impl NationalTeam {
         player.country_id == country_id
     }
 
-    /// Collect eligible candidates from clubs across the supplied
-    /// countries, grouped by nationality. Generic over the iterator so
-    /// the same routine handles both continent-local pools and the
-    /// world-wide pool (a Brazilian playing in Spain shows up under
+    /// Collect eligible candidates from clubs across the world, grouped
+    /// by nationality (a Brazilian playing in Spain shows up under
     /// Brazil's bucket without any continent-specific plumbing).
-    pub(crate) fn collect_all_candidates_by_country<'a, I>(
-        countries: I,
+    pub(crate) fn collect_all_candidates_by_country(
+        continents: &[Continent],
         date: NaiveDate,
-    ) -> HashMap<u32, Vec<CallUpCandidate>>
-    where
-        I: IntoIterator<Item = &'a Country>,
-    {
+    ) -> FxHashMap<u32, Vec<CallUpCandidate>> {
         Self::collect_all_candidates_by_country_with_policy(
-            countries,
+            continents,
             date,
             &NationalSelectionPolicy::senior(),
         )
@@ -130,99 +126,118 @@ impl NationalTeam {
     /// senior policy, preserving the original behaviour exactly; the U21
     /// path passes [`NationalSelectionPolicy::under21`] to reach into
     /// reserve / youth team types and apply the 21-and-under age cap.
-    pub(crate) fn collect_all_candidates_by_country_with_policy<'a, I>(
-        countries: I,
+    ///
+    /// Every country walks its own clubs in parallel, and the buckets are
+    /// filled in world order, so each nation's list reads exactly as one
+    /// walk of the world would have built it.
+    pub(crate) fn collect_all_candidates_by_country_with_policy(
+        continents: &[Continent],
         date: NaiveDate,
         policy: &NationalSelectionPolicy,
-    ) -> HashMap<u32, Vec<CallUpCandidate>>
-    where
-        I: IntoIterator<Item = &'a Country>,
-    {
-        let mut map: HashMap<u32, Vec<CallUpCandidate>> = HashMap::new();
+    ) -> FxHashMap<u32, Vec<CallUpCandidate>> {
+        let per_country: Vec<Vec<(u32, CallUpCandidate)>> = continents
+            .par_iter()
+            .flat_map(|continent| continent.countries.par_iter())
+            .map(|country| Self::country_candidates(country, date, policy))
+            .collect();
+
+        let mut map: FxHashMap<u32, Vec<CallUpCandidate>> = FxHashMap::default();
+        for (nationality, candidate) in per_country.into_iter().flatten() {
+            map.entry(nationality).or_default().push(candidate);
+        }
+
+        map.par_iter_mut().for_each(|(_, candidates)| {
+            *candidates = Self::rank_and_trim_candidates(std::mem::take(candidates));
+        });
+
+        map
+    }
+
+    /// One country's eligible players, each paired with the nation that
+    /// would call him up.
+    fn country_candidates(
+        country: &Country,
+        date: NaiveDate,
+        policy: &NationalSelectionPolicy,
+    ) -> Vec<(u32, CallUpCandidate)> {
+        let mut candidates: Vec<(u32, CallUpCandidate)> = Vec::new();
         let min_condition = policy.min_condition();
 
-        for country in countries {
-            for club in &country.clubs {
-                for team in &club.teams.teams {
-                    if !policy.include_team_types.contains(&team.team_type) {
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                if !policy.include_team_types.contains(&team.team_type) {
+                    continue;
+                }
+
+                let league_reputation = team
+                    .league_id
+                    .and_then(|lid| {
+                        country
+                            .leagues
+                            .leagues
+                            .iter()
+                            .find(|l| l.id == lid)
+                            .map(|l| l.reputation)
+                    })
+                    .unwrap_or(0);
+                let club_reputation = team.reputation.world;
+
+                for player in &team.players.players {
+                    if player.player_attributes.is_injured
+                        || player.player_attributes.is_banned
+                        || player.statuses.has(PlayerStatusType::Loa)
+                        || player.player_attributes.condition < min_condition
+                        || player.international_retired
+                    {
                         continue;
                     }
 
-                    let league_reputation = team
-                        .league_id
-                        .and_then(|lid| {
-                            country
-                                .leagues
-                                .leagues
-                                .iter()
-                                .find(|l| l.id == lid)
-                                .map(|l| l.reputation)
-                        })
-                        .unwrap_or(0);
-                    let club_reputation = team.reputation.world;
-
-                    for player in &team.players.players {
-                        if player.player_attributes.is_injured
-                            || player.player_attributes.is_banned
-                            || player.statuses.has(PlayerStatusType::Loa)
-                            || player.player_attributes.condition < min_condition
-                            || player.international_retired
-                        {
+                    // Age cap (U21: 21-and-under). `age` uses the same
+                    // year-difference convention as `build_candidate`.
+                    if let Some(max_age) = policy.max_age {
+                        let age = date.year() - player.birth_date.year();
+                        if age > max_age {
                             continue;
                         }
+                    }
 
-                        // Age cap (U21: 21-and-under). `age` uses the same
-                        // year-difference convention as `build_candidate`.
-                        if let Some(max_age) = policy.max_age {
-                            let age = date.year() - player.birth_date.year();
-                            if age > max_age {
-                                continue;
-                            }
-                        }
+                    // Eligibility check is its own helper so a future
+                    // dual-nationality pass can extend it without
+                    // touching the candidate-collection skeleton.
+                    if !Self::is_eligible_for_country(player, player.country_id) {
+                        continue;
+                    }
 
-                        // Eligibility check is its own helper so a future
-                        // dual-nationality pass can extend it without
-                        // touching the candidate-collection skeleton.
-                        if !Self::is_eligible_for_country(player, player.country_id) {
-                            continue;
-                        }
-
-                        // Senior uses the original `build_candidate`;
-                        // U21 the policy-aware variant with the looser
-                        // youth gate.
-                        let candidate = match policy.level {
-                            NationalTeamLevel::Senior => Self::build_candidate(
-                                player,
-                                club.id,
-                                team.id,
-                                club_reputation,
-                                league_reputation,
-                                date,
-                            ),
-                            NationalTeamLevel::Under21 => Self::build_candidate_with_policy(
-                                player,
-                                club.id,
-                                team.id,
-                                club_reputation,
-                                league_reputation,
-                                date,
-                                policy,
-                            ),
-                        };
-                        if let Some(candidate) = candidate {
-                            map.entry(player.country_id).or_default().push(candidate);
-                        }
+                    // Senior uses the original `build_candidate`;
+                    // U21 the policy-aware variant with the looser
+                    // youth gate.
+                    let candidate = match policy.level {
+                        NationalTeamLevel::Senior => Self::build_candidate(
+                            player,
+                            club.id,
+                            team.id,
+                            club_reputation,
+                            league_reputation,
+                            date,
+                        ),
+                        NationalTeamLevel::Under21 => Self::build_candidate_with_policy(
+                            player,
+                            club.id,
+                            team.id,
+                            club_reputation,
+                            league_reputation,
+                            date,
+                            policy,
+                        ),
+                    };
+                    if let Some(candidate) = candidate {
+                        candidates.push((player.country_id, candidate));
                     }
                 }
             }
         }
 
-        for candidates in map.values_mut() {
-            let trimmed = Self::rank_and_trim_candidates(std::mem::take(candidates));
-            *candidates = trimmed;
-        }
-
-        map
+        candidates
     }
 
     /// Build a CallUpCandidate from a player, if the player is worth scouting.
@@ -532,7 +547,7 @@ impl NationalTeam {
     ) {
         // Capture incumbents BEFORE we clear — continuity scoring needs
         // to know who held a place in the prior cycle.
-        let incumbents: HashSet<u32> = self.squad.iter().map(|sp| sp.player_id).collect();
+        let incumbents: FxHashSet<u32> = self.squad.iter().map(|sp| sp.player_id).collect();
 
         self.squad.clear();
         self.generated_squad.clear();
@@ -800,7 +815,7 @@ impl NationalTeam {
     fn continuity_score(
         c: &CallUpCandidate,
         window: CallUpWindowType,
-        incumbents: &HashSet<u32>,
+        incumbents: &FxHashSet<u32>,
     ) -> f32 {
         let in_prior_squad = incumbents.contains(&c.player_id);
         let raw: f32 = if in_prior_squad {
@@ -999,7 +1014,7 @@ impl NationalTeam {
         c: &CallUpCandidate,
         tactics: &Tactics,
         ctx: &CallUpContext,
-        incumbents: &HashSet<u32>,
+        incumbents: &FxHashSet<u32>,
     ) -> f32 {
         // U21 uses a dedicated youth/potential blend rather than the
         // senior axes — see `score_candidate_u21`.
@@ -1085,7 +1100,7 @@ impl NationalTeam {
     fn role_coverage_counts(
         candidates: &[CallUpCandidate],
         indices: impl Iterator<Item = usize>,
-    ) -> HashMap<RoleSlot, usize> {
+    ) -> FxHashMap<RoleSlot, usize> {
         let slots = [
             RoleSlot::Goalkeeper,
             RoleSlot::LeftDefensiveSide,
@@ -1096,7 +1111,8 @@ impl NationalTeam {
             RoleSlot::CentralForward,
         ];
 
-        let mut counts: HashMap<RoleSlot, usize> = slots.iter().copied().map(|s| (s, 0)).collect();
+        let mut counts: FxHashMap<RoleSlot, usize> =
+            slots.iter().copied().map(|s| (s, 0)).collect();
 
         for idx in indices {
             let c = &candidates[idx];
@@ -1115,8 +1131,8 @@ impl NationalTeam {
     }
 
     /// Coverage target per slot, depending on squad size.
-    fn coverage_targets(target_squad_size: usize) -> HashMap<RoleSlot, usize> {
-        let mut t: HashMap<RoleSlot, usize> = HashMap::new();
+    fn coverage_targets(target_squad_size: usize) -> FxHashMap<RoleSlot, usize> {
+        let mut t: FxHashMap<RoleSlot, usize> = FxHashMap::default();
         if target_squad_size >= TOURNAMENT_SQUAD_SIZE {
             t.insert(RoleSlot::Goalkeeper, 3);
             t.insert(RoleSlot::LeftDefensiveSide, 2);
@@ -1161,7 +1177,7 @@ impl NationalTeam {
         candidates: &[CallUpCandidate],
         tactics: &Tactics,
         ctx: &CallUpContext,
-        incumbents: &HashSet<u32>,
+        incumbents: &FxHashSet<u32>,
     ) -> Vec<(usize, CallUpReason, Vec<CallUpReason>)> {
         if candidates.is_empty() {
             return Vec::new();
@@ -1197,12 +1213,12 @@ impl NationalTeam {
 
         // (idx, role-coverage flag, position-need flag, score)
         let mut selected: Vec<(usize, bool, bool, f32)> = Vec::with_capacity(ctx.target_squad_size);
-        let mut taken: HashSet<usize> = HashSet::new();
+        let mut taken: FxHashSet<usize> = FxHashSet::default();
 
         let take_group = |group: &[(usize, f32)],
                           quota: usize,
                           selected: &mut Vec<(usize, bool, bool, f32)>,
-                          taken: &mut HashSet<usize>| {
+                          taken: &mut FxHashSet<usize>| {
             for (rank, &(idx, score)) in group.iter().take(quota).enumerate() {
                 let c = &candidates[idx];
                 let position_need = rank >= quota / 2 && c.current_ability < 130;
@@ -1258,7 +1274,7 @@ impl NationalTeam {
     fn apply_role_coverage(
         candidates: &[CallUpCandidate],
         selected: &mut [(usize, bool, bool, f32)],
-        taken: &mut HashSet<usize>,
+        taken: &mut FxHashSet<usize>,
         scored: &[(usize, f32)],
         ctx: &CallUpContext,
     ) {
@@ -1436,7 +1452,7 @@ impl NationalTeam {
         position_need: bool,
         role_coverage: bool,
         ctx: &CallUpContext,
-        incumbents: &HashSet<u32>,
+        incumbents: &FxHashSet<u32>,
     ) -> (CallUpReason, Vec<CallUpReason>) {
         // U21 picks get youth-specific reasons.
         if ctx.level == NationalTeamLevel::Under21 {

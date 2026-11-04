@@ -53,14 +53,9 @@ impl TransferRoutePolicy {
         if date < Self::ru_ua_block_from() {
             return false;
         }
-        let pair = (
-            from_country_code.to_ascii_lowercase(),
-            to_country_code.to_ascii_lowercase(),
-        );
-        matches!(
-            (pair.0.as_str(), pair.1.as_str()),
-            ("ru", "ua") | ("ua", "ru")
-        )
+        let is = |code: &str, iso: &str| code.eq_ignore_ascii_case(iso);
+        (is(from_country_code, "ru") && is(to_country_code, "ua"))
+            || (is(from_country_code, "ua") && is(to_country_code, "ru"))
     }
 
     /// True when clubs from this country are barred from UEFA

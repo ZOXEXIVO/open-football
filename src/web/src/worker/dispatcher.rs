@@ -181,11 +181,13 @@ impl DistributedDispatcher {
     /// than the local pool takes to play these matches. Cuts tail latency
     /// on idle days and the last stragglers of a matchday.
     ///
-    /// Returns an empty vec when there is nothing to run on (no local
-    /// share and no Ready workers); the caller then returns `Err` so the
-    /// engine pool falls back to its own rayon path.
+    /// Returns an empty vec when no remote worker is Ready; the caller then
+    /// returns `Err` and the engine pool plays the whole batch in one pass.
+    /// Pulling it through the local share instead would play it chunk by
+    /// chunk, each chunk waiting on its slowest match before the next
+    /// starts.
     fn build_slots(total: usize, local_threads: usize, ready: Vec<ReadyWorker>) -> Vec<Slot> {
-        if total == 0 {
+        if total == 0 || ready.is_empty() {
             return Vec::new();
         }
         if local_threads > 0 && total <= local_threads * 2 {
@@ -725,7 +727,12 @@ impl DistributedDispatcher {
 #[cfg(test)]
 mod tests {
     use super::{DistributedDispatcher, Target};
+    use crate::worker::registry::ReadyWorker;
     use std::collections::VecDeque;
+    use std::sync::Arc;
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::runtime::Runtime;
+    use tokio::sync::Mutex;
 
     #[test]
     fn pull_chunk_drains_up_to_chunk_size() {
@@ -750,12 +757,31 @@ mod tests {
         assert!(chunk.is_empty());
     }
 
+    /// A connected socket stands in for a worker that passed its handshake.
+    /// A connected socket stands in for a worker that passed its handshake.
+    /// The runtime is returned with it: the socket is registered with it.
+    fn ready_worker(threads: usize) -> (Runtime, ReadyWorker) {
+        let runtime = Runtime::new().unwrap();
+        let worker = runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap().to_string();
+            let stream = TcpStream::connect(&address).await.unwrap();
+            ReadyWorker {
+                address,
+                threads,
+                connection: Arc::new(Mutex::new(stream)),
+            }
+        });
+        (runtime, worker)
+    }
+
     /// Small batch with a local share collapses to a single local slot —
     /// no remote round-trip for work the local pool can swallow in one
     /// chunk.
     #[test]
     fn build_slots_fast_path_local_only() {
-        let slots = DistributedDispatcher::build_slots(4, 8, Vec::new());
+        let (_runtime, worker) = ready_worker(4);
+        let slots = DistributedDispatcher::build_slots(4, 8, vec![worker]);
         assert_eq!(slots.len(), 1);
         assert!(matches!(slots[0].target, Target::Local));
         assert_eq!(slots[0].chunk_size, 16);
@@ -769,12 +795,25 @@ mod tests {
         assert!(slots.is_empty());
     }
 
-    /// Large batch, local enabled, no workers → one local slot that pulls
-    /// the whole queue over multiple rounds.
+    /// A batch three times the local share, with no remote worker Ready, is
+    /// handed back whole: the engine pool plays it in one pass instead of
+    /// the local share pulling it chunk by chunk.
     #[test]
-    fn build_slots_local_only_large_batch() {
-        let slots = DistributedDispatcher::build_slots(100, 8, Vec::new());
-        assert_eq!(slots.len(), 1);
+    fn with_no_ready_worker_the_engine_pool_plays_the_batch() {
+        let slots = DistributedDispatcher::build_slots(3 * 8, 8, Vec::new());
+        assert!(slots.is_empty());
+    }
+
+    /// A Ready remote worker still splits a large batch with the local
+    /// share, each pulling chunks of twice its threads.
+    #[test]
+    fn a_ready_remote_worker_still_pulls_chunks() {
+        let (_runtime, worker) = ready_worker(4);
+        let slots = DistributedDispatcher::build_slots(100, 8, vec![worker]);
+        assert_eq!(slots.len(), 2);
         assert!(matches!(slots[0].target, Target::Local));
+        assert_eq!(slots[0].chunk_size, 16);
+        assert!(matches!(slots[1].target, Target::Remote(_)));
+        assert_eq!(slots[1].chunk_size, 8);
     }
 }

@@ -5,7 +5,7 @@ use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::club::BoardTransferProposal;
 use crate::club::board::mandate::{MandatePurpose, SigningMandate, TargetBelief};
@@ -772,9 +772,9 @@ impl ShortlistPass {
     fn snapshot_players(
         country: &Country,
         date: NaiveDate,
-    ) -> HashMap<u32, PlayerApprovalSnapshot> {
-        let mut player_snapshots: HashMap<u32, PlayerApprovalSnapshot> = HashMap::new();
-        let league_reps: HashMap<u32, u16> = country
+    ) -> FxHashMap<u32, PlayerApprovalSnapshot> {
+        let mut player_snapshots: FxHashMap<u32, PlayerApprovalSnapshot> = FxHashMap::default();
+        let league_reps: FxHashMap<u32, u16> = country
             .clubs
             .iter()
             .map(|c| {
@@ -815,7 +815,7 @@ impl ShortlistPass {
     /// each hearing is staged as a [`Decision`] and applied afterwards.
     fn review_shortlists(
         country: &Country,
-        player_snapshots: &HashMap<u32, PlayerApprovalSnapshot>,
+        player_snapshots: &FxHashMap<u32, PlayerApprovalSnapshot>,
         date: NaiveDate,
         decisions: &mut Vec<Decision>,
     ) {
@@ -1096,7 +1096,7 @@ impl ShortlistPass {
         fee: f64,
         alloc: f64,
         finances: BoardClubFinances,
-        player_snapshots: &HashMap<u32, PlayerApprovalSnapshot>,
+        player_snapshots: &FxHashMap<u32, PlayerApprovalSnapshot>,
         date: NaiveDate,
         days_left_frac: f32,
     ) -> (BoardTransferProposal, Option<u32>) {

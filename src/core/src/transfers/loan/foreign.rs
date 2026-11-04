@@ -14,6 +14,7 @@
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::window::MarketCadence;
 use crate::transfers::view::club::ClubView;
+use crate::transfers::view::world::ForeignPool;
 use chrono::NaiveDate;
 use log::debug;
 
@@ -37,7 +38,6 @@ use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::{MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind};
 use crate::utils::FormattingUtils;
 use crate::{Club, Country, Language, PlayerFieldPositionGroup, ReputationLevel, Team};
-use std::collections::HashMap;
 
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -58,7 +58,7 @@ struct ForeignLoanBoard<'a> {
     /// board was filtered. The same number gates and weights: a route this
     /// country barely works is not a candidate it takes as readily as one it
     /// works every window.
-    visibility: HashMap<(u32, u32), f32>,
+    visibility: FxHashMap<(u32, u32), f32>,
 }
 
 impl ForeignLoanBoard<'_> {
@@ -282,6 +282,7 @@ impl ForeignBorrower<'_> {
         if LoanAgreement::disarmed() {
             return None;
         }
+        let parent = p.parent_loan?;
         let group = p.position_group;
         let borrower = self.foreign_borrower_profile.map(|profile| {
             profile.with_best_in_group(self.borrower_position_depth.best_in_group(group))
@@ -300,9 +301,9 @@ impl ForeignBorrower<'_> {
         );
         let verdict = borrower
             .as_ref()
-            .map(|b| guard.assess(b, p.loan_willingness.score, p.parent_subsidy));
+            .map(|b| guard.assess(b, parent.willingness.score, p.parent_subsidy));
         let inputs = AgreementInputs {
-            parent: p.loan_willingness,
+            parent: parent.willingness,
             parent_rep: p.club_world_reputation.max(0) as u16,
             parent_league_rep: p.seller_ctx.league_reputation,
             parent_best_in_group: p.club_best_in_group,
@@ -320,7 +321,7 @@ impl ForeignBorrower<'_> {
             slot_room: self.slot_room(p),
             mid_season_window,
             candidate: p.observable_level,
-            is_development: p.is_development,
+            is_development: parent.development,
             stage: p.pathway_stage,
             // A summary carries no loan-out row: the club's own band is
             // one of the things a borrowing country cannot see.
@@ -369,7 +370,7 @@ impl ForeignBorrower<'_> {
 /// What one club's turn needs from the rest of the market: who already has a
 /// pursuit in flight, and how many negotiations each club is carrying.
 struct MarketLoad {
-    pending_loans: HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+    pending_loans: FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
     /// Incoming loan approaches already spending a foreign registration
     /// slot, per borrowing club.
     pending_foreign: FxHashMap<u32, u32>,
@@ -539,7 +540,7 @@ struct ForeignLoanAction {
 impl ForeignLoanScan {
     pub(in crate::transfers::loan) fn run(
         country: &mut Country,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         date: NaiveDate,
         market_map: &MarketMap,
         placement_reach: &PlacementReachIndex,
@@ -598,7 +599,7 @@ impl ForeignLoanScan {
     /// geography for both.
     fn board<'a>(
         country: &Country,
-        foreign_players: &[&'a PlayerSummary],
+        foreign_players: ForeignPool<'a>,
         date: NaiveDate,
         market_map: &MarketMap,
     ) -> Option<ForeignLoanBoard<'a>> {
@@ -620,7 +621,7 @@ impl ForeignLoanScan {
         // Keyed on the league alone (the first cut) a Brazilian at Porto and
         // a Portuguese at Porto shared one entry, and the first of the two
         // scored decided the geography for both.
-        let mut visibility_cache: HashMap<(u32, u32), f32> = HashMap::new();
+        let mut visibility_cache: FxHashMap<(u32, u32), f32> = FxHashMap::default();
         let mut market_visibility = |p: &PlayerSummary| -> f32 {
             let key = (p.nationality_country_id, p.country_id);
             if let Some(cached) = visibility_cache.get(&key) {
@@ -651,7 +652,6 @@ impl ForeignLoanScan {
         let country_rep = country.reputation;
         let foreign_loans: Vec<&PlayerSummary> = foreign_players
             .iter()
-            .copied()
             .filter(|p| {
                 // Either the parent advertised the loan, or the player is a
                 // credible cold target his club isn't building around — the

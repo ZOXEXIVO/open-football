@@ -27,6 +27,7 @@ use crate::transfers::scouting::recruitment::meeting::MeetingPass;
 use crate::transfers::scouting::watch::FormWatch;
 use crate::transfers::scouting::watchlist::Watchlist;
 use crate::transfers::squad::SquadReviewPass;
+use crate::transfers::view::world::ForeignPool;
 use crate::transfers::{MarketMap, ScoutMarketDesk};
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
@@ -41,6 +42,7 @@ pub(crate) use free::GlobalFreeAgentSummary;
 use free::precontract::PreContractManager;
 use log::debug;
 use settlement::TransferClauseSettler;
+use std::cell::OnceCell;
 pub use types::DeferredTransfer;
 use types::TransferActivitySummary;
 use types::{CountryRoster, PendingPlayerSignal};
@@ -66,9 +68,8 @@ pub(crate) struct TransferTail {
 pub struct DeferredTransferOps {
     pub country_id: u32,
     pub window_open: bool,
-    /// Per-country sweep targets — every domestic signing in Phase A
-    /// needs `cleanup_player_transfer_interest` to run against *every*
-    /// other country's shortlists. Serial in Phase C.
+    /// Every domestic signing in Phase A, swept from every other
+    /// country's shortlists by the drain's one world-wide sweep.
     pub domestic_signed_ids: Vec<u32>,
     /// Free-agent (`data.free_agents` global pool) candidates that
     /// fielded an offer today; bumps the 30-day window counter.
@@ -87,14 +88,6 @@ pub struct DeferredTransferOps {
     /// Domestic + cross-country transfers ready for the unified
     /// `execution::execute_transfer` path.
     pub deferred_transfers: Vec<DeferredTransfer>,
-    /// `summary.completed_transfers` at the start of this country's
-    /// local pass — Phase C compares against `completed_after` to
-    /// decide whether to flag `data.dirty_player_index`.
-    pub completed_before: u32,
-    /// Roster mutations from `handle_free_agents` that already
-    /// landed in Phase A. Phase C checks this against `completed_before`
-    /// so it can dirty the player index without re-counting.
-    pub completed_after: u32,
     /// Pre-contract (Bosman) free moves executed in this country's Phase-A
     /// pass — a subset of `domestic_signed_ids`. Phase C splits the monthly
     /// "signed pre-contract" vs "signed off a domestic expiry" counters
@@ -124,8 +117,6 @@ impl DeferredTransferOps {
             global_block_reasons: Vec::new(),
             global_signings: Vec::new(),
             deferred_transfers: Vec::new(),
-            completed_before: 0,
-            completed_after: 0,
             pre_contract_signed: 0,
             cross_country_clause_credits: Vec::new(),
             player_signals: Vec::new(),
@@ -168,15 +159,10 @@ impl TransferTick {
         // exists year-round now: the breakout watch runs weekly whatever
         // the window says (scouts don't stop watching football in
         // October), while the negotiation-side passes stay window-gated.
-        let foreign_players: Vec<&PlayerSummary> = world_pool
-            .iter()
-            .filter(|s| s.country_id != country_id)
-            .collect();
+        let foreign_players = ForeignPool::of(world_pool, country_id);
 
-        let completed_before = summary.completed_transfers;
         let mut ops = DeferredTransferOps::empty(country_id);
         ops.window_open = window_open;
-        ops.completed_before = completed_before;
 
         // Detect the open→closed transition BEFORE syncing the flag —
         // the market's stored flag still holds yesterday's state.
@@ -211,7 +197,7 @@ impl TransferTick {
             country,
             current_date,
             world_pool,
-            &foreign_players,
+            foreign_players,
             market_map,
         );
 
@@ -219,16 +205,15 @@ impl TransferTick {
             Self::run_window_passes(
                 country,
                 current_date,
-                &foreign_players,
+                foreign_players,
                 market_map,
                 placement_reach,
                 &mut summary,
             );
         }
 
-        Self::run_year_round_tail(country, current_date, &foreign_players);
+        Self::run_year_round_tail(country, current_date, foreign_players);
 
-        ops.completed_after = summary.completed_transfers;
         ops.pre_contract_signed = summary.signed_pre_contract;
         debug!(
             "Transfer Activity (Phase A) - Listings: {}, Negotiations: {}, Completed: {}",
@@ -251,10 +236,9 @@ impl TransferTick {
         let config = TransferConfig::default();
 
         // Cross-country interest sweep used to fire per signed id here.
-        // Hoisted into the simulator orchestrator: it now aggregates
-        // every country's `domestic_signed_ids` and calls
-        // `cleanup_player_transfer_interest_batch` once per tick,
-        // collapsing O(countries × signings × countries) into a single
+        // Every country's `domestic_signed_ids` now join the players the
+        // drain places in the single sweep of [`Self::conclude`],
+        // collapsing O(countries × signings × countries) into one
         // parallel pass over the world.
 
         // Free-agent market-state bumps (offer / reject / block-reason)
@@ -288,21 +272,14 @@ impl TransferTick {
 
         // Execute global free-agent signings (Move-on-Free players from
         // `data.free_agents`).
-        let mut completed = ops.completed_after;
         let stage = PerformanceProfiler::stage_scope("drain_free_agent_signings", 3);
         let mut swept: Vec<u32> = Vec::new();
         for signing in &ops.global_signings {
             if GlobalFreeAgentPool::execute_signing(data, signing, current_date, &config) {
-                completed += 1;
                 swept.push(signing.player_id);
             }
         }
         drop(stage);
-
-        // If anything moved this tick the global indexes need refreshing.
-        if completed > ops.completed_before {
-            data.dirty_player_index = true;
-        }
 
         // Monthly diagnostics flow: every domestic signed id is an
         // in-country free-agent signing (the global-pool ones defer to
@@ -341,23 +318,31 @@ impl TransferTick {
     /// moved their players.
     ///
     /// The interest sweep walks the whole world, so it runs ONCE for everyone
-    /// placed or moved anywhere this tick instead of once per country — per
-    /// country it was two world-wide fan-outs each, and the drain spent more
-    /// time waking the pool than sweeping. The follow-ups keep their order
-    /// behind it: development loans are staged after the sweep (it would
-    /// cancel their listings), and no club opens a foreign negotiation until
-    /// every signing in the world has been swept.
-    pub(crate) fn conclude(data: &mut SimulatorData, tails: Vec<TransferTail>, date: NaiveDate) {
-        let swept: Vec<u32> = tails.iter().flat_map(|t| t.swept.iter().copied()).collect();
+    /// signed at home, placed or moved anywhere this tick instead of once per
+    /// country — per country it was two world-wide fan-outs each, and the
+    /// drain spent more time waking the pool than sweeping. The follow-ups
+    /// keep their order behind it: development loans are staged after the
+    /// sweep (it would cancel their listings), and no club opens a foreign
+    /// negotiation until every signing in the world has been swept.
+    pub(crate) fn conclude(
+        data: &mut SimulatorData,
+        signed: Vec<u32>,
+        tails: Vec<TransferTail>,
+        date: NaiveDate,
+    ) {
+        let swept: Vec<u32> = signed
+            .into_iter()
+            .chain(tails.iter().flat_map(|t| t.swept.iter().copied()))
+            .collect();
         PerformanceProfiler::stage("drain_interest_sweep", 2, || {
             ApproachPass::cleanup_player_transfer_interest_batch(data, &swept)
         });
 
+        let loanees = OnceCell::new();
         for tail in tails {
-            TransferExecutor::stage_pathways(data, &tail.transfers, &tail.moves, date);
+            TransferExecutor::stage_pathways(data, &loanees, &tail.transfers, &tail.moves, date);
             for (transfer, &success) in tail.transfers.iter().zip(&tail.moves.results) {
                 if success {
-                    data.dirty_player_index = true;
                     continue;
                 }
                 if let Some(country) = data.country_mut(transfer.buying_country_id) {
@@ -390,6 +375,7 @@ impl TransferTick {
     /// player exactly as a domestic beat would be.
     fn deliver_pending_player_signals(data: &mut SimulatorData, signals: &[PendingPlayerSignal]) {
         for pending in signals {
+            let place = data.indexed_player_place(pending.player_id);
             let Some(country) = data.country_mut(pending.selling_country_id) else {
                 continue;
             };
@@ -409,7 +395,13 @@ impl TransferTick {
                     (club.is_rival(pending.interested_club_id), league_rep)
                 })
                 .unwrap_or((false, 0));
-            let Some(player) = CountryRoster::find_mut(country, pending.player_id) else {
+            let found = match place {
+                Some((country_id, club, team, slot)) if country_id == country.id => {
+                    Some(&mut country.clubs[club].teams.teams[team].players.players[slot])
+                }
+                _ => CountryRoster::find_mut(country, pending.player_id),
+            };
+            let Some(player) = found else {
                 continue;
             };
             let sig = TransferInterestSignal {
@@ -569,7 +561,7 @@ impl TransferTick {
         country: &mut Country,
         current_date: NaiveDate,
         world_pool: &[PlayerSummary],
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         market_map: &MarketMap,
     ) {
         let country_name = country.name.clone();
@@ -665,7 +657,7 @@ impl TransferTick {
     fn run_window_passes(
         country: &mut Country,
         current_date: NaiveDate,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         market_map: &MarketMap,
         placement_reach: &PlacementReachIndex,
         summary: &mut TransferActivitySummary,
@@ -759,7 +751,7 @@ impl TransferTick {
     fn run_year_round_tail(
         country: &mut Country,
         current_date: NaiveDate,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
     ) {
         let country_name = country.name.clone();
 
@@ -874,7 +866,7 @@ mod side_channel_tests {
                 vec![continent],
                 GlobalCompetitions::new(Vec::new()),
             );
-            data.free_agents = free_agents;
+            data.free_agents = free_agents.into();
             data
         }
     }
@@ -890,8 +882,8 @@ mod side_channel_tests {
         // concatenated into the world-wide batch and must still count once
         // after the single dedup'd pool pass.
         let batch = FreeAgentBumpBatch {
-            offered_ids: vec![900, 900, 900],
-            rejected_ids: vec![900, 900],
+            offered_ids: vec![&[900, 900], &[900]],
+            rejected_ids: vec![&[900, 900]],
             block_reasons: Vec::new(),
         };
         ApproachPass::apply_free_agent_market_bumps_batch(&mut data, &batch, date);

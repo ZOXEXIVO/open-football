@@ -3,12 +3,12 @@ pub use chrono::prelude::*;
 use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
 use crate::TeamType;
-use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
+use crate::club::{BoardContext, ClubContext};
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
 use crate::transfers::market::window::TransferWindowManager;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -19,10 +19,7 @@ pub struct GlobalContext<'gc> {
     pub league: Option<LeagueContext<'gc>>,
     pub club: Option<ClubContext<'gc>>,
     pub team: Option<TeamContext>,
-    pub finance: Option<ClubFinanceContext>,
     pub board: Option<BoardContext>,
-    pub player: Option<PlayerContext>,
-    pub staff: Option<StaffContext>,
 }
 
 impl<'gc> GlobalContext<'gc> {
@@ -34,10 +31,7 @@ impl<'gc> GlobalContext<'gc> {
             league: None,
             club: None,
             team: None,
-            finance: None,
             board: None,
-            player: None,
-            staff: None,
         }
     }
 
@@ -166,24 +160,6 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_player(&self, player_id: Option<u32>) -> Self {
-        let mut ctx = GlobalContext::clone(self);
-        ctx.player = Some(PlayerContext::new(player_id));
-        ctx
-    }
-
-    pub fn with_staff(&self, staff_id: Option<u32>) -> Self {
-        let mut ctx = GlobalContext::clone(self);
-        ctx.staff = Some(StaffContext::new(staff_id));
-        ctx
-    }
-
-    pub fn with_finance(&self) -> Self {
-        let mut ctx = GlobalContext::clone(self);
-        ctx.finance = Some(ClubFinanceContext::new());
-        ctx
-    }
-
     /// Get training facility quality from club context (0.0-1.0)
     pub fn club_facilities_training(&self) -> f32 {
         self.club
@@ -294,11 +270,11 @@ impl<'gc> GlobalContext<'gc> {
 /// behaviour and the correct one for a native.
 #[derive(Debug, Clone, Default)]
 pub struct TournamentClocks {
-    by_continent: Arc<HashMap<u32, u8>>,
+    by_continent: Arc<FxHashMap<u32, u8>>,
 }
 
 impl TournamentClocks {
-    pub fn new(by_continent: HashMap<u32, u8>) -> Self {
+    pub fn new(by_continent: FxHashMap<u32, u8>) -> Self {
         TournamentClocks {
             by_continent: Arc::new(by_continent),
         }
@@ -334,11 +310,11 @@ impl TournamentClocks {
 /// with it (memory `feedback_balance_system_not_cases`).
 #[derive(Debug, Clone, Default)]
 pub struct HomeLeagueTable {
-    by_country: Arc<HashMap<u32, u16>>,
+    by_country: Arc<FxHashMap<u32, u16>>,
 }
 
 impl HomeLeagueTable {
-    pub fn new(by_country: HashMap<u32, u16>) -> Self {
+    pub fn new(by_country: FxHashMap<u32, u16>) -> Self {
         HomeLeagueTable {
             by_country: Arc::new(by_country),
         }
@@ -525,10 +501,7 @@ mod tests {
         assert!(global_ctx.league.is_none());
         assert!(global_ctx.club.is_none());
         assert!(global_ctx.team.is_none());
-        assert!(global_ctx.finance.is_none());
         assert!(global_ctx.board.is_none());
-        assert!(global_ctx.player.is_none());
-        assert!(global_ctx.staff.is_none());
 
         // Test if contexts can be added
         let updated_global_ctx = global_ctx
@@ -537,10 +510,7 @@ mod tests {
             .with_league(1, "slug".to_owned(), &[1, 2], 5000)
             .with_club(1, "Test Club")
             .with_team(1)
-            .with_finance()
-            .with_board()
-            .with_player(Some(1))
-            .with_staff(Some(1));
+            .with_board();
 
         // Test if the added contexts are set correctly
         assert!(updated_global_ctx.continent.is_some());
@@ -548,10 +518,7 @@ mod tests {
         assert!(updated_global_ctx.league.is_some());
         assert!(updated_global_ctx.club.is_some());
         assert!(updated_global_ctx.team.is_some());
-        assert!(updated_global_ctx.finance.is_some());
         assert!(updated_global_ctx.board.is_some());
-        assert!(updated_global_ctx.player.is_some());
-        assert!(updated_global_ctx.staff.is_some());
     }
 }
 
@@ -568,7 +535,7 @@ mod tournament_clock_tests {
     const EUROPE: u32 = 1;
 
     fn clocks() -> TournamentClocks {
-        TournamentClocks::new(HashMap::from([(AFRICA, 11u8), (EUROPE, 34u8)]))
+        TournamentClocks::new(FxHashMap::from_iter([(AFRICA, 11u8), (EUROPE, 34u8)]))
     }
 
     #[test]
@@ -593,7 +560,7 @@ mod tournament_clock_tests {
     /// whole world and read by passport.
     #[test]
     fn a_home_league_lookup_fails_closed_on_a_country_it_has_never_heard_of() {
-        let table = HomeLeagueTable::new(HashMap::from([(7u32, 6_400u16)]));
+        let table = HomeLeagueTable::new(FxHashMap::from_iter([(7u32, 6_400u16)]));
         assert_eq!(table.reputation_of(7), 6_400);
         assert_eq!(table.reputation_of(8), 0);
         assert_eq!(HomeLeagueTable::default().reputation_of(7), 0);

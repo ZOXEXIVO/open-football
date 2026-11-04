@@ -2,7 +2,7 @@ use crate::Club;
 use crate::league::LeagueTable;
 use crate::r#match::MatchResult;
 use log::debug;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct LeagueStatistics {
@@ -10,7 +10,7 @@ pub struct LeagueStatistics {
     pub total_matches: u32,
     pub top_scorer: Option<(u32, u16)>,
     pub top_assists: Option<(u32, u16)>,
-    pub clean_sheets: HashMap<u32, u16>,
+    pub clean_sheets: FxHashMap<u32, u16>,
     pub competitive_balance_index: f32,
     pub average_attendance: u32,
     pub highest_scoring_match: Option<(u32, u32, u8, u8)>,
@@ -31,7 +31,7 @@ impl LeagueStatistics {
             total_matches: 0,
             top_scorer: None,
             top_assists: None,
-            clean_sheets: HashMap::new(),
+            clean_sheets: FxHashMap::default(),
             competitive_balance_index: 1.0,
             average_attendance: 0,
             highest_scoring_match: None,
@@ -105,8 +105,8 @@ impl LeagueStatistics {
     /// this league — without the gate, a country with multiple divisions
     /// would award the lower-tier top scorer to the upper-tier league.
     pub fn update_player_rankings(&mut self, league_id: u32, clubs: &[Club]) {
-        let mut scorer_stats: HashMap<u32, u16> = HashMap::new();
-        let mut assist_stats: HashMap<u32, u16> = HashMap::new();
+        let mut scorer_stats: FxHashMap<u32, u16> = FxHashMap::default();
+        let mut assist_stats: FxHashMap<u32, u16> = FxHashMap::default();
 
         for club in clubs {
             for team in &club.teams.teams {

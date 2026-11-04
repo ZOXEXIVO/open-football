@@ -30,3 +30,21 @@ When profiling is enabled, the system SHALL sample the process's CPU cycle consu
 #### Scenario: A phase has a straggler tail
 - **WHEN** a phase runs at high parallelism for part of its duration and at very low parallelism for the remainder
 - **THEN** the reported wall time is split across both a high-core bucket and a low-core bucket, revealing the tail that an average core count alone would hide
+
+### Requirement: Allocation accounting per profiled region
+When profiling is enabled and the host binary has installed an allocation probe, the profiler SHALL record, for every phase and stage, the number of heap allocations, the number of reallocations and the bytes requested while it ran, and SHALL report them beside its wall and CPU time. A phase SHALL count allocations made on every thread while it ran. A stage SHALL count those made on the worker that ran each item, summed over its items.
+
+Without a probe, or with profiling disabled, the profiler SHALL read no allocation counter.
+
+#### Scenario: A probe is installed and profiling is enabled
+- **WHEN** a profiled run completes in a binary that installed an allocation probe
+- **THEN** every phase and stage row of the report shows allocations, reallocations and bytes beside its wall and CPU time
+- **AND** the phase rows' allocations add up to the allocations the probe counted for the whole tick, within the allocations made outside any phase
+
+#### Scenario: No probe is installed
+- **WHEN** profiling is enabled in a binary that installed no allocation probe
+- **THEN** the report shows wall and CPU time only, and no region reads an allocation counter
+
+#### Scenario: Profiling is disabled
+- **WHEN** the profiling environment variable is not set, whether or not a probe is installed
+- **THEN** no allocation counter is read by the profiler

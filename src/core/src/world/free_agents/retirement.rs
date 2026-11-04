@@ -110,7 +110,7 @@ impl SimulatorData {
             player.announce_retirement(date, reason);
             let country_id = player.country_id;
             if let Some(country) = self.country_mut(country_id) {
-                country.retired_players.push(player);
+                country.retired_players.add(player);
             }
             // Else: nationality country isn't loaded — drop silently.
             // The player is gone from the pool either way.
@@ -206,7 +206,7 @@ mod free_agent_retirement_tests {
                 vec![continent],
                 GlobalCompetitions::new(Vec::new()),
             );
-            data.free_agents = free_agents;
+            data.free_agents = free_agents.into();
             data
         }
     }
@@ -232,7 +232,7 @@ mod free_agent_retirement_tests {
             country.retired_players.iter().any(|p| p.id == 900),
             "retired player must land in his nationality country"
         );
-        assert!(country.retired_players[0].retired);
+        assert!(country.retired_players.players[0].retired);
     }
 
     #[test]

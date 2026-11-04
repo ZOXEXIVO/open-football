@@ -16,7 +16,7 @@
 use crate::transfers::squad::SquadReviewPass;
 use crate::transfers::squad::bands::TierBands;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::club::board::mandate::{MandateIncumbent, MandatePurpose, MinutesCurve};
 use crate::club::staff::Staff;
@@ -317,7 +317,7 @@ impl<'a> SquadReview<'a> {
             .iter()
             .map(|p| {
                 let all_pos = p.positions();
-                let mut levels = HashMap::new();
+                let mut levels = FxHashMap::default();
                 for pos in &all_pos {
                     levels.insert(*pos, p.positions.get_level(*pos));
                 }

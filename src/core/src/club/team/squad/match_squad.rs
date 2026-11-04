@@ -4,8 +4,8 @@ use crate::r#match::squad::{CoachStrategyForSelection, PlayerSelectionResult};
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Staff, Tactics, TacticsSelector, Team};
 use chrono::NaiveDate;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 impl Team {
     /// Get match squad using rotation — prioritizes players who haven't played recently.
@@ -197,7 +197,7 @@ impl Team {
             );
         }
 
-        let mut position_coverage = HashMap::new();
+        let mut position_coverage = FxHashMap::default();
         for match_player in &squad_result.main_squad {
             let pos = match_player.tactical_position.current_position;
             *position_coverage.entry(pos).or_insert(0) += 1;
@@ -221,7 +221,7 @@ impl Team {
     /// Select penalty taker from the starting XI — the designated taker
     /// has to actually be on the pitch at kickoff, not at home in the
     /// stands. Ranked by penalty taking + composure.
-    fn select_penalty_taker(&self, main_squad: &[MatchPlayer]) -> Option<MatchPlayer> {
+    fn select_penalty_taker(&self, main_squad: &[MatchPlayer]) -> Option<u32> {
         main_squad
             .iter()
             .max_by(|a, b| {
@@ -232,12 +232,12 @@ impl Team {
                     .partial_cmp(&penalty_skill_b)
                     .unwrap_or(Ordering::Equal)
             })
-            .cloned()
+            .map(|p| p.id)
     }
 
     /// Select free-kick taker from the starting XI, ranked by free
     /// kicks + technique.
-    fn select_free_kick_taker(&self, main_squad: &[MatchPlayer]) -> Option<MatchPlayer> {
+    fn select_free_kick_taker(&self, main_squad: &[MatchPlayer]) -> Option<u32> {
         main_squad
             .iter()
             .max_by(|a, b| {
@@ -248,7 +248,7 @@ impl Team {
                     .partial_cmp(&fk_skill_b)
                     .unwrap_or(Ordering::Equal)
             })
-            .cloned()
+            .map(|p| p.id)
     }
 }
 

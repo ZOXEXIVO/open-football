@@ -8,6 +8,7 @@ use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
 use crate::transfers::HomePull;
 use crate::utils::IntegerUtils;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     Mental, PeopleNameGeneratorData, PersonAttributes, PersonBehaviour, PersonBehaviourState,
     Physical, Player, PlayerAttributes, PlayerClubContract, PlayerDecisionHistory, PlayerFoots,
@@ -100,8 +101,8 @@ const SK_MATCH_READINESS: usize = 36;
 
 /// Box-Muller normal distribution
 fn random_normal() -> f32 {
-    let u1 = rand::random::<f32>().max(1e-10);
-    let u2 = rand::random::<f32>();
+    let u1 = RandomEngine::gen_f32().max(1e-10);
+    let u2 = RandomEngine::gen_f32();
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
 }
 
@@ -453,18 +454,18 @@ fn apply_talent_spikes(skills: &mut [f32; SKILL_COUNT], mean_skill: f32) {
 
         // Fisher-Yates shuffle
         for i in (1..len).rev() {
-            let j = (rand::random::<f32>() * (i + 1) as f32) as usize % (i + 1);
+            let j = (RandomEngine::gen_f32() * (i + 1) as f32) as usize % (i + 1);
             indices.swap(i, j);
         }
 
         // First n_up get boosted
         for &idx in indices.iter().take(n_up) {
-            skills[idx] += spike_up * (0.7 + rand::random::<f32>() * 0.6);
+            skills[idx] += spike_up * (0.7 + RandomEngine::gen_f32() * 0.6);
         }
 
         // Next n_down get reduced
         for &idx in indices.iter().skip(n_up).take(n_down) {
-            skills[idx] -= spike_down * (0.5 + rand::random::<f32>() * 0.5);
+            skills[idx] -= spike_down * (0.5 + RandomEngine::gen_f32() * 0.5);
         }
     }
 }
@@ -841,7 +842,7 @@ impl PlayerGenerator {
             + 0.0060 * country_rep
             + 0.0040 * pathway_rep)
             * elite_damping;
-        let is_gem = rand::random::<f32>() < gem_chance;
+        let is_gem = RandomEngine::gen_f32() < gem_chance;
 
         // PA ceiling — single continuous curve of `ecosystem_score`.
         // Roughly 95..185 before any prodigy roll. Adds normal noise
@@ -852,7 +853,7 @@ impl PlayerGenerator {
 
         // Rare prodigy: gates beyond the standard cap. Bands are tighter
         // than before so the upper tail is anchored on the ecosystem.
-        let prodigy_roll = rand::random::<f32>() / elite_damping.max(1e-3);
+        let prodigy_roll = RandomEngine::gen_f32() / elite_damping.max(1e-3);
         if prodigy_roll < 0.000015 && cps >= 0.76 {
             // Generational, only at the most well-resourced clubs.
             academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(195, 200));
@@ -880,7 +881,7 @@ impl PlayerGenerator {
             // Talent factor max climbs with CPS so top academies regularly
             // graduate the high-PA bands without needing a gem roll. CPS=0
             // tops out at ~0.85, CPS=1 at ~1.50.
-            let talent_roll = rand::random::<f32>();
+            let talent_roll = RandomEngine::gen_f32();
             let talent_max = 0.85 + cps * 0.65;
             let talent_factor = 0.35 + talent_roll.powi(2) * (talent_max - 0.35);
             let jittered_base = (raw_ca * talent_factor) as i32;
@@ -965,17 +966,17 @@ impl PlayerGenerator {
                 state: PersonBehaviourState::Normal,
             },
             attributes: PersonAttributes {
-                adaptability: rand::random::<f32>() * 20.0,
-                ambition: rand::random::<f32>() * 20.0,
-                controversy: rand::random::<f32>() * 10.0,
-                loyalty: rand::random::<f32>() * 20.0,
-                pressure: rand::random::<f32>() * 20.0,
-                professionalism: rand::random::<f32>() * 20.0,
-                sportsmanship: rand::random::<f32>() * 20.0,
-                temperament: rand::random::<f32>() * 20.0,
-                consistency: 4.0 + rand::random::<f32>() * 14.0,
-                important_matches: 4.0 + rand::random::<f32>() * 14.0,
-                dirtiness: rand::random::<f32>() * 20.0,
+                adaptability: RandomEngine::gen_f32() * 20.0,
+                ambition: RandomEngine::gen_f32() * 20.0,
+                controversy: RandomEngine::gen_f32() * 10.0,
+                loyalty: RandomEngine::gen_f32() * 20.0,
+                pressure: RandomEngine::gen_f32() * 20.0,
+                professionalism: RandomEngine::gen_f32() * 20.0,
+                sportsmanship: RandomEngine::gen_f32() * 20.0,
+                temperament: RandomEngine::gen_f32() * 20.0,
+                consistency: 4.0 + RandomEngine::gen_f32() * 14.0,
+                important_matches: 4.0 + RandomEngine::gen_f32() * 14.0,
+                dirtiness: RandomEngine::gen_f32() * 20.0,
             },
             happiness: PlayerHappiness::new(),
             statuses: PlayerStatus { statuses: vec![] },
@@ -1033,7 +1034,8 @@ impl PlayerGenerator {
             mind: PlayerMind::new(),
             individual_training: None,
             languages: Language::from_country_code(country_code)
-                .into_iter()
+                .iter()
+                .copied()
                 .map(PlayerLanguage::native)
                 .collect(),
             last_transfer_date: None,
@@ -1073,9 +1075,9 @@ impl PlayerGenerator {
     /// E.g. one striker might be "technical but physically weak", another "strong but clumsy".
     fn apply_group_bias(skills: &mut [f32; SKILL_COUNT]) {
         // Random multiplier per group: 0.85 to 1.15
-        let tech_bias = 0.85 + rand::random::<f32>() * 0.30;
-        let mental_bias = 0.85 + rand::random::<f32>() * 0.30;
-        let phys_bias = 0.80 + rand::random::<f32>() * 0.40;
+        let tech_bias = 0.85 + RandomEngine::gen_f32() * 0.30;
+        let mental_bias = 0.85 + RandomEngine::gen_f32() * 0.30;
+        let phys_bias = 0.80 + RandomEngine::gen_f32() * 0.40;
 
         for skill in &mut skills[0..14] {
             *skill *= tech_bias;
@@ -1100,7 +1102,7 @@ impl PlayerGenerator {
 
         // Shuffle with Fisher-Yates for randomness
         for i in (1..distributable).rev() {
-            let j = (rand::random::<f32>() * (i + 1) as f32) as usize % (i + 1);
+            let j = (RandomEngine::gen_f32() * (i + 1) as f32) as usize % (i + 1);
             indices.swap(i, j);
         }
 
@@ -1118,12 +1120,12 @@ impl PlayerGenerator {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let n_strengths = 2 + (rand::random::<f32>() * 3.0) as usize; // 2-4
-        let n_weaknesses = 2 + (rand::random::<f32>() * 3.0) as usize; // 2-4
+        let n_strengths = 2 + (RandomEngine::gen_f32() * 3.0) as usize; // 2-4
+        let n_weaknesses = 2 + (RandomEngine::gen_f32() * 3.0) as usize; // 2-4
 
         // Strengths: pick from the first half (biased toward high-weight skills)
         for &idx in indices[..n_strengths].iter() {
-            let boost = 2.0 + rand::random::<f32>() * 3.0; // +2 to +5
+            let boost = 2.0 + RandomEngine::gen_f32() * 3.0; // +2 to +5
             skills[idx] += boost;
         }
 
@@ -1138,7 +1140,7 @@ impl PlayerGenerator {
             if indices[..n_strengths].contains(&idx) {
                 continue;
             }
-            let penalty = 2.0 + rand::random::<f32>() * 2.0; // −2 to −4
+            let penalty = 2.0 + RandomEngine::gen_f32() * 2.0; // −2 to −4
             skills[idx] -= penalty;
             weakness_count += 1;
         }
@@ -1193,7 +1195,7 @@ impl PlayerGenerator {
         let spread = (pa_final * 0.5).max(2.5);
 
         let mut pos_w = PositionWeights::for_position(position);
-        let archetype_roll = rand::random::<f32>();
+        let archetype_roll = RandomEngine::gen_f32();
         apply_role_archetype(&mut pos_w, &position_type_from(position), archetype_roll);
 
         // Noise per group — youth have more technical noise (raw talent variation)
@@ -1247,7 +1249,7 @@ impl PlayerGenerator {
         }
 
         // Match readiness default
-        skills[SK_MATCH_READINESS] = 10.0 + rand::random::<f32>() * 5.0;
+        skills[SK_MATCH_READINESS] = 10.0 + RandomEngine::gen_f32() * 5.0;
 
         // Per-player group bias for variety
         Self::apply_group_bias(&mut skills);
@@ -1595,13 +1597,14 @@ mod academy_realism_tests {
         use super::generate_gk_skills;
         use crate::PlayerSkills;
         use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
+        use crate::utils::random::engine::RandomEngine;
 
         let pa_final = PlayerSkills::ability_skill_level(150);
         let mean = |age: u32| {
             let n = 4000;
             let total: f32 = (0..n)
                 .map(|_| {
-                    let g = generate_gk_skills(pa_final, age, rand::random::<f32>());
+                    let g = generate_gk_skills(pa_final, age, RandomEngine::gen_f32());
                     [
                         g.aerial_reach,
                         g.command_of_area,

@@ -96,6 +96,17 @@ impl FixtureContext {
         self.competition == CompetitionKind::Friendly
     }
 
+    /// How long this fixture is likely to take to play, as a rank: a tie
+    /// that can go to extra time and penalties, then any competitive match,
+    /// then a friendly.
+    pub fn expected_length(&self) -> u8 {
+        match (self.knockout, self.is_friendly()) {
+            (true, _) => 2,
+            (false, false) => 1,
+            (false, true) => 0,
+        }
+    }
+
     /// FNV-1a over the fixture's id and date: stable across runs and
     /// machines, different for every fixture.
     fn seed_of(id: &str, date: NaiveDate) -> u64 {

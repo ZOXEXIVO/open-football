@@ -22,14 +22,15 @@ use crate::club::team::behaviour::{
 use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
 use crate::utils::DateUtils;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     ContractType, HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup,
     PlayerStatusType, PrivateTalkReason, Staff, StaffCollection, TeamType,
 };
 use chrono::{Duration, NaiveDate};
 use log::debug;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
 
 impl TeamBehaviour {
     /// How close a man has to be to the deadline he gave his own plan
@@ -265,12 +266,12 @@ impl TeamBehaviour {
             + credibility_chance)
             .clamp(0.1, 0.95);
 
-        let success = rand::random::<f32>() < success_chance;
+        let success = RandomEngine::gen_f32() < success_chance;
 
         // For transfer discussion, the talk succeeding doesn't guarantee the player
         // withdraws the request — there's only a 30% chance of that happening.
         let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
-            rand::random::<f32>() < 0.3
+            RandomEngine::gen_f32() < 0.3
         } else {
             success
         };
@@ -630,7 +631,7 @@ impl TeamBehaviour {
         // terminations are emitted so two cuts in the same group this week
         // still respect the floor. Loanees / contractless players don't
         // count (they aren't this club's usable depth).
-        let mut group_active: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut group_active: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
         for p in &players.players {
             if p.is_on_loan() || p.contract.is_none() {
                 continue;
@@ -719,7 +720,7 @@ impl TeamBehaviour {
 
         // Per-position-group active headcount — a forced exit must never thin
         // a group below safe cover. Decremented as exits are approved.
-        let mut group_active: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut group_active: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
         for p in &players.players {
             if p.is_on_loan() || p.contract.is_none() {
                 continue;
@@ -735,7 +736,7 @@ impl TeamBehaviour {
 
         // Never double-terminate a player the coach path already picked this
         // tick.
-        let already: HashSet<u32> = result
+        let already: FxHashSet<u32> = result
             .contract_terminations
             .iter()
             .map(|t| t.player_id)
@@ -820,7 +821,7 @@ impl TeamBehaviour {
                 + credibility_chance)
                 .clamp(0.10, 0.95);
 
-            let success = rand::random::<f32>() < success_chance;
+            let success = RandomEngine::gen_f32() < success_chance;
 
             let (mut morale_change, rel_change) = if success {
                 (5.0, 0.2) // Player happy — loan agreed

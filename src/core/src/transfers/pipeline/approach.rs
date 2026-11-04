@@ -6,7 +6,6 @@ use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::SimulatorData;
@@ -14,7 +13,6 @@ use crate::club::CareerRunway;
 use crate::club::board::mandate::{FeeEnvelope, MandatePurpose, SigningMandate};
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::club::player::contract::contract::ClubLevelAnchor;
-use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::club::staff::perception::AbilityEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutMonitoringStatus;
@@ -962,7 +960,7 @@ struct PlausibilityReject {
 /// once, wasteful per candidate.
 #[derive(Default)]
 struct ForeignRegistrationGuard {
-    by_club: HashMap<u32, ForeignSlotCount>,
+    by_club: FxHashMap<u32, ForeignSlotCount>,
 }
 
 impl ForeignRegistrationGuard {
@@ -1416,12 +1414,6 @@ impl ApproachPass {
     /// stale scouting/shortlist entries don't linger.
     pub fn clear_player_interest(country: &mut Country, player_id: u32) {
         for club in &mut country.clubs {
-            // Ownership check BEFORE the plan borrow: loan-out candidates
-            // only survive at the club that currently rosters the player.
-            // The development pathway stages a candidate on the buyer in
-            // the same tick this sweep runs — wiping it would kill the
-            // same-window development loan.
-            let owns_player = club.teams.contains_player(player_id);
             let plan = &mut club.transfer_plan;
 
             // Scouting assignments: drop observations for this player
@@ -1443,9 +1435,20 @@ impl ApproachPass {
 
             // Loan-out candidates: a moved player is no longer at this
             // club's disposal to be loaned out — unless this IS the club
-            // that now owns him.
-            plan.loan_out_candidates
-                .retain(|c| c.player_id != player_id || owns_player);
+            // that now owns him. The development pathway stages a
+            // candidate on the buyer in the same tick this sweep runs, and
+            // wiping it would kill the same-window development loan. Only
+            // a club that lists him asks the roster: asking every club
+            // walked the whole country per cleared player.
+            if plan
+                .loan_out_candidates
+                .iter()
+                .any(|c| c.player_id == player_id)
+                && !club.teams.contains_player(player_id)
+            {
+                plan.loan_out_candidates
+                    .retain(|c| c.player_id != player_id);
+            }
 
             // Drop active monitoring rows so the player no longer
             // appears as "watched" by clubs that didn't sign them.
@@ -1530,30 +1533,15 @@ impl ApproachPass {
     /// failed-approach streak before any same-day block can regrow it.
     pub fn apply_free_agent_market_bumps_batch(
         data: &mut SimulatorData,
-        batch: &FreeAgentBumpBatch,
+        batch: &FreeAgentBumpBatch<'_>,
         current_date: NaiveDate,
     ) {
         if batch.is_empty() {
             return;
         }
-        // Membership-only sets probed once per free agent in the world, so
-        // Fx hashing rather than the SipHash default — the same reason the
-        // interest sweep below uses it.
-        let offered: FxHashSet<u32> = batch.offered_ids.iter().copied().collect();
-        let rejected: FxHashSet<u32> = batch.rejected_ids.iter().copied().collect();
-        // Merge block reasons to the highest-ranked (closest-to-signing)
-        // reason per player across every country that recorded one.
-        let mut merged: FxHashMap<u32, FreeAgentBlockReason> = FxHashMap::default();
-        for (player_id, reason) in &batch.block_reasons {
-            merged
-                .entry(*player_id)
-                .and_modify(|existing| {
-                    if reason.rank() > existing.rank() {
-                        *existing = *reason;
-                    }
-                })
-                .or_insert(*reason);
-        }
+        let offered = batch.offered();
+        let rejected = batch.rejected();
+        let blocked = batch.merged_block_reasons();
 
         // Every bump is player-local and the three sets are read-only, so
         // the pool walk fans out. It is the whole free-agent population once
@@ -1565,8 +1553,8 @@ impl ApproachPass {
             if rejected.contains(&player.id) {
                 player.on_offer_rejected(current_date);
             }
-            if let Some(reason) = merged.get(&player.id) {
-                player.on_market_blocked(current_date, *reason);
+            if let Some(reason) = blocked.get(player.id) {
+                player.on_market_blocked(current_date, reason);
             }
         });
     }

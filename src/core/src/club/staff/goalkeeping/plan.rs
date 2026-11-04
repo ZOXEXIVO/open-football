@@ -12,7 +12,7 @@
 //! plan every one of them behaves exactly as it did before the department
 //! existed.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::NaiveDate;
 
@@ -60,7 +60,7 @@ impl KeeperNomination {
 /// The department's standing view of the club's goalkeepers.
 #[derive(Debug, Clone, Default)]
 pub struct KeeperRoomPlan {
-    assignments: HashMap<u32, KeeperAssignment>,
+    assignments: FxHashMap<u32, KeeperAssignment>,
     /// Declared order. Kept alongside the assignments so the pecking order
     /// survives a review that could not see a squad (an injured keeper is
     /// still the number one).
@@ -201,7 +201,8 @@ impl KeeperRoomPlan {
         today: NaiveDate,
     ) -> Vec<(u32, KeeperTier)> {
         let mut changes = Vec::new();
-        let mut next: HashMap<u32, KeeperAssignment> = HashMap::with_capacity(outcome.tiers.len());
+        let mut next: FxHashMap<u32, KeeperAssignment> =
+            FxHashMap::with_capacity_and_hasher(outcome.tiers.len(), Default::default());
 
         for (player_id, tier, understudy_to) in outcome.tiers {
             let previous = self.assignments.get(&player_id);

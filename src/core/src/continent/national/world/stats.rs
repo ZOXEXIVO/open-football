@@ -8,7 +8,8 @@
 //! national-team match".
 
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use super::lookups::world_country_elo;
 use crate::continent::Continent;
@@ -67,7 +68,7 @@ pub fn collect_international_appearances<'a>(
     away_country_id: u32,
     home_score: u8,
     away_score: u8,
-) -> HashMap<u32, InternationalAppearance<'a>> {
+) -> FxHashMap<u32, InternationalAppearance<'a>> {
     raw.player_stats
         .iter()
         .map(|(&player_id, stats)| {
@@ -108,7 +109,7 @@ pub fn apply_world_international_stats(
     continents: &mut [Continent],
     home_country_id: u32,
     away_country_id: u32,
-    appearances: &HashMap<u32, InternationalAppearance<'_>>,
+    appearances: &FxHashMap<u32, InternationalAppearance<'_>>,
     ctx: &InternationalMatchContext<'_>,
 ) {
     apply_world_international_stats_for_level(
@@ -136,11 +137,11 @@ pub fn apply_world_international_stats_for_level(
     continents: &mut [Continent],
     home_country_id: u32,
     away_country_id: u32,
-    appearances: &HashMap<u32, InternationalAppearance<'_>>,
+    appearances: &FxHashMap<u32, InternationalAppearance<'_>>,
     ctx: &InternationalMatchContext<'_>,
 ) {
     let is_senior = ctx.level == NationalTeamLevel::Senior;
-    let mut country_weights: HashMap<u32, f32> = HashMap::new();
+    let mut country_weights: FxHashMap<u32, f32> = FxHashMap::default();
 
     if is_senior {
         for continent in continents.iter() {
@@ -162,8 +163,12 @@ pub fn apply_world_international_stats_for_level(
         }
     }
 
-    for continent in continents.iter_mut() {
-        for country in continent.countries.iter_mut() {
+    // Every write lands on the player who appeared, so the world fans
+    // out by country.
+    continents
+        .par_iter_mut()
+        .flat_map(|continent| continent.countries.par_iter_mut())
+        .for_each(|country| {
             for club in country.clubs.iter_mut() {
                 for team in club.teams.iter_mut() {
                     for player in team.players.iter_mut() {
@@ -234,8 +239,7 @@ pub fn apply_world_international_stats_for_level(
                     }
                 }
             }
-        }
-    }
+        });
 }
 
 /// Update Elo for both countries after a national-team match.

@@ -1,4 +1,6 @@
 use crate::r#match::engine::player::injury::InjuryGrade;
+use crate::utils::IntegerUtils;
+use crate::utils::random::engine::RandomEngine;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -269,14 +271,14 @@ impl InjuryType {
             InjurySeverity::Critical => (14, 21),
         };
         let range = max - min + 1;
-        min + (rand::random::<u16>() % range)
+        min + IntegerUtils::random(0, range as i32) as u16
     }
 
     /// Generate a random duration within this injury's range
     pub fn random_duration(&self) -> u16 {
         let (min, max) = self.duration_range();
         let range = max - min + 1;
-        min + (rand::random::<u16>() % range)
+        min + IntegerUtils::random(0, range as i32) as u16
     }
 
     /// Pick a random match injury — weighted toward contact/muscle injuries
@@ -288,7 +290,7 @@ impl InjuryType {
         injury_proneness: u8,
     ) -> InjuryType {
         Self::match_injury_from_roll(
-            rand::random::<f32>(),
+            RandomEngine::gen_f32(),
             minutes_played,
             age,
             condition_pct,
@@ -309,7 +311,7 @@ impl InjuryType {
         natural_fitness: f32,
         injury_proneness: u8,
     ) -> Option<InjuryType> {
-        let roll: f32 = rand::random::<f32>();
+        let roll: f32 = RandomEngine::gen_f32();
         let band = match severity {
             InjuryGrade::Knock => return None,
             InjuryGrade::Hurt => roll * Self::MINOR_BAND,
@@ -357,7 +359,7 @@ impl InjuryType {
 
         if adjusted_roll < Self::MINOR_BAND {
             // 45% minor
-            match rand::random::<u8>() % 5 {
+            match IntegerUtils::random(0, 5) {
                 0 => InjuryType::Cramp,
                 1 => InjuryType::MinorKnock,
                 2 => InjuryType::Bruise,
@@ -366,7 +368,7 @@ impl InjuryType {
             }
         } else if adjusted_roll < 0.85 {
             // 40% moderate — heavily weighted toward muscle injuries in matches
-            match rand::random::<u8>() % 7 {
+            match IntegerUtils::random(0, 7) {
                 0 => InjuryType::HamstringStrain,
                 1 => InjuryType::CalfStrain,
                 2 => InjuryType::AnkleSprain,
@@ -377,7 +379,7 @@ impl InjuryType {
             }
         } else if adjusted_roll < 0.96 {
             // 11% severe
-            match rand::random::<u8>() % 6 {
+            match IntegerUtils::random(0, 6) {
                 0 => InjuryType::TornMeniscus,
                 1 => InjuryType::ShoulderDislocation,
                 2 => InjuryType::StressFracture,
@@ -387,7 +389,7 @@ impl InjuryType {
             }
         } else {
             // 4% critical
-            match rand::random::<u8>() % 4 {
+            match IntegerUtils::random(0, 4) {
                 0 => InjuryType::ACLTear,
                 1 => InjuryType::BrokenLeg,
                 2 => InjuryType::AchillesRupture,
@@ -403,7 +405,7 @@ impl InjuryType {
         natural_fitness: f32,
         injury_proneness: u8,
     ) -> InjuryType {
-        let roll: f32 = rand::random::<f32>();
+        let roll: f32 = RandomEngine::gen_f32();
 
         let severity_modifier = InjurySeverityShift::for_training(
             age,
@@ -416,7 +418,7 @@ impl InjuryType {
 
         if adjusted_roll < 0.50 {
             // 50% minor
-            match rand::random::<u8>() % 5 {
+            match IntegerUtils::random(0, 5) {
                 0 => InjuryType::Cramp,
                 1 => InjuryType::MinorKnock,
                 2 => InjuryType::Bruise,
@@ -425,7 +427,7 @@ impl InjuryType {
             }
         } else if adjusted_roll < 0.92 {
             // 42% moderate (training injuries are typically muscle strains)
-            match rand::random::<u8>() % 7 {
+            match IntegerUtils::random(0, 7) {
                 0 => InjuryType::HamstringStrain,
                 1 => InjuryType::CalfStrain,
                 2 => InjuryType::GroinStrain,
@@ -436,7 +438,7 @@ impl InjuryType {
             }
         } else if adjusted_roll < 0.98 {
             // 6% severe
-            match rand::random::<u8>() % 6 {
+            match IntegerUtils::random(0, 6) {
                 0 => InjuryType::TornMeniscus,
                 1 => InjuryType::ShoulderDislocation,
                 2 => InjuryType::StressFracture,
@@ -446,7 +448,7 @@ impl InjuryType {
             }
         } else {
             // 2% critical
-            match rand::random::<u8>() % 4 {
+            match IntegerUtils::random(0, 4) {
                 0 => InjuryType::ACLTear,
                 1 => InjuryType::BrokenLeg,
                 2 => InjuryType::AchillesRupture,
@@ -457,13 +459,13 @@ impl InjuryType {
 
     /// Pick a random daily spontaneous injury
     pub fn random_spontaneous_injury(age: u8, injury_proneness: u8) -> InjuryType {
-        let roll: f32 = rand::random::<f32>();
+        let roll: f32 = RandomEngine::gen_f32();
 
         let severity_modifier = InjurySeverityShift::for_spontaneous(age, injury_proneness);
         let adjusted_roll = roll + severity_modifier;
 
         if adjusted_roll < 0.65 {
-            match rand::random::<u8>() % 5 {
+            match IntegerUtils::random(0, 5) {
                 0 => InjuryType::MinorKnock,
                 1 => InjuryType::Cramp,
                 2 => InjuryType::Bruise,
@@ -471,7 +473,7 @@ impl InjuryType {
                 _ => InjuryType::MinorConcussion,
             }
         } else if adjusted_roll < 0.90 {
-            match rand::random::<u8>() % 7 {
+            match IntegerUtils::random(0, 7) {
                 0 => InjuryType::HamstringStrain,
                 1 => InjuryType::CalfStrain,
                 2 => InjuryType::AnkleSprain,
@@ -481,7 +483,7 @@ impl InjuryType {
                 _ => InjuryType::BackSpasm,
             }
         } else if adjusted_roll < 0.97 {
-            match rand::random::<u8>() % 6 {
+            match IntegerUtils::random(0, 6) {
                 0 => InjuryType::TornMeniscus,
                 1 => InjuryType::ShoulderDislocation,
                 2 => InjuryType::StressFracture,
@@ -490,7 +492,7 @@ impl InjuryType {
                 _ => InjuryType::HerniatedDisc,
             }
         } else {
-            match rand::random::<u8>() % 4 {
+            match IntegerUtils::random(0, 4) {
                 0 => InjuryType::ACLTear,
                 1 => InjuryType::BrokenLeg,
                 2 => InjuryType::AchillesRupture,

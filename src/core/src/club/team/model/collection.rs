@@ -7,7 +7,7 @@ use crate::club::staff::perception::{CoachProfile, date_to_week};
 use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
-use crate::utils::Logging;
+use crate::utils::SlowStep;
 use crate::{HappinessEventType, PlayerStatusType, Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 use rayon::iter::IntoParallelRefMutIterator;
@@ -40,8 +40,10 @@ impl TeamCollection {
         self.teams
             .par_iter_mut()
             .map(|team| {
-                let message = &format!("simulate team: {}", team.name);
-                Logging::estimate_result(|| team.simulate(ctx.with_team(team.id)), message)
+                let step = SlowStep::start();
+                let result = team.simulate(ctx.with_team(team.id));
+                step.finish(|| format!("simulate team: {}", team.name));
+                result
             })
             .collect()
     }

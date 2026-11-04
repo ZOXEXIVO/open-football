@@ -27,7 +27,7 @@
 //!   seller's `refusal_delta` and a one-line diagnostic for
 //!   `OF_TRACE_PLAYER`.
 
-use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::player::{ClubGroupRanks, PlayerView};
 use chrono::NaiveDate;
 
 use crate::club::CareerRunway;
@@ -210,33 +210,42 @@ impl LoanAssetGuard {
         seller_club_rep: u16,
     ) -> Option<Self> {
         let value = player.value(date, seller_league_rep, seller_club_rep);
-        Self::from_parts(club, player, date, seller_league_rep, value)
+        Self::from_parts(club, player, date, seller_league_rep, value, None)
     }
 
     /// The shared field build. `value` is passed in because the two
     /// entry points differ only there: the full guard prices him, and the
     /// destination-independent veto never reads the number and must not
-    /// pay for a valuation on a per-player-per-day sweep.
+    /// pay for a valuation on a per-player-per-day sweep. `ranks` is the
+    /// club's depth chart when a pass has already ranked it.
     fn from_parts(
         club: &Club,
         player: &Player,
         date: NaiveDate,
         parent_league_rep: u16,
         value: f64,
+        ranks: Option<&ClubGroupRanks>,
     ) -> Option<Self> {
         let contract = player.contract.as_ref()?;
         let team = club.teams.main().or_else(|| club.teams.teams.first())?;
         let group = player.position().position_group();
+        let (parent_rank, parent_best_in_group) = match ranks {
+            Some(ranks) => (ranks.ability_rank(player.id), ranks.best(group)),
+            None => (
+                PlayerView::position_group_rank(club, player.id, group),
+                PlayerView::best_observable_in_group(club, group),
+            ),
+        };
         Some(LoanAssetGuard {
             level: AbilityEstimator::observable_level(player),
             age: player.age(date),
             group,
             parent_anchor: ClubLevelAnchor::for_reputation(team.reputation.overall_score()),
-            parent_rank: PlayerView::position_group_rank(club, player.id, group),
+            parent_rank,
             starting_slots: SquadReviewPass::group_min_needed(group, team.tactics().positions())
                 .saturating_sub(1)
                 .max(1),
-            parent_best_in_group: PlayerView::best_observable_in_group(club, group),
+            parent_best_in_group,
             parent_league_rep,
             value,
             salary: contract.salary,
@@ -264,10 +273,31 @@ impl LoanAssetGuard {
         // resolved here, and the half-built guard is used for nothing
         // else. The valuation matters: this runs per player per day on
         // the country listing pass.
-        let Some(guard) = Self::from_parts(club, player, date, 0, 0.0) else {
+        let Some(guard) = Self::from_parts(club, player, date, 0, 0.0, None) else {
             return ParentWillingness::open();
         };
         ParentWillingness::of(&guard.parent_reading(club, player, date))
+    }
+
+    /// [`Self::willingness_for`] and [`Self::is_development`] off one
+    /// guard, with his depth read off the club's ranks — what a summary
+    /// stages for the foreign loan scan.
+    pub(in crate::transfers) fn parent_view(
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+        ranks: &ClubGroupRanks,
+    ) -> ParentLoanView {
+        let guard = Self::from_parts(club, player, date, 0, 0.0, Some(ranks));
+        ParentLoanView {
+            willingness: match guard {
+                Some(guard) if !MarketSwitches::loan_guard_off() => {
+                    ParentWillingness::of(&guard.parent_reading(club, player, date))
+                }
+                _ => ParentWillingness::open(),
+            },
+            development: guard.is_some_and(|guard| guard.is_development()),
+        }
     }
 
     /// Everything the parent can see about him, gathered from the club
@@ -427,19 +457,6 @@ impl LoanAssetGuard {
             && (self.parent_rank as usize) < self.starting_slots
     }
 
-    /// Would a loan of this man be a DEVELOPMENT loan — one he needs
-    /// because he is below his own club's level — rather than merely a
-    /// loan of somebody young?
-    ///
-    /// The one definition. The foreign sweep read a birth year, the
-    /// domestic one read the level, and the guard read both, so the same
-    /// player was a prospect on one path and a squad man on another.
-    pub fn development_loan(player: &Player, club: &Club, date: NaiveDate) -> bool {
-        Self::from_parts(club, player, date, 0, 0.0)
-            .map(|guard| guard.is_development())
-            .unwrap_or(false)
-    }
-
     /// Development means BELOW HIS CLUB'S LEVEL, not "young". The age band
     /// bounds it — past it a below-level player is a squad player, not a
     /// prospect — but a teenager who is already a first-team regular for
@@ -575,6 +592,15 @@ impl LoanAssetGuard {
             verdict.refusal_delta,
         )
     }
+}
+
+/// The parent's side of a loan of him, staged where his club is still in
+/// scope: how willing it is to lend him, and whether the loan would be a
+/// development one.
+#[derive(Debug, Clone, Copy)]
+pub struct ParentLoanView {
+    pub willingness: ParentWillingness,
+    pub development: bool,
 }
 
 /// One priced (player, borrower) pair.

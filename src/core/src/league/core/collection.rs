@@ -1,6 +1,6 @@
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueResult};
-use crate::{Club, Logging};
+use crate::{Club, SlowStep};
 
 #[derive(Clone)]
 pub struct LeagueCollection {
@@ -28,23 +28,15 @@ impl LeagueCollection {
                     .map(|(id, _)| *id)
                     .collect();
 
-                let message = &format!("simulate league: {}", league.name);
                 let league_slug = String::from(&league.slug);
 
-                Logging::estimate_result(
-                    || {
-                        league.simulate(
-                            clubs,
-                            ctx.with_league(
-                                league.id,
-                                league_slug,
-                                &league_team_ids,
-                                league.reputation,
-                            ),
-                        )
-                    },
-                    message,
-                )
+                let step = SlowStep::start();
+                let result = league.simulate(
+                    clubs,
+                    ctx.with_league(league.id, league_slug, &league_team_ids, league.reputation),
+                );
+                step.finish(|| format!("simulate league: {}", league.name));
+                result
             })
             .collect()
     }

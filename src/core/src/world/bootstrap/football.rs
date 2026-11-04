@@ -5,7 +5,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::world::SimulatorData;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 impl SimulatorData {
     /// Seed every rostered player's football absorbed once, at world
@@ -19,7 +19,7 @@ impl SimulatorData {
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
             .for_each(|country| {
-                let friendly_leagues: HashSet<u32> = country
+                let friendly_leagues: FxHashSet<u32> = country
                     .leagues
                     .leagues
                     .iter()

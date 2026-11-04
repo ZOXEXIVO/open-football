@@ -6,7 +6,7 @@ Captures the existing behavior of the background match-processing worker dispatc
 ## Requirements
 
 ### Requirement: Batch routing across local and remote capacity
-The system SHALL split a batch of matches to be played across available background workers and, optionally, a local processing share, using a shared pull-based work queue so that faster capacity picks up more work than slower capacity within the same batch.
+The system SHALL split a batch of matches to be played across available background workers and, optionally, a local processing share, using a shared pull-based work queue so that faster capacity picks up more work than slower capacity within the same batch. When no remote worker is ready, the local share SHALL play the whole batch in a single pass rather than in chunks, so that no match waits for the slowest match of an earlier chunk before it can start.
 
 #### Scenario: Batch dispatched to multiple ready workers
 - **WHEN** a batch of matches is dispatched and more than one worker is in the ready state
@@ -15,6 +15,11 @@ The system SHALL split a batch of matches to be played across available backgrou
 #### Scenario: Small batch stays local
 - **WHEN** a batch is small enough to be fully absorbed by the configured local processing share in a single chunk
 - **THEN** the batch is run entirely locally and no remote worker is contacted for it
+
+#### Scenario: No remote worker is ready
+- **WHEN** a batch larger than one local chunk is dispatched, the local share is enabled, and no remote worker is in the ready state
+- **THEN** the local pool plays the entire batch in one pass, every match starting as soon as a local thread is free
+- **AND** the results come back complete and in the batch's order
 
 ### Requirement: No available capacity falls back to the caller
 The system SHALL report an explicit failure to the caller when there is no local share configured and no worker is in the ready state, rather than silently dropping the batch.

@@ -24,7 +24,7 @@ use crate::club::team::Team;
 use crate::{Player, PlayerCollection, Staff};
 use chrono::Duration;
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Cutoff window for the "recent signing" turnover signal. Anyone whose
 /// last transfer falls inside this window contributes to the turnover
@@ -580,10 +580,10 @@ struct PairSample {
 
 impl PairWalk {
     fn collect(active: &[&Player]) -> Self {
-        let squad_ids: HashSet<u32> = active.iter().map(|p| p.id).collect();
+        let squad_ids: FxHashSet<u32> = active.iter().map(|p| p.id).collect();
         // Map keyed on the canonical ordered (lo, hi) pair so a
         // direction recorded on either side updates the same bucket.
-        let mut buckets: HashMap<(u32, u32), [Option<DirectionSample>; 2]> = HashMap::new();
+        let mut buckets: FxHashMap<(u32, u32), [Option<DirectionSample>; 2]> = FxHashMap::default();
         for p in active.iter() {
             for (target_id, rel) in p.relations.player_relations_iter() {
                 if !squad_ids.contains(target_id) {
@@ -713,7 +713,7 @@ const FACTION_HOSTILITY_THRESHOLD: f32 = 25.0;
 /// (≤32 typically) that the constant overhead doesn't matter.
 struct FactionWalk {
     /// One entry per active player, mapping player_id → component_root.
-    roots: HashMap<u32, u32>,
+    roots: FxHashMap<u32, u32>,
     /// Hostile cross-component edge count.
     hostile_cross: u32,
     /// Total hostile pair count (cross + within) used to scale tension.
@@ -725,13 +725,13 @@ struct FactionWalk {
 impl FactionWalk {
     fn collect(active: &[&Player]) -> Self {
         let mut uf = UnionFind::new(active.iter().map(|p| p.id));
-        let squad_ids: HashSet<u32> = active.iter().map(|p| p.id).collect();
+        let squad_ids: FxHashSet<u32> = active.iter().map(|p| p.id).collect();
 
         // Build undirected pair table from the same data PairWalk
         // walks, but average per-direction harmony BEFORE thresholding
         // so a one-sided strong bond doesn't elevate an otherwise weak
         // pair into a clique edge.
-        let mut pair_table: HashMap<(u32, u32), [Option<f32>; 2]> = HashMap::new();
+        let mut pair_table: FxHashMap<(u32, u32), [Option<f32>; 2]> = FxHashMap::default();
         for p in active.iter() {
             for (target_id, rel) in p.relations.player_relations_iter() {
                 if !squad_ids.contains(target_id) || *target_id == p.id {
@@ -778,7 +778,7 @@ impl FactionWalk {
             }
         }
 
-        let mut roots: HashMap<u32, u32> = HashMap::new();
+        let mut roots: FxHashMap<u32, u32> = FxHashMap::default();
         for &id in squad_ids.iter() {
             roots.insert(id, uf.find(id));
         }
@@ -797,7 +797,7 @@ impl FactionWalk {
         }
 
         // Group by root to enumerate components.
-        let mut comp_sizes: HashMap<u32, u32> = HashMap::new();
+        let mut comp_sizes: FxHashMap<u32, u32> = FxHashMap::default();
         for &root in self.roots.values() {
             *comp_sizes.entry(root).or_insert(0) += 1;
         }
@@ -833,14 +833,14 @@ impl FactionWalk {
 /// rank-tied union. Sized for active rosters (~32), so a Vec-backed
 /// dense store isn't worth the index translation cost.
 struct UnionFind {
-    parent: HashMap<u32, u32>,
-    rank: HashMap<u32, u32>,
+    parent: FxHashMap<u32, u32>,
+    rank: FxHashMap<u32, u32>,
 }
 
 impl UnionFind {
     fn new<I: IntoIterator<Item = u32>>(ids: I) -> Self {
-        let mut parent = HashMap::new();
-        let mut rank = HashMap::new();
+        let mut parent = FxHashMap::default();
+        let mut rank = FxHashMap::default();
         for id in ids {
             parent.insert(id, id);
             rank.insert(id, 0);
@@ -932,7 +932,7 @@ impl IntegrationParts {
             };
         }
 
-        let mut nat_counts: HashMap<u32, u16> = HashMap::new();
+        let mut nat_counts: FxHashMap<u32, u16> = FxHashMap::default();
         for p in active.iter() {
             *nat_counts.entry(p.country_id).or_insert(0) += 1;
         }
@@ -1188,7 +1188,7 @@ impl TeamSocialDebug {
 
     fn isolated_player_ids(active: &[&Player]) -> Vec<u32> {
         let walk = FactionWalk::collect(active);
-        let mut comp_size: HashMap<u32, u32> = HashMap::new();
+        let mut comp_size: FxHashMap<u32, u32> = FxHashMap::default();
         for &root in walk.roots.values() {
             *comp_size.entry(root).or_insert(0) += 1;
         }

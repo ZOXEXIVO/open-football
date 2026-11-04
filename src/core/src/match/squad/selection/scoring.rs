@@ -267,7 +267,7 @@ pub(crate) struct ScoringEngine {
     /// Squad roles belong to the roster which assigned them. A borrowed
     /// player brings only the club-wide verdicts
     /// ([`PlayerSquadStatus::carries_across_squads`]) into this team.
-    pub(crate) owning_roster: Option<std::collections::HashSet<u32>>,
+    pub(crate) owning_roster: Option<rustc_hash::FxHashSet<u32>>,
     pub(crate) profile: CoachProfile,
     /// Club philosophy tilts selection — DevelopAndSell pushes youth further
     /// up the XI, LoanFocused prefers loan signings when merit is close.

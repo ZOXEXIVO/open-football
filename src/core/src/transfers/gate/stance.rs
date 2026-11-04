@@ -463,7 +463,6 @@ mod tests {
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::CareerPlanView;
     use crate::transfers::gate::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
-    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
@@ -491,7 +490,7 @@ mod tests {
             adaptability: 6,
             leave_pressure: 0.55,
             stay_pressure: 0.1,
-            loan_willingness: ParentWillingness::open(),
+            parent_loan: None,
             career_plan: CareerPlanView::none(),
             parent_subsidy: 0.0,
             player_name: "Test".to_string(),
@@ -506,7 +505,6 @@ mod tests {
             skill_ability: 120,
             observable_level: 120,
             pathway_stage: PathwayStage::Rotation,
-            is_development: false,
             average_rating: 6.6,
             goals: 1,
             assists: 0,

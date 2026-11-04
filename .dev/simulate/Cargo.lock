@@ -282,6 +282,7 @@ dependencies = [
  "env_logger",
  "log",
  "mimalloc",
+ "rayon",
 ]
 
 [[package]]

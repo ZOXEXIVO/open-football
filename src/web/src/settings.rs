@@ -53,10 +53,16 @@ impl Settings {
                     .unwrap_or(4)
             });
 
+        // Baking runs on blocking threads, overlapped with the next simulated
+        // day, so it can take every core the tick is not using.
         let match_store_threads = env::var("MATCH_STORE_POOL_MAX_THREADS")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(4);
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            });
 
         let worker_mode = args.iter().any(|arg| arg == "--worker");
 

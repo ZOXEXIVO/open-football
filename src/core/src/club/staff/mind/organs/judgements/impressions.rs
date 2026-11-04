@@ -25,12 +25,12 @@ use crate::club::staff::perception::{
 };
 use crate::{Player, Staff, TeamType};
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct CoachDecisionState {
     pub profile: CoachProfile,
-    pub impressions: HashMap<u32, PlayerImpression>,
+    pub impressions: FxHashMap<u32, PlayerImpression>,
     pub coach_id: u32,
     pub current_week: u32,
     pub squad_satisfaction: f32,
@@ -55,7 +55,7 @@ impl CoachDecisionState {
     pub fn unbound() -> Self {
         CoachDecisionState {
             profile: CoachProfile::neutral(),
-            impressions: HashMap::new(),
+            impressions: FxHashMap::default(),
             coach_id: 0,
             current_week: 0,
             squad_satisfaction: 0.5,
@@ -68,7 +68,7 @@ impl CoachDecisionState {
     pub fn new(staff: &Staff, date: NaiveDate) -> Self {
         CoachDecisionState {
             profile: CoachProfile::from_staff(staff),
-            impressions: HashMap::new(),
+            impressions: FxHashMap::default(),
             coach_id: staff.id,
             current_week: date_to_week(date),
             squad_satisfaction: 0.5,

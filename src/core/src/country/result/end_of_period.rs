@@ -40,8 +40,8 @@ use crate::{
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
 
 struct LoanReturnEvent {
     player_id: u32,
@@ -86,7 +86,7 @@ enum LoanBuyoutDecision {
 /// featuring, and with no permanent option pending — is surplus the
 /// borrower over-loaned and should be returned to its parent early.
 struct WarehousedLoans {
-    kept_ids: HashSet<u32>,
+    kept_ids: FxHashSet<u32>,
 }
 
 impl WarehousedLoans {
@@ -98,7 +98,7 @@ impl WarehousedLoans {
     const UNUSED_APPS: u16 = 3;
 
     fn for_team(team: &Team) -> Self {
-        let mut kept_ids: HashSet<u32> = HashSet::new();
+        let mut kept_ids: FxHashSet<u32> = FxHashSet::default();
         let groups = [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
@@ -226,7 +226,7 @@ impl CountryResult {
         debug!("Processing season awards");
 
         // Build team_id -> club index mapping
-        let team_to_club: HashMap<u32, usize> = country
+        let team_to_club: FxHashMap<u32, usize> = country
             .clubs
             .iter()
             .enumerate()
@@ -340,7 +340,7 @@ impl CountryResult {
         }
 
         // Collect awards per club: (club_idx, prize_money, tv_money)
-        let mut club_awards: HashMap<usize, (i64, i64)> = HashMap::new();
+        let mut club_awards: FxHashMap<usize, (i64, i64)> = FxHashMap::default();
 
         for league in &country.leagues.leagues {
             if league.friendly {
@@ -554,7 +554,7 @@ impl CountryResult {
             cup_name: String,
             cup_league_id: u32,
             cup_reputation: u16,
-            final_appearance_ids: std::collections::HashSet<u32>,
+            final_appearance_ids: rustc_hash::FxHashSet<u32>,
         }
         let snapshot = {
             let cup = match country.domestic_cup.as_ref() {
@@ -570,7 +570,7 @@ impl CountryResult {
             // (e.g. an in-progress save, or details trimmed by storage
             // retention), the set is empty — the bonus is just skipped,
             // not a hard error.
-            let mut final_ids = std::collections::HashSet::new();
+            let mut final_ids = FxHashSet::default();
             if let Some((home_id, away_id)) = cup.champion_final_pairing(&country.clubs)
                 && let Some(last_tour) = cup.league.schedule.tours.last()
                 && let Some(item) = last_tour.items.first()
@@ -686,7 +686,7 @@ impl CountryResult {
         // the precomputed eligible set and emit per-player events +
         // award impact. The eligibility map (player_id → EligiblePlayer)
         // lets the player loop avoid re-deriving the cup stats.
-        let eligibility: std::collections::HashMap<u32, EligiblePlayer> =
+        let eligibility: rustc_hash::FxHashMap<u32, EligiblePlayer> =
             eligible.into_iter().map(|e| (e.player_id, e)).collect();
 
         for club in country.clubs.iter_mut() {
@@ -1826,7 +1826,7 @@ impl CountryResult {
 
         let mut events: Vec<LoanReturnEvent> = Vec::new();
         // One emergency recall per (parent, position group) per pass.
-        let mut emergency_taken: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+        let mut emergency_taken: FxHashSet<(u32, PlayerFieldPositionGroup)> = FxHashSet::default();
 
         for club in &country.clubs {
             for team in club.teams.iter() {
@@ -1980,7 +1980,7 @@ impl CountryResult {
                     player.age(date)
                 );
                 player.retire_from_squad(&from, date, reason);
-                country.retired_players.push(player);
+                country.retired_players.add(player);
             }
         }
     }
@@ -2168,7 +2168,7 @@ impl CountryResult {
     fn boundary_swap(
         leagues: &[crate::league::League],
         tier1_id: u32,
-        reserve_ceilings: &HashMap<u32, u8>,
+        reserve_ceilings: &FxHashMap<u32, u8>,
     ) -> Option<(Vec<(u32, u32)>, Vec<(u32, u32)>)> {
         let upper = leagues.iter().find(|l| l.id == tier1_id)?;
         let split: Vec<(u32, usize)> = LeagueLadder::new(leagues)
@@ -2267,14 +2267,14 @@ impl CountryResult {
 
     /// Every reserve side in a league (B team, U23, Jong) mapped to the tier
     /// its club's first team plays in.
-    fn reserve_ceilings(country: &Country) -> HashMap<u32, u8> {
-        let tier_of: HashMap<u32, u8> = country
+    fn reserve_ceilings(country: &Country) -> FxHashMap<u32, u8> {
+        let tier_of: FxHashMap<u32, u8> = country
             .leagues
             .leagues
             .iter()
             .map(|l| (l.id, l.settings.tier))
             .collect();
-        let mut ceilings = HashMap::new();
+        let mut ceilings = FxHashMap::default();
         for club in &country.clubs {
             let Some(main_tier) = club
                 .teams
@@ -2297,7 +2297,7 @@ impl CountryResult {
 
     /// Whether `team_id` may be promoted into `tier`: a reserve side must
     /// stay strictly below its first team.
-    fn may_go_up(reserve_ceilings: &HashMap<u32, u8>, team_id: u32, tier: u8) -> bool {
+    fn may_go_up(reserve_ceilings: &FxHashMap<u32, u8>, team_id: u32, tier: u8) -> bool {
         reserve_ceilings
             .get(&team_id)
             .is_none_or(|&main_tier| tier > main_tier)
@@ -2314,7 +2314,7 @@ impl CountryResult {
     #[allow(clippy::type_complexity)]
     fn split_competition_swap_pairs(
         leagues: &[crate::league::League],
-    ) -> (Vec<(u32, u32, Vec<u32>, Vec<u32>)>, HashSet<u32>) {
+    ) -> (Vec<(u32, u32, Vec<u32>, Vec<u32>)>, FxHashSet<u32>) {
         use std::collections::BTreeMap;
 
         // competition name → zone leagues (tier-1, split, grouped).
@@ -2332,7 +2332,7 @@ impl CountryResult {
         }
 
         let mut pairs: Vec<(u32, u32, Vec<u32>, Vec<u32>)> = Vec::new();
-        let mut handled: HashSet<u32> = HashSet::new();
+        let mut handled: FxHashSet<u32> = FxHashSet::default();
 
         for (_, mut zones) in competitions {
             if zones.len() < 2 {
@@ -2432,7 +2432,7 @@ impl CountryResult {
         promoted: &[(u32, u32)],
         promoted_club_ids: &mut Vec<u32>,
     ) {
-        let relegated_to: HashMap<u32, u32> = relegated.iter().copied().collect();
+        let relegated_to: FxHashMap<u32, u32> = relegated.iter().copied().collect();
         let relegated_team_ids: Vec<u32> = relegated.iter().map(|&(team, _)| team).collect();
         let promoted_team_ids: Vec<u32> = promoted.iter().map(|&(team, _)| team).collect();
         let mut lower_ids: Vec<u32> = relegated
@@ -2462,7 +2462,7 @@ impl CountryResult {
         // relegation event can carry SeasonOutcomeContext (final
         // position, points, gap to safety) without re-borrowing
         // the league inside the upcoming `&mut country.clubs` loop.
-        let relegation_outcome_by_team: HashMap<u32, (u8, u16, i16)> = country
+        let relegation_outcome_by_team: FxHashMap<u32, (u8, u16, i16)> = country
             .leagues
             .leagues
             .iter()
@@ -2528,7 +2528,7 @@ impl CountryResult {
         // A side in a senior division (Castilla, Jong Ajax, Zenit 2) moves
         // on its own result alone; only youth and friendly sides follow
         // their first team down or up.
-        let senior_league_ids: HashSet<u32> = country
+        let senior_league_ids: FxHashSet<u32> = country
             .leagues
             .leagues
             .iter()
@@ -2750,7 +2750,7 @@ impl CountryResult {
         // Collect (team_id, in_zone, near_zone) from each non-friendly
         // league with a meaningful relegation slot count and enough
         // season progress to register pressure.
-        let mut at_risk_teams: HashMap<u32, (u32, u8, u16, i16, u8)> = HashMap::new();
+        let mut at_risk_teams: FxHashMap<u32, (u32, u8, u16, i16, u8)> = FxHashMap::default();
 
         for league in &country.leagues.leagues {
             if league.friendly || league.settings.relegation_spots == 0 {

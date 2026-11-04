@@ -19,6 +19,8 @@ use crate::transfers::view::club::ClubView;
 use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use log::debug;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::cell::OnceCell;
 use std::sync::Arc;
 
 use crate::SimulatorData;
@@ -149,6 +151,12 @@ impl ForeignApproachPass {
         let mut candidates: Vec<ForeignCandidate> = Vec::new();
 
         if let Some(country) = data.country(country_id) {
+            // The country's own players, gathered the first time a
+            // shortlist entry the index cannot place asks whether he is
+            // local. Nothing below writes, so the market is read once.
+            let own_players: OnceCell<FxHashSet<u32>> = OnceCell::new();
+            let active_counts: OnceCell<FxHashMap<u32, u32>> = OnceCell::new();
+            let active_pairs: OnceCell<FxHashSet<(u32, u32)>> = OnceCell::new();
             for club in &country.clubs {
                 let plan = &club.transfer_plan;
                 if !plan.initialized || !plan.can_start_negotiation() {
@@ -163,9 +171,11 @@ impl ForeignApproachPass {
                     continue;
                 }
 
-                let actual_active = country
-                    .transfer_market
-                    .active_negotiation_count_for_club(club.id);
+                let actual_active = active_counts
+                    .get_or_init(|| country.transfer_market.active_negotiation_counts())
+                    .get(&club.id)
+                    .copied()
+                    .unwrap_or(0);
                 if actual_active >= plan.max_concurrent_negotiations {
                     continue;
                 }
@@ -210,15 +220,27 @@ impl ForeignApproachPass {
                     };
 
                     // Only process if player is NOT in the local country
-                    let is_local =
-                        PlayerView::find_player_in_country(country, candidate.player_id).is_some();
+                    let is_local = match data.indexed_player_place(candidate.player_id) {
+                        Some((found_in, ..)) => found_in == country_id,
+                        None => own_players
+                            .get_or_init(|| {
+                                country
+                                    .clubs
+                                    .iter()
+                                    .flat_map(|club| club.teams.teams.iter())
+                                    .flat_map(|team| team.players.players.iter())
+                                    .map(|player| player.id)
+                                    .collect()
+                            })
+                            .contains(&candidate.player_id),
+                    };
                     if is_local {
                         continue;
                     }
 
-                    if country
-                        .transfer_market
-                        .has_active_negotiation_for(candidate.player_id, club.id)
+                    if active_pairs
+                        .get_or_init(|| country.transfer_market.active_negotiation_pairs())
+                        .contains(&(candidate.player_id, club.id))
                     {
                         continue;
                     }
@@ -765,7 +787,8 @@ impl ForeignApproachPass {
             found?;
 
         let sell_country = data.country(sell_country_id)?;
-        let player = PlayerView::find_player_in_country(sell_country, player_id)?;
+        let sell_club = sell_country.clubs.iter().find(|c| c.id == sell_club_id)?;
+        let player = PlayerView::find_player_in_club(sell_club, player_id)?;
         if player.is_on_loan() {
             return None;
         }
@@ -780,7 +803,6 @@ impl ForeignApproachPass {
             return None;
         }
 
-        let sell_club = sell_country.clubs.iter().find(|c| c.id == sell_club_id)?;
         let asking_price = AskingPrice::calculate_asking_price(
             player,
             sell_country,

@@ -493,8 +493,8 @@ impl MatchdayLeadership {
     }
 
     /// Resolve the armband over a selected `MatchPlayer` XI and return the
-    /// chosen captain / vice as clones drawn from that XI, so the stored ids
-    /// always point at genuinely selected starters. `persistent_*` carry the
+    /// chosen captain / vice, both drawn from that XI, so the ids always
+    /// point at genuinely selected starters. `persistent_*` carry the
     /// club hierarchy (pass `None` for national teams).
     ///
     /// `date` drives the age read on each candidate — passed in rather than
@@ -505,15 +505,13 @@ impl MatchdayLeadership {
         persistent_vice: Option<u32>,
         main_squad: &[MatchPlayer],
         date: NaiveDate,
-    ) -> (Option<MatchPlayer>, Option<MatchPlayer>) {
+    ) -> (Option<u32>, Option<u32>) {
         let candidates: Vec<LeadershipCandidate> = main_squad
             .iter()
             .map(|p| LeadershipCandidate::from_match_player_at(p, date))
             .collect();
         let resolved = Self::resolve(persistent_captain, persistent_vice, &candidates);
-        let pick =
-            |id: Option<u32>| id.and_then(|id| main_squad.iter().find(|p| p.id == id).cloned());
-        (pick(resolved.captain_id), pick(resolved.vice_captain_id))
+        (resolved.captain_id, resolved.vice_captain_id)
     }
 
     /// An id only counts as present if its holder is in the candidate pool

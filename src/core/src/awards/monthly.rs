@@ -13,8 +13,8 @@ use crate::{
 use chrono::NaiveDate;
 use chrono::{Datelike, Duration};
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 const MONTHLY_TOP_N: usize = 5;
 const MONTHLY_RATING_MIN_APPS: u8 = 2;
@@ -143,7 +143,7 @@ impl MonthlyAwardsTick {
 
     fn pick_pom(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         league_reputation: u16,
         month_end: NaiveDate,
     ) -> Option<MonthlyPlayerAward> {
@@ -154,7 +154,7 @@ impl MonthlyAwardsTick {
 
     fn pick_young_pom(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         league_reputation: u16,
         today: NaiveDate,
         month_end: NaiveDate,
@@ -202,10 +202,10 @@ impl MonthlyAwardsTick {
     /// for both the open and Young (≤21) variants.
     fn build_team(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
         eligibility: impl Fn(u32) -> bool,
     ) -> Vec<TeamOfTheWeekSlot> {
-        let filtered: HashMap<u32, CandidateAggregate> = scores
+        let filtered: FxHashMap<u32, CandidateAggregate> = scores
             .iter()
             .filter(|(id, _)| eligibility(**id))
             .map(|(id, a)| (*id, *a))
@@ -246,7 +246,7 @@ impl MonthlyAwardsTick {
 
     fn top_scorers(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
     ) -> Vec<MonthlyStatLeader> {
         let mut all: Vec<(u32, CandidateAggregate)> = scores
             .iter()
@@ -272,7 +272,7 @@ impl MonthlyAwardsTick {
 
     fn top_assists(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
     ) -> Vec<MonthlyStatLeader> {
         let mut all: Vec<(u32, CandidateAggregate)> = scores
             .iter()
@@ -298,7 +298,7 @@ impl MonthlyAwardsTick {
 
     fn best_ratings(
         data: &SimulatorData,
-        scores: &HashMap<u32, CandidateAggregate>,
+        scores: &FxHashMap<u32, CandidateAggregate>,
     ) -> Vec<MonthlyStatLeader> {
         let mut all: Vec<(u32, CandidateAggregate)> = scores
             .iter()

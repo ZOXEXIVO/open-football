@@ -1,8 +1,10 @@
 //! Deterministic roll source for the development tick.
 //!
-//! Production code uses [`ThreadRolls`] which forwards to `rand::random()`.
+//! Production code uses [`ThreadRolls`] which forwards to `RandomEngine::gen_f32`.
 //! Tests use [`FixedRolls`] (every roll returns the same value) so a
 //! development tick produces stable, inspectable output.
+
+use crate::utils::random::engine::RandomEngine;
 
 /// Source of uniform random numbers in `[0.0, 1.0)`. Implementations are
 /// expected to be cheap and stateful (each call advances the stream).
@@ -16,7 +18,7 @@ pub struct ThreadRolls;
 impl RollSource for ThreadRolls {
     #[inline]
     fn roll_unit(&mut self) -> f32 {
-        rand::random::<f32>()
+        RandomEngine::gen_f32()
     }
 }
 

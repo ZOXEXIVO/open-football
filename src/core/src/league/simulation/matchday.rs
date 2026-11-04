@@ -1,3 +1,4 @@
+use crate::club::finance::RevenueModel;
 use crate::club::staff::perception::DevelopmentFormEvidence;
 use crate::context::GlobalContext;
 use crate::league::{
@@ -6,7 +7,6 @@ use crate::league::{
 use crate::r#match::MatchSquad;
 use crate::r#match::squad::selection::helpers::PlayerAvailability;
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::club::finance::RevenueModel;
 use crate::r#match::{
     CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
 };
@@ -15,23 +15,25 @@ use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
 
 /// Per-matchday snapshot of clubs and teams indexed by id. Built once
 /// at the top of `play_scheduled_matches` so `build_match` and friends
 /// can fan out lookups in O(1) instead of re-scanning every club's
 /// team list per fixture.
 struct MatchdayLookup<'a> {
-    team_by_id: HashMap<u32, &'a Team>,
-    club_by_id: HashMap<u32, &'a Club>,
+    team_by_id: FxHashMap<u32, &'a Team>,
+    club_by_id: FxHashMap<u32, &'a Club>,
 }
 
 impl<'a> MatchdayLookup<'a> {
     fn build(clubs: &'a [Club]) -> Self {
         let estimated_teams = clubs.len() * 4;
-        let mut team_by_id: HashMap<u32, &'a Team> = HashMap::with_capacity(estimated_teams);
-        let mut club_by_id: HashMap<u32, &'a Club> = HashMap::with_capacity(clubs.len());
+        let mut team_by_id: FxHashMap<u32, &'a Team> =
+            FxHashMap::with_capacity_and_hasher(estimated_teams, Default::default());
+        let mut club_by_id: FxHashMap<u32, &'a Club> =
+            FxHashMap::with_capacity_and_hasher(clubs.len(), Default::default());
         for club in clubs {
             club_by_id.insert(club.id, club);
             for team in &club.teams.teams {
@@ -544,7 +546,7 @@ impl League {
         club: &'a Club,
         team_id: u32,
         is_friendly: bool,
-        spoken_for: &HashSet<u32>,
+        spoken_for: &FxHashSet<u32>,
         reserves: &mut Vec<&'a Player>,
     ) {
         // A starter plus one substitute keeper. Borrowing is capped at this so
@@ -957,7 +959,7 @@ impl League {
 /// and is never lent to another of his club's sides.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct MatchdayCommitments {
-    teams: HashSet<u32>,
+    teams: FxHashSet<u32>,
 }
 
 impl MatchdayCommitments {
@@ -981,7 +983,7 @@ impl MatchdayCommitments {
     /// whose own side plays, and — when a more senior side of the club
     /// plays too — everyone, because the club lends to one side a day and
     /// the most senior is served first.
-    fn spoken_for(&self, club: &Club, assembling_team_id: u32) -> HashSet<u32> {
+    fn spoken_for(&self, club: &Club, assembling_team_id: u32) -> FxHashSet<u32> {
         let rank = |t: &Team| (t.team_type.seniority(), t.id);
         let outranked = club
             .teams
@@ -1130,7 +1132,7 @@ impl YouthSeniorCallUp {
         club: &'a Club,
         main_team_id: u32,
         is_friendly: bool,
-        spoken_for: &HashSet<u32>,
+        spoken_for: &FxHashSet<u32>,
         reserves: &mut Vec<&'a Player>,
     ) {
         let Some(main) = club.teams.teams.iter().find(|t| t.id == main_team_id) else {
@@ -1237,10 +1239,10 @@ impl MatchdayShortfall {
         club: &'a Club,
         team_id: u32,
         is_friendly: bool,
-        spoken_for: &HashSet<u32>,
+        spoken_for: &FxHashSet<u32>,
         reserves: &mut Vec<&'a Player>,
     ) {
-        let mut offered: HashSet<u32> = reserves.iter().map(|p| p.id).collect();
+        let mut offered: FxHashSet<u32> = reserves.iter().map(|p| p.id).collect();
         let own = club
             .teams
             .teams
@@ -1314,7 +1316,7 @@ impl KeeperCallUp {
         main_team_id: u32,
         is_friendly: bool,
         date: NaiveDate,
-        spoken_for: &HashSet<u32>,
+        spoken_for: &FxHashSet<u32>,
         reserves: &mut Vec<&'a Player>,
     ) {
         let called_up: Vec<&'a Player> = club

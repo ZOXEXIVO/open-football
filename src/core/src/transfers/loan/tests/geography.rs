@@ -2,7 +2,7 @@
 //! goes: the lender's own placement network, the borrower's registration
 //! room and reach, and what the player makes of the place.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::NaiveDate;
 
@@ -35,7 +35,7 @@ impl Geo {
     }
 
     fn map() -> MarketMap {
-        let mut facts = HashMap::new();
+        let mut facts = FxHashMap::default();
         for (id, code, continent, top_flight) in [
             (Self::HOME, "nl", 1u32, 6500u16),
             (Self::WORKED, "be", 1, 3500),
@@ -54,7 +54,7 @@ impl Geo {
                 },
             );
         }
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         profiles.insert(
             Self::HOME,
             CountryTransferProfile {

@@ -52,7 +52,7 @@ pub enum FirstTeamFootballAsk {
 /// `GlobalContext` so the desire logic stays unit-testable and the
 /// player code never walks the simulator world.
 #[derive(Debug, Clone, Default)]
-pub struct TransferDesireContext {
+pub struct TransferDesireContext<'a> {
     /// Country id of the player's current club. 0 if unknown.
     pub club_country_id: u32,
     /// Continent id of the player's current club country (matches the
@@ -65,7 +65,7 @@ pub struct TransferDesireContext {
     pub player_nationality_continent_id: Option<u32>,
     /// Country / club country code for the local-language check.
     /// Empty if unknown.
-    pub country_code: String,
+    pub country_code: &'a str,
     /// League reputation (0..10000). 0 if unknown.
     pub league_reputation: u16,
     /// Club reputation 0..1 normalised. 0.0 if unknown.
@@ -113,7 +113,7 @@ pub struct TransferDesireContext {
     pub squad_team_type: Option<TeamType>,
 }
 
-impl TransferDesireContext {
+impl<'a> TransferDesireContext<'a> {
     /// Build the desire context from the active `GlobalContext` and
     /// the player. Reads only what the global context already
     /// surfaces (club country / continent / league reputation /
@@ -126,12 +126,8 @@ impl TransferDesireContext {
     /// knows only `country_id`, the simulator knows the country →
     /// continent mapping. Without it (zero), all continent gates
     /// fail closed.
-    pub fn from_global(player: &Player, gc: &GlobalContext<'_>) -> Self {
-        let country_code = gc
-            .country
-            .as_ref()
-            .map(|c| c.code.clone())
-            .unwrap_or_default();
+    pub fn from_global(player: &Player, gc: &'a GlobalContext<'_>) -> Self {
+        let country_code = gc.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
         let club_country_id = gc.country.as_ref().map(|c| c.id).unwrap_or(0);
         let club_continent_id = gc.continent.as_ref().map(|c| c.id()).unwrap_or(0);
         // Reputation of the competitive stage this player's club occupies.
@@ -188,7 +184,7 @@ impl TransferDesireContext {
         // first-class continental ban so the elite-reputation shortcut
         // cannot paper over a real federation suspension.
         let country_uefa_suspended =
-            TransferRoutePolicy::is_uefa_suspended(&country_code, gc.simulation.date.date());
+            TransferRoutePolicy::is_uefa_suspended(country_code, gc.simulation.date.date());
 
         // Continental-access picture — see
         // [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
@@ -578,23 +574,22 @@ impl Player {
     /// Reads a [`TransferDesireContext`] built once per weekly tick by
     /// `Player::simulate` from `GlobalContext` so the player code never
     /// walks the simulator world.
+    /// Whether he can want a move at all: a loanee belongs to his parent
+    /// club, and an under-16 has no request to make, only a free release.
+    pub(crate) fn may_seek_transfer(&self, now: NaiveDate) -> bool {
+        !self.is_on_loan() && DateUtils::age(self.birth_date, now) >= 16
+    }
+
     pub(crate) fn process_transfer_desire(
         &mut self,
         result: &mut PlayerResult,
         now: NaiveDate,
         ctx: &TransferDesireContext,
     ) {
-        // Loaned players belong to their parent club — they cannot request
-        // transfers or be unhappy with salary at the loan club
-        if self.is_on_loan() {
+        if !self.may_seek_transfer(now) {
             return;
         }
-
-        // Under-16 players cannot request transfers — only free release
         let age = DateUtils::age(self.birth_date, now);
-        if age < 16 {
-            return;
-        }
 
         // Honeymoon: newly-transferred players don't fire off a request in
         // the first 21 days regardless of shock events — they need a fair
@@ -1374,31 +1369,35 @@ impl Player {
             // reads. No formation here (we don't carry it through the
             // weekly tick); the formation arm of `adaptation_score`
             // contributes ±10 at most so the missing input only damps
-            // the signal.
-            let squad_ctx = AdaptationSquadContext {
-                same_language_teammates: self
-                    .squad_social_view
-                    .as_ref()
-                    .map(|v| v.same_language_teammates)
-                    .unwrap_or(0),
-                same_nationality_teammates: self
-                    .squad_social_view
-                    .as_ref()
-                    .map(|v| v.same_nationality_teammates)
-                    .unwrap_or(0),
-                mentor_quality: None,
-                squad_chemistry: 50.0,
-                manager_relation_level: 0.0,
-                is_loan: self.is_on_loan(),
-                is_favorite_club: ctx.destination_is_favourite,
+            // the signal. Zero stands for "not computed".
+            let adaptation_score = if self.adaptation_score_is_read(now) {
+                let squad_ctx = AdaptationSquadContext {
+                    same_language_teammates: self
+                        .squad_social_view
+                        .as_ref()
+                        .map(|v| v.same_language_teammates)
+                        .unwrap_or(0),
+                    same_nationality_teammates: self
+                        .squad_social_view
+                        .as_ref()
+                        .map(|v| v.same_nationality_teammates)
+                        .unwrap_or(0),
+                    mentor_quality: None,
+                    squad_chemistry: 50.0,
+                    manager_relation_level: 0.0,
+                    is_loan: self.is_on_loan(),
+                    is_favorite_club: ctx.destination_is_favourite,
+                };
+                self.adaptation_score(
+                    now,
+                    &ctx.country_code,
+                    ctx.club_reputation,
+                    None,
+                    &squad_ctx,
+                )
+            } else {
+                0.0
             };
-            let adaptation_score = self.adaptation_score(
-                now,
-                &ctx.country_code,
-                ctx.club_reputation,
-                None,
-                &squad_ctx,
-            );
             let signals = AdaptationFailureSignals {
                 player_nationality_continent_id: ctx.player_nationality_continent_id,
                 club_continent_id: ctx.club_continent_id,
@@ -2085,7 +2084,7 @@ mod career_desire_tests {
     }
 
     /// An elite club: reputation 8000 on the 0..10000 scale.
-    fn elite_ctx() -> TransferDesireContext {
+    fn elite_ctx() -> TransferDesireContext<'static> {
         TransferDesireContext {
             club_reputation: 0.80,
             league_reputation: 8_000,
@@ -2544,7 +2543,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 17.0, 12.0, 10.0, 12.0, 1, 150, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "gb".to_string(),
+            country_code: "gb",
             club_continent_id: 1,
             player_nationality_continent_id: Some(1),
             league_reputation: 9000,
@@ -2567,7 +2566,7 @@ mod career_desire_tests {
         // CA only 90 — wouldn't realistically land at a UCL club.
         let mut p = build(26, 17.0, 12.0, 10.0, 12.0, 1, 90, 2500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "gb".to_string(),
+            country_code: "gb",
             club_continent_id: 1,
             player_nationality_continent_id: Some(1),
             league_reputation: 9000,
@@ -2584,7 +2583,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 17.0, 12.0, 10.0, 12.0, 1, 150, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "gb".to_string(),
+            country_code: "gb",
             club_continent_id: 1,
             player_nationality_continent_id: Some(1),
             league_reputation: 9000,
@@ -2603,7 +2602,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(24, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "jp".to_string(),
+            country_code: "jp",
             club_continent_id: 4,
             player_nationality_continent_id: Some(3),
             league_reputation: 4000,
@@ -2626,7 +2625,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 30, 140, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "ar".to_string(),
+            country_code: "ar",
             club_continent_id: 3, // South America
             player_nationality_continent_id: Some(3),
             league_reputation: 4500, // sub-Libertadores tier
@@ -2645,7 +2644,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 140, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             club_continent_id: 1,
             player_nationality_continent_id: Some(1),
             league_reputation: 9000,
@@ -2662,7 +2661,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 9.0, 12.0, 10.0, 12.0, 30, 150, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "jp".to_string(),
+            country_code: "jp",
             club_continent_id: 4,
             player_nationality_continent_id: Some(3),
             league_reputation: 5000,
@@ -2683,7 +2682,7 @@ mod career_desire_tests {
         p.happiness.factors.club_fit = -5.0;
         let mut result = PlayerResult::new(p.id);
         let ctx = TransferDesireContext {
-            country_code: "jp".to_string(),
+            country_code: "jp",
             club_continent_id: 4,
             player_nationality_continent_id: Some(3),
             league_reputation: 4000,
@@ -2721,7 +2720,7 @@ mod career_desire_tests {
         );
         p.happiness.factors.salary_satisfaction = -6.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -2765,7 +2764,7 @@ mod career_desire_tests {
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
         p.happiness.factors.ambition_fit = -10.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -2796,7 +2795,7 @@ mod career_desire_tests {
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
         p.happiness.factors.ambition_fit = -3.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -2818,7 +2817,7 @@ mod career_desire_tests {
         let mut p = build(24, 12.0, 12.0, 14.0, 12.0, 1, 150, 6000, 400, today);
         p.happiness.factors.ambition_fit = -12.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -2846,7 +2845,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 4000, 400, today);
         let ctx = TransferDesireContext {
-            country_code: "nl".to_string(),
+            country_code: "nl",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             ..Default::default()
@@ -2880,7 +2879,7 @@ mod career_desire_tests {
         p.happiness
             .add_event(HappinessEventType::MoveVetoedByClub, -6.0);
         let ctx = TransferDesireContext {
-            country_code: "nl".to_string(),
+            country_code: "nl",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             ..Default::default()
@@ -2902,7 +2901,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             league_reputation: 9200,
             ..Default::default()
@@ -2926,7 +2925,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 17.0, 2.0, 18.0, 13.0, 1, 128, 4000, 400, today);
         let ctx = TransferDesireContext {
-            country_code: "ru".to_string(),
+            country_code: "ru",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             country_uefa_suspended: true,
@@ -2949,7 +2948,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 17.0, 12.0, 18.0, 12.0, 1, 145, 5000, 400, today);
         let ctx = TransferDesireContext {
-            country_code: "ru".to_string(),
+            country_code: "ru",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             country_uefa_suspended: true,
@@ -2975,7 +2974,7 @@ mod career_desire_tests {
         let player = build(24, 16.0, 12.0, 10.0, 12.0, 1, 145, 4000, 400, today);
 
         let isolated_ctx = TransferDesireContext {
-            country_code: "ru".to_string(),
+            country_code: "ru",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             country_uefa_suspended: true,
@@ -2983,7 +2982,7 @@ mod career_desire_tests {
         };
 
         let open_ctx = TransferDesireContext {
-            country_code: "nl".to_string(),
+            country_code: "nl",
             player_nationality_continent_id: Some(1),
             league_reputation: 6000,
             ..Default::default()
@@ -3013,7 +3012,7 @@ mod career_desire_tests {
         let mut p = build(28, 17.0, 12.0, 8.0, 12.0, 1, 150, 6000, 9 * 365, today);
         p.happiness.factors.ambition_fit = 2.0; // club still fits — not outgrown
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -3040,7 +3039,7 @@ mod career_desire_tests {
         let mut p = build(28, 17.0, 12.0, 18.0, 12.0, 1, 150, 6000, 9 * 365, today);
         p.happiness.factors.ambition_fit = 2.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -3061,7 +3060,7 @@ mod career_desire_tests {
         let mut p = build(28, 17.0, 12.0, 8.0, 12.0, 1, 150, 6000, 2 * 365, today);
         p.happiness.factors.ambition_fit = 2.0;
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -3087,7 +3086,7 @@ mod career_desire_tests {
             PlayerStatusType::Unh,
         );
         let ctx = TransferDesireContext {
-            country_code: "es".to_string(),
+            country_code: "es",
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
@@ -3185,10 +3184,10 @@ mod career_desire_tests {
     fn desire_ctx_from_access(
         access: &ContinentalAccessContext,
         player_continent: u32,
-    ) -> TransferDesireContext {
+    ) -> TransferDesireContext<'static> {
         let hint = ContinentalPathHeuristic::from_access(access).is_on_path(access);
         TransferDesireContext {
-            country_code: "gb".to_string(),
+            country_code: "gb",
             club_continent_id: access.club_continent_id,
             player_nationality_continent_id: Some(player_continent),
             league_reputation: access.league_reputation,
@@ -3432,7 +3431,7 @@ mod career_desire_tests {
         // detector into the "wants tutor" range.
         p.squad_social_view = Some(SquadSocialView::default());
         let ctx = TransferDesireContext {
-            country_code: "jp".to_string(),
+            country_code: "jp",
             player_nationality_continent_id: Some(3),
             club_continent_id: 4,
             ..Default::default()
@@ -3471,7 +3470,7 @@ mod career_desire_tests {
             LifeSimulationDesireKind::ClubLegendRefusesLeave,
             LifeSimulationDesireKind::RefusesRivalMoveDespiteUpgrade,
         ];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = rustc_hash::FxHashSet::default();
         for k in kinds {
             let key = k.as_i18n_key();
             assert!(!key.is_empty());
@@ -3545,7 +3544,7 @@ mod career_desire_tests {
         let today = d(2026, 5, 1);
         let mut p = build(26, 17.0, 12.0, 10.0, 12.0, 1, 150, 5500, 60, today);
         let ctx = TransferDesireContext {
-            country_code: "ru".to_string(),
+            country_code: "ru",
             club_continent_id: 1,
             player_nationality_continent_id: Some(1),
             league_reputation: 7000,

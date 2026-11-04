@@ -51,8 +51,9 @@ use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::scouting::ScoutingPass;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::world::ForeignPool;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
@@ -141,7 +142,7 @@ struct InvestmentRelevance {
     top_k: usize,
     /// The buyer's believed abilities in each position group, descending.
     /// Built once per buyer per pass.
-    believed_by_group: HashMap<PlayerFieldPositionGroup, Vec<f32>>,
+    believed_by_group: FxHashMap<PlayerFieldPositionGroup, Vec<f32>>,
     /// The club's best `judging_player_ability` — how sharp the belief is.
     judging: u8,
     club_id: u32,
@@ -168,7 +169,8 @@ impl InvestmentRelevance {
             .round()
             .max(1.0) as usize;
 
-        let mut believed_by_group: HashMap<PlayerFieldPositionGroup, Vec<f32>> = HashMap::new();
+        let mut believed_by_group: FxHashMap<PlayerFieldPositionGroup, Vec<f32>> =
+            FxHashMap::default();
         if let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) {
             for p in team.players.players.iter() {
                 let opinion = ClubOpinion::of(club.id, p.id, judging);
@@ -218,7 +220,7 @@ impl InvestmentRelevance {
 struct BuyerRead<'a> {
     scan: &'a BuyerScan,
     relevance: &'a InvestmentRelevance,
-    reach: &'a HashSet<ScoutingRegion>,
+    reach: &'a FxHashSet<ScoutingRegion>,
     plausibility: &'a BuyerPlausibilityContext,
 }
 
@@ -316,7 +318,7 @@ impl FormWatch {
     /// the world while a minnow's stops at the border.
     pub fn scan_breakout_form(
         country: &mut Country,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         date: NaiveDate,
     ) {
         // Weekly cadence, independent of the transfer window.
@@ -541,7 +543,7 @@ impl FormWatch {
     /// evidence, which makes his bar effectively higher, never lower.
     fn add_foreign_candidates(
         country: &Country,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         best_league_reputation: u16,
         candidates: &mut Vec<BreakoutCandidate>,
     ) {
@@ -556,7 +558,6 @@ impl FormWatch {
         let country_reputation = country.reputation;
         for s in foreign_players
             .iter()
-            .copied()
             .filter(|s| s.country_reputation <= country_reputation)
         {
             let breakout = BreakoutPerformanceSignal::compute(&BreakoutInputs {
@@ -810,7 +811,7 @@ impl FormWatch {
         // demand-driven scouting pass uses. This one gate is what
         // keeps "form travels" meaning "as far as your scouts do".
         let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-        let reach: HashSet<ScoutingRegion> =
+        let reach: FxHashSet<ScoutingRegion> =
             ScoutingPass::reputation_scout_regions(home_region, club_overall_score)
                 .into_iter()
                 .collect();
@@ -1045,7 +1046,6 @@ mod breakout_watch_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::loan::agreement::ParentWillingness;
     use crate::transfers::pipeline::{
         SellerPlausibilityContext, TransferNeedReason, TransferRequestStatus,
     };
@@ -1211,7 +1211,7 @@ mod breakout_watch_tests {
                 adaptability: 12,
                 leave_pressure: 0.0,
                 stay_pressure: 0.0,
-                loan_willingness: ParentWillingness::open(),
+                parent_loan: None,
                 career_plan: CareerPlanView::none(),
                 parent_subsidy: 0.0,
                 player_name: "Foreign Star".into(),
@@ -1226,7 +1226,6 @@ mod breakout_watch_tests {
                 skill_ability: ability,
                 observable_level: ability,
                 pathway_stage: PathwayStage::Rotation,
-                is_development: false,
                 average_rating: 8.4,
                 goals: 23,
                 assists: 3,
@@ -1290,9 +1289,9 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
-        let pool: Vec<&PlayerSummary> = vec![&star];
+        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
 
-        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
 
         let plan = &country.clubs[0].transfer_plan;
         assert!(
@@ -1322,9 +1321,9 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
-        let pool: Vec<&PlayerSummary> = vec![&star];
+        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
 
-        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
         assert!(country.clubs[0].transfer_plan.transfer_requests.is_empty());
 
         StaffRecommendations::process_staff_recommendations(&mut country, Fx::monday());
@@ -1356,9 +1355,9 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let plain = Fx::ordinary_foreigner(ability);
-        let pool: Vec<&PlayerSummary> = vec![&plain];
+        let pool = ForeignPool::of(std::slice::from_ref(&plain), country.id);
 
-        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
 
         assert!(
             country.clubs[0]
@@ -1381,9 +1380,9 @@ mod breakout_watch_tests {
             s.region = ScoutingRegion::from_country(3, "BR");
             s
         };
-        let pool: Vec<&PlayerSummary> = vec![&star];
+        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
 
-        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
 
         assert!(
             country.clubs[0]

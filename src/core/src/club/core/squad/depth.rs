@@ -6,7 +6,7 @@
 //! development-loan pass have to agree on when the first team is short, or the
 //! one loans away the player the other is about to call up.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use chrono::NaiveDate;
 
@@ -247,16 +247,16 @@ impl YouthDevelopmentLoanPolicy {
 /// An empty plan protects nobody and asks for nobody, so a club that has
 /// never reviewed its keeper room gets exactly the audit it always had.
 pub(in crate::club::core) struct KeeperLoanView {
-    protected: HashSet<u32>,
+    protected: FxHashSet<u32>,
     /// Keeper → the standard of football the department means the loan to
     /// take him to, when it has said.
-    wanted_out: HashMap<u32, Option<f32>>,
+    wanted_out: FxHashMap<u32, Option<f32>>,
 }
 
 impl KeeperLoanView {
     pub(in crate::club::core) fn of(plan: Option<&KeeperRoomPlan>, today: NaiveDate) -> Self {
-        let mut protected: HashSet<u32> = HashSet::new();
-        let mut wanted_out: HashMap<u32, Option<f32>> = HashMap::new();
+        let mut protected: FxHashSet<u32> = FxHashSet::default();
+        let mut wanted_out: FxHashMap<u32, Option<f32>> = FxHashMap::default();
         let Some(plan) = plan else {
             return KeeperLoanView {
                 protected,

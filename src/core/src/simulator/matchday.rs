@@ -24,21 +24,25 @@
 //!   2. `WorldMatchdayResult::process(continents, world)` — root
 //!      dispatch + per-continent fan-out, populates
 //!      `self.continents` with `Vec<ContinentResult>`.
-//!   3. `collect_domestic_signed_ids` feeds the world-wide
-//!      transfer-interest cleanup sweep.
-//!   4. `drain_into` consumes the wrapper and routes every
+//!   3. `drain_into` consumes the wrapper and routes every
 //!      `ContinentResult::process` into `data` and the tick's
-//!      `SimulationResult`.
+//!      `SimulationResult`, then ends the transfer drain with one
+//!      world-wide interest sweep for everyone signed or moved.
 
+use std::any::Any;
+use std::cmp::Reverse;
 use std::ops::Range;
 use std::panic::{self, AssertUnwindSafe};
+use std::thread;
 
 use log::info;
-use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::prelude::IntoParallelRefMutIterator;
+use rayon::iter::{ParallelBridge, ParallelIterator};
 
 use crate::MatchRuntime;
-use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
+use crate::continent::{
+    Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult, CountryWork,
+};
+use crate::country::CountryResult;
 use crate::country::result::transfers::{TransferTail, TransferTick};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
@@ -159,51 +163,89 @@ impl<'gc> WorldMatchdayResult<'gc> {
         };
         drop(phase);
 
-        // 3. Slice results back per continent using the ranges we
-        //    captured before the dispatch. `to_vec` copies the slice
-        //    so each continent's process pass owns its share.
+        // 3. Hand each continent its share of the results, in the order
+        //    the ranges were captured — consecutive, so draining the
+        //    global batch front to back moves every result exactly once.
+        let phase = PerformanceProfiler::phase_scope("A2a_result_split", 1);
+        let mut played = global_results.into_iter();
         let per_continent: Vec<Vec<MatchResult>> = continent_ranges
             .iter()
-            .map(|r| global_results[r.clone()].to_vec())
-            .collect();
-
-        // 4. Parallel fan-out across continents. Each continent
-        //    routes its slice back through its countries (which fan
-        //    out parallel inside each country). A panic here is
-        //    isolated per continent — recorded on the global counter
-        //    and substituted with an empty result, same shape as the
-        //    simulate-side guard.
-        let phase = PerformanceProfiler::phase_scope("A2b_continent_fanout", 1);
-        let results: Vec<ContinentResult> = continents
-            .par_iter_mut()
-            .zip(build_states.into_par_iter())
-            .zip(per_continent.into_par_iter())
-            .map(|((continent, state_opt), results)| {
-                let cid = continent.id;
-                let name = continent.name.clone();
-                match state_opt {
-                    None => ContinentResult::new(cid, Vec::new(), Vec::new()),
-                    Some(state) => panic::catch_unwind(AssertUnwindSafe(|| {
-                        continent.process_results(world, state, results)
-                    }))
-                    .unwrap_or_else(|payload| {
-                        ContinentPanicMetrics::swallow(&payload, "process", cid, &name);
-                        ContinentResult::new(cid, Vec::new(), Vec::new())
-                    }),
-                }
-            })
+            .map(|r| played.by_ref().take(r.len()).collect())
             .collect();
         drop(phase);
 
-        self.continents = results;
+        // 4. Every country of every continent in one queue, heaviest
+        //    first, so the countries that set the tail start first and
+        //    the light ones fill in behind them. A panic still costs its
+        //    whole continent: recorded once on the global counter and
+        //    substituted with an empty result, same shape as the
+        //    simulate-side guard.
+        let phase = PerformanceProfiler::phase_scope("A2b_continent_fanout", 1);
+        let identities: Vec<(u32, String, bool)> = continents
+            .iter()
+            .zip(&build_states)
+            .map(|(continent, state)| (continent.id, continent.name.clone(), state.is_some()))
+            .collect();
+        let mut queue: Vec<(usize, usize, CountryWork<'_, 'gc>)> = Vec::new();
+        for (continent_idx, ((continent, state), results)) in continents
+            .iter_mut()
+            .zip(build_states)
+            .zip(per_continent)
+            .enumerate()
+        {
+            if let Some(state) = state {
+                for (country_idx, work) in continent
+                    .country_work(state, results)
+                    .into_iter()
+                    .enumerate()
+                {
+                    queue.push((continent_idx, country_idx, work));
+                }
+            }
+        }
+        queue.sort_by_key(|(_, _, work)| Reverse(work.weight()));
+        let mut done: Vec<(usize, usize, thread::Result<CountryResult>)> = queue
+            .into_iter()
+            .par_bridge()
+            .map(|(continent_idx, country_idx, work)| {
+                let outcome = panic::catch_unwind(AssertUnwindSafe(|| work.run(world)));
+                (continent_idx, country_idx, outcome)
+            })
+            .collect();
+        done.sort_unstable_by_key(|(continent_idx, country_idx, _)| (*continent_idx, *country_idx));
+
+        let mut countries: Vec<Vec<CountryResult>> =
+            identities.iter().map(|_| Vec::new()).collect();
+        let mut panics: Vec<Option<Box<dyn Any + Send>>> =
+            identities.iter().map(|_| None).collect();
+        for (continent_idx, _, outcome) in done {
+            match outcome {
+                Ok(result) => countries[continent_idx].push(result),
+                Err(payload) => {
+                    panics[continent_idx].get_or_insert(payload);
+                }
+            }
+        }
+        self.continents = identities
+            .into_iter()
+            .zip(countries)
+            .zip(panics)
+            .map(|(((id, name, built), countries), panic)| match panic {
+                Some(payload) => {
+                    ContinentPanicMetrics::swallow(&payload, "process", id, &name);
+                    ContinentResult::new(id, Vec::new(), Vec::new())
+                }
+                None if built => ContinentResult::new(id, countries, Vec::new()),
+                None => ContinentResult::new(id, Vec::new(), Vec::new()),
+            })
+            .collect();
+        drop(phase);
     }
 
     /// Collect every domestically-signed player id staged on each
-    /// country's `DeferredTransferOps`. Fed to the world-wide
-    /// `cleanup_player_transfer_interest_batch` sweep so shortlists
-    /// in OTHER countries can be pruned in one pass before the per-
-    /// continent drain commits the signings.
-    pub fn collect_domestic_signed_ids(&self) -> Vec<u32> {
+    /// country's `DeferredTransferOps`, for the drain's world-wide
+    /// interest sweep.
+    fn collect_domestic_signed_ids(&self) -> Vec<u32> {
         self.continents
             .iter()
             .flat_map(|cr| cr.countries.iter())
@@ -217,7 +259,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
     /// world-wide `apply_free_agent_market_bumps_batch` pass so the
     /// `data.free_agents` pool is walked ONCE per tick instead of once
     /// per country (the per-country drain was `O(countries × pool)`).
-    pub fn collect_free_agent_bumps(&self) -> FreeAgentBumpBatch {
+    pub fn collect_free_agent_bumps(&self) -> FreeAgentBumpBatch<'_> {
         let mut batch = FreeAgentBumpBatch::default();
         for ops in self
             .continents
@@ -225,15 +267,9 @@ impl<'gc> WorldMatchdayResult<'gc> {
             .flat_map(|cr| cr.countries.iter())
             .filter_map(|country_r| country_r.deferred_transfer_ops.as_ref())
         {
-            batch
-                .offered_ids
-                .extend(ops.global_offered_ids.iter().copied());
-            batch
-                .rejected_ids
-                .extend(ops.global_rejected_ids.iter().copied());
-            batch
-                .block_reasons
-                .extend(ops.global_block_reasons.iter().copied());
+            batch.offered_ids.push(&ops.global_offered_ids);
+            batch.rejected_ids.push(&ops.global_rejected_ids);
+            batch.block_reasons.push(&ops.global_block_reasons);
         }
         batch
     }
@@ -260,11 +296,12 @@ impl<'gc> WorldMatchdayResult<'gc> {
     /// rest of the tick.
     pub fn drain_into(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let date = data.date.date();
+        let signed = self.collect_domestic_signed_ids();
         let tails: Vec<TransferTail> = self
             .continents
             .into_iter()
             .flat_map(|continent_result| continent_result.process(data, result))
             .collect();
-        TransferTick::conclude(data, tails, date);
+        TransferTick::conclude(data, signed, tails, date);
     }
 }

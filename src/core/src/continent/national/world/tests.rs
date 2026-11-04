@@ -8,7 +8,7 @@
 
 use super::*;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
@@ -263,7 +263,7 @@ fn empty_end_stats() -> PlayerMatchEndStats {
 }
 
 fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) -> MatchResultRaw {
-    let mut player_stats: HashMap<u32, PlayerMatchEndStats> = HashMap::new();
+    let mut player_stats: FxHashMap<u32, PlayerMatchEndStats> = FxHashMap::default();
     if let Some(id) = scorer_id {
         player_stats.insert(
             id,
@@ -292,10 +292,10 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
         right_team_players: FieldSquad::new(),
         match_time_ms: 5_400_000,
         additional_time_ms: 0,
-        player_stats,
+        player_stats: player_stats.into_iter().collect(),
         substitutions: Vec::new(),
         chances: Vec::new(),
-        physical_snapshots: HashMap::new(),
+        physical_snapshots: FxHashMap::default(),
         penalty_shootout: Vec::new(),
         player_of_the_match_id: None,
         starting_home_tactic: None,
@@ -709,7 +709,7 @@ fn u21_candidate_collection_includes_youth_teams_and_excludes_overage() {
 
     let policy = NationalSelectionPolicy::under21();
     let map = NationalTeam::collect_all_candidates_by_country_with_policy(
-        continents.iter().flat_map(|c| c.countries.iter()),
+        &continents,
         d(2026, 9, 6),
         &policy,
     );

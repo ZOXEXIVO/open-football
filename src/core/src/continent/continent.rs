@@ -1,6 +1,5 @@
 use crate::Country;
 use crate::context::GlobalContext;
-use crate::continent::ContinentResult;
 use crate::continent::national::{NationalCompetitionConfig, NationalTeamCompetitions};
 use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
@@ -9,8 +8,8 @@ use crate::country::{CountryPendingState, CountryResult};
 use crate::league::FixtureRest;
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
-use crate::utils::Logging;
 use crate::utils::PerformanceProfiler;
+use crate::utils::SlowStep;
 use chrono::{Duration, NaiveDate};
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -24,7 +23,6 @@ use std::ops::Range;
 pub const CONTINENT_EUROPE_ID: u32 = 1;
 pub const CONTINENT_SOUTH_AMERICA_ID: u32 = 3;
 
-#[derive(Clone)]
 pub struct Continent {
     pub id: u32,
     pub name: String,
@@ -37,8 +35,32 @@ pub struct Continent {
     pub national_team_competitions: NationalTeamCompetitions,
 }
 
+/// Countries are the bulk of a world copy and independent of one another,
+/// so they are copied across the pool rather than one after another.
+impl Clone for Continent {
+    fn clone(&self) -> Self {
+        Continent {
+            id: self.id,
+            name: self.name.clone(),
+            countries: self.countries.par_iter().cloned().collect(),
+            continental_competitions: self.continental_competitions.clone(),
+            continental_rankings: self.continental_rankings.clone(),
+            regulations: self.regulations.clone(),
+            economic_zone: self.economic_zone.clone(),
+            national_team_competitions: self.national_team_competitions.clone(),
+        }
+    }
+}
+
+impl Continent {
+    /// Drop the countries across the pool, the counterpart of the copy.
+    pub(crate) fn release(self) {
+        self.countries.into_par_iter().for_each(drop);
+    }
+}
+
 /// Resume state stashed between [`Continent::simulate`] and
-/// [`Continent::process_results`]. Holds the per-country
+/// [`Continent::country_work`]. Holds the per-country
 /// `GlobalContext`s (cloned with their name generators) and the
 /// pending states so the process pass doesn't rebuild them, plus the
 /// index ranges that map each country's slice inside the continent's
@@ -50,6 +72,38 @@ pub struct ContinentBuildState<'gc> {
     /// `country_ranges[i]` is the slice of the build's `matches` that
     /// belongs to `countries[i]`.
     pub country_ranges: Vec<Range<usize>>,
+}
+
+/// One country's post-dispatch tick: its league and cup results, its
+/// clubs and its transfer market.
+pub struct CountryWork<'a, 'gc> {
+    country: &'a mut Country,
+    ctx: GlobalContext<'gc>,
+    pending: CountryPendingState,
+    results: Vec<MatchResult>,
+}
+
+impl CountryWork<'_, '_> {
+    /// Players on the country's rosters, which is what its tick costs.
+    pub fn weight(&self) -> usize {
+        self.country
+            .clubs
+            .iter()
+            .flat_map(|club| club.teams.teams.iter())
+            .map(|team| team.players.players.len())
+            .sum()
+    }
+
+    pub fn run(self, world: WorldSnapshot<'_>) -> CountryResult {
+        let country = self.country;
+        let stage = PerformanceProfiler::stage_scope("country_process", 1)
+            .labelled(|| country.name.clone());
+        let step = SlowStep::start();
+        let output = country.simulate_process(self.ctx, world, self.pending, self.results);
+        step.finish(|| format!("simulate country: {}", country.name));
+        drop(stage);
+        output
+    }
 }
 
 /// Per-continent output of [`Continent::simulate`]. Only the build
@@ -241,50 +295,28 @@ impl Continent {
         }
     }
 
-    /// Post-dispatch per-country fan-out. Called from
-    /// [`WorldMatchdayResult::process`][crate::WorldMatchdayResult::process]
-    /// after the GLOBAL engine batch returns — `results` is this
-    /// continent's slice of the global Vec, in build order. Routes
-    /// every match result back to its league / cup, then runs the
-    /// rest of each country tick (clubs, transfers, country-local
-    /// result fan-out) in parallel across countries.
-    pub fn process_results<'gc>(
-        &mut self,
-        world: WorldSnapshot<'_>,
+    /// This continent's countries, each with its share of the day's
+    /// results — the post-dispatch half of the tick, ready to run in any
+    /// order. `results` is this continent's slice of the global batch, in
+    /// build order; consecutive ranges move every result exactly once.
+    pub fn country_work<'a, 'gc>(
+        &'a mut self,
         state: ContinentBuildState<'gc>,
         results: Vec<MatchResult>,
-    ) -> ContinentResult {
-        let continent_name = self.name.clone();
-
-        // Split the continent's result vec back into per-country
-        // slices using the ranges captured during the build pass.
-        let per_country_results: Vec<Vec<MatchResult>> = state
-            .country_ranges
-            .iter()
-            .map(|r| results[r.clone()].to_vec())
-            .collect();
-
-        let country_results: Vec<CountryResult> = self
-            .countries
-            .par_iter_mut()
-            .zip(state.country_ctxs.into_par_iter())
-            .zip(state.country_pending.into_par_iter())
-            .zip(per_country_results.into_par_iter())
-            .map(|(((country, country_ctx), pending), results)| {
-                let message = format!("simulate country: {}", country.name);
-                let stage = PerformanceProfiler::stage_scope("country_process", 1)
-                    .labelled(|| country.name.clone());
-                let output = Logging::estimate_result(
-                    || country.simulate_process(country_ctx, world, pending, results),
-                    &message,
-                );
-                drop(stage);
-                output
+    ) -> Vec<CountryWork<'a, 'gc>> {
+        let mut played = results.into_iter();
+        self.countries
+            .iter_mut()
+            .zip(state.country_ctxs)
+            .zip(state.country_pending)
+            .zip(state.country_ranges)
+            .map(|(((country, ctx), pending), range)| CountryWork {
+                country,
+                ctx,
+                pending,
+                results: played.by_ref().take(range.len()).collect(),
             })
-            .collect();
-
-        debug!("Continent {} simulation complete", continent_name);
-        ContinentResult::new(self.id, country_results, Vec::new())
+            .collect()
     }
 }
 
@@ -295,7 +327,7 @@ mod continental_night_tests {
     use crate::country::core::country::fixture_calendar_tests::september_country;
     use crate::transfers::market::PlacementReachIndex;
     use crate::transfers::market::map::MarketMap;
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     fn d(m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, m, day).unwrap()
@@ -321,7 +353,7 @@ mod continental_night_tests {
             .to_vec();
         assert_eq!(nights, vec![d(9, 17)], "matchday one is Thursday the 17th");
 
-        let country_info = HashMap::new();
+        let country_info = FxHashMap::default();
         let market_map = MarketMap::default();
         let placement_reach = PlacementReachIndex::default();
         let mut first_team_days = Vec::new();

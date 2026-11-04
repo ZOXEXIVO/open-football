@@ -15,6 +15,7 @@ mod goal_distance_tests;
 mod goal_kick_tests;
 mod counter_press_tests;
 mod fixture_environment_tests;
+mod fixture_seed_tests;
 mod injury_tests;
 mod landing_prediction_tests;
 mod nerves_outcome_tests;

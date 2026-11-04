@@ -24,7 +24,7 @@
 
 use crate::club::board::mandate::MandateIncumbent;
 use crate::transfers::squad::bands::TierBands;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 
@@ -331,7 +331,7 @@ pub struct SquadPlan {
     /// Levels per formation slot, in slot order.
     slot_targets: Vec<SlotLevel>,
     /// Bodies the plan wants per group, formation slots included.
-    depth_targets: HashMap<PlayerFieldPositionGroup, usize>,
+    depth_targets: FxHashMap<PlayerFieldPositionGroup, usize>,
     /// Median age band the plan steers toward.
     age_profile_target: (u8, u8),
     /// Annual wage the club can add before it breaches its own mandate.
@@ -364,7 +364,7 @@ impl SquadPlan {
             })
             .collect();
 
-        let mut depth_targets: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+        let mut depth_targets: FxHashMap<PlayerFieldPositionGroup, usize> = FxHashMap::default();
         for pos in inputs.formation_positions.iter() {
             let group = pos.position_group();
             depth_targets.entry(group).or_insert_with(|| {

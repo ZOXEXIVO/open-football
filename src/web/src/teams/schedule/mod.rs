@@ -175,7 +175,7 @@ pub async fn team_schedule_get_action(
             } else {
                 fixture.home_team_id
             };
-            let opponent = simulator_data.team_data(opponent_id).unwrap();
+            let opponent = simulator_data.team(opponent_id).unwrap();
 
             items.push((
                 fixture.date,

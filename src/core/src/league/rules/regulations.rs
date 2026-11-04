@@ -3,7 +3,7 @@ use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
 use crate::league::LeagueTable;
 use crate::r#match::MatchResult;
 use chrono::{Duration, NaiveDate};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct LeagueRegulations {
@@ -11,10 +11,10 @@ pub struct LeagueRegulations {
     /// `Player.player_attributes.suspension_matches`; the league copy is
     /// kept for league-level analytics and to surface a "currently
     /// suspended" view without walking every club.
-    pub suspended_players: HashMap<u32, u8>,
+    pub suspended_players: FxHashMap<u32, u8>,
     /// player_id → running yellow-card tally toward the next ban. Reset
     /// each time the threshold triggers a suspension.
-    pub yellow_card_accumulation: HashMap<u32, u8>,
+    pub yellow_card_accumulation: FxHashMap<u32, u8>,
     /// FFP cases in flight — opened on a deficit threshold breach,
     /// resolved on `hearing_date`. One sanction per case.
     pub ffp_cases: Vec<FFPCase>,
@@ -87,8 +87,8 @@ impl Default for LeagueRegulations {
 impl LeagueRegulations {
     pub fn new() -> Self {
         LeagueRegulations {
-            suspended_players: HashMap::new(),
-            yellow_card_accumulation: HashMap::new(),
+            suspended_players: FxHashMap::default(),
+            yellow_card_accumulation: FxHashMap::default(),
             ffp_cases: Vec::new(),
             ffp_history: Vec::new(),
             pending_cases: Vec::new(),
@@ -325,9 +325,9 @@ mod tests {
     use crate::r#match::engine::result::{FieldSquad, MatchResultRaw};
     use crate::r#match::result::ResultMatchPositionData;
     use crate::r#match::{PlayerMatchEndStats, Score, TeamScore};
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
-    fn make_match_with_stats(stats: HashMap<u32, PlayerMatchEndStats>) -> MatchResult {
+    fn make_match_with_stats(stats: FxHashMap<u32, PlayerMatchEndStats>) -> MatchResult {
         let raw = MatchResultRaw {
             score: Some(Score::new(1, 2)),
             position_data: ResultMatchPositionData::empty(),
@@ -336,10 +336,10 @@ mod tests {
             right_team_players: FieldSquad::new(),
             match_time_ms: 90 * 60 * 1000,
             additional_time_ms: 0,
-            player_stats: stats,
+            player_stats: stats.into_iter().collect(),
             substitutions: Vec::new(),
             chances: Vec::new(),
-            physical_snapshots: HashMap::new(),
+            physical_snapshots: FxHashMap::default(),
             penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
             starting_home_tactic: None,
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn red_card_returns_one_match_suspension() {
         let mut regs = LeagueRegulations::new();
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(42u32, end_stats(0, 1));
         let result = make_match_with_stats(stats);
         let actions = regs.process_disciplinary_actions(&result);
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn yellow_card_under_threshold_does_not_ban() {
         let mut regs = LeagueRegulations::new();
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(42u32, end_stats(1, 0));
         let result = make_match_with_stats(stats);
         let actions = regs.process_disciplinary_actions(&result);
@@ -446,14 +446,14 @@ mod tests {
         let mut regs = LeagueRegulations::new();
         // Pump 4 yellows.
         for _ in 0..4 {
-            let mut stats = HashMap::new();
+            let mut stats = FxHashMap::default();
             stats.insert(42u32, end_stats(1, 0));
             let result = make_match_with_stats(stats);
             let actions = regs.process_disciplinary_actions(&result);
             assert!(actions.new_suspensions.is_empty());
         }
         // 5th crosses the FIFA threshold.
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(42u32, end_stats(1, 0));
         let result = make_match_with_stats(stats);
         let actions = regs.process_disciplinary_actions(&result);

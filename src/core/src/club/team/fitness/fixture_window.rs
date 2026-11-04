@@ -17,6 +17,53 @@ pub struct TeamFixtureWindow {
     pub recent: Vec<NaiveDate>,
 }
 
+/// One team's window while every schedule is being read: only the four
+/// nearest dates on each side are ever kept, rather than the season's
+/// whole fixture list sorted and cut afterwards.
+#[derive(Debug, Default)]
+pub struct NearestFixtures {
+    upcoming: Vec<NaiveDate>,
+    recent: Vec<NaiveDate>,
+}
+
+impl NearestFixtures {
+    const KEPT: usize = 4;
+
+    pub fn offer_upcoming(&mut self, date: NaiveDate) {
+        Self::keep(&mut self.upcoming, date, |new, kept| new < kept);
+    }
+
+    pub fn offer_recent(&mut self, date: NaiveDate) {
+        Self::keep(&mut self.recent, date, |new, kept| new > kept);
+    }
+
+    /// Upcoming oldest first, recent newest first.
+    pub fn into_window(self, today: NaiveDate) -> TeamFixtureWindow {
+        TeamFixtureWindow {
+            refreshed: Some(today),
+            upcoming: self.upcoming,
+            recent: self.recent,
+        }
+    }
+
+    fn keep(
+        dates: &mut Vec<NaiveDate>,
+        date: NaiveDate,
+        nearer: impl Fn(NaiveDate, NaiveDate) -> bool,
+    ) {
+        let at = dates
+            .iter()
+            .position(|&kept| nearer(date, kept))
+            .unwrap_or(dates.len());
+        if at < Self::KEPT {
+            if dates.len() == Self::KEPT {
+                dates.pop();
+            }
+            dates.insert(at, date);
+        }
+    }
+}
+
 impl TeamFixtureWindow {
     pub fn next_after(&self, today: NaiveDate) -> Option<NaiveDate> {
         self.upcoming.iter().copied().find(|d| *d >= today)
@@ -82,6 +129,46 @@ mod tests {
                 "one match a week read as congested on {today}"
             );
         }
+    }
+
+    #[test]
+    fn nearest_fixtures_keep_what_a_full_sort_and_cut_keeps() {
+        let today = d(10, 10);
+        let fixtures = [
+            d(11, 2),
+            d(10, 3),
+            d(10, 14),
+            d(9, 20),
+            d(10, 14),
+            d(12, 1),
+            d(10, 9),
+            d(10, 21),
+            d(9, 27),
+            d(10, 3),
+            d(10, 11),
+            d(10, 1),
+        ];
+        let mut nearest = NearestFixtures::default();
+        for &f in &fixtures {
+            if f > today {
+                nearest.offer_upcoming(f);
+            } else {
+                nearest.offer_recent(f);
+            }
+        }
+        let window = nearest.into_window(today);
+
+        let mut upcoming: Vec<NaiveDate> =
+            fixtures.iter().copied().filter(|f| *f > today).collect();
+        upcoming.sort_unstable();
+        upcoming.truncate(4);
+        let mut recent: Vec<NaiveDate> = fixtures.iter().copied().filter(|f| *f <= today).collect();
+        recent.sort_unstable_by(|a, b| b.cmp(a));
+        recent.truncate(4);
+
+        assert_eq!(window.refreshed, Some(today));
+        assert_eq!(window.upcoming, upcoming);
+        assert_eq!(window.recent, recent);
     }
 
     #[test]

@@ -15,7 +15,7 @@ pub use super_cup::*;
 pub use types::*;
 
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone)]
 pub struct ContinentalCompetitions {
@@ -30,7 +30,7 @@ pub struct ContinentalCompetitions {
 /// [`ContinentalCompetitions::commitments`].
 #[derive(Debug, Clone, Default)]
 pub struct ContinentalCommitments {
-    by_club: HashMap<u32, Vec<NaiveDate>>,
+    by_club: FxHashMap<u32, Vec<NaiveDate>>,
 }
 
 impl ContinentalCommitments {
@@ -74,7 +74,7 @@ impl ContinentalCompetitions {
 
     /// Every club already drawn into one of the continent's club
     /// competitions for the season that starts in `year`.
-    pub fn drawn_this_season(&self, year: u16) -> HashSet<u32> {
+    pub fn drawn_this_season(&self, year: u16) -> FxHashSet<u32> {
         [
             (
                 self.champions_league.season_year,
@@ -102,7 +102,7 @@ impl ContinentalCompetitions {
     /// Every club's continental fixture dates between `from` and `to`,
     /// inclusive — the nights a domestic fixture has to keep clear of.
     pub fn commitments(&self, from: NaiveDate, to: NaiveDate) -> ContinentalCommitments {
-        let mut by_club: HashMap<u32, Vec<NaiveDate>> = HashMap::new();
+        let mut by_club: FxHashMap<u32, Vec<NaiveDate>> = FxHashMap::default();
         let fixtures = self
             .champions_league
             .matches

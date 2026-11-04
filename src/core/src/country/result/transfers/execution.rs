@@ -32,6 +32,8 @@ use crate::{
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use rustc_hash::FxHashMap;
+use std::cell::OnceCell;
 
 /// Stateless helpers for the transfer execution path — roster placement
 /// and fee-structure math. Grouped on a unit struct (rather than free
@@ -717,7 +719,7 @@ impl TransferExecutor {
         if success {
             ApproachPass::cleanup_player_transfer_interest(data, transfer.player_id);
             if stage_pathway {
-                Self::stage_development_loan(data, transfer, date);
+                Self::stage_development_loan(data, &OnceCell::new(), transfer, date);
             }
         }
         success
@@ -736,7 +738,7 @@ impl TransferExecutor {
         let moved = Self::complete_permanent(data, transfer, date);
         if moved {
             ApproachPass::cleanup_player_transfer_interest(data, transfer.player_id);
-            Self::stage_development_loan(data, transfer, date);
+            Self::stage_development_loan(data, &OnceCell::new(), transfer, date);
         }
         moved
     }
@@ -769,12 +771,13 @@ impl TransferExecutor {
     /// The last of the three steps, once the world sweep has run.
     pub(crate) fn stage_pathways(
         data: &mut SimulatorData,
+        loanees: &OnceCell<ForeignLoanees>,
         transfers: &[DeferredTransfer],
         moves: &TransferMoves,
         date: NaiveDate,
     ) {
         for &index in &moves.pathways {
-            Self::stage_development_loan(data, &transfers[index], date);
+            Self::stage_development_loan(data, loanees, &transfers[index], date);
         }
     }
 
@@ -783,6 +786,7 @@ impl TransferExecutor {
     /// hoarding cap also counts the buyer's cross-country loanees.
     fn stage_development_loan(
         data: &mut SimulatorData,
+        loanees: &OnceCell<ForeignLoanees>,
         transfer: &DeferredTransfer,
         date: NaiveDate,
     ) {
@@ -792,6 +796,7 @@ impl TransferExecutor {
             let buying_club_id = transfer.buying_club_id;
             DevelopmentLoanPathway::stage_after_purchase_global(
                 data,
+                loanees,
                 buying_country_id,
                 buying_club_id,
                 player_id,
@@ -2021,6 +2026,61 @@ impl TransferClauseScheduler {
 /// same-window loan-out protection. All readiness checks use observable
 /// data (current ability vs the buyer's tier baseline, squad depth);
 /// hidden potential is never consulted.
+/// Every club's loanees by position group, and where they play: players
+/// it has farmed out to countries other than its own live on foreign
+/// rosters, invisible to the single-country scan inside
+/// [`DevelopmentLoanPathway::stage_after_purchase`] — without them a parent
+/// could stack a whole position group abroad past its loan-out cap.
+/// Counted once per drain: its stagings move nobody.
+pub(crate) struct ForeignLoanees {
+    total: FxHashMap<(u32, usize), usize>,
+    by_country: FxHashMap<(u32, usize, u32), usize>,
+}
+
+impl ForeignLoanees {
+    pub(crate) fn count(data: &SimulatorData) -> Self {
+        let mut total = FxHashMap::default();
+        let mut by_country = FxHashMap::default();
+        for country in data.continents.iter().flat_map(|c| c.countries.iter()) {
+            for player in country
+                .clubs
+                .iter()
+                .flat_map(|c| c.teams.teams.iter())
+                .flat_map(|t| t.players.players.iter())
+            {
+                let Some(parent) = player
+                    .contract_loan
+                    .as_ref()
+                    .and_then(|cl| cl.loan_from_club_id)
+                else {
+                    continue;
+                };
+                let group = player.position().position_group().index();
+                *total.entry((parent, group)).or_insert(0) += 1;
+                *by_country.entry((parent, group, country.id)).or_insert(0) += 1;
+            }
+        }
+        ForeignLoanees { total, by_country }
+    }
+
+    /// The club's loanees at `group` outside `home_country_id`.
+    pub(crate) fn abroad(
+        &self,
+        home_country_id: u32,
+        club_id: u32,
+        group: PlayerFieldPositionGroup,
+    ) -> usize {
+        let group = group.index();
+        let total = self.total.get(&(club_id, group)).copied().unwrap_or(0);
+        let home = self
+            .by_country
+            .get(&(club_id, group, home_country_id))
+            .copied()
+            .unwrap_or(0);
+        total - home
+    }
+}
+
 pub(crate) struct DevelopmentLoanPathway;
 
 impl DevelopmentLoanPathway {
@@ -2047,36 +2107,12 @@ impl DevelopmentLoanPathway {
         }
     }
 
-    /// Players the club has farmed out at `group` in countries OTHER
-    /// than `home_country_id`. Cross-country loanees live on foreign
-    /// rosters and are invisible to the single-country scan inside
-    /// [`Self::stage_after_purchase`] — without this a parent could
-    /// stack a whole position group abroad past its loan-out cap.
-    pub(crate) fn count_foreign_loanees_in_group(
-        data: &SimulatorData,
-        home_country_id: u32,
-        club_id: u32,
-        group: PlayerFieldPositionGroup,
-    ) -> usize {
-        data.continents
-            .iter()
-            .flat_map(|c| c.countries.iter())
-            .filter(|country| country.id != home_country_id)
-            .flat_map(|country| country.clubs.iter())
-            .flat_map(|c| c.teams.teams.iter())
-            .flat_map(|t| t.players.players.iter())
-            .filter(|p| {
-                p.contract_loan.as_ref().and_then(|cl| cl.loan_from_club_id) == Some(club_id)
-                    && p.position().position_group() == group
-            })
-            .count()
-    }
-
     /// Data-level entry used by the deferred Phase-C executor: resolves
     /// the buyer's country, counts the club's foreign loanees for the
     /// hoarding cap, and runs the country-level staging.
     pub(crate) fn stage_after_purchase_global(
         data: &mut SimulatorData,
+        loanees: &OnceCell<ForeignLoanees>,
         buying_country_id: u32,
         buying_club_id: u32,
         player_id: u32,
@@ -2097,8 +2133,11 @@ impl DevelopmentLoanPathway {
         else {
             return;
         };
-        let foreign_loanees =
-            Self::count_foreign_loanees_in_group(data, buying_country_id, buying_club_id, group);
+        let foreign_loanees = loanees.get_or_init(|| ForeignLoanees::count(data)).abroad(
+            buying_country_id,
+            buying_club_id,
+            group,
+        );
         if let Some(country) = data.country_mut(buying_country_id) {
             Self::stage_after_purchase(
                 country,

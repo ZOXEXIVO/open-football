@@ -1,19 +1,19 @@
 use super::{
-    CompetitionStage, ContinentalMatch, ContinentalMatchweek, EUROPA_LEAGUE_ID, GroupTable,
-    KnockoutTie,
+    CompetitionStage, ContinentalMatch, ContinentalMatchday, ContinentalMatchweek,
+    EUROPA_LEAGUE_ID, GroupTable, KnockoutTie,
 };
+use crate::club::finance::RevenueModel;
 use crate::continent::ContinentalRankings;
 use crate::league::Season;
 use crate::league::simulation::matchday::{MatchdayCommitments, MatchdayPool};
 use crate::r#match::squad::selection::model::MatchSelectionGameModel;
-use crate::club::finance::RevenueModel;
 use crate::r#match::{
     CompetitionKind, FixtureContext, Match, MatchResult, SelectionCompetition, SelectionContext,
 };
-use crate::{Club, MatchRuntime, TeamType};
+use crate::{Club, TeamType};
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::{debug, info};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub const EUROPA_LEAGUE_SLUG: &str = "europa-league";
 
@@ -199,22 +199,20 @@ impl EuropaLeague {
         self.matches.iter().any(|m| m.date == date)
     }
 
-    pub(crate) fn play_matches(
-        &mut self,
-        clubs: &HashMap<u32, &Club>,
+    /// Today's ties, built for the continent's single dispatch. Reads the
+    /// competition only; [`Self::record_matchday`] applies what is played.
+    pub(crate) fn prepare_matchday(
+        &self,
+        clubs: &FxHashMap<u32, &Club>,
         date: NaiveDate,
         commitments: &MatchdayCommitments,
-    ) -> Vec<MatchResult> {
+    ) -> ContinentalMatchday {
         let todays_matches: Vec<ContinentalMatch> = self
             .matches
             .iter()
             .filter(|m| m.date == date)
             .cloned()
             .collect();
-
-        if todays_matches.is_empty() {
-            return Vec::new();
-        }
 
         let engine_matches: Vec<Match> = todays_matches
             .iter()
@@ -323,12 +321,19 @@ impl EuropaLeague {
             })
             .collect();
 
-        if engine_matches.is_empty() {
-            return Vec::new();
+        ContinentalMatchday {
+            todays: todays_matches,
+            matches: engine_matches,
         }
+    }
 
-        let results = MatchRuntime::engine_pool().play(engine_matches);
-
+    /// Apply the results of the ties [`Self::prepare_matchday`] built, in
+    /// the order it built them.
+    pub(crate) fn record_matchday(
+        &mut self,
+        todays_matches: Vec<ContinentalMatch>,
+        results: Vec<MatchResult>,
+    ) -> Vec<MatchResult> {
         // Store results back on the matches
         for (cm, result) in todays_matches.iter().zip(results.iter()) {
             let home_goals = result.score.home_team.get();

@@ -950,7 +950,8 @@ impl PlayerGenerator {
 
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(&CountryLoader::code_for_id(country_id))
-                .into_iter()
+                .iter()
+                .copied()
                 .map(core::PlayerLanguage::native)
                 .collect();
 
@@ -1763,7 +1764,8 @@ impl PlayerGenerator {
 
         let native_languages: Vec<core::PlayerLanguage> =
             core::Language::from_country_code(&CountryLoader::code_for_id(record.country_id))
-                .into_iter()
+                .iter()
+                .copied()
                 .map(core::PlayerLanguage::native)
                 .collect();
 

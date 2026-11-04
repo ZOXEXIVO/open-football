@@ -45,8 +45,9 @@ use crate::{
 use chrono::NaiveDate;
 use log::{debug, warn};
 use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 #[cfg(test)]
@@ -67,8 +68,8 @@ use crate::transfers::pipeline::TransferNeedReason;
 /// save (the id is missing from both the world and `country_info`), so
 /// warning once per id per process keeps the signal without re-emitting
 /// the same line for every affected country on every daily tick.
-static UNKNOWN_NATIONALITY_WARNED: LazyLock<Mutex<HashSet<u32>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
+static UNKNOWN_NATIONALITY_WARNED: LazyLock<Mutex<FxHashSet<u32>>> =
+    LazyLock::new(|| Mutex::new(FxHashSet::default()));
 
 /// Lightweight snapshot of a player in the global `sim.free_agents` pool.
 /// Built before the per-country borrow so `handle_free_agents` can match
@@ -94,6 +95,9 @@ pub struct GlobalFreeAgentSummary {
     /// region-prestige gate (same pattern as `scan_foreign_loan_market`).
     pub nationality_continent_id: u32,
     pub nationality_country_code: String,
+    /// Footballing region of his nationality, resolved once here for every
+    /// buying country's region gate.
+    pub nationality_region: ScoutingRegion,
     /// Nationality as an id — what the corridor cards are keyed by.
     pub nationality_country_id: u32,
     /// Career-pressure score in [0,1] computed at snapshot time. Read
@@ -201,11 +205,11 @@ impl EmergencySignedTerms {
 /// `handle_free_agents` builds the vec once, both passes consume it.
 #[allow(dead_code)]
 #[derive(Clone)]
-pub(super) struct FreeAgentCandidate {
+pub(super) struct FreeAgentCandidate<'a> {
     pub player_id: u32,
-    pub player_name: String,
+    pub player_name: Cow<'a, str>,
     pub club_id: u32,
-    pub club_name: String,
+    pub club_name: Cow<'a, str>,
     pub ability: u8,
     pub potential: u8,
     pub age: u8,
@@ -224,7 +228,7 @@ pub(super) struct FreeAgentCandidate {
     /// True when the candidate's nationality country code matches
     /// the buyer country's code — drives the emergency strategy's
     /// domestic-preference tiebreaker.
-    pub nationality_country_code: String,
+    pub nationality_country_code: Cow<'a, str>,
     /// Continent id of the player's nationality — emergency strategy
     /// uses this as a softer continental fallback when the player
     /// isn't strictly domestic.
@@ -276,7 +280,7 @@ pub(super) struct FreeAgentCandidate {
 /// which also keeps the corridor arithmetic out of a loop that runs
 /// clubs × requests × candidates.
 pub(super) struct FreeAgentMarketVisibility {
-    by_player: HashMap<u32, MarketView>,
+    by_player: FxHashMap<u32, MarketView>,
     import_capacity: f32,
 }
 
@@ -314,7 +318,7 @@ impl FreeAgentMarketVisibility {
         // quietly refusing every foreign signing.
         if map.is_silent() {
             return FreeAgentMarketVisibility {
-                by_player: HashMap::new(),
+                by_player: FxHashMap::default(),
                 import_capacity: 1.0,
             };
         }
@@ -326,8 +330,9 @@ impl FreeAgentMarketVisibility {
         // tick is the difference between a run that finishes and one that
         // does not — it is four linear scans of a forty-entry corridor list,
         // times the whole free-agent pool, times every country, every day.
-        let mut geography: HashMap<(u32, u32), (f32, f32)> = HashMap::new();
-        let mut by_player = HashMap::with_capacity(candidates.len());
+        let mut geography: FxHashMap<(u32, u32), (f32, f32)> = FxHashMap::default();
+        let mut by_player =
+            FxHashMap::with_capacity_and_hasher(candidates.len(), Default::default());
         for candidate in candidates {
             let key = (candidate.nationality_country_id, candidate.last_country_id);
             let (affinity, reach) = *geography.entry(key).or_insert_with(|| {
@@ -622,12 +627,12 @@ impl FreeAgentPass {
         country: &mut Country,
         date: NaiveDate,
         expired_player_ids: &[u32],
-    ) -> HashSet<u32> {
-        let mut renewed: HashSet<u32> = HashSet::new();
+    ) -> FxHashSet<u32> {
+        let mut renewed: FxHashSet<u32> = FxHashSet::default();
         if expired_player_ids.is_empty() {
             return renewed;
         }
-        let expired_set: HashSet<u32> = expired_player_ids.iter().copied().collect();
+        let expired_set: FxHashSet<u32> = expired_player_ids.iter().copied().collect();
 
         struct ExpiryRenewalOffer {
             player_id: u32,
@@ -835,14 +840,14 @@ impl FreeAgentPass {
             // from this club in this tick — used to dedup retries
             // so a single rejection doesn't lock the slot for the
             // whole pass.
-            let mut rejected_locally: HashSet<u32> = HashSet::new();
+            let mut rejected_locally: FxHashSet<u32> = FxHashSet::default();
             // Groups the picker has reported empty for this tick —
             // the planner skips them on subsequent iterations so we
             // don't spin re-selecting the same dead slot. Without
             // this a club short of GKs with no GK candidates would
             // never sign anyone, because the planner keeps emitting
             // the GK slot and the picker keeps returning None.
-            let mut empty_groups: HashSet<PlayerFieldPositionGroup> = HashSet::new();
+            let mut empty_groups: FxHashSet<PlayerFieldPositionGroup> = FxHashSet::default();
 
             // Sign up to per_club_cap times; each iteration recomputes
             // the buyer urgency flag and the next-best slot from the
@@ -941,9 +946,9 @@ impl FreeAgentPass {
 
                 signings.push(FreeAgentSigning {
                     player_id: best.player_id,
-                    player_name: best.player_name.clone(),
+                    player_name: best.player_name.to_string(),
                     from_club_id: best.club_id,
-                    from_club_name: best.club_name.clone(),
+                    from_club_name: best.club_name.to_string(),
                     to_club_id: club.id,
                     reason: TransferReason::key(slot.reason),
                     terms: Some(pricing.signed_terms(best)),
@@ -989,7 +994,7 @@ impl FreeAgentPass {
         config: &TransferConfig,
         date: NaiveDate,
         visibility: &FreeAgentMarketVisibility,
-        staged_ids: &HashSet<u32>,
+        staged_ids: &FxHashSet<u32>,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
         global_rejected_ids: &mut Vec<u32>,
@@ -1124,7 +1129,7 @@ impl FreeAgentPass {
         buyers: &[MarketClearingBuyer],
         tier: MarketClearingTier,
         visibility: &FreeAgentMarketVisibility,
-        staged_ids: &HashSet<u32>,
+        staged_ids: &FxHashSet<u32>,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
         global_rejected_ids: &mut Vec<u32>,
@@ -1268,9 +1273,9 @@ impl FreeAgentPass {
 
             signings.push(FreeAgentSigning {
                 player_id: candidate.player_id,
-                player_name: candidate.player_name.clone(),
+                player_name: candidate.player_name.to_string(),
                 from_club_id: candidate.club_id,
-                from_club_name: candidate.club_name.clone(),
+                from_club_name: candidate.club_name.to_string(),
                 to_club_id: buyer.club_id,
                 reason: TransferReason::key("free_agent_market_clearing"),
                 terms: Some(pricing.signed_terms(candidate)),
@@ -1299,13 +1304,13 @@ impl FreeAgentPass {
     /// nationalities — its whole purpose is the local market outlet; a
     /// cross-continent punt is the hard tier's job.
     fn clearing_queue<'c>(
-        candidates: &'c [FreeAgentCandidate],
+        candidates: &'c [FreeAgentCandidate<'c>],
         tier: &MarketClearingTier,
         signings: &[FreeAgentSigning],
-        staged_ids: &HashSet<u32>,
+        staged_ids: &FxHashSet<u32>,
         buyer_country_code: &str,
         buyer_continent_id: u32,
-    ) -> Vec<&'c FreeAgentCandidate> {
+    ) -> Vec<&'c FreeAgentCandidate<'c>> {
         // Long-tail candidates eligible for this tier, most desperate
         // first. The soft tier additionally restricts to domestic /
         // same-continent nationalities — its whole purpose is the local
@@ -1667,7 +1672,7 @@ impl FreeAgentPass {
         buyer_rep: u16,
         global_offered_ids: &mut Vec<u32>,
         global_rejected_ids: &mut Vec<u32>,
-        rejected_locally: &mut HashSet<u32>,
+        rejected_locally: &mut FxHashSet<u32>,
     ) -> Option<FreeAgentOfferPricing> {
         // Stage wage / role / terms — emergency offers are
         // realistic short deals, priced through the same
@@ -1785,7 +1790,7 @@ struct EmergencySlotPlanner;
 impl EmergencySlotPlanner {
     fn next_slot(
         projected: &EmergencyProjectedSquad,
-        empty_groups: &HashSet<PlayerFieldPositionGroup>,
+        empty_groups: &FxHashSet<PlayerFieldPositionGroup>,
     ) -> Option<EmergencyGroupSlot> {
         use crate::transfers::squad::needs::{
             MIN_GROUP_DEFENDER, MIN_GROUP_FORWARD, MIN_GROUP_GOALKEEPER, MIN_GROUP_MIDFIELDER,
@@ -1843,7 +1848,7 @@ impl EmergencySlotPlanner {
     /// the depth tail.
     fn depth_group(
         projected: &EmergencyProjectedSquad,
-        empty_groups: &HashSet<PlayerFieldPositionGroup>,
+        empty_groups: &FxHashSet<PlayerFieldPositionGroup>,
     ) -> Option<PlayerFieldPositionGroup> {
         let fallback = projected.thinnest_group();
         if !empty_groups.contains(&fallback) {
@@ -2078,15 +2083,15 @@ struct EmergencyCandidatePicker;
 impl EmergencyCandidatePicker {
     #[allow(clippy::too_many_arguments)]
     fn pick<'a>(
-        candidates: &'a [FreeAgentCandidate],
+        candidates: &'a [FreeAgentCandidate<'a>],
         signings: &[FreeAgentSigning],
-        rejected_locally: &HashSet<u32>,
+        rejected_locally: &FxHashSet<u32>,
         slot: EmergencyGroupSlot,
         buyer_ctx: &EmergencyBuyerContext,
         buying_club_id: u32,
         visibility: &FreeAgentMarketVisibility,
         recorder: &mut BlockReasonRecorder,
-    ) -> Option<&'a FreeAgentCandidate> {
+    ) -> Option<&'a FreeAgentCandidate<'a>> {
         let mut scored: Vec<(&FreeAgentCandidate, f32)> = candidates
             .iter()
             .filter(|c| c.club_id != buying_club_id)
@@ -2240,10 +2245,10 @@ impl EmergencyTopClusterSelector {
     /// cluster → the leader with no RNG draw; otherwise a weighted
     /// roulette pick over the cluster.
     fn choose<'a>(
-        scored: &[(&'a FreeAgentCandidate, f32)],
+        scored: &[(&'a FreeAgentCandidate<'a>, f32)],
         buyer: &EmergencyBuyerContext,
         group: PlayerFieldPositionGroup,
-    ) -> Option<&'a FreeAgentCandidate> {
+    ) -> Option<&'a FreeAgentCandidate<'a>> {
         let len = EmergencyTopClusterSelector::cluster_len(scored, buyer);
         if len == 0 {
             return None;
@@ -2645,13 +2650,13 @@ impl RequestCandidateOrdering {
 /// drained into the `global_blocked` side-channel so Phase C can stamp
 /// `FreeAgentMarketState::last_block` outside the country borrow.
 pub(super) struct BlockReasonRecorder {
-    reasons: HashMap<u32, FreeAgentBlockReason>,
+    reasons: FxHashMap<u32, FreeAgentBlockReason>,
 }
 
 impl BlockReasonRecorder {
     pub(super) fn new() -> Self {
         BlockReasonRecorder {
-            reasons: HashMap::new(),
+            reasons: FxHashMap::default(),
         }
     }
 
@@ -2691,7 +2696,7 @@ struct MarketClearingBuyer {
     /// Where a newcomer would stand in the main squad.
     ladder: SquadLadder,
     /// The recruitment fit rule, per position group.
-    fit: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
+    fit: FxHashMap<PlayerFieldPositionGroup, SquadFitSnapshot>,
 }
 
 /// How well the clubs of one country know the market a single clearing
@@ -2726,7 +2731,7 @@ impl ClearingMarketKnowledge<'_> {
         // One pass over the department, not one per source country — a
         // scout knows a handful of countries, so inverting the walk turns a
         // scan per question into a scan per club.
-        let mut coverage: HashMap<u32, u8> = HashMap::new();
+        let mut coverage: FxHashMap<u32, u8> = FxHashMap::default();
         for staff in club.teams.iter().flat_map(|t| t.staffs.iter()) {
             for known in &staff.staff_attributes.knowledge.known_countries {
                 let slot = coverage.entry(known.country_id).or_insert(0);
@@ -2901,9 +2906,9 @@ impl GlobalFreeAgentPool {
         // fall back to permissive defaults and an Argentinian free agent
         // slips through to a Mali buyer. Build a cache keyed by country_id
         // so the mutable pass below doesn't need a SimulatorData borrow.
-        let unique_country_ids: HashSet<u32> =
+        let unique_country_ids: FxHashSet<u32> =
             data.free_agents.iter().map(|p| p.country_id).collect();
-        let nationality_cache: HashMap<u32, (u16, u32, String)> = {
+        let nationality_cache: FxHashMap<u32, (u16, u32, String)> = {
             let data_ref: &SimulatorData = data;
             unique_country_ids
                 .into_par_iter()
@@ -3020,6 +3025,10 @@ impl GlobalFreeAgentPool {
                     position_group: player.position().position_group(),
                     nationality_country_reputation: nationality_rep,
                     nationality_continent_id,
+                    nationality_region: ScoutingRegion::from_country(
+                        nationality_continent_id,
+                        &nationality_country_code,
+                    ),
                     nationality_country_code,
                     nationality_country_id: player.country_id,
                     career_pressure,
@@ -3086,18 +3095,13 @@ impl GlobalFreeAgentPool {
         // pool signing writes `from_club_id: 0`, so this is the only record
         // the world keeps of which league released him — and the free-agent
         // corridor is a real corridor: a released man signs where he is known.
-        let Some(origin_country_id) = data
-            .free_agents
-            .iter()
-            .find(|p| p.id == signing.player_id)
-            .map(|p| {
-                p.free_agent_state()
-                    .and_then(|state| state.last_country_id)
-                    .unwrap_or(0)
-            })
-        else {
+        let Some(player_idx) = data.free_agents.slot_of(signing.player_id) else {
             return false;
         };
+        let origin_country_id = data.free_agents[player_idx]
+            .free_agent_state()
+            .and_then(|state| state.last_country_id)
+            .unwrap_or(0);
 
         // Pre-check 2: the buying club can still accept a player.
         let has_room = data
@@ -3114,7 +3118,7 @@ impl GlobalFreeAgentPool {
         let terms = signing.terms.map(EmergencySignedTerms::to_personal_terms);
         if !Self::complete_signing(
             data,
-            signing.player_id,
+            player_idx,
             signing.buying_country_id,
             signing.buying_club_id,
             terms.as_ref(),
@@ -3161,9 +3165,12 @@ impl GlobalFreeAgentPool {
         transfer: &DeferredTransfer,
         date: NaiveDate,
     ) -> bool {
+        let Some(player_idx) = data.free_agents.slot_of(transfer.player_id) else {
+            return false;
+        };
         let signed = Self::complete_signing(
             data,
-            transfer.player_id,
+            player_idx,
             transfer.buying_country_id,
             transfer.buying_club_id,
             transfer.personal_terms.as_ref(),
@@ -3185,15 +3192,12 @@ impl GlobalFreeAgentPool {
     /// attributed to that club rather than to a synthetic "Free Agent" entry.
     fn complete_signing(
         data: &mut SimulatorData,
-        player_id: u32,
+        player_idx: usize,
         buying_country_id: u32,
         buying_club_id: u32,
         terms: Option<&PersonalTermsOffer>,
         date: NaiveDate,
     ) -> bool {
-        let Some(player_idx) = data.free_agents.iter().position(|p| p.id == player_id) else {
-            return false;
-        };
         // Capture the destination snapshot while we hold the read borrow;
         // we'll need it after we mutate the pool.
         let Some(snapshot) =
@@ -3203,6 +3207,7 @@ impl GlobalFreeAgentPool {
         };
 
         let mut player = data.free_agents.swap_remove(player_idx);
+        let player_id = player.id;
         let origin_country_id = player
             .free_agent_state()
             .and_then(|state| state.last_country_id)

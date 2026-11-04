@@ -35,8 +35,8 @@ use crate::transfers::value::PlayerValuationCalculator;
 use crate::{MatchSelectionContext, SelectionOmissionReason};
 use chrono::Datelike;
 use chrono::NaiveDate;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 
 use crate::Team;
 use crate::club::staff::{CoachMatchObservation, CoachProfile};
@@ -219,9 +219,10 @@ impl LeagueResult {
         // cups have no `League` row and store via the global `match_store`
         // after `process_cup_match`, so `league_mut` finds nothing and
         // this is a no-op for them.
-        let finalized = result.copy_without_data_positions();
         if let Some(league) = data.league_mut(result.league_id) {
-            league.matches.replace_if_present(finalized);
+            league
+                .matches
+                .replace_if_present(result.copy_without_data_positions());
         }
     }
 
@@ -454,7 +455,7 @@ impl LeagueResult {
         data: &mut D,
     ) {
         // Count this match's goals per player.
-        let mut goals_per_player: HashMap<u32, u8> = HashMap::new();
+        let mut goals_per_player: FxHashMap<u32, u8> = FxHashMap::default();
         for detail in &result.score.details {
             if detail.stat_type == MatchStatisticType::Goal {
                 *goals_per_player.entry(detail.player_id).or_insert(0) += 1;
@@ -515,7 +516,7 @@ impl LeagueResult {
         //     borrower for a goal bonus the parent agreed to.
         //   - Permanent players: contract bonuses billed to current club
         //     as before.
-        let mut club_totals: HashMap<u32, i64> = HashMap::new();
+        let mut club_totals: FxHashMap<u32, i64> = FxHashMap::default();
         for pid in &appearance_ids {
             if let Some(player) = data.player(*pid) {
                 // Permanent-deal payer (current club from index). Loaned
@@ -681,21 +682,21 @@ impl LeagueResult {
         // goals and de-dup on (scorer, timestamp). Own goals credit the
         // other side.
         let ht_cutoff_ms: u64 = 45 * 60_000;
-        let left_participants: HashSet<u32> = details
+        let left_participants: FxHashSet<u32> = details
             .left_team_players
             .main
             .iter()
             .chain(details.left_team_players.substitutes_used.iter())
             .copied()
             .collect();
-        let right_participants: HashSet<u32> = details
+        let right_participants: FxHashSet<u32> = details
             .right_team_players
             .main
             .iter()
             .chain(details.right_team_players.substitutes_used.iter())
             .copied()
             .collect();
-        let mut seen_goals: HashSet<(u32, u64)> = HashSet::new();
+        let mut seen_goals: FxHashSet<(u32, u64)> = FxHashSet::default();
         let (mut left_ht, mut right_ht) = (0i8, 0i8);
         for goal in score.details.iter() {
             if goal.stat_type != MatchStatisticType::Goal || goal.time > ht_cutoff_ms {
@@ -1012,7 +1013,7 @@ impl LeagueResult {
             // detail stream. We don't have an assister↔scorer mapping in
             // the current stat model, so the assist↔scorer cooperation
             // bonus is omitted here (kept for a future model upgrade).
-            let mut scorer_goals: HashMap<u32, u8> = HashMap::new();
+            let mut scorer_goals: FxHashMap<u32, u8> = FxHashMap::default();
             let mut red_carded: Vec<u32> = Vec::new();
             for d in &result.score.details {
                 if !appeared.contains(&d.player_id) {
@@ -1030,7 +1031,7 @@ impl LeagueResult {
             }
 
             // Track per-player visible event count so we cap at 2.
-            let mut event_budget: HashMap<u32, u8> = HashMap::new();
+            let mut event_budget: FxHashMap<u32, u8> = FxHashMap::default();
 
             // Pending updates — applied after the read pass.
             struct Update {
@@ -1260,7 +1261,7 @@ impl LeagueResult {
                 // layer, and the feed stays quiet.
                 visible_reactors
                     .sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(Ordering::Equal));
-                let visible_reactors: HashMap<u32, ReactorProfile> = visible_reactors
+                let visible_reactors: FxHashMap<u32, ReactorProfile> = visible_reactors
                     .into_iter()
                     .filter(|(_, prof)| prof.score >= 1.5)
                     .take(2)
@@ -1667,7 +1668,7 @@ impl LeagueResult {
 struct CanonicalRatingMutator;
 
 impl CanonicalRatingMutator {
-    fn apply(details: &mut MatchResultRaw, effective_ratings: &HashMap<u32, f32>) {
+    fn apply(details: &mut MatchResultRaw, effective_ratings: &FxHashMap<u32, f32>) {
         for (pid, public_rating) in effective_ratings {
             if let Some(stats) = details.player_stats.get_mut(pid) {
                 stats.match_rating = *public_rating;
@@ -1778,14 +1779,14 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
     details: &MatchResultRaw,
     data: &D,
     now: NaiveDate,
-) -> HashMap<u32, f32> {
+) -> FxHashMap<u32, f32> {
     // Resolve per-side enrichment once. Map each player_id (starters +
     // used subs) to the side context their team owns so the per-player
     // loop below doesn't repeat the team / staff / formation lookups.
     let left_ctx = MatchSideContext::build(&details.left_team_players, data);
     let right_ctx = MatchSideContext::build(&details.right_team_players, data);
-    let mut side_for: HashMap<u32, &MatchSideContext> =
-        HashMap::with_capacity(details.player_stats.len());
+    let mut side_for: FxHashMap<u32, &MatchSideContext> =
+        FxHashMap::with_capacity_and_hasher(details.player_stats.len(), Default::default());
     for pid in details
         .left_team_players
         .main
@@ -1826,7 +1827,8 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
         }
     };
 
-    let mut out = HashMap::with_capacity(details.player_stats.len());
+    let mut out =
+        FxHashMap::with_capacity_and_hasher(details.player_stats.len(), Default::default());
     for (player_id, stats) in &details.player_stats {
         let location = data
             .indexes()
@@ -2096,7 +2098,7 @@ fn compute_effective_ratings<D: LeagueProcessAccess>(
 struct PlayerOfTheMatch;
 
 impl PlayerOfTheMatch {
-    fn pick(details: &MatchResultRaw, effective_ratings: &HashMap<u32, f32>) -> Option<u32> {
+    fn pick(details: &MatchResultRaw, effective_ratings: &FxHashMap<u32, f32>) -> Option<u32> {
         Self::pick_from_ratings(&details.player_stats, effective_ratings)
     }
 
@@ -2105,8 +2107,8 @@ impl PlayerOfTheMatch {
     /// case, since `compute_effective_ratings` iterates the same key
     /// set.
     fn pick_from_ratings(
-        player_stats: &HashMap<u32, PlayerMatchEndStats>,
-        effective_ratings: &HashMap<u32, f32>,
+        player_stats: &FxHashMap<u32, PlayerMatchEndStats>,
+        effective_ratings: &FxHashMap<u32, f32>,
     ) -> Option<u32> {
         let mut best_rating = 0.0_f32;
         let mut best = None;
@@ -2167,7 +2169,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
     team_conceded: u8,
     details: &MatchResultRaw,
     data: &mut D,
-    effective_ratings: &HashMap<u32, f32>,
+    effective_ratings: &FxHashMap<u32, f32>,
     best_player_id: Option<u32>,
     is_friendly: bool,
     is_cup: bool,
@@ -2202,7 +2204,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         CoachObservationBuilder::match_importance(is_friendly, is_cup, is_continental);
     let mut coach_observations: Vec<crate::club::staff::CoachMatchObservation> = Vec::new();
     let early_hook_threshold_minutes: u16 = 70;
-    let early_hooks: HashSet<u32> = details
+    let early_hooks: FxHashSet<u32> = details
         .substitutions
         .iter()
         .filter(|s| s.team_id == side.team_id)
@@ -2616,7 +2618,7 @@ impl CoachObservationBuilder {
         // thinks a player might become is a perception read over the
         // player, and the two cannot be borrowed at once.
         let date = observations.first().map(|obs| obs.date);
-        let ceilings: HashMap<u32, f32> = match date {
+        let ceilings: FxHashMap<u32, f32> = match date {
             Some(date) => observations
                 .iter()
                 .filter_map(|obs| {
@@ -2631,7 +2633,7 @@ impl CoachObservationBuilder {
                     ))
                 })
                 .collect(),
-            None => HashMap::new(),
+            None => FxHashMap::default(),
         };
         // What the ladder needs about the squad around each man, read
         // before the staff list is borrowed. Without it every observation
@@ -2645,14 +2647,14 @@ impl CoachObservationBuilder {
             .iter()
             .filter(|player| !player.is_on_loan() && player.is_ready_for_match())
             .count();
-        let ages: HashMap<u32, u8> = match date {
+        let ages: FxHashMap<u32, u8> = match date {
             Some(date) => team
                 .players
                 .players
                 .iter()
                 .map(|player| (player.id, player.age(date)))
                 .collect(),
-            None => HashMap::new(),
+            None => FxHashMap::default(),
         };
 
         let Some(head_coach) = team.staffs.head_coach_mut() else {
@@ -2831,13 +2833,13 @@ mod potm_tests {
     /// teammate whose effective rating is higher.
     #[test]
     fn potm_follows_effective_rating_not_raw() {
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         // Fresh signing: raw 8.6, effective dampened to 6.8.
         stats.insert(1, PotmFixture::stat(8.6));
         // Settled teammate: raw 7.5, effective 7.5.
         stats.insert(2, PotmFixture::stat(7.5));
 
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(1, 6.8);
         effective.insert(2, 7.5);
 
@@ -2854,11 +2856,11 @@ mod potm_tests {
     /// active for anyone) the legacy ordering is preserved.
     #[test]
     fn potm_matches_raw_ordering_when_no_dampening() {
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(1, PotmFixture::stat(8.6));
         stats.insert(2, PotmFixture::stat(7.5));
 
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(1, 8.6);
         effective.insert(2, 7.5);
 
@@ -2937,7 +2939,7 @@ mod canonical_rating_tests {
         /// map. Other fields are defaulted — the canonical-rating
         /// mutator only touches `player_stats`, so the rest can stay
         /// minimal.
-        fn match_with(stats: HashMap<u32, PlayerMatchEndStats>) -> MatchResultRaw {
+        fn match_with(stats: FxHashMap<u32, PlayerMatchEndStats>) -> MatchResultRaw {
             MatchResultRaw {
                 score: None,
                 position_data: ResultMatchPositionData::empty(),
@@ -2946,10 +2948,10 @@ mod canonical_rating_tests {
                 right_team_players: FieldSquad::new(),
                 match_time_ms: 90 * 60 * 1000,
                 additional_time_ms: 0,
-                player_stats: stats,
+                player_stats: stats.into_iter().collect(),
                 substitutions: Vec::new(),
                 chances: Vec::new(),
-                physical_snapshots: HashMap::new(),
+                physical_snapshots: FxHashMap::default(),
                 penalty_shootout: Vec::new(),
                 player_of_the_match_id: None,
                 starting_home_tactic: None,
@@ -2973,12 +2975,12 @@ mod canonical_rating_tests {
     /// can still recover the original engine verdict.
     #[test]
     fn mutator_writes_public_rating_to_canonical_field() {
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(11, CanonicalFixture::empty_stats(8.6)); // fresh signing
         stats.insert(22, CanonicalFixture::empty_stats(7.5)); // settled
         let mut details = CanonicalFixture::match_with(stats);
 
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(11, 6.8); // dampened
         effective.insert(22, 7.5); // unchanged
 
@@ -3004,10 +3006,10 @@ mod canonical_rating_tests {
     /// engine value stays, the player is not silently zeroed.
     #[test]
     fn mutator_leaves_missing_entries_alone() {
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(11, CanonicalFixture::empty_stats(7.4));
         let mut details = CanonicalFixture::match_with(stats);
-        let effective: HashMap<u32, f32> = HashMap::new();
+        let effective: FxHashMap<u32, f32> = FxHashMap::default();
 
         CanonicalRatingMutator::apply(&mut details, &effective);
 
@@ -3023,11 +3025,11 @@ mod canonical_rating_tests {
     #[test]
     fn cup_showcase_gate_reads_dampened_rating_after_mutation() {
         const SHOWCASE_FLOOR: f32 = 7.0;
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(11, CanonicalFixture::empty_stats(8.0));
         let mut details = CanonicalFixture::match_with(stats);
 
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(11, 6.6);
         CanonicalRatingMutator::apply(&mut details, &effective);
 
@@ -3047,11 +3049,11 @@ mod canonical_rating_tests {
     /// invariant the rebuild relies on.
     #[test]
     fn league_rebuild_reads_public_rating_after_mutation() {
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(11, CanonicalFixture::empty_stats(8.2));
         let mut details = CanonicalFixture::match_with(stats);
 
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(11, 7.1);
         CanonicalRatingMutator::apply(&mut details, &effective);
 
@@ -3079,11 +3081,11 @@ mod canonical_rating_tests {
         // 6.8) and a settled teammate with raw 7.5 (unchanged). After
         // the mutation, the awards-style aggregator must rank the
         // settled teammate as the higher contributor.
-        let mut stats = HashMap::new();
+        let mut stats = FxHashMap::default();
         stats.insert(11, CanonicalFixture::empty_stats(8.6));
         stats.insert(22, CanonicalFixture::empty_stats(7.5));
         let mut details = CanonicalFixture::match_with(stats);
-        let mut effective = HashMap::new();
+        let mut effective = FxHashMap::default();
         effective.insert(11, 6.8);
         effective.insert(22, 7.5);
         CanonicalRatingMutator::apply(&mut details, &effective);

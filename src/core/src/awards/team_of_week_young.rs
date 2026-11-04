@@ -10,7 +10,7 @@ use crate::world::SimulatorData;
 use crate::{AwardReputationInput, AwardReputationKind};
 use chrono::NaiveDate;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Monday-only Young Team of the Week. Reuses `TeamOfTheWeekSelector`
 /// over the same week window but with the candidate set restricted to
@@ -47,7 +47,7 @@ impl YoungTeamOfTheWeekTick {
                     return None;
                 }
                 let scores = cache.candidate_for(league.id)?;
-                let young: HashMap<u32, CandidateAggregate> = scores
+                let young: FxHashMap<u32, CandidateAggregate> = scores
                     .iter()
                     .filter(|(id, _)| {
                         data.player(**id)

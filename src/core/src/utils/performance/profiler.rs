@@ -9,6 +9,62 @@ use super::sampler;
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 static INITIALISED: OnceLock<()> = OnceLock::new();
+static ALLOCATION_PROBE: OnceLock<AllocationProbe> = OnceLock::new();
+
+/// Heap traffic as the host binary's allocator counted it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AllocationCount {
+    pub allocations: u64,
+    pub reallocations: u64,
+    pub bytes: u64,
+}
+
+impl AllocationCount {
+    pub fn since(self, earlier: AllocationCount) -> AllocationCount {
+        AllocationCount {
+            allocations: self.allocations.saturating_sub(earlier.allocations),
+            reallocations: self.reallocations.saturating_sub(earlier.reallocations),
+            bytes: self.bytes.saturating_sub(earlier.bytes),
+        }
+    }
+
+    fn add(&mut self, other: AllocationCount) {
+        self.allocations += other.allocations;
+        self.reallocations += other.reallocations;
+        self.bytes += other.bytes;
+    }
+}
+
+/// The counters a binary that owns the global allocator lends the profiler.
+/// `core` is a library and never picks the allocator, so it can only read
+/// one. A phase spans every worker and reads `process`; a stage item runs on
+/// one worker and reads `thread`.
+#[derive(Clone, Copy)]
+pub struct AllocationProbe {
+    pub process: fn() -> AllocationCount,
+    pub thread: fn() -> AllocationCount,
+}
+
+/// A counter reading taken when a region opened, and the counter to read
+/// again when it closes.
+#[derive(Clone, Copy)]
+struct AllocationMark {
+    at_open: AllocationCount,
+    read: fn() -> AllocationCount,
+}
+
+impl AllocationMark {
+    fn open(read: fn() -> AllocationCount) -> Self {
+        AllocationMark {
+            at_open: read(),
+            read,
+        }
+    }
+
+    fn close(self) -> AllocationCount {
+        (self.read)().since(self.at_open)
+    }
+}
 
 /// One profiled region, accumulated across every tick in the run.
 struct MeasuredRegion {
@@ -33,6 +89,10 @@ struct MeasuredRegion {
     /// `wall / max` is the widest that stage could ever run — its
     /// load-balance ceiling. That ratio is printed in the `cores` column.
     is_stage: bool,
+    /// `None` unless an allocation probe was installed. Like `wall_ns`, a
+    /// stage's count is summed over its items, so work a worker stole while
+    /// waiting inside one is charged to it too.
+    allocations: Option<AllocationCount>,
 }
 
 fn regions() -> &'static Mutex<Vec<MeasuredRegion>> {
@@ -62,6 +122,15 @@ impl PerformanceProfiler {
         ENABLED.load(Ordering::Relaxed)
     }
 
+    /// Lend the profiler the binary's allocation counters. First call wins.
+    pub fn install_allocation_probe(probe: AllocationProbe) {
+        let _ = ALLOCATION_PROBE.set(probe);
+    }
+
+    fn allocation_probe() -> Option<&'static AllocationProbe> {
+        ALLOCATION_PROBE.get()
+    }
+
     /// Run `f` as a *phase*, charging its wall time and the process CPU
     /// burned while it ran. `depth` only indents the report.
     ///
@@ -84,13 +153,24 @@ impl PerformanceProfiler {
     /// wrapped in a closure — end one early with `drop(guard)`.
     #[inline(always)]
     pub fn phase_scope(name: &'static str, depth: u8) -> PhaseScope {
-        let on = Self::enabled();
+        Self::open_phase(name, depth, Self::enabled(), Self::allocation_probe())
+    }
+
+    fn open_phase(
+        name: &'static str,
+        depth: u8,
+        on: bool,
+        probe: Option<&AllocationProbe>,
+    ) -> PhaseScope {
         PhaseScope {
             name,
             depth,
             start_ns: if on { sampler::now_ns() } else { 0 },
             wall0: on.then(Instant::now),
             cpu0: if on { process_cpu_nanos() } else { 0 },
+            allocations: probe
+                .filter(|_| on)
+                .map(|p| AllocationMark::open(p.process)),
         }
     }
 
@@ -107,27 +187,30 @@ impl PerformanceProfiler {
         if !Self::enabled() {
             return f();
         }
-        let wall0 = Instant::now();
+        let scope = Self::stage_scope(name, depth);
         let out = f();
-        Self::record(
-            name,
-            depth,
-            wall0.elapsed().as_nanos() as u64,
-            0,
-            true,
-            None,
-        );
+        drop(scope);
         out
     }
 
     /// Open a stage that ends when the returned guard drops.
     #[inline(always)]
     pub fn stage_scope(name: &'static str, depth: u8) -> StageScope {
+        Self::open_stage(name, depth, Self::enabled(), Self::allocation_probe())
+    }
+
+    fn open_stage(
+        name: &'static str,
+        depth: u8,
+        on: bool,
+        probe: Option<&AllocationProbe>,
+    ) -> StageScope {
         StageScope {
             name,
             depth,
-            wall0: Self::enabled().then(Instant::now),
+            wall0: on.then(Instant::now),
             label: None,
+            allocations: probe.filter(|_| on).map(|p| AllocationMark::open(p.thread)),
         }
     }
 
@@ -138,6 +221,7 @@ impl PerformanceProfiler {
         cpu_ns: u64,
         is_stage: bool,
         label: Option<&str>,
+        allocations: Option<AllocationCount>,
     ) {
         let mut regions = regions().lock().expect("performance regions poisoned");
         // Linear scan: the region set is a few dozen entries and insertion
@@ -150,6 +234,9 @@ impl PerformanceProfiler {
                 row.max_label = label.unwrap_or_default().to_string();
             }
             row.calls += 1;
+            if let Some(count) = allocations {
+                row.allocations.get_or_insert_default().add(count);
+            }
         } else {
             regions.push(MeasuredRegion {
                 name,
@@ -160,6 +247,7 @@ impl PerformanceProfiler {
                 max_label: label.unwrap_or_default().to_string(),
                 calls: 1,
                 is_stage,
+                allocations,
             });
         }
     }
@@ -186,9 +274,37 @@ impl PerformanceProfiler {
             top_cpu as f64 / 1e9,
             ratio(top_cpu, top_wall),
         );
+        let counted = regions.iter().any(|r| r.allocations.is_some());
+        if counted {
+            let top_allocations = regions
+                .iter()
+                .filter(is_top)
+                .filter_map(|r| r.allocations)
+                .fold(AllocationCount::default(), |mut sum, c| {
+                    sum.add(c);
+                    sum
+                });
+            eprintln!(
+                "allocations {:.1} M   reallocations {:.1} M   requested {:.1} GB",
+                top_allocations.allocations as f64 / 1e6,
+                top_allocations.reallocations as f64 / 1e6,
+                top_allocations.bytes as f64 / 1_073_741_824.0,
+            );
+        }
         eprintln!(
-            "{:<34} {:>10} {:>7} {:>11} {:>7} {:>9} {:>7}  straggler",
-            "phase", "wall_ms", "%wall", "cpu_ms", "cores", "max_ms", "calls"
+            "{:<34} {:>10} {:>7} {:>11} {:>7} {:>9} {:>7}{}  straggler",
+            "phase",
+            "wall_ms",
+            "%wall",
+            "cpu_ms",
+            "cores",
+            "max_ms",
+            "calls",
+            if counted {
+                format!(" {:>9} {:>9} {:>9}", "allocs_M", "reallocs_M", "MB")
+            } else {
+                String::new()
+            },
         );
         for row in regions.iter() {
             let wall_ms = row.wall_ns as f64 / 1e6;
@@ -199,8 +315,18 @@ impl PerformanceProfiler {
                 ratio(row.cpu_ns, row.wall_ns)
             };
             let indent = "  ".repeat(row.depth as usize);
+            let heap = match (counted, row.allocations) {
+                (false, _) => String::new(),
+                (true, None) => format!(" {:>9} {:>9} {:>9}", "", "", ""),
+                (true, Some(c)) => format!(
+                    " {:>9.2} {:>9.2} {:>9.1}",
+                    c.allocations as f64 / 1e6,
+                    c.reallocations as f64 / 1e6,
+                    c.bytes as f64 / 1_048_576.0,
+                ),
+            };
             eprintln!(
-                "{:<34} {:>10.1} {:>6.1}% {:>11.1} {:>7.2} {:>9.1} {:>7}  {}",
+                "{:<34} {:>10.1} {:>6.1}% {:>11.1} {:>7.2} {:>9.1} {:>7}{}  {}",
                 format!("{indent}{}", row.name),
                 wall_ms,
                 ratio(row.wall_ns, top_wall) * 100.0,
@@ -208,6 +334,7 @@ impl PerformanceProfiler {
                 cores,
                 row.max_ns as f64 / 1e6,
                 row.calls,
+                heap,
                 row.max_label,
             );
         }
@@ -255,6 +382,7 @@ pub struct PhaseScope {
     /// at either end.
     wall0: Option<Instant>,
     cpu0: u64,
+    allocations: Option<AllocationMark>,
 }
 
 impl Drop for PhaseScope {
@@ -264,7 +392,8 @@ impl Drop for PhaseScope {
         };
         let wall = wall0.elapsed().as_nanos() as u64;
         let cpu = process_cpu_nanos().saturating_sub(self.cpu0);
-        PerformanceProfiler::record(self.name, self.depth, wall, cpu, false, None);
+        let allocations = self.allocations.map(AllocationMark::close);
+        PerformanceProfiler::record(self.name, self.depth, wall, cpu, false, None, allocations);
         sampler::push_window(self.name, self.start_ns, self.start_ns + wall);
     }
 }
@@ -278,6 +407,7 @@ pub struct StageScope {
     /// cost nothing.
     wall0: Option<Instant>,
     label: Option<String>,
+    allocations: Option<AllocationMark>,
 }
 
 impl StageScope {
@@ -301,6 +431,7 @@ impl Drop for StageScope {
                 0,
                 true,
                 self.label.as_deref(),
+                self.allocations.map(AllocationMark::close),
             );
         }
     }
@@ -324,5 +455,127 @@ impl PerformanceProfiler {
         let out = f();
         drop(scope);
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU64;
+
+    static PHASE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static STAGE_ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+    static DISABLED_READS: AtomicU64 = AtomicU64::new(0);
+
+    fn phase_counter() -> AllocationCount {
+        let n = PHASE_ALLOCATIONS.load(Ordering::SeqCst);
+        AllocationCount {
+            allocations: n,
+            reallocations: 0,
+            bytes: n * 16,
+        }
+    }
+
+    fn stage_counter() -> AllocationCount {
+        let n = STAGE_ALLOCATIONS.load(Ordering::SeqCst);
+        AllocationCount {
+            allocations: n,
+            reallocations: n,
+            bytes: n * 8,
+        }
+    }
+
+    fn unused_counter() -> AllocationCount {
+        AllocationCount::default()
+    }
+
+    fn disabled_counter() -> AllocationCount {
+        DISABLED_READS.fetch_add(1, Ordering::SeqCst);
+        AllocationCount::default()
+    }
+
+    fn recorded(name: &str) -> Option<Option<AllocationCount>> {
+        regions()
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.allocations)
+    }
+
+    #[test]
+    fn a_phase_reports_the_allocations_made_while_it_ran() {
+        let probe = AllocationProbe {
+            process: phase_counter,
+            thread: unused_counter,
+        };
+        let scope =
+            PerformanceProfiler::open_phase("test_phase_allocations", 0, true, Some(&probe));
+        PHASE_ALLOCATIONS.fetch_add(7, Ordering::SeqCst);
+        drop(scope);
+        assert_eq!(
+            recorded("test_phase_allocations"),
+            Some(Some(AllocationCount {
+                allocations: 7,
+                reallocations: 0,
+                bytes: 112,
+            }))
+        );
+    }
+
+    #[test]
+    fn a_stage_reports_the_allocations_of_the_worker_that_ran_it() {
+        let probe = AllocationProbe {
+            process: unused_counter,
+            thread: stage_counter,
+        };
+        for _ in 0..2 {
+            let scope =
+                PerformanceProfiler::open_stage("test_stage_allocations", 1, true, Some(&probe));
+            STAGE_ALLOCATIONS.fetch_add(3, Ordering::SeqCst);
+            drop(scope);
+        }
+        assert_eq!(
+            recorded("test_stage_allocations"),
+            Some(Some(AllocationCount {
+                allocations: 6,
+                reallocations: 6,
+                bytes: 48,
+            }))
+        );
+    }
+
+    #[test]
+    fn without_a_probe_a_region_counts_no_allocations() {
+        drop(PerformanceProfiler::open_phase(
+            "test_phase_without_probe",
+            0,
+            true,
+            None,
+        ));
+        assert_eq!(recorded("test_phase_without_probe"), Some(None));
+    }
+
+    #[test]
+    fn a_disabled_profiler_reads_no_counter() {
+        let probe = AllocationProbe {
+            process: disabled_counter,
+            thread: disabled_counter,
+        };
+        drop(PerformanceProfiler::open_phase(
+            "test_phase_disabled",
+            0,
+            false,
+            Some(&probe),
+        ));
+        drop(PerformanceProfiler::open_stage(
+            "test_stage_disabled",
+            1,
+            false,
+            Some(&probe),
+        ));
+        assert_eq!(DISABLED_READS.load(Ordering::SeqCst), 0);
+        assert_eq!(recorded("test_phase_disabled"), None);
+        assert_eq!(recorded("test_stage_disabled"), None);
     }
 }

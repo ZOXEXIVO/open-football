@@ -30,12 +30,12 @@ use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchResultRaw, MatchSquad};
 use crate::utils::IntegerUtils;
 use crate::{
-    Club, MatchTacticType, Player, PlayerPositionType, RecognitionEventContext,
+    Club, MatchTacticType, Player, PlayerCollection, PlayerPositionType, RecognitionEventContext,
     RecognitionEventKind, Tactics,
 };
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Clone)]
 pub struct NationalTeam {
@@ -47,7 +47,7 @@ pub struct NationalTeam {
     pub level: NationalTeamLevel,
     pub staff: Vec<NationalTeamStaffMember>,
     pub squad: Vec<NationalSquadPlayer>,
-    pub generated_squad: Vec<Player>,
+    pub generated_squad: PlayerCollection,
     pub tactics: Tactics,
     pub reputation: u16,
     pub elo_rating: u16,
@@ -76,7 +76,7 @@ impl NationalTeam {
             level,
             staff,
             squad: Vec::new(),
-            generated_squad: Vec::new(),
+            generated_squad: PlayerCollection::new(Vec::new()),
             tactics: Tactics::new(MatchTacticType::T442),
             reputation: 0,
             elo_rating: 1500,
@@ -166,7 +166,7 @@ impl NationalTeam {
         // bumped and the debut transition. Squad members who travelled
         // but didn't get on the pitch are not "capped" — call-up alone
         // already emits `NationalTeamCallup`.
-        let appearance_ids: HashSet<u32> = match_result.player_stats.keys().copied().collect();
+        let appearance_ids: FxHashSet<u32> = match_result.player_stats.keys().copied().collect();
 
         for club in clubs.iter_mut() {
             for team in club.teams.iter_mut() {

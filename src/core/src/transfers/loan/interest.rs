@@ -673,7 +673,7 @@ mod tests {
                 .map(|c| c.player_id)
                 .unwrap()
         };
-        let picks: std::collections::HashSet<u32> = (1u32..=25).map(favourite_of).collect();
+        let picks: rustc_hash::FxHashSet<u32> = (1u32..=25).map(favourite_of).collect();
         assert!(
             picks.len() > 3,
             "25 clubs on one market converged on {} names",
@@ -764,7 +764,7 @@ mod tests {
     /// moved the privilege rather than removed it.
     #[test]
     fn visit_order_rotates() {
-        let mut leaders = std::collections::HashSet::new();
+        let mut leaders = rustc_hash::FxHashSet::default();
         for _ in 0..400 {
             leaders.insert(InterestDraw::visit_order(8)[0]);
         }

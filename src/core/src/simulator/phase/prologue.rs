@@ -31,7 +31,9 @@ impl Prologue {
         // their club's continent can differ, and BEFORE the national
         // fixtures below — those matches need a populated squad with
         // world visibility.
+        let callups = PerformanceProfiler::phase_scope("0a_callups", 1);
         data.process_world_national_team_callups();
+        drop(callups);
 
         // National-team matches simulate at the world level so squads can
         // include foreign-based players and post-match stats updates fan
@@ -40,7 +42,8 @@ impl Prologue {
         // *every* continent.
         let national_results = WorldNationalCompetitions::simulate(&mut data.continents, today);
         for match_result in &national_results {
-            data.match_store.push(match_result.clone(), today);
+            data.match_store
+                .push(match_result.copy_without_data_positions(), today);
         }
         result.match_results.extend(national_results);
 

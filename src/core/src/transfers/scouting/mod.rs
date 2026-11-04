@@ -26,6 +26,7 @@ use crate::transfers::scouting::assignment::ClubScan;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::world::ForeignPool;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -65,8 +66,8 @@ use crate::{
 use crate::{Player, Team};
 use chrono::Weekday;
 use rayon::prelude::*;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
 
 struct ScoutAssignmentAction {
     club_id: u32,
@@ -122,7 +123,7 @@ struct MatchScoutingObservationResult {
 /// There is no reentrancy — every borrow is taken and dropped inside
 /// [`Self::reach`].
 struct MarketReachCache {
-    entries: std::cell::RefCell<HashMap<(u32, u32), f32>>,
+    entries: std::cell::RefCell<FxHashMap<(u32, u32), f32>>,
 }
 
 impl MarketReachCache {
@@ -133,7 +134,7 @@ impl MarketReachCache {
 
     fn new() -> Self {
         MarketReachCache {
-            entries: std::cell::RefCell::new(HashMap::new()),
+            entries: std::cell::RefCell::new(FxHashMap::default()),
         }
     }
 
@@ -330,6 +331,7 @@ struct PoolContext<'c> {
     seller_club_matches: u16,
     group_ranks: ClubGroupRanks,
     home_preferences: Vec<u32>,
+    stage_parent_loan: bool,
 }
 
 impl<'c> PoolContext<'c> {
@@ -341,6 +343,7 @@ impl<'c> PoolContext<'c> {
         country_id: u32,
         country_reputation: u16,
         country_region: ScoutingRegion,
+        stage_parent_loan: bool,
     ) -> Self {
         // Seller market context once per club — flat 0/0 used to
         // drag every domestic player to the same baseline regardless
@@ -395,6 +398,7 @@ impl<'c> PoolContext<'c> {
             seller_club_matches,
             group_ranks,
             home_preferences,
+            stage_parent_loan,
         }
     }
 }
@@ -1229,7 +1233,13 @@ impl ScoutingPass {
     // ============================================================
 
     /// Collect player summaries from a country for cross-country scouting.
-    pub fn collect_player_pool(country: &Country, date: NaiveDate) -> Vec<PlayerSummary> {
+    /// `stage_parent_loan` stages each parent's view of lending him, which
+    /// only the foreign loan scan reads off the world pool.
+    pub fn collect_player_pool(
+        country: &Country,
+        date: NaiveDate,
+        stage_parent_loan: bool,
+    ) -> Vec<PlayerSummary> {
         let price_level = country.settings.pricing.price_level;
         let country_id = country.id;
         let country_reputation = country.reputation;
@@ -1256,6 +1266,7 @@ impl ScoutingPass {
                     country_id,
                     country_reputation,
                     country_region,
+                    stage_parent_loan,
                 );
 
                 for team in &club.teams.teams {
@@ -1318,7 +1329,7 @@ impl ScoutingPass {
 
     pub fn process_scouting(
         country: &mut Country,
-        foreign_players: &[&PlayerSummary],
+        foreign_players: ForeignPool<'_>,
         date: NaiveDate,
         market_map: &MarketMap,
     ) {
@@ -1337,7 +1348,7 @@ impl ScoutingPass {
         // pool. Now it runs once.
         let all_players: Vec<PlayerSummary> =
             PerformanceProfiler::stage("scout_domestic_pool", 4, || {
-                Self::collect_player_pool(&*country, date)
+                Self::collect_player_pool(&*country, date, false)
             });
 
         // Partition both candidate pools by position group ONCE per country.
@@ -1384,7 +1395,6 @@ impl ScoutingPass {
         // gates, reputation reach and affordability) still has to pass.
         for p in foreign_players
             .iter()
-            .copied()
             .filter(|p| p.country_reputation <= country_reputation || Self::is_openly_available(p))
         {
             for group in PlayerFieldPositionGroup::ALL {
@@ -1432,7 +1442,7 @@ impl ScoutingPass {
         // staged is about that club, so it stays with it for the parallel
         // apply below. Membership set instead of `Vec::contains` — the
         // dedup was quadratic in the day's target count.
-        let mut seen_targets: HashSet<(u32, u32)> = HashSet::new();
+        let mut seen_targets: FxHashSet<(u32, u32)> = FxHashSet::default();
         let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
         for staged in &staged_per_club {
             for target in &staged.wanted_targets {
@@ -1509,7 +1519,7 @@ impl ScoutingPass {
         // Grouped by target, in the order the clubs staged them, so a
         // player watched by several clubs hears from them in the same
         // sequence the serial loop delivered.
-        let mut signals_by_player: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut signals_by_player: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
         for (index, (player_id, _)) in wanted_signals.iter().enumerate() {
             signals_by_player.entry(*player_id).or_default().push(index);
         }
@@ -1669,7 +1679,7 @@ impl ScoutingPass {
         // Build a lookup of current player abilities from every club in the
         // country once — shadow targets may have moved clubs since we first
         // observed them, so we search all teams.
-        let mut current_ability: HashMap<u32, u8> = HashMap::new();
+        let mut current_ability: FxHashMap<u32, u8> = FxHashMap::default();
         for c in &country.clubs {
             for t in &c.teams.teams {
                 for p in &t.players.players {
@@ -1883,7 +1893,9 @@ impl ScoutingPass {
                 .pressure_of(GoalKind::StayAtThisClub)
                 .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
                 .clamp(0.0, 1.0),
-            loan_willingness: LoanAssetGuard::willingness_for(club, player, date),
+            parent_loan: ctx
+                .stage_parent_loan
+                .then(|| LoanAssetGuard::parent_view(club, player, date, group_ranks)),
             career_plan: player.mind.career.plan_view(MindClock::day(date)),
             parent_subsidy: LoanMoney::parent_desire(
                 player.pathway_stage(),
@@ -1903,7 +1915,6 @@ impl ScoutingPass {
                 .calculate_ability_for_position(player.position()),
             observable_level: AbilityEstimator::observable_level(player),
             pathway_stage: player.pathway_stage(),
-            is_development: LoanAssetGuard::development_loan(player, club, date),
             // Transfer-market candidate listing: regressed
             // value so the candidate sorter / recommendation
             // engine isn't fooled by a small-sample season.
@@ -2013,7 +2024,7 @@ mod scout_reach_tests {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     use super::*;
     use crate::transfers::market::map::{
@@ -2054,7 +2065,7 @@ mod tests {
         }
 
         fn world() -> MarketMap {
-            let mut facts = HashMap::new();
+            let mut facts = FxHashMap::default();
             for f in [
                 Self::facts(Self::BR, "br", 3, 7800),
                 Self::facts(Self::PT, "pt", 1, 7500),
@@ -2062,7 +2073,7 @@ mod tests {
             ] {
                 facts.insert(f.id, f);
             }
-            let mut profiles = HashMap::new();
+            let mut profiles = FxHashMap::default();
             // Spain's clubs buy Brazilians; they do not import Portuguese
             // nationals at anything like the same rate.
             profiles.insert(

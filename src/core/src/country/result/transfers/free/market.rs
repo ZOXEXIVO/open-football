@@ -41,7 +41,8 @@ use crate::utils::IntegerUtils;
 use crate::{Club, Country, Person, PlayerStatusType, Team};
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
+use std::borrow::Cow;
 
 use super::*;
 
@@ -68,7 +69,7 @@ pub(in crate::country::result) struct FreeAgentLedger<'a> {
 /// who the club talked into staying before the release sweep could clear them.
 struct ExpiryOutcome {
     expired: Vec<u32>,
-    renewed: HashSet<u32>,
+    renewed: FxHashSet<u32>,
 }
 
 /// The market as this country sees it today: who is free, who can see whom,
@@ -78,7 +79,9 @@ struct ExpiryOutcome {
 struct FreeAgentMarket<'a> {
     country: &'a Country,
     date: NaiveDate,
-    candidates: &'a [FreeAgentCandidate],
+    /// The day's candidates by position group, in their order, so a
+    /// request reads only its own shirt.
+    by_group: [Vec<&'a FreeAgentCandidate<'a>>; PlayerFieldPositionGroup::COUNT],
     visibility: &'a FreeAgentMarketVisibility,
     registration: &'a SquadRegistrationLimits,
     config: &'a TransferConfig,
@@ -94,7 +97,7 @@ struct FreeAgentMarket<'a> {
 /// one accumulator rather than a per-club return value.
 struct MatchState<'a> {
     signings: Vec<FreeAgentSigning>,
-    approached_today: HashSet<(u32, u32)>,
+    approached_today: FxHashSet<(u32, u32)>,
     depth_offers: Vec<DepthNegotiationAction>,
     recorder: BlockReasonRecorder,
     /// What the emergency pass already signed, so the day's cap counts only
@@ -249,7 +252,7 @@ impl FreeAgentMarketPass {
         // (club, player) pairs already approached this tick — a player
         // who turned this club down under one request must not be
         // re-asked the same day under another.
-        let approached_today: HashSet<(u32, u32)> = HashSet::new();
+        let approached_today: FxHashSet<(u32, u32)> = FxHashSet::default();
         // Depth-type requests (DepthCover / SquadPadding) never sign
         // instantly — they collect staged offers here and the stager
         // below turns each one into a real Pending negotiation that
@@ -271,12 +274,17 @@ impl FreeAgentMarketPass {
             global_offered_ids,
             global_rejected_ids,
         };
+        let mut by_group: [Vec<&FreeAgentCandidate>; PlayerFieldPositionGroup::COUNT] =
+            Default::default();
+        for candidate in &candidates {
+            by_group[candidate.position_group.index()].push(candidate);
+        }
         Self::match_to_clubs(
             country,
             &FreeAgentMarket {
                 country,
                 date,
-                candidates: &candidates,
+                by_group,
                 visibility: &visibility,
                 registration: &registration,
                 config,
@@ -299,7 +307,7 @@ impl FreeAgentMarketPass {
         // negotiations (PersonalTerms phase). Runs after the matcher
         // loop because creating a negotiation needs the mutable
         // country borrow the loop's club iteration holds immutably.
-        let staged_depth_ids: HashSet<u32> = depth_offers.iter().map(|d| d.player_id).collect();
+        let staged_depth_ids: FxHashSet<u32> = depth_offers.iter().map(|d| d.player_id).collect();
         FreeAgentNegotiationStager::stage(country, depth_offers, date, global_offered_ids);
 
         // Pass 2c: long-term market clearing. Free agents past the
@@ -333,11 +341,11 @@ impl FreeAgentMarketPass {
     }
 
     /// Passes 1 and 1b — who is actually free today.
-    fn candidates(
+    fn candidates<'a>(
         country: &mut Country,
         date: NaiveDate,
-        world: &FreeAgentWorld<'_>,
-    ) -> Vec<FreeAgentCandidate> {
+        world: &FreeAgentWorld<'a>,
+    ) -> Vec<FreeAgentCandidate<'a>> {
         let (mut candidates, expired, renewed) = Self::expiring_here(country, date);
         Self::add_global_pool(
             country,
@@ -355,9 +363,9 @@ impl FreeAgentMarketPass {
     fn expiring_here(
         country: &mut Country,
         date: NaiveDate,
-    ) -> (Vec<FreeAgentCandidate>, Vec<u32>, HashSet<u32>) {
+    ) -> (Vec<FreeAgentCandidate<'static>>, Vec<u32>, FxHashSet<u32>) {
         // Pass 1: Find players with expiring contracts (< 90 days) or already expired
-        let mut candidates: Vec<FreeAgentCandidate> = Vec::new();
+        let mut candidates: Vec<FreeAgentCandidate<'static>> = Vec::new();
         let mut expired_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
@@ -407,9 +415,9 @@ impl FreeAgentMarketPass {
                         let last_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                         candidates.push(FreeAgentCandidate {
                             player_id: player.id,
-                            player_name: player.full_name.to_string(),
+                            player_name: Cow::Owned(player.full_name.to_string()),
                             club_id: club.id,
-                            club_name: club.name.clone(),
+                            club_name: Cow::Owned(club.name.clone()),
                             ability: player.player_attributes.current_ability,
                             // Signing decisions read the observable
                             // ceiling, never hidden biological PA.
@@ -435,7 +443,7 @@ impl FreeAgentMarketPass {
                             // emergency-fill purposes — which is the
                             // common case anyway and skews preference
                             // mildly toward local journeymen.
-                            nationality_country_code: country.code.clone(),
+                            nationality_country_code: Cow::Owned(country.code.clone()),
                             nationality_continent_id: country.continent_id,
                             // Treated as domestic for the same reason: the
                             // true passport is not reachable from inside
@@ -486,10 +494,10 @@ impl FreeAgentMarketPass {
 
     /// The players the rest of the world has put in its "move on a free" pool,
     /// plus the release sweep over whoever here is still expired.
-    fn add_global_pool(
+    fn add_global_pool<'a>(
         country: &mut Country,
-        world: &FreeAgentWorld<'_>,
-        candidates: &mut Vec<FreeAgentCandidate>,
+        world: &FreeAgentWorld<'a>,
+        candidates: &mut Vec<FreeAgentCandidate<'a>>,
         expiry: &ExpiryOutcome,
     ) {
         let global_pool = world.global_pool;
@@ -503,23 +511,21 @@ impl FreeAgentMarketPass {
         // club_id=0 / club_name="Free Agent" as the synthetic "from" so the
         // matching filter in Pass 2 (`c.club_id != club.id`) and the Pass 3
         // splitter (`from_club_id == 0` → defer to caller) both work.
+        candidates.reserve(global_pool.len());
         for fa in global_pool {
             candidates.push(FreeAgentCandidate {
                 player_id: fa.player_id,
-                player_name: fa.player_name.clone(),
+                player_name: Cow::Borrowed(&fa.player_name),
                 club_id: 0,
-                club_name: "Free Agent".to_string(),
+                club_name: Cow::Borrowed("Free Agent"),
                 ability: fa.ability,
                 potential: fa.potential,
                 age: fa.age,
                 position_group: fa.position_group,
                 days_to_expiry: 0,
                 nationality_country_reputation: fa.nationality_country_reputation,
-                nationality_region: ScoutingRegion::from_country(
-                    fa.nationality_continent_id,
-                    &fa.nationality_country_code,
-                ),
-                nationality_country_code: fa.nationality_country_code.clone(),
+                nationality_region: fa.nationality_region,
+                nationality_country_code: Cow::Borrowed(&fa.nationality_country_code),
                 nationality_continent_id: fa.nationality_continent_id,
                 nationality_country_id: fa.nationality_country_id,
                 career_pressure: fa.career_pressure,
@@ -685,7 +691,6 @@ impl FreeAgentMarketPass {
         let buyer_negotiator_skill = buyer.negotiator_skill;
         let buyer_foreign_slots = buyer.foreign_slots;
         let buyer_benefactor = buyer.benefactor;
-        let candidates = market.candidates;
         let visibility = market.visibility;
         let config = market.config;
         let max_signings_per_day = market.max_signings_per_day;
@@ -754,11 +759,8 @@ impl FreeAgentMarketPass {
         // be offered, and each gate failure is recorded so the
         // diagnosis layer can explain long sits.
         let mut ranked: Vec<(&FreeAgentCandidate, f32, BuyerRoleFit)> = Vec::new();
-        for c in candidates.iter() {
+        for &c in &market.by_group[group.index()] {
             if c.club_id == club.id {
-                continue;
-            }
-            if c.position_group != group {
                 continue;
             }
             if state.signings.iter().any(|s| s.player_id == c.player_id)
@@ -965,9 +967,9 @@ impl FreeAgentMarketPass {
 
             state.depth_offers.push(DepthNegotiationAction {
                 player_id: best.player_id,
-                player_name: best.player_name.clone(),
+                player_name: best.player_name.to_string(),
                 from_club_id: best.club_id,
-                from_club_name: best.club_name.clone(),
+                from_club_name: best.club_name.to_string(),
                 to_club_id: club.id,
                 request_id: request.id,
                 arrival: FreeAgentArrival {
@@ -1025,9 +1027,9 @@ impl FreeAgentMarketPass {
 
         state.signings.push(FreeAgentSigning {
             player_id: best.player_id,
-            player_name: best.player_name.clone(),
+            player_name: best.player_name.to_string(),
             from_club_id: best.club_id,
-            from_club_name: best.club_name.clone(),
+            from_club_name: best.club_name.to_string(),
             to_club_id: club.id,
             reason,
             terms: Some(terms),

@@ -471,22 +471,29 @@ impl PositionCoverage {
 
 impl PlayerPositions {
     pub fn positions(&self) -> Vec<PlayerPositionType> {
-        let filtered: Vec<PlayerPositionType> = self
+        self.playable().collect()
+    }
+
+    /// [`Self::positions`] without building the Vec: every stored position
+    /// at playable level, else the single best one.
+    pub fn playable(&self) -> impl Iterator<Item = PlayerPositionType> + '_ {
+        let any_playable = self
             .positions
             .iter()
-            .filter(|p| p.level >= REQUIRED_POSITION_LEVEL)
-            .map(|p| p.position)
-            .collect();
-
-        if filtered.is_empty() {
+            .any(|p| p.level >= REQUIRED_POSITION_LEVEL);
+        let fallback = if any_playable {
+            None
+        } else {
             self.positions
                 .iter()
                 .max_by_key(|p| p.level)
-                .map(|p| vec![p.position])
-                .unwrap_or_default()
-        } else {
-            filtered
-        }
+                .map(|p| p.position)
+        };
+        self.positions
+            .iter()
+            .filter(move |p| any_playable && p.level >= REQUIRED_POSITION_LEVEL)
+            .map(|p| p.position)
+            .chain(fallback)
     }
 
     /// First entry of [`Self::positions`] without building the Vec —

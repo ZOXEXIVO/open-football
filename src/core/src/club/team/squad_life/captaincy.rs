@@ -44,8 +44,8 @@ use crate::{
     Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
 };
 use chrono::NaiveDate;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 /// Cooldown (days) on each captaincy event so monthly recalculation
 /// oscillation around an evenly-matched leadership group doesn't spam
@@ -369,7 +369,7 @@ struct CaptaincyModel<'a> {
     min_ca: u8,
     max_ca: u8,
     ca_values: Vec<u8>,
-    nationality_counts: HashMap<u32, usize>,
+    nationality_counts: FxHashMap<u32, usize>,
     squad_size: usize,
 }
 
@@ -380,7 +380,7 @@ impl<'a> CaptaincyModel<'a> {
         let mut min_ca = u8::MAX;
         let mut max_ca = u8::MIN;
         let mut ca_values = Vec::with_capacity(team.players.players.len());
-        let mut nationality_counts: HashMap<u32, usize> = HashMap::new();
+        let mut nationality_counts: FxHashMap<u32, usize> = FxHashMap::default();
 
         for p in team.players.iter() {
             let starts = p.statistics.played;

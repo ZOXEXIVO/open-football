@@ -6,7 +6,7 @@ use crate::club::player::mind::MindSwitch;
 use crate::club::player::statistics::PlayerStatisticsHistoryItem;
 use crate::world::SimulatorData;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// The standard of football each club a career passes through played at.
 ///
@@ -14,16 +14,16 @@ use std::collections::HashMap;
 /// league's mean; one whose league is not here either reads a fit of
 /// standard on team reputation taken from the world's own clubs.
 pub struct ClubStandardTable {
-    by_team: HashMap<String, f32>,
-    by_league: HashMap<String, f32>,
+    by_team: FxHashMap<String, f32>,
+    by_league: FxHashMap<String, f32>,
     intercept: f32,
     slope: f32,
 }
 
 impl ClubStandardTable {
     pub fn build(data: &SimulatorData) -> Self {
-        let mut by_team = HashMap::new();
-        let mut leagues: HashMap<String, (f32, u32)> = HashMap::new();
+        let mut by_team = FxHashMap::default();
+        let mut leagues: FxHashMap<String, (f32, u32)> = FxHashMap::default();
         let (mut n, mut sx, mut sy, mut sxx, mut sxy) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 0.0f64);
         for country in data.continents.iter().flat_map(|c| &c.countries) {
             let league_lookup = ClubIdentity::league_lookup(country);
@@ -143,8 +143,8 @@ mod tests {
 
     fn table() -> ClubStandardTable {
         ClubStandardTable {
-            by_team: HashMap::from([("top-club".to_string(), 0.72), ("second-tier".to_string(), 0.58)]),
-            by_league: HashMap::from([("abroad-league".to_string(), 0.64)]),
+            by_team: FxHashMap::from_iter([("top-club".to_string(), 0.72), ("second-tier".to_string(), 0.58)]),
+            by_league: FxHashMap::from_iter([("abroad-league".to_string(), 0.64)]),
             intercept: 0.30,
             slope: 0.0001,
         }

@@ -19,6 +19,18 @@
 //!   cargo build --profile profiling
 //!   ./target/profiling/dev_simulate [days]          # default 60
 //!   ./target/profiling/dev_simulate bench [days]    # same; muscle memory
+//!   ./target/profiling/dev_simulate fingerprint 30 --seed 7
+//!
+//! Flags, valid with every mode:
+//!   --threads N    size the global and the match-engine pool (default: all
+//!                  cores; `fingerprint` defaults to 1, the only width at
+//!                  which a seed replays the same world)
+//!   --seed S       pin the simulation seed before the world is generated
+//!   --recordings   record matches in Goals scope, as the game does
+//!
+//! Production shape: build with `--no-default-features` to play matches on
+//! the real engine instead of the stub, and pass `--recordings`. A
+//! real-engine day is minutes, not milliseconds.
 //!
 //! Profile it:
 //!   samply record --save-only -o prof.json.gz -r 4000 \
@@ -33,19 +45,28 @@ use core::utils::DateUtils;
 use core::continent::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
+use core::r#match::RecordingScope;
+use core::utils::random::engine::RandomEngine;
+use core::shared::{CountryLookupIndex, ReconcileStats, SimulatorDataIndexes};
 use core::{
-    FootballSimulator, InternationalCalendar, PerformanceProfiler, SimulationResult,
-    SimulatorData, TeamType,
+    AllocationCount, FootballSimulator, InternationalCalendar, MatchRuntime, PerformanceProfiler,
+    PhaseObserver,
+    SimulationResult, SimulatorData, TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
-use mimalloc::MiMalloc;
+use fingerprint::WorldFingerprint;
+use heap::CountingAllocator;
+
+mod fingerprint;
+mod heap;
 
 /// Windows' system heap serialises concurrent alloc/free behind a global
 /// lock; under the world sim's 32-thread rayon fan-out that lock — not CPU
 /// or parallelism — is the dominant cost. mimalloc's per-thread heaps
-/// remove the contention so the parallel phases actually scale.
+/// remove the contention so the parallel phases actually scale. The
+/// counting wrapper only counts under `OF_PERFORMANCE`.
 #[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+static GLOBAL: CountingAllocator = CountingAllocator;
 use env_logger::Env;
 use std::cmp::Reverse;
 use chrono::{Datelike, NaiveDate, Timelike};
@@ -216,11 +237,19 @@ impl SimHarness {
         // Taken before the first tick: the world exactly as the database
         // hydrated it, which is the state the youth pathway has to heal.
         let youth_before = YouthSquadCensus::take(&self.data);
+        // Heap traffic inside the ticks only, so it can be held against the
+        // profiler's phase total: the gap is what no phase owns.
+        let mut tick_heap = AllocationCount::default();
 
         for day in 1..=days {
+            let heap_before = CountingAllocator::process_count();
             let tick_start = Instant::now();
             let result = self.tick();
             let ms = tick_start.elapsed().as_secs_f64() * 1000.0;
+            let heap = CountingAllocator::process_count().since(heap_before);
+            tick_heap.allocations += heap.allocations;
+            tick_heap.reallocations += heap.reallocations;
+            tick_heap.bytes += heap.bytes;
 
             let matches = result.match_results.len();
             census.record(&result);
@@ -254,6 +283,15 @@ impl SimHarness {
         // set. `cores` is the column that matters: it is CPU/wall, i.e. how
         // wide each phase actually ran.
         PerformanceProfiler::report(&format!("{days}d"));
+        if CountingAllocator::is_counting() {
+            eprintln!(
+                "heap inside the ticks: allocations {:.1} M   reallocations {:.1} M   requested {:.1} GB   ({:.1} M allocations a day)",
+                tick_heap.allocations as f64 / 1e6,
+                tick_heap.reallocations as f64 / 1e6,
+                tick_heap.bytes as f64 / 1_073_741_824.0,
+                tick_heap.allocations as f64 / 1e6 / days as f64,
+            );
+        }
 
         census.print(MIN_CENSUS_MATCHES);
         world.print();
@@ -278,15 +316,82 @@ impl SimHarness {
     }
 }
 
+/// The switches that make a run production-shaped or reproducible. All of
+/// them must take effect before the world is generated.
+struct HarnessOptions {
+    threads: Option<usize>,
+    recordings: bool,
+    seed: Option<u64>,
+    positional: Vec<String>,
+}
+
+impl HarnessOptions {
+    fn parse(args: Vec<String>) -> Self {
+        let mut options = HarnessOptions {
+            threads: None,
+            recordings: false,
+            seed: None,
+            positional: Vec::new(),
+        };
+        let mut args = args.into_iter();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--recordings" => options.recordings = true,
+                "--threads" => options.threads = args.next().and_then(|v| v.parse().ok()),
+                "--seed" => options.seed = args.next().and_then(|v| v.parse().ok()),
+                _ => match arg.split_once('=') {
+                    Some(("--threads", v)) => options.threads = v.parse().ok(),
+                    Some(("--seed", v)) => options.seed = v.parse().ok(),
+                    _ => options.positional.push(arg),
+                },
+            }
+        }
+        if options
+            .positional
+            .first()
+            .is_some_and(|m| m.starts_with("fingerprint"))
+        {
+            options.threads.get_or_insert(1);
+            options.seed.get_or_insert(7);
+        }
+        options
+    }
+
+    fn apply(&self) {
+        if let Some(threads) = self.threads {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build_global()
+                .expect("the global pool is sized before anything uses it");
+            MatchRuntime::init_engine_pool(threads);
+        }
+        if self.recordings {
+            MatchRuntime::set_recordings_mode(true);
+            MatchRuntime::set_recording_scope(RecordingScope::Goals);
+        }
+        if let Some(seed) = self.seed {
+            RandomEngine::set_seed(seed);
+        }
+    }
+}
+
 fn main() {
     // Quiet by default (the database loader and simulator emit `info!`
     // lines that would swamp the per-day timing); raise with RUST_LOG.
     env_logger::Builder::from_env(Env::default().default_filter_or("warn")).init();
+    CountingAllocator::install_probe_if_profiling();
+
+    // Flags come off first, so `--seed 7` is never read as a day count, and
+    // take effect before the world exists: generation already draws from
+    // the pools and the seed.
+    let options = HarnessOptions::parse(std::env::args().skip(1).collect());
+    options.apply();
+    let args = options.positional;
 
     // Accept `dev_simulate [days]` or `dev_simulate bench [days]`: take the
     // first argument that parses as a day count so both spellings work.
-    let days = std::env::args()
-        .skip(1)
+    let days = args
+        .iter()
         .find_map(|arg| arg.parse::<u32>().ok())
         .unwrap_or(DEFAULT_DAYS);
 
@@ -298,10 +403,152 @@ fn main() {
         gen_start.elapsed().as_secs_f64(),
     );
 
+    // `dev_simulate fingerprint [days] [--seed S]` — one world digest per
+    // day. Runs at one worker per pool unless `--threads` says otherwise,
+    // because only then does the same seed replay the same world.
+    if args.first().map(|a| a == "fingerprint").unwrap_or(false) {
+        for day in 1..=days {
+            let date = harness.data.date.date();
+            let result = harness.tick();
+            let print = WorldFingerprint::take(&harness.data, &result);
+            println!("day {day:>3} {date}  {}", print.line());
+        }
+        return;
+    }
+
+    // `dev_simulate copy-check [days]` — a world copy must be the world:
+    // after `days` ticks the copy digests the same as the original, and the
+    // copy releases without touching the original.
+    // `dev_simulate index-oracle [days]` — after every day, the indexes the
+    // tick keeps must equal a fresh build of the same world.
+    if args.first().map(|a| a == "index-oracle").unwrap_or(false) {
+        IndexOracle::run(&mut harness, days);
+        return;
+    }
+
+    if args.first().map(|a| a == "copy-check").unwrap_or(false) {
+        let ticks = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(3);
+        for _ in 0..ticks {
+            harness.tick();
+        }
+        let no_matches = SimulationResult::new();
+        let original = WorldFingerprint::take(&harness.data, &no_matches);
+        let copy = harness.data.clone();
+        let copied = WorldFingerprint::take(&copy, &no_matches);
+        assert_eq!(
+            original.differences(&copied),
+            Vec::<&str>::new(),
+            "a world copy must digest the same as the world"
+        );
+        copy.release();
+        assert_eq!(original, WorldFingerprint::take(&harness.data, &no_matches));
+        println!("copy-check PASS  {}", original.line());
+        return;
+    }
+
+    // `dev_simulate fingerprint-check` — the digest's own sanity check: the
+    // same world digests the same twice, and touching one player's
+    // condition moves the players digest and nothing else.
+    if args.first().map(|a| a == "fingerprint-check").unwrap_or(false) {
+        let no_matches = SimulationResult::new();
+        let first = WorldFingerprint::take(&harness.data, &no_matches);
+        let again = WorldFingerprint::take(&harness.data, &no_matches);
+        assert_eq!(first, again, "the same world digested twice must agree");
+        let player = harness
+            .data
+            .continents
+            .iter_mut()
+            .flat_map(|c| c.countries.iter_mut())
+            .flat_map(|c| c.clubs.iter_mut())
+            .flat_map(|c| c.teams.teams.iter_mut())
+            .flat_map(|t| t.players.players.iter_mut())
+            .next()
+            .expect("a world with players");
+        player.player_attributes.condition += 1;
+        let touched = WorldFingerprint::take(&harness.data, &no_matches);
+        assert_eq!(
+            first.differences(&touched),
+            vec!["players"],
+            "a condition change must move the players digest alone"
+        );
+        println!("fingerprint-check PASS  {}", first.line());
+        return;
+    }
+
+    // `dev_simulate fingerprint-phases [days]` — a world digest after every
+    // step of every tick, so a run that stops reproducing names the step.
+    if args.first().map(|a| a == "fingerprint-phases").unwrap_or(false) {
+        PhaseObserver::install(|step, data| {
+            let print = WorldFingerprint::take(data, &SimulationResult::new());
+            println!("{} {step:<15} {}", data.date.date(), print.line());
+        });
+        for _ in 0..days {
+            harness.tick();
+        }
+        return;
+    }
+
+    // `dev_simulate fingerprint-matches [day]` — every match of that day: its
+    // score and the players who took part, to tell a different squad from
+    // a different draw when two runs disagree about a match.
+    if args.first().map(|a| a == "fingerprint-matches").unwrap_or(false) {
+        let day = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(1);
+        for _ in 1..day {
+            harness.tick();
+        }
+        let result = harness.tick();
+        for m in &result.match_results {
+            let mut ids: Vec<u32> = m
+                .details
+                .as_ref()
+                .map(|d| d.player_stats.keys().copied().collect())
+                .unwrap_or_default();
+            ids.sort_unstable();
+            println!(
+                "{} {}-{} players {:?}",
+                m.id,
+                m.score.home_team.get(),
+                m.score.away_team.get(),
+                ids
+            );
+        }
+        return;
+    }
+
+    // `dev_simulate fingerprint-detail [days]` — per-country digests after
+    // `days` ticks (0: the freshly generated world), to pin a mismatch
+    // between two runs to a country.
+    if args.first().map(|a| a == "fingerprint-detail").unwrap_or(false) {
+        let ticks = args
+            .iter()
+            .skip(1)
+            .find_map(|a| a.parse::<u32>().ok())
+            .unwrap_or(0);
+        for _ in 0..ticks {
+            harness.tick();
+        }
+        for line in WorldFingerprint::country_lines(&harness.data) {
+            println!("{line}");
+        }
+        if let Some(country) = args.iter().skip(2).find_map(|a| a.parse::<u32>().ok()) {
+            for line in WorldFingerprint::player_lines(&harness.data, country) {
+                println!("{line}");
+            }
+        }
+        return;
+    }
+
     // `dev_simulate stars [team-slug] [days]` — the potential-star census:
     // how the coach's displayed potential stars relate to the hidden PA
     // across the day-0 world (and after `days` ticks when given).
-    let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(|a| a == "stars").unwrap_or(false) {
         let slug = args.iter().skip(1).find(|a| a.parse::<u32>().is_err()).cloned();
         let ticks = args.iter().skip(1).find_map(|a| a.parse::<u32>().ok()).unwrap_or(0);
@@ -407,7 +654,7 @@ fn main() {
                 let copy = harness.data.clone();
                 let clone_ms = clone_start.elapsed().as_secs_f64() * 1000.0;
                 let drop_start = Instant::now();
-                drop(std::mem::replace(&mut harness.data, copy));
+                std::mem::replace(&mut harness.data, copy).release();
                 let drop_ms = drop_start.elapsed().as_secs_f64() * 1000.0;
                 println!(
                     "week {:>3}  {}  tick {tick_ms:>8.1} ms  clone {clone_ms:>8.1} ms  drop {drop_ms:>8.1} ms",
@@ -420,6 +667,76 @@ fn main() {
     }
 
     harness.bench(days);
+}
+
+/// The incremental index maintenance held against a fresh build. After every
+/// tick the indexes the tick reconciled must equal
+/// `SimulatorDataIndexes::build` of the same world, and replaying the day's
+/// reconcile from yesterday's indexes must land on them too; the replay also
+/// says how much the day's reconcile walked. Every country's lookup, brought
+/// up to date the same way, must equal a fresh one.
+struct IndexOracle;
+
+impl IndexOracle {
+    fn run(harness: &mut SimHarness, days: u32) {
+        let mut total = ReconcileStats::default();
+        for day in 1..=days {
+            let date = harness.data.date.date();
+            let mut replay = harness.data.indexes.clone().expect("the world is indexed");
+            harness.tick();
+            let stats = replay.reconcile(&harness.data);
+            let kept = harness.data.indexes.as_ref().expect("the world is indexed");
+            let fresh = SimulatorDataIndexes::build(&harness.data);
+            assert!(
+                kept == &fresh,
+                "day {day} {date}: the kept indexes differ from a fresh build in {:?}",
+                kept.differences(&fresh)
+            );
+            assert!(
+                &replay == kept,
+                "day {day} {date}: replaying the day's reconcile differs in {:?}",
+                replay.differences(kept)
+            );
+            let mut homes = HashSet::new();
+            for country in harness.data.continents.iter().flat_map(|c| &c.countries) {
+                let rostered = country
+                    .clubs
+                    .iter()
+                    .flat_map(|club| club.teams.teams.iter())
+                    .flat_map(|team| team.players.players.iter());
+                for player in rostered
+                    .chain(&country.retired_players)
+                    .chain(&country.national_team.generated_squad)
+                {
+                    assert!(
+                        homes.insert(player.id),
+                        "day {day} {date}: player {} has two homes",
+                        player.id
+                    );
+                }
+            }
+            for country in harness.data.continents.iter().flat_map(|c| &c.countries) {
+                let mut lookup = country.lookup.clone();
+                lookup.reconcile(country);
+                assert!(
+                    lookup == CountryLookupIndex::build(country),
+                    "day {day} {date}: country {} lookup differs from a fresh build once reconciled",
+                    country.id
+                );
+            }
+            println!(
+                "day {day:>4} {date}  containers {:>5}  rosters {:>5}  members {:>6}  departures {:>4}",
+                stats.containers, stats.rosters, stats.members, stats.departures
+            );
+            total.rosters += stats.rosters;
+            total.members += stats.members;
+            total.departures += stats.departures;
+        }
+        println!(
+            "index-oracle PASS  {days} days  rosters {}  members {}  departures {}",
+            total.rosters, total.members, total.departures
+        );
+    }
 }
 
 /// Every club player's injury counter summed, and how many are injured

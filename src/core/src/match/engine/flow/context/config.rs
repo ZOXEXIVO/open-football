@@ -4,6 +4,7 @@
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::{CompetitionKind, FixtureContext};
+use crate::utils::random::engine::RandomEngine;
 use chrono::{NaiveDate, Utc};
 
 /// Full match-construction inputs. Replaces the loose
@@ -42,10 +43,12 @@ impl Default for MatchEngineConfig {
 
 impl MatchEngineConfig {
     /// The match a fixture is: its date, competition and knockout format,
-    /// and the weather, crowd and referee drawn from it.
+    /// and the weather, crowd and referee drawn from it. Under a pinned sim
+    /// seed the engine's own stream is the fixture's too, so the same
+    /// fixture plays out the same whichever batch or worker carries it.
     pub fn for_fixture(fixture: &FixtureContext, match_recordings: bool) -> Self {
         MatchEngineConfig {
-            seed: None,
+            seed: RandomEngine::pinned_stream(fixture.seed),
             today: fixture.date,
             environment: MatchEnvironment::for_fixture(fixture),
             referee: RefereeProfile::draw(fixture.seed, RefereeProfile::default()),

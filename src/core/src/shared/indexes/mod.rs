@@ -1,5 +1,5 @@
 pub mod accessors;
-pub mod simulator_indexes;
+pub mod simulation;
 
 pub use accessors::{
     ActiveMonitoringRow, ClubScoutingDashboard, ClubScoutingDashboardBuilder, KnownPlayerRow,
@@ -7,4 +7,4 @@ pub use accessors::{
     PlayerMonitoringDetail, RecruitmentMeetingRow, ScoutWorkloadRow, ScoutingAssignmentRow,
     ScoutingReportRow, ScoutingSummary, ShadowReportRow, StaffMonitoringRow, TransferRequestRow,
 };
-pub use simulator_indexes::*;
+pub use simulation::*;

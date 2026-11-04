@@ -30,7 +30,7 @@ use crate::transfers::squad::ledger::SellListEntry;
 use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub use self::advice::StaffRecommendations;
 pub use self::circulation::MarketCirculation;
@@ -73,12 +73,12 @@ pub(in crate::transfers) mod processor {
     use crate::club::player::mind::CareerPlanView;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
-    use crate::transfers::loan::agreement::ParentWillingness;
+    use crate::transfers::loan::guard::ParentLoanView;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{
         PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
     };
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     /// Info about a player in the squad for formation-based analysis.
     /// `estimated_potential` is the **head coach's belief** about the
@@ -94,7 +94,7 @@ pub(in crate::transfers) mod processor {
         pub estimated_potential: u8,
         pub potential_confidence: f32,
         pub age: u8,
-        pub position_levels: HashMap<PlayerPositionType, u8>,
+        pub position_levels: FxHashMap<PlayerPositionType, u8>,
         /// League appearances this season only. Retained for the existing
         /// (calibration-sensitive) loan-out branches that read it.
         pub appearances: u16,
@@ -305,26 +305,23 @@ pub(in crate::transfers) mod processor {
         /// once when the pool is built.
         pub leave_pressure: f32,
         pub stay_pressure: f32,
-        /// What his club makes of lending him out at all, the arc he is
-        /// living out, and what it would keep paying of his wage. Staged
-        /// here because a borrowing country cannot reach into his club's
-        /// squad to read any of the three — the same reason
-        /// `leave_pressure` travels.
-        pub loan_willingness: ParentWillingness,
+        /// What his club makes of lending him out at all, and whether a loan
+        /// of him would be a DEVELOPMENT one — below his club's own level,
+        /// not merely young — the arc he is living out, and what it would
+        /// keep paying of his wage. Staged here because a borrowing country
+        /// cannot reach into his club's squad to read any of them — the
+        /// same reason `leave_pressure` travels. The parent's view is staged
+        /// on the world pool while a window is open somewhere: the foreign
+        /// loan scan is its one reader.
+        pub parent_loan: Option<ParentLoanView>,
         /// What he looks like from outside, 1..200 — the one scale a
         /// [`LevelBand`](crate::transfers::squad::LevelBand), a readiness
         /// and a clearly-better count are all measured on. `skill_ability`
         /// is a positional skill total and is not comparable with it.
         pub observable_level: u8,
-        /// Where his club's own pathway has him, and whether a loan of
-        /// him would be a DEVELOPMENT one — below his club's own level,
-        /// not merely young. Both travel because a borrowing country
-        /// cannot reach into his club to read either, and because the
-        /// three sweeps used to answer the second question three
-        /// different ways: by age abroad, by level at home, by birth
-        /// year in the guard.
+        /// Where his club's own pathway has him. Travels because a
+        /// borrowing country cannot reach into his club to read it.
         pub pathway_stage: PathwayStage,
-        pub is_development: bool,
         pub career_plan: CareerPlanView,
         pub parent_subsidy: f32,
         /// His parent has posted him to the world as a man who would go
@@ -1471,7 +1468,7 @@ pub struct ClubTransferPlan {
     /// "push": a National+ club offers each loan-listed player to clubs one
     /// reputation tier at a time, top-down. Empty for clubs below the
     /// resource threshold, who fall back to passive listing.
-    pub loan_broadcasts: HashMap<u32, AvailabilityBroadcast>,
+    pub loan_broadcasts: FxHashMap<u32, AvailabilityBroadcast>,
 
     /// Staged availability broadcasts for STALE permanent listings, keyed
     /// by player id. Once a transfer-listed player has sat unsold past the
@@ -1479,7 +1476,7 @@ pub struct ClubTransferPlan {
     /// the scouts start offering him around — the same tier-cascading push
     /// as the loan broadcast, but with no resource gate: a stranded
     /// listing is a wage problem for any club.
-    pub transfer_broadcasts: HashMap<u32, AvailabilityBroadcast>,
+    pub transfer_broadcasts: FxHashMap<u32, AvailabilityBroadcast>,
 
     /// End of the squad-review window a just-appointed head coach gets
     /// before the club honours the old regime's exit decisions. While
@@ -1689,8 +1686,8 @@ impl ClubTransferPlan {
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
             loan_withdrawals: Vec::new(),
-            loan_broadcasts: HashMap::new(),
-            transfer_broadcasts: HashMap::new(),
+            loan_broadcasts: FxHashMap::default(),
+            transfer_broadcasts: FxHashMap::default(),
             manager_review_until: None,
             prospect_buys_this_window: 0,
             compatriot_sweeps_this_window: 0,
@@ -2135,14 +2132,14 @@ impl ClubTransferPlan {
     /// Move the current window's scouting reports into the persistent shadow
     /// squad. Keeps only the strongest N per position group to bound growth.
     pub fn archive_reports_to_shadow(&mut self) {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap;
         let shadow_cap_per_group = ScoutingConfig::default().shadow.cap_per_group;
 
         if self.scouting_reports.is_empty() {
             return;
         }
 
-        let assign_lookup: HashMap<u32, &ScoutingAssignment> = self
+        let assign_lookup: FxHashMap<u32, &ScoutingAssignment> = self
             .scouting_assignments
             .iter()
             .map(|a| (a.id, a))

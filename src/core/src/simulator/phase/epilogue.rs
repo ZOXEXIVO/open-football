@@ -34,10 +34,11 @@ impl Epilogue {
         data.sweep_released_to_free_agents();
         drop(phase);
 
-        // Only if a transfer actually moved a player between clubs today.
-        // Walking the world every day is wasteful.
-        let phase = PerformanceProfiler::phase_scope("E3_rebuild_indexes", 0);
-        data.rebuild_indexes_if_dirty();
+        // Whatever moved today — transfers, releases, squad rebalances,
+        // graduations, staff turnover — only the rosters that changed are
+        // walked again.
+        let phase = PerformanceProfiler::phase_scope("E3_reconcile_indexes", 0);
+        data.reconcile_indexes();
         drop(phase);
 
         // Catches players created today — youth intake, regens, new clubs

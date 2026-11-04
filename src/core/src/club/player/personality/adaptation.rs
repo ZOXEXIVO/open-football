@@ -356,6 +356,17 @@ impl Player {
         self.last_transfer_date.map(|d| (now - d).num_days())
     }
 
+    /// Whether a career-desire pass today reads his adaptation score. Both
+    /// readers — the chronic-failure detector and the mentor-support
+    /// desire — wait out the same 60-day settling window and stand down
+    /// while a return-home mood is fresh.
+    pub(crate) fn adaptation_score_is_read(&self, now: NaiveDate) -> bool {
+        self.days_since_transfer(now).is_some_and(|days| days >= 60)
+            && !self
+                .happiness
+                .has_recent_event(&HappinessEventType::WantsReturnHome, 60)
+    }
+
     /// Years the player has spent at his current club, for the restlessness
     /// readers that ask "has he been here long enough to want a change?".
     ///
@@ -704,7 +715,7 @@ impl Player {
             if !langs.is_empty() {
                 let mut highest_proficiency: u8 = 0;
                 let mut native_or_fluent = false;
-                for target in &langs {
+                for target in langs {
                     for pl in &self.languages {
                         if pl.language != *target {
                             continue;

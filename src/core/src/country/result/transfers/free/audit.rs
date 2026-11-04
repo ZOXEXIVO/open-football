@@ -19,7 +19,7 @@ use crate::transfers::view::club::ClubView;
 use crate::world::{FreeAgentFlowCounters, SimulatorData};
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// One player's full market-stall picture. Mirrors the fields the
 /// matcher decides on, plus the world-scan eligibility counters that
@@ -359,7 +359,7 @@ impl FreeAgentMarketAuditor {
         const LABELS: [&str; 5] = ["0-30", "31-90", "91-180", "181-365", "365+"];
         let mut counts = [0usize; 5];
         let mut pressure_sums = [0.0f32; 5];
-        let mut reason_counts: HashMap<FreeAgentBlockReason, usize> = HashMap::new();
+        let mut reason_counts: FxHashMap<FreeAgentBlockReason, usize> = FxHashMap::default();
 
         for player in &data.free_agents {
             let Some(state) = player.free_agent_state() else {
@@ -568,7 +568,7 @@ mod tests {
                 vec![continent],
                 GlobalCompetitions::new(Vec::new()),
             );
-            data.free_agents = pool;
+            data.free_agents = pool.into();
             data
         }
     }

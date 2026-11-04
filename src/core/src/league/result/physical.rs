@@ -5,7 +5,7 @@ use crate::r#match::FieldSquad;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Regulation match duration in minutes. Used as the upper bound for
 /// fallback minute synthesis when no snapshot is supplied.
@@ -36,8 +36,8 @@ impl LeagueResult {
         // sub-on durations sensibly.
         let actual_match_minutes = derive_actual_minutes(details.match_time_ms);
 
-        let mut subbed_out_at: HashMap<u32, u64> = HashMap::new();
-        let mut subbed_in_at: HashMap<u32, u64> = HashMap::new();
+        let mut subbed_out_at: FxHashMap<u32, u64> = FxHashMap::default();
+        let mut subbed_in_at: FxHashMap<u32, u64> = FxHashMap::default();
         for sub in &details.substitutions {
             subbed_out_at.insert(sub.player_out_id, sub.match_time_ms);
             subbed_in_at.insert(sub.player_in_id, sub.match_time_ms);
@@ -74,9 +74,9 @@ fn derive_actual_minutes(match_time_ms: u64) -> f32 {
 
 fn apply_side<D: LeagueProcessAccess>(
     team: &FieldSquad,
-    subbed_out_at: &HashMap<u32, u64>,
-    subbed_in_at: &HashMap<u32, u64>,
-    physical_snapshots: &HashMap<u32, PlayerMatchPhysicalSnapshot>,
+    subbed_out_at: &FxHashMap<u32, u64>,
+    subbed_in_at: &FxHashMap<u32, u64>,
+    physical_snapshots: &FxHashMap<u32, PlayerMatchPhysicalSnapshot>,
     data: &mut D,
     now: NaiveDate,
     is_friendly: bool,

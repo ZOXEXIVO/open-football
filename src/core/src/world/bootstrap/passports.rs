@@ -3,7 +3,7 @@ use crate::world::SimulatorData;
 use crate::{Player, PlayerCollection};
 use chrono::{Datelike, NaiveDate};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Where the world's players are FROM, denormalised onto the players
 /// themselves.
@@ -14,12 +14,12 @@ use std::collections::HashMap;
 /// through [`Player::home_region`].
 pub struct PassportOffice {
     /// `country_id -> (continent_id, region)`, built once per pass.
-    stamps: HashMap<u32, (u32, ScoutingRegion)>,
+    stamps: FxHashMap<u32, (u32, ScoutingRegion)>,
 }
 
 impl PassportOffice {
     fn open(data: &SimulatorData) -> Option<Self> {
-        let stamps: HashMap<u32, (u32, ScoutingRegion)> = data
+        let stamps: FxHashMap<u32, (u32, ScoutingRegion)> = data
             .country_info
             .iter()
             .map(|(id, info)| {

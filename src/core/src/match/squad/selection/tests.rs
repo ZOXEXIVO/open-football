@@ -4151,7 +4151,7 @@ mod game_model_tests {
         let team = generate_test_team();
         let staff = generate_test_staff();
         let result = SquadSelector::select(&team, &staff);
-        let player_by_id: std::collections::HashMap<u32, &Player> =
+        let player_by_id: rustc_hash::FxHashMap<u32, &Player> =
             team.players.players().iter().map(|p| (p.id, *p)).collect();
         for objective in [TacticalObjective::ProtectLead, TacticalObjective::ChaseGame] {
             let s = LineupBalanceScorer::score(&result.main_squad, &player_by_id, objective);

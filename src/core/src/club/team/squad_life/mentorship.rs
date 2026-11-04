@@ -32,8 +32,8 @@ use crate::{
     TeammateConflictReason,
 };
 use chrono::NaiveDate;
+use rustc_hash::FxHashSet;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 /// Compatibility threshold below which a candidate mentor/mentee pair is
 /// rejected outright. Stops the system from forcing mismatched pairs that
@@ -164,7 +164,7 @@ impl MentorshipScorer {
     }
 
     fn languages_overlap(a: &Player, b: &Player) -> bool {
-        let a_set: HashSet<Language> = a
+        let a_set: FxHashSet<Language> = a
             .languages
             .iter()
             .filter(|l| l.is_native || l.proficiency >= 60)
@@ -356,7 +356,7 @@ impl MentorshipProcessor {
                             HappinessEventType::ConflictWithTeammate,
                             mag,
                             mentor_ids[i],
-                            ctx,
+                            || ctx,
                             30,
                             PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
                         );
@@ -400,7 +400,7 @@ impl MentorshipProcessor {
                             HappinessEventType::TeammateBonding,
                             mag,
                             mentor_ids[i],
-                            ctx,
+                            || ctx,
                             30,
                             PlayerHappiness::MAX_TEAMMATE_BONDING_PER_TICK,
                         );

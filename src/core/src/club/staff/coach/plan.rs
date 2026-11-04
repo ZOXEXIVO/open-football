@@ -20,7 +20,7 @@
 //! keeps the plan honest and removable: with an empty plan every consumer
 //! falls back to exactly the behaviour it had before.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use chrono::NaiveDate;
 
@@ -162,7 +162,7 @@ pub struct PlayerPlanEntry {
 /// Every player the coach currently holds an opinion about.
 #[derive(Debug, Clone, Default)]
 pub struct CoachSquadPlan {
-    entries: HashMap<u32, PlayerPlanEntry>,
+    entries: FxHashMap<u32, PlayerPlanEntry>,
     last_revised: Option<NaiveDate>,
 }
 
@@ -310,7 +310,7 @@ impl CoachSquadPlan {
 
         // Players who have left the squad are no longer the coach's
         // problem — drop them so the plan cannot grow without bound.
-        let present: std::collections::HashSet<u32> = players.iter().map(|p| p.id).collect();
+        let present: rustc_hash::FxHashSet<u32> = players.iter().map(|p| p.id).collect();
         self.entries.retain(|id, _| present.contains(id));
 
         self.last_revised = Some(today);
@@ -423,10 +423,10 @@ impl CoachSquadPlan {
 /// revision from OBSERVABLE levels only.
 pub struct SquadDepthRanks {
     /// Descending observable levels per position group.
-    group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
+    group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>>,
     /// Oldest first-choice per group, with his level — the man an heir
     /// would be groomed to replace.
-    incumbents: HashMap<PlayerFieldPositionGroup, (u32, u8, u8)>,
+    incumbents: FxHashMap<PlayerFieldPositionGroup, (u32, u8, u8)>,
     squad_level: u8,
     top_level: u8,
 }
@@ -438,7 +438,7 @@ impl SquadDepthRanks {
     const HEIR_MAX_AGE: u8 = 24;
 
     pub fn build(players: &PlayerCollection, today: NaiveDate) -> Self {
-        let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        let mut group_levels: FxHashMap<PlayerFieldPositionGroup, Vec<u8>> = FxHashMap::default();
         let mut sum: u32 = 0;
         let mut count: u32 = 0;
         let mut top_level: u8 = 0;
@@ -457,7 +457,8 @@ impl SquadDepthRanks {
 
         // The incumbent at each position: the best man there, kept with
         // his age so an heir can be recognised.
-        let mut incumbents: HashMap<PlayerFieldPositionGroup, (u32, u8, u8)> = HashMap::new();
+        let mut incumbents: FxHashMap<PlayerFieldPositionGroup, (u32, u8, u8)> =
+            FxHashMap::default();
         for player in players.iter() {
             let group = player.position().position_group();
             let level = AbilityEstimator::observable_level(player);

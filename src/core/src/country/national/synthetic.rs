@@ -85,7 +85,7 @@ impl NationalTeam {
                 age_max,
                 id_base,
             );
-            self.generated_squad.push(player);
+            self.generated_squad.add(player);
         }
     }
 

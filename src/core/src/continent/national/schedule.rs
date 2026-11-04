@@ -1,12 +1,12 @@
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::competition::GroupFixture;
 use super::config::ScheduleConfig;
 
 /// The dates each national side (by country id) already has a fixture on,
 /// for one team level.
-pub type NationalBookings = HashMap<u32, HashSet<NaiveDate>>;
+pub type NationalBookings = FxHashMap<u32, FxHashSet<NaiveDate>>;
 
 /// A qualifying group's fixture list: a double round-robin in which every
 /// round has its own date.
@@ -141,7 +141,7 @@ mod tests {
     }
 
     fn at_most_once_per_date(fixtures: &[GroupFixture]) {
-        let mut seen: HashSet<(u32, NaiveDate)> = HashSet::new();
+        let mut seen: FxHashSet<(u32, NaiveDate)> = FxHashSet::default();
         for f in fixtures {
             for side in [f.home_country_id, f.away_country_id] {
                 assert!(
@@ -177,7 +177,7 @@ mod tests {
             &[1, 2, 3, 4, 5],
             2026,
             &eight_dates(),
-            &NationalBookings::new(),
+            &NationalBookings::default(),
         );
         assert_eq!(fixtures.len(), 20);
         at_most_once_per_date(&fixtures);
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn a_side_booked_elsewhere_pushes_the_groups_rounds_on() {
-        let mut booked = NationalBookings::new();
+        let mut booked = NationalBookings::default();
         booked.insert(3, [d(2026, 9, 3), d(2026, 9, 6)].into_iter().collect());
 
         let fixtures =
@@ -262,7 +262,7 @@ mod tests {
                 &[1, 2, 3, 4],
                 2026,
                 &config,
-                &NationalBookings::new()
+                &NationalBookings::default()
             )
             .is_empty()
         );

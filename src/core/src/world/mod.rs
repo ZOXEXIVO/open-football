@@ -28,3 +28,4 @@ mod national;
 pub use country_info::CountryInfo;
 pub use data::SimulatorData;
 pub use flow::FreeAgentFlowCounters;
+pub use free_agents::FreeAgentPool;

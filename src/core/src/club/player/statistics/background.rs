@@ -27,12 +27,12 @@
 use crate::Player;
 use crate::league::Season;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// One closed season-spell slice used while aggregating the background.
-struct SpellSlice {
+struct SpellSlice<'p> {
     season_year: u16,
-    team_slug: String,
+    team_slug: &'p str,
     team_reputation: u16,
     starts: u16,
     apps: u16,
@@ -84,7 +84,9 @@ impl MatchExperienceBackground {
     const ESTABLISHED_SCALE: f32 = 50.0;
 
     pub fn from_player(player: &Player) -> Self {
-        let mut slices: Vec<SpellSlice> = Vec::new();
+        let history = &player.statistics_history;
+        let mut slices: Vec<SpellSlice<'_>> =
+            Vec::with_capacity(history.season_ledger.len() + history.current.len());
 
         for e in &player.statistics_history.season_ledger {
             if !e.competition_kind.counts_toward_career_history() {
@@ -92,7 +94,7 @@ impl MatchExperienceBackground {
             }
             slices.push(SpellSlice {
                 season_year: e.season_start_year,
-                team_slug: e.team_slug.clone(),
+                team_slug: &e.team_slug,
                 team_reputation: e.team_reputation,
                 starts: e.statistics.played,
                 apps: e.statistics.played + e.statistics.played_subs,
@@ -110,7 +112,7 @@ impl MatchExperienceBackground {
             }
             slices.push(SpellSlice {
                 season_year: Season::from_date(e.joined_date).start_year,
-                team_slug: e.team_slug.clone(),
+                team_slug: &e.team_slug,
                 team_reputation: e.team_reputation,
                 starts: e.statistics.played,
                 apps: e.statistics.played + e.statistics.played_subs,
@@ -122,17 +124,12 @@ impl MatchExperienceBackground {
         let career_official_starts: u32 = slices.iter().map(|s| s.starts as u32).sum();
         let established = 1.0 - (-(career_official_apps as f32) / Self::ESTABLISHED_SCALE).exp();
 
-        let mut distinct: Vec<&str> = slices.iter().map(|s| s.team_slug.as_str()).collect();
-        distinct.sort_unstable();
-        distinct.dedup();
-        let distinct_clubs = distinct.len() as u16;
-
         // Peak spell: per (season, club) totals; only seasons with real
         // involvement anchor the level the player has actually played at.
-        let mut per_spell: HashMap<(u16, &str), (u16, u16)> = HashMap::new();
+        let mut per_spell: FxHashMap<(u16, &str), (u16, u16)> = FxHashMap::default();
         for s in &slices {
             let entry = per_spell
-                .entry((s.season_year, s.team_slug.as_str()))
+                .entry((s.season_year, s.team_slug))
                 .or_insert((0, s.team_reputation));
             entry.0 = entry.0.saturating_add(s.apps);
             entry.1 = entry.1.max(s.team_reputation);
@@ -152,6 +149,11 @@ impl MatchExperienceBackground {
                 peak_spell_apps = *apps;
             }
         }
+
+        // Counted after the spells are tallied: the tally's order is the
+        // order the slices were read in.
+        slices.sort_unstable_by(|a, b| a.team_slug.cmp(b.team_slug));
+        let distinct_clubs = slices.chunk_by(|a, b| a.team_slug == b.team_slug).count() as u16;
 
         // Recent window: the latest season-year in the record plus the one
         // before it, weighted toward the latest.

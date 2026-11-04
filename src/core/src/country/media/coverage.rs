@@ -1,13 +1,13 @@
 use crate::Club;
 use crate::league::LeagueResult;
 use crate::utils::IntegerUtils;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct MediaCoverage {
     pub intensity: f32,
     pub trending_stories: Vec<MediaStory>,
-    pub pressure_targets: HashMap<u32, f32>, // club_id -> pressure level
+    pub pressure_targets: FxHashMap<u32, f32>, // club_id -> pressure level
 }
 
 impl Default for MediaCoverage {
@@ -21,7 +21,7 @@ impl MediaCoverage {
         MediaCoverage {
             intensity: 0.5,
             trending_stories: Vec::new(),
-            pressure_targets: HashMap::new(),
+            pressure_targets: FxHashMap::default(),
         }
     }
 

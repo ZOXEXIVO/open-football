@@ -1,13 +1,17 @@
 use super::{ContinentResult, ContinentalCompetitionResults};
-use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalQualification};
+use crate::continent::{
+    CompetitionTier, ContinentalMatchResult, ContinentalMatchday, ContinentalQualification,
+};
 use crate::league::League;
 use crate::league::LeagueResult;
 use crate::league::simulation::matchday::MatchdayCommitments;
+use crate::r#match::{Match, MatchResult};
+use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
-use crate::{Club, Country, SimulationResult};
+use crate::{Club, Country, MatchRuntime, SimulationResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 impl ContinentResult {
     pub(crate) fn is_competition_draw_period(&self, date: NaiveDate) -> bool {
@@ -160,7 +164,7 @@ impl ContinentResult {
     fn collect_qualified_clubs(
         countries: &[&Country],
         tier: &CompetitionTier,
-        already_drawn: &HashSet<u32>,
+        already_drawn: &FxHashSet<u32>,
     ) -> Vec<u32> {
         let cap = ContinentalQualification::field_cap(tier).unwrap_or(usize::MAX);
         let mut qualified = Vec::new();
@@ -222,102 +226,110 @@ impl ContinentResult {
             date,
         );
 
-        // Simulate Champions League matches with real engine
-        if continent
-            .continental_competitions
-            .champions_league
-            .has_matches_today(date)
-        {
-            let real_results = continent
-                .continental_competitions
+        // Every competition builds today's ties from the same club state,
+        // then the continent plays all of them in one dispatch: a Thursday
+        // with two competitions costs one match's length, not two.
+        let competitions = &mut continent.continental_competitions;
+        let mut days: [Option<ContinentalMatchday>; 4] = [
+            competitions
                 .champions_league
-                .play_matches(&clubs_map, date, &commitments);
-            let cl_results: Vec<ContinentalMatchResult> = real_results
-                .iter()
-                .map(|r| ContinentalMatchResult {
-                    home_team: r.home_team_id,
-                    away_team: r.away_team_id,
-                    home_score: r.score.home_team.get(),
-                    away_score: r.score.away_team.get(),
-                    competition: CompetitionTier::ChampionsLeague,
-                })
-                .collect();
-            results.champions_league_results = Some(cl_results);
-            results.match_results.extend(real_results);
-        }
-
-        // Simulate Europa League matches with real engine
-        if continent
-            .continental_competitions
-            .europa_league
-            .has_matches_today(date)
-        {
-            let real_results = continent
-                .continental_competitions
-                .europa_league
-                .play_matches(&clubs_map, date, &commitments);
-            let el_results: Vec<ContinentalMatchResult> = real_results
-                .iter()
-                .map(|r| ContinentalMatchResult {
-                    home_team: r.home_team_id,
-                    away_team: r.away_team_id,
-                    home_score: r.score.home_team.get(),
-                    away_score: r.score.away_team.get(),
-                    competition: CompetitionTier::EuropaLeague,
-                })
-                .collect();
-            results.europa_league_results = Some(el_results);
-            results.match_results.extend(real_results);
-        }
-
-        // Simulate Conference League matches with real engine
-        if continent
-            .continental_competitions
-            .conference_league
-            .has_matches_today(date)
-        {
-            let real_results = continent
-                .continental_competitions
+                .has_matches_today(date)
+                .then(|| {
+                    competitions
+                        .champions_league
+                        .prepare_matchday(&clubs_map, date, &commitments)
+                }),
+            competitions.europa_league.has_matches_today(date).then(|| {
+                competitions
+                    .europa_league
+                    .prepare_matchday(&clubs_map, date, &commitments)
+            }),
+            competitions
                 .conference_league
-                .play_matches(&clubs_map, date, &commitments);
-            let conf_results: Vec<ContinentalMatchResult> = real_results
-                .iter()
-                .map(|r| ContinentalMatchResult {
-                    home_team: r.home_team_id,
-                    away_team: r.away_team_id,
-                    home_score: r.score.home_team.get(),
-                    away_score: r.score.away_team.get(),
-                    competition: CompetitionTier::ConferenceLeague,
-                })
-                .collect();
-            results.conference_league_results = Some(conf_results);
+                .has_matches_today(date)
+                .then(|| {
+                    competitions
+                        .conference_league
+                        .prepare_matchday(&clubs_map, date, &commitments)
+                }),
+            competitions
+                .copa_libertadores
+                .has_matches_today(date)
+                .then(|| {
+                    competitions
+                        .copa_libertadores
+                        .prepare_matchday(&clubs_map, date, &commitments)
+                }),
+        ];
+
+        let mut sizes = [0usize; 4];
+        let mut batch: Vec<Match> = Vec::new();
+        for (day, size) in days.iter_mut().zip(sizes.iter_mut()) {
+            if let Some(day) = day {
+                *size = day.matches.len();
+                batch.append(&mut day.matches);
+            }
+        }
+        let mut played = if batch.is_empty() {
+            Vec::new()
+        } else {
+            PerformanceProfiler::stage("drain_continental_dispatch", 2, || {
+                MatchRuntime::engine_pool().play(batch)
+            })
+        }
+        .into_iter();
+
+        let [champions, europa, conference, libertadores] = days;
+        if let Some(day) = champions {
+            let real_results = match sizes[0] {
+                0 => Vec::new(),
+                n => competitions
+                    .champions_league
+                    .record_matchday(day.todays, played.by_ref().take(n).collect()),
+            };
+            results.champions_league_results = Some(Self::tier_results(
+                &real_results,
+                CompetitionTier::ChampionsLeague,
+            ));
             results.match_results.extend(real_results);
         }
-
-        // Simulate Copa Libertadores matches with real engine. The draw only
-        // populates this competition on the South-American continent, so the
-        // `has_matches_today` guard naturally keeps it scoped — Europe never
-        // schedules Libertadores fixtures.
-        if continent
-            .continental_competitions
-            .copa_libertadores
-            .has_matches_today(date)
-        {
-            let real_results = continent
-                .continental_competitions
-                .copa_libertadores
-                .play_matches(&clubs_map, date, &commitments);
-            let copa_results: Vec<ContinentalMatchResult> = real_results
-                .iter()
-                .map(|r| ContinentalMatchResult {
-                    home_team: r.home_team_id,
-                    away_team: r.away_team_id,
-                    home_score: r.score.home_team.get(),
-                    away_score: r.score.away_team.get(),
-                    competition: CompetitionTier::CopaLibertadores,
-                })
-                .collect();
-            results.copa_libertadores_results = Some(copa_results);
+        if let Some(day) = europa {
+            let real_results = match sizes[1] {
+                0 => Vec::new(),
+                n => competitions
+                    .europa_league
+                    .record_matchday(day.todays, played.by_ref().take(n).collect()),
+            };
+            results.europa_league_results = Some(Self::tier_results(
+                &real_results,
+                CompetitionTier::EuropaLeague,
+            ));
+            results.match_results.extend(real_results);
+        }
+        if let Some(day) = conference {
+            let real_results = match sizes[2] {
+                0 => Vec::new(),
+                n => competitions
+                    .conference_league
+                    .record_matchday(day.todays, played.by_ref().take(n).collect()),
+            };
+            results.conference_league_results = Some(Self::tier_results(
+                &real_results,
+                CompetitionTier::ConferenceLeague,
+            ));
+            results.match_results.extend(real_results);
+        }
+        if let Some(day) = libertadores {
+            let real_results = match sizes[3] {
+                0 => Vec::new(),
+                n => competitions
+                    .copa_libertadores
+                    .record_matchday(day.todays, played.by_ref().take(n).collect()),
+            };
+            results.copa_libertadores_results = Some(Self::tier_results(
+                &real_results,
+                CompetitionTier::CopaLibertadores,
+            ));
             results.match_results.extend(real_results);
         }
 
@@ -327,6 +339,22 @@ impl ContinentResult {
         }
 
         Some(results)
+    }
+
+    fn tier_results(
+        results: &[MatchResult],
+        competition: CompetitionTier,
+    ) -> Vec<ContinentalMatchResult> {
+        results
+            .iter()
+            .map(|r| ContinentalMatchResult {
+                home_team: r.home_team_id,
+                away_team: r.away_team_id,
+                home_score: r.score.home_team.get(),
+                away_score: r.score.away_team.get(),
+                competition: competition.clone(),
+            })
+            .collect()
     }
 
     pub(crate) fn process_competition_results(
@@ -370,7 +398,8 @@ impl ContinentResult {
         let today = data.date.date();
         for mut match_result in comp_results.match_results {
             LeagueResult::process_cup_match(&mut match_result, data);
-            data.match_store.push(match_result.clone(), today);
+            data.match_store
+                .push(match_result.copy_without_data_positions(), today);
             result.match_results.push(match_result);
         }
     }
@@ -527,7 +556,7 @@ impl ContinentResult {
         }
     }
 
-    fn get_clubs_map(countries: &[Country]) -> HashMap<u32, &Club> {
+    fn get_clubs_map(countries: &[Country]) -> FxHashMap<u32, &Club> {
         countries
             .iter()
             .flat_map(|c| &c.clubs)
@@ -565,7 +594,7 @@ mod qualification_tests {
         let fresh = ContinentResult::collect_qualified_clubs(
             &countries,
             &CompetitionTier::ConferenceLeague,
-            &HashSet::new(),
+            &FxHashSet::default(),
         );
         assert_eq!(
             fresh,
@@ -574,7 +603,7 @@ mod qualification_tests {
         );
 
         // Club 800 was seventh on Europa League draw day and is already in.
-        let in_europe: HashSet<u32> = [800].into_iter().collect();
+        let in_europe: FxHashSet<u32> = [800].into_iter().collect();
         let passed_down = ContinentResult::collect_qualified_clubs(
             &countries,
             &CompetitionTier::ConferenceLeague,

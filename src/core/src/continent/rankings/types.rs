@@ -1,11 +1,11 @@
 use crate::continent::CompetitionTier;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct ContinentalRankings {
     pub country_rankings: Vec<(u32, f32)>, // country_id, coefficient
     pub club_rankings: Vec<(u32, f32)>,    // club_id, points
-    pub qualification_spots: HashMap<u32, QualificationSpots>,
+    pub qualification_spots: FxHashMap<u32, QualificationSpots>,
 }
 
 impl Default for ContinentalRankings {
@@ -19,7 +19,7 @@ impl ContinentalRankings {
         ContinentalRankings {
             country_rankings: Vec::new(),
             club_rankings: Vec::new(),
-            qualification_spots: HashMap::new(),
+            qualification_spots: FxHashMap::default(),
         }
     }
 
@@ -58,9 +58,9 @@ impl ContinentalRankings {
         &self.country_rankings
     }
 
-    pub fn get_qualified_clubs(&self) -> HashMap<CompetitionTier, Vec<u32>> {
+    pub fn get_qualified_clubs(&self) -> FxHashMap<CompetitionTier, Vec<u32>> {
         // Logic to determine which clubs qualify for each competition
-        HashMap::new() // Simplified
+        FxHashMap::default() // Simplified
     }
 
     pub fn set_qualification_spots(&mut self, country_id: u32, cl_spots: u8, el_spots: u8) {

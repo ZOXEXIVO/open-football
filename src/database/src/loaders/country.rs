@@ -420,14 +420,18 @@ mod tests {
         assert!(preference.weight < 0.5);
         preference.weight = 1.0;
         let preferred_map = MarketMap::new(
-            HashMap::from([
+            [
                 (id("pt"), changed_profile),
                 (id("br"), map.profile(id("br")).clone()),
-            ]),
-            HashMap::from([
+            ]
+            .into_iter()
+            .collect(),
+            [
                 (id("pt"), map.facts(id("pt")).unwrap().clone()),
                 (id("br"), map.facts(id("br")).unwrap().clone()),
-            ]),
+            ]
+            .into_iter()
+            .collect(),
         );
         let cfg = AppraisalConfig::default();
         for language_profile in [

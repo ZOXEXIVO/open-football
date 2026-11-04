@@ -5,6 +5,7 @@
 use super::TeamBehaviour;
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     ChangeType, HappinessEventCause, HappinessEventContext, HappinessEventEvidence,
     HappinessEventFollowUp, HappinessEventScope, HappinessEventSeverity, HappinessEventType,
@@ -117,7 +118,7 @@ impl TeamBehaviour {
                 // weekly — settling-in is a slow process; isolation
                 // shouldn't tick every fortnight while the player is
                 // already adjusting elsewhere.
-                if positive_count >= 3 && rand::random::<f32>() < 0.10 {
+                if positive_count >= 3 && RandomEngine::gen_f32() < 0.10 {
                     // Long cooldown so a single transfer spell yields at
                     // most one settling-in event — the previous 21-day
                     // window let it fire ~4× per 90-day adaptation period
@@ -145,7 +146,7 @@ impl TeamBehaviour {
                         ctx,
                         365,
                     );
-                } else if !has_any_relation && rand::random::<f32>() < 0.08 {
+                } else if !has_any_relation && RandomEngine::gen_f32() < 0.08 {
                     let magnitude = -1.5;
                     // Concrete reasons for isolation: no inner-circle bond
                     // formed yet AND fresh transfer window.

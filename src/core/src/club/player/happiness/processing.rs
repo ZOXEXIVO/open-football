@@ -2637,7 +2637,7 @@ mod morale_timeline_tests {
             saw_week_beginning |= ctx.simulation.is_week_beginning();
             // skip_natural_development = true keeps the tick focused on the
             // morale pipeline.
-            let _ = player.simulate_with_options(ctx, true);
+            let _ = player.simulate_with_options(&ctx, true);
             day += Duration::days(1);
         }
 

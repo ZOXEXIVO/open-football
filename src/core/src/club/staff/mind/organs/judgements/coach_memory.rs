@@ -20,7 +20,7 @@ use crate::club::staff::coach::standing::{
     CoachStanding, EvidenceLens, LadderContext, StandingEvidence, StandingLadder, StandingTuning,
 };
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// EMA coefficient for `recent_rating_ema` — half-life ~3 matches.
 /// Higher = faster reaction to the latest performance, used by
@@ -299,7 +299,7 @@ impl Default for CoachMemory {
 /// for the side is known.
 #[derive(Debug, Clone, Default)]
 pub struct CoachMemoryStore {
-    records: HashMap<u32, CoachMemory>,
+    records: FxHashMap<u32, CoachMemory>,
 }
 
 impl CoachMemoryStore {

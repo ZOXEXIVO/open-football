@@ -32,10 +32,10 @@ pub(in crate::transfers::scouting) struct ClubScan<'a> {
     buyer_plausibility_ctx: BuyerPlausibilityContext,
     buyer_fee_capacity: f64,
     /// Which regions of the world this club can spot talent in at all.
-    club_scout_reach: HashSet<ScoutingRegion>,
+    club_scout_reach: FxHashSet<ScoutingRegion>,
     market_reach_cache: MarketReachCache,
     /// The department's best coverage of each market, folded once per club.
-    scout_coverage: HashMap<u32, u8>,
+    scout_coverage: FxHashMap<u32, u8>,
     staged: ClubScoutingStaged,
 }
 
@@ -92,7 +92,7 @@ impl<'a> ClubScan<'a> {
             .or_else(|| club.teams.teams.first())
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
-        let club_scout_reach: HashSet<ScoutingRegion> =
+        let club_scout_reach: FxHashSet<ScoutingRegion> =
             ScoutingPass::reputation_scout_regions(home_region, club_overall_score)
                 .into_iter()
                 .collect();
@@ -117,8 +117,8 @@ impl<'a> ClubScan<'a> {
         // walks every staff member's list every time; a scout knows a
         // handful of countries, so inverting the walk turns a scan per
         // question into one pass per club.
-        let scout_coverage: HashMap<u32, u8> = {
-            let mut coverage: HashMap<u32, u8> = HashMap::new();
+        let scout_coverage: FxHashMap<u32, u8> = {
+            let mut coverage: FxHashMap<u32, u8> = FxHashMap::default();
             for staff in club.teams.iter().flat_map(|t| t.staffs.iter()) {
                 for known in &staff.staff_attributes.knowledge.known_countries {
                     let slot = coverage.entry(known.country_id).or_insert(0);

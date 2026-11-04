@@ -5,6 +5,9 @@
 //! archetype, PA band roll, body metrics — everything). Procedural generation
 //! seeds from OS entropy and keeps its historical unseeded behaviour.
 
+use core::utils::random::engine::RandomEngine;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 /// Splitmix64-based generator. Small, fast, and statistically fine for
 /// attribute jitter; nearby seeds (sequential player ids) produce
 /// uncorrelated streams because every draw scrambles the counter.
@@ -23,10 +26,17 @@ impl HydrationRng {
     }
 
     /// Entropy-seeded stream for procedural generation, where cross-save
-    /// stability is not wanted.
+    /// stability is not wanted. Under a pinned sim seed each call takes the
+    /// next stream derived from it instead, so a single-threaded generation
+    /// replays exactly.
     pub fn from_entropy() -> Self {
-        HydrationRng {
-            state: rand::random::<u64>(),
+        static STREAMS: AtomicU64 = AtomicU64::new(0);
+        let stream = STREAMS.fetch_add(1, Ordering::Relaxed);
+        match RandomEngine::pinned_stream(stream) {
+            Some(seed) => Self::from_seed(seed),
+            None => HydrationRng {
+                state: rand::random::<u64>(),
+            },
         }
     }
 

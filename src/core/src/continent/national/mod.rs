@@ -138,7 +138,7 @@ impl NationalTeamCompetitions {
     /// campaigns still running — a newly drawn campaign never books a side
     /// twice on one date.
     fn bookings(&self, level: NationalTeamLevel) -> NationalBookings {
-        let mut booked = NationalBookings::new();
+        let mut booked = NationalBookings::default();
         for comp in self
             .competitions
             .iter()
@@ -387,7 +387,7 @@ mod booking_tests {
         CompetitionScope, QualifyingConfig, QualifyingPosition, QualifyingZoneConfig,
         ScheduleConfig, ScheduleDate, TournamentConfig,
     };
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet;
 
     fn qd(month: u32, day: u32, year_offset: i32) -> ScheduleDate {
         ScheduleDate {
@@ -472,7 +472,7 @@ mod booking_tests {
         assert_eq!(comps.competitions.len(), 2, "both campaigns are drawn");
 
         let bookings = fixtures_of(&comps, NationalTeamLevel::Senior);
-        let mut seen: HashSet<(u32, NaiveDate)> = HashSet::new();
+        let mut seen: FxHashSet<(u32, NaiveDate)> = FxHashSet::default();
         for booking in &bookings {
             assert!(
                 seen.insert(*booking),

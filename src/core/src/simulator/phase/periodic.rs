@@ -8,13 +8,13 @@ use crate::transfers::pipeline::approach::ApproachPass;
 use crate::utils::{DateUtils, PerformanceProfiler};
 use crate::world::SimulatorData;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 /// Everything the matchday deferred, plus the calendar's own work.
 ///
-/// The passes here are ordered by what they must see: the batched
-/// cross-country sweeps read the deferred ops *before* the drain commits
-/// them, and the season snapshot freezes a borrowing club's loanees
+/// The passes here are ordered by what they must see: the free-agent
+/// bumps read the deferred ops *before* the drain commits them, and the
+/// season snapshot freezes a borrowing club's loanees
 /// *before* the drain's loan returns move them home.
 pub struct PeriodicPasses;
 
@@ -40,7 +40,7 @@ impl PeriodicPasses {
         data.daily_global_free_agents = Some(free_agents);
 
         Self::continent_periodic(data, today);
-        Self::batched_market_sweeps(data, &matchday, today);
+        Self::free_agent_bumps(data, &matchday, today);
         Self::free_agent_development(data);
         Self::season_snapshot(data, &matchday, today);
 
@@ -91,23 +91,14 @@ impl PeriodicPasses {
         }
     }
 
-    /// The two world-wide sweeps the matchday staged rather than ran.
-    ///
-    /// Both used to fire per country and re-walk the world once per
-    /// country: the interest cleanup re-walked every other country's
-    /// shortlists once per domestic signing, and the free-agent bumps
-    /// walked the whole pool per country — `O(countries × pool)`.
-    /// Aggregating first turns each into one pass.
-    fn batched_market_sweeps(
+    /// The free-agent bumps the matchday staged rather than ran. They used
+    /// to fire per country and walk the whole pool each time —
+    /// `O(countries × pool)`; aggregating first turns them into one pass.
+    fn free_agent_bumps(
         data: &mut SimulatorData,
         matchday: &WorldMatchdayResult<'_>,
         today: chrono::NaiveDate,
     ) {
-        let phase = PerformanceProfiler::phase_scope("C3_interest_cleanup", 0);
-        let signed_ids = matchday.collect_domestic_signed_ids();
-        ApproachPass::cleanup_player_transfer_interest_batch(data, &signed_ids);
-        drop(phase);
-
         let _phase = PerformanceProfiler::phase_scope("C4_free_agent_bumps", 0);
         let bumps = matchday.collect_free_agent_bumps();
         ApproachPass::apply_free_agent_market_bumps_batch(data, &bumps, today);
@@ -141,7 +132,7 @@ impl PeriodicPasses {
         today: chrono::NaiveDate,
     ) {
         let _phase = PerformanceProfiler::phase_scope("C6_season_snapshot", 0);
-        let new_season: HashSet<u32> = matchday
+        let new_season: FxHashSet<u32> = matchday
             .collect_new_season_country_ids()
             .into_iter()
             .collect();

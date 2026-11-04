@@ -1,7 +1,7 @@
 use crate::league::Season;
 use crate::{InternationalCalendar, NationalTeamLevel};
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Scope of a national team competition
 #[derive(Debug, Clone, PartialEq)]
@@ -119,7 +119,7 @@ impl ScheduleConfig {
             i32::MAX
         };
         (0..years).flat_map(move |cycle| {
-            let mut taken: HashMap<NaiveDate, usize> = HashMap::new();
+            let mut taken: FxHashMap<NaiveDate, usize> = FxHashMap::default();
             self.qualifying_dates.iter().filter_map(move |sd| {
                 let named =
                     NaiveDate::from_ymd_opt(start_year + sd.year_offset + cycle, sd.month, sd.day)?;

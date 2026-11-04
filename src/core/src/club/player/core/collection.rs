@@ -2,22 +2,33 @@ use crate::PlayerPositionType;
 use crate::club::player::player::Player;
 use crate::club::{PlayerCollectionResult, PlayerResult};
 use crate::context::GlobalContext;
-use crate::utils::Logging;
+use crate::shared::RosterRevision;
+use crate::utils::SlowStep;
 use std::ops::Index;
 use std::slice::Iter;
 use std::slice::IterMut;
 
+/// Players are edited in place through `players`; anything that adds or
+/// removes one goes through the collection, which moves its revision.
 #[derive(Debug, Clone)]
 pub struct PlayerCollection {
     pub players: Vec<Player>,
+    revision: RosterRevision,
 }
 
 impl PlayerCollection {
     pub fn new(players: Vec<Player>) -> Self {
-        PlayerCollection { players }
+        PlayerCollection {
+            players,
+            revision: RosterRevision::next(),
+        }
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
+    pub fn revision(&self) -> RosterRevision {
+        self.revision
+    }
+
+    pub fn simulate(&mut self, ctx: &GlobalContext<'_>) -> PlayerCollectionResult {
         self.simulate_inner(ctx, false)
     }
 
@@ -25,29 +36,23 @@ impl PlayerCollection {
     /// development tick. Owned by `ClubAcademy` — academy players have a
     /// separate per-week training driver (`ClubAcademy::train_academy_players`),
     /// and running both in the same week double-develops every prospect.
-    pub fn simulate_skip_development(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
+    pub fn simulate_skip_development(&mut self, ctx: &GlobalContext<'_>) -> PlayerCollectionResult {
         self.simulate_inner(ctx, true)
     }
 
     fn simulate_inner(
         &mut self,
-        ctx: GlobalContext<'_>,
+        ctx: &GlobalContext<'_>,
         skip_natural_development: bool,
     ) -> PlayerCollectionResult {
         let player_results: Vec<PlayerResult> = self
             .players
             .iter_mut()
             .map(|player| {
-                let message = &format!("simulate player: id: {}", player.id);
-                Logging::estimate_result(
-                    || {
-                        player.simulate_with_options(
-                            ctx.with_player(Some(player.id)),
-                            skip_natural_development,
-                        )
-                    },
-                    message,
-                )
+                let step = SlowStep::start();
+                let result = player.simulate_with_options(ctx, skip_natural_development);
+                step.finish(|| format!("simulate player: id: {}", player.id));
+                result
             })
             .collect();
 
@@ -76,12 +81,14 @@ impl PlayerCollection {
 
     pub fn add(&mut self, player: Player) {
         self.players.push(player);
+        self.revision = RosterRevision::next();
     }
 
     pub fn add_range(&mut self, players: Vec<Player>) {
         for player in players {
             self.players.push(player);
         }
+        self.revision = RosterRevision::next();
     }
 
     pub fn get_annual_salary(&self) -> u32 {
@@ -96,12 +103,15 @@ impl PlayerCollection {
         self.players.iter().collect()
     }
 
+    pub fn clear(&mut self) {
+        self.players.clear();
+        self.revision = RosterRevision::next();
+    }
+
     pub fn take_player(&mut self, player_id: &u32) -> Option<Player> {
-        let player_idx = self.players.iter().position(|p| p.id == *player_id);
-        match player_idx {
-            Some(idx) => Some(self.players.remove(idx)),
-            None => None,
-        }
+        let idx = self.players.iter().position(|p| p.id == *player_id)?;
+        self.revision = RosterRevision::next();
+        Some(self.players.remove(idx))
     }
 
     pub fn contains(&self, player_id: u32) -> bool {
@@ -169,6 +179,15 @@ impl PlayerCollection {
             .collect();
         cas.sort_unstable_by(|a, b| b.cmp(a));
         cas
+    }
+}
+
+impl<'a> IntoIterator for &'a PlayerCollection {
+    type Item = &'a Player;
+    type IntoIter = Iter<'a, Player>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.players.iter()
     }
 }
 

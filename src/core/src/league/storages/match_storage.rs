@@ -1,7 +1,8 @@
 use crate::r#match::MatchResult;
 use chrono::Duration;
 use chrono::NaiveDate;
-use std::collections::{BTreeMap, HashMap};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Default retention window — three completed seasons. Long enough for anyrt
@@ -29,7 +30,7 @@ pub const DEFAULT_RETENTION_DAYS: i64 = 365 * 3 + 1;
 /// whole values.
 #[derive(Debug, Clone)]
 pub struct MatchStorage {
-    results: HashMap<String, Arc<MatchResult>>,
+    results: FxHashMap<String, Arc<MatchResult>>,
     /// Secondary index: date → match ids recorded that day. Used to drop
     /// old entries without walking the main HashMap.
     by_date: BTreeMap<NaiveDate, Vec<String>>,
@@ -45,7 +46,7 @@ impl Default for MatchStorage {
 impl MatchStorage {
     pub fn new() -> Self {
         MatchStorage {
-            results: HashMap::new(),
+            results: FxHashMap::default(),
             by_date: BTreeMap::new(),
             retention_days: DEFAULT_RETENTION_DAYS,
         }

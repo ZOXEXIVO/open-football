@@ -2,7 +2,8 @@ use crate::context::GlobalContext;
 use crate::continent::ContinentBuildOutput;
 use crate::country::result::transfers::{GlobalFreeAgentPool, GlobalFreeAgentSummary};
 use crate::league::result::WorldSnapshot;
-use crate::simulator::{ContinentPanicMetrics, WorldMatchdayResult};
+use crate::simulator::{ContinentPanicMetrics, PhaseObserver, WorldMatchdayResult};
+use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::scouting::ScoutingPass;
 use crate::utils::PerformanceProfiler;
@@ -53,14 +54,21 @@ impl MatchdayPhase {
 
         let phase = PerformanceProfiler::phase_scope("A0_world_snapshots", 0);
         let today = data.date.date();
+        let window_open_somewhere = data.is_transfer_window_open_anywhere(today);
         let world_pool: Vec<PlayerSummary> = data
             .continents
             .par_iter()
             .flat_map(|continent| continent.countries.par_iter())
-            .flat_map_iter(|country| ScoutingPass::collect_player_pool(country, today))
+            .flat_map_iter(|country| {
+                ScoutingPass::collect_player_pool(country, today, window_open_somewhere)
+            })
             .collect();
         let free_agents = GlobalFreeAgentPool::snapshot(data, today);
-        let placement_reach = data.collect_placement_reach();
+        let placement_reach = if window_open_somewhere {
+            data.collect_placement_reach()
+        } else {
+            PlacementReachIndex::default()
+        };
         // At the window boundaries the wage world has moved enough that
         // the money axis of `import_capacity` is stale — the Gulf got
         // richer, a league collapsed. The corridor cards are shipped data
@@ -103,6 +111,7 @@ impl MatchdayPhase {
             .collect();
         drop(phase);
 
+        PhaseObserver::notify("matchday_build", data);
         let mut matchday = WorldMatchdayResult::from_builds(builds);
 
         let phase = PerformanceProfiler::phase_scope("A2_process", 0);

@@ -4,8 +4,10 @@ use crate::transfers::market::knowledge::{PlacementReach, PlacementReachIndex};
 use crate::transfers::market::map::{
     CountryTransferProfile, MarketCountryFacts, MarketMap, RegionPrestigeTable,
 };
+use crate::transfers::market::window::TransferWindowManager;
+use chrono::NaiveDate;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 impl SimulatorData {
@@ -18,7 +20,7 @@ impl SimulatorData {
     /// change; only the facts around them do.
     pub fn rebuild_market_map(&mut self) {
         let wages = self.median_top_flight_wages();
-        let facts: HashMap<u32, MarketCountryFacts> = self
+        let facts: FxHashMap<u32, MarketCountryFacts> = self
             .country_info
             .values()
             .map(|info| {
@@ -36,7 +38,7 @@ impl SimulatorData {
                 )
             })
             .collect();
-        let profiles: HashMap<u32, CountryTransferProfile> = self
+        let profiles: FxHashMap<u32, CountryTransferProfile> = self
             .country_info
             .values()
             .map(|info| (info.id, info.transfer_profile.clone()))
@@ -68,7 +70,7 @@ impl SimulatorData {
             .for_each(|country| {
                 let country_id = country.id;
                 for club in &mut country.clubs {
-                    let mut counts: HashMap<u32, u16> = HashMap::new();
+                    let mut counts: FxHashMap<u32, u16> = FxHashMap::default();
                     for team in club.teams.teams.iter().filter(|t| !t.team_type.is_youth()) {
                         for player in &team.players.players {
                             if player.country_id != country_id {
@@ -95,8 +97,8 @@ impl SimulatorData {
     /// the club the player is standing in.
     pub fn bootstrap_loan_placements(&mut self) {
         let today = self.date.date();
-        let mut club_country: HashMap<u32, u32> = HashMap::new();
-        let mut counts: HashMap<(u32, u32), u16> = HashMap::new();
+        let mut club_country: FxHashMap<u32, u32> = FxHashMap::default();
+        let mut counts: FxHashMap<(u32, u32), u16> = FxHashMap::default();
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
@@ -148,11 +150,24 @@ impl SimulatorData {
         )
     }
 
+    /// A transfer window is open somewhere today: the foreign loan scan,
+    /// which reads what the world pool and the placement reach stage for
+    /// it, runs only in a country whose window is open.
+    pub fn is_transfer_window_open_anywhere(&self, date: NaiveDate) -> bool {
+        self.continents
+            .iter()
+            .flat_map(|continent| &continent.countries)
+            .any(|country| {
+                TransferWindowManager::for_country(country.id, &country.code, date)
+                    .is_window_open(country.id, date)
+            })
+    }
+
     /// Median annual salary in each country's strongest division. The money
     /// axis of `import_capacity`: what a league PAYS is what decides whether
     /// it can sign a name from outside its own corridors, and it is a fact
     /// about the live world rather than anything the data files could state.
-    fn median_top_flight_wages(&self) -> HashMap<u32, u32> {
+    fn median_top_flight_wages(&self) -> FxHashMap<u32, u32> {
         self.continents
             .iter()
             .flat_map(|continent| &continent.countries)

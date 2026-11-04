@@ -46,7 +46,6 @@ use crate::{
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::HashMap;
 
 use super::*;
 use crate::transfers::loan::legacy::{LegacyDomesticGate, LoanDestinationLevel};
@@ -436,7 +435,7 @@ impl LoanBoard {
 /// What every borrower's turn reads of the rest of the market, taken once for
 /// the pass: the scan only stages actions, so the negotiation set is frozen.
 struct LoanScanLoad {
-    pending_loans: HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+    pending_loans: FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
     pending_foreign: FxHashMap<u32, u32>,
     active_counts: FxHashMap<u32, u32>,
     active_pairs: FxHashSet<(u32, u32)>,

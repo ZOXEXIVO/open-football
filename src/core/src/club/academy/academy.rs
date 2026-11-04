@@ -211,9 +211,7 @@ impl ClubAcademy {
         // **skip natural skill development**. That signal is owned by
         // the academy-specific weekly training tick — running both in
         // the same week would double-develop every prospect.
-        let players_result = self
-            .players
-            .simulate_skip_development(ctx.with_player(None));
+        let players_result = self.players.simulate_skip_development(&ctx);
 
         self.run_pathway_review(&ctx);
 

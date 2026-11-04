@@ -10,10 +10,10 @@ pub struct MatchSquad {
     pub tactics: Tactics,
     pub main_squad: Vec<MatchPlayer>,
     pub substitutes: Vec<MatchPlayer>,
-    pub captain_id: Option<MatchPlayer>,
-    pub vice_captain_id: Option<MatchPlayer>,
-    pub penalty_taker_id: Option<MatchPlayer>,
-    pub free_kick_taker_id: Option<MatchPlayer>,
+    pub captain_id: Option<u32>,
+    pub vice_captain_id: Option<u32>,
+    pub penalty_taker_id: Option<u32>,
+    pub free_kick_taker_id: Option<u32>,
     /// Important omissions surfaced by the squad selector, with the
     /// structured context the player-events feed needs to explain who
     /// the manager picked instead and why. Empty for rotation /
@@ -34,17 +34,13 @@ pub struct MatchSquad {
 }
 
 impl MatchSquad {
-    /// Every player this squad carries into the match — the XI, the bench
-    /// and the designated takers' copies — read against the standard of
-    /// the match. See `MatchStandard::measure`.
+    /// Every player this squad carries into the match — the XI and the
+    /// bench — read against the standard of the match. See
+    /// `MatchStandard::measure`.
     pub fn measure_against(&mut self, outfield_points: f32, goalkeeping_points: f32) {
         self.main_squad
             .iter_mut()
             .chain(self.substitutes.iter_mut())
-            .chain(self.captain_id.iter_mut())
-            .chain(self.vice_captain_id.iter_mut())
-            .chain(self.penalty_taker_id.iter_mut())
-            .chain(self.free_kick_taker_id.iter_mut())
             .for_each(|p| p.measure_against(outfield_points, goalkeeping_points));
     }
 }

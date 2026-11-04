@@ -82,6 +82,23 @@ impl RandomEngine {
         SIM_SEED.load(Ordering::Relaxed)
     }
 
+    /// A seed for one keyed consumer — a fixture, a generator stream —
+    /// derived from the pinned seed, so it is the same whichever thread or
+    /// machine asks and in whatever order. `None` while unpinned: the caller
+    /// keeps drawing from entropy.
+    pub fn pinned_stream(key: u64) -> Option<u64> {
+        let seed = SIM_SEED.load(Ordering::Relaxed);
+        (seed != 0).then(|| Self::split_mix(seed ^ Self::split_mix(key)))
+    }
+
+    /// SplitMix64's finaliser: one well-mixed word out of any input.
+    fn split_mix(mut z: u64) -> u64 {
+        z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
     pub fn gen_f32() -> f32 {
         Self::with_rng(|rng| rng.random::<f32>())
     }
@@ -97,5 +114,37 @@ impl RandomEngine {
             guard.ensure_fresh(id);
             f(&mut guard.rng)
         })
+    }
+}
+
+#[cfg(test)]
+static HELD_SEED: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The process-global sim seed, held for one test. Tests that pin a seed,
+/// or that depend on none being pinned, take it so a sibling running
+/// alongside cannot change the seed underneath them. Dropping it unpins.
+#[cfg(test)]
+pub struct HeldSeed {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl RandomEngine {
+    /// Pin `seed` (0 for unpinned) until the returned guard drops.
+    /// Poisoning is ignored: every holder pins the value it needs after
+    /// taking the lock.
+    pub fn hold_seed_for_test(seed: u64) -> HeldSeed {
+        let lock = HELD_SEED
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self::set_seed(seed);
+        HeldSeed { _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for HeldSeed {
+    fn drop(&mut self) {
+        RandomEngine::set_seed(0);
     }
 }

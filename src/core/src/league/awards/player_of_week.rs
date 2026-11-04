@@ -22,7 +22,7 @@
 //! Tiebreak: total score → highest single-match rating → lower id.
 
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::MatchResult;
@@ -180,11 +180,11 @@ impl PlayerOfTheWeekSelector {
     /// matches and matches without `details` (no player stats — typically
     /// AI-batched) are skipped. Caller is responsible for filtering to the
     /// week-of-interest before calling.
-    pub fn aggregate<'a, I>(matches: I) -> HashMap<u32, WeeklyAggregate>
+    pub fn aggregate<'a, I>(matches: I) -> FxHashMap<u32, WeeklyAggregate>
     where
         I: IntoIterator<Item = &'a MatchResult>,
     {
-        let mut out: HashMap<u32, WeeklyAggregate> = HashMap::new();
+        let mut out: FxHashMap<u32, WeeklyAggregate> = FxHashMap::default();
         for m in matches {
             if m.friendly {
                 continue;
@@ -234,7 +234,7 @@ impl PlayerOfTheWeekSelector {
 
     /// Pick the top scorer. Ties broken by best single-match rating, then
     /// lowest player id (deterministic across ticks).
-    pub fn pick_winner(scores: &HashMap<u32, WeeklyAggregate>) -> Option<(u32, WeeklyAggregate)> {
+    pub fn pick_winner(scores: &FxHashMap<u32, WeeklyAggregate>) -> Option<(u32, WeeklyAggregate)> {
         Self::pick_winner_with_min_score(scores, 0.0)
     }
 
@@ -245,7 +245,7 @@ impl PlayerOfTheWeekSelector {
     /// `None` if no candidate clears the floor — the league simply
     /// doesn't have a Young POW that week.
     pub fn pick_winner_with_min_score(
-        scores: &HashMap<u32, WeeklyAggregate>,
+        scores: &FxHashMap<u32, WeeklyAggregate>,
         min_score: f32,
     ) -> Option<(u32, WeeklyAggregate)> {
         scores
@@ -527,9 +527,9 @@ mod tests {
         assert_eq!(senior, 1);
 
         // Now apply the young-eligibility filter (age ≤ 20).
-        let ages: std::collections::HashMap<u32, u8> =
+        let ages: rustc_hash::FxHashMap<u32, u8> =
             [(1u32, 21u8), (2u32, 20u8)].into_iter().collect();
-        let young: std::collections::HashMap<u32, WeeklyAggregate> = agg
+        let young: rustc_hash::FxHashMap<u32, WeeklyAggregate> = agg
             .iter()
             .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
             .map(|(id, a)| (*id, *a))
@@ -550,8 +550,8 @@ mod tests {
         let m = build_match("m", 10, 20, 1, 0, &[1], &[], vec![(1, twenty)], Some(1));
 
         let agg = PlayerOfTheWeekSelector::aggregate([&m]);
-        let ages: std::collections::HashMap<u32, u8> = [(1u32, 20u8)].into_iter().collect();
-        let young: std::collections::HashMap<u32, WeeklyAggregate> = agg
+        let ages: rustc_hash::FxHashMap<u32, u8> = [(1u32, 20u8)].into_iter().collect();
+        let young: rustc_hash::FxHashMap<u32, WeeklyAggregate> = agg
             .iter()
             .filter(|(id, _)| ages.get(*id).map(|a| *a <= 20).unwrap_or(false))
             .map(|(id, a)| (*id, *a))

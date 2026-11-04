@@ -28,8 +28,8 @@ use crate::{
     TeammateConflictReason,
 };
 use chrono::{Datelike, NaiveDate};
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 impl TeamBehaviour {
     /// When a teammate signs a notably bigger deal and this player earns
@@ -683,7 +683,7 @@ impl TeamBehaviour {
                         HappinessEventType::ConflictWithTeammate,
                         -2.0,
                         offender_id,
-                        conflict_ctx,
+                        || conflict_ctx,
                         45,
                         PlayerHappiness::MAX_CONFLICT_WITH_TEAMMATE_PER_TICK,
                     );
@@ -710,7 +710,7 @@ impl TeamBehaviour {
         // Madrid loanee carrying a Madrid wage) or tiny (a youth loanee
         // from a lower-league parent) and neither belongs in the
         // borrower's wage structure.
-        let mut top_by_group: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
+        let mut top_by_group: FxHashMap<PlayerFieldPositionGroup, u32> = FxHashMap::default();
         for p in &players.players {
             if p.is_on_loan() {
                 continue;
@@ -863,7 +863,7 @@ impl TeamBehaviour {
         // averages / counts so we can name the weakest unit around a star.
         let mut sum: u32 = 0;
         let mut count: u32 = 0;
-        let mut by_group: HashMap<PlayerFieldPositionGroup, (u32, u32)> = HashMap::new();
+        let mut by_group: FxHashMap<PlayerFieldPositionGroup, (u32, u32)> = FxHashMap::default();
         for p in &players.players {
             if p.is_on_loan() {
                 continue;

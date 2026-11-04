@@ -18,6 +18,7 @@ use crate::club::staff::StaffPosition;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 use log::debug;
+use rayon::prelude::*;
 
 /// Hard ceiling on age — coaches retire if they're still unsigned past
 /// this birthday. Real-world managers occasionally work into their 70s
@@ -122,12 +123,15 @@ impl StaffPool {
     ///
     /// Returns the number of staff moved this tick. Cheap when nothing
     /// expires (the common case): just a contract-date comparison per
-    /// staff member.
+    /// staff member, every country walking its own clubs, and the pool
+    /// admitting them in world order.
     pub fn harvest_expired(data: &mut SimulatorData, today: NaiveDate) -> usize {
-        let mut harvested: Vec<Staff> = Vec::new();
-
-        for continent in &mut data.continents {
-            for country in &mut continent.countries {
+        let harvested: Vec<Staff> = data
+            .continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .flat_map_iter(|country| {
+                let mut harvested: Vec<Staff> = Vec::new();
                 for club in &mut country.clubs {
                     for team in club.teams.iter_mut() {
                         // Snapshot of expiring ids — can't mutate while iterating.
@@ -157,8 +161,9 @@ impl StaffPool {
                         }
                     }
                 }
-            }
-        }
+                harvested
+            })
+            .collect();
 
         let n = harvested.len();
         for staff in harvested {

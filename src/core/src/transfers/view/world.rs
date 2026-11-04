@@ -1,5 +1,6 @@
 //! How a market pass reaches the world it is moving players around in.
 
+use crate::transfers::pipeline::PlayerSummary;
 use crate::world::SimulatorData;
 use crate::{Club, Country};
 
@@ -59,5 +60,40 @@ impl MarketWorld for SimulatorData {
 
     fn club_mut(&mut self, club_id: u32) -> Option<&mut Club> {
         SimulatorData::club_mut(self, club_id)
+    }
+}
+
+/// Every summary in the world pool but this country's own. The pool is laid
+/// out country by country, so that is the run before the country's block
+/// and the run after it, read in place.
+#[derive(Clone, Copy)]
+pub struct ForeignPool<'a> {
+    before: &'a [PlayerSummary],
+    after: &'a [PlayerSummary],
+}
+
+impl<'a> ForeignPool<'a> {
+    pub fn of(world_pool: &'a [PlayerSummary], country_id: u32) -> Self {
+        let start = world_pool
+            .iter()
+            .position(|s| s.country_id == country_id)
+            .unwrap_or(world_pool.len());
+        let end = start
+            + world_pool[start..]
+                .iter()
+                .take_while(|s| s.country_id == country_id)
+                .count();
+        ForeignPool {
+            before: &world_pool[..start],
+            after: &world_pool[end..],
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &'a PlayerSummary> + Clone + 'a {
+        self.before.iter().chain(self.after)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.before.is_empty() && self.after.is_empty()
     }
 }

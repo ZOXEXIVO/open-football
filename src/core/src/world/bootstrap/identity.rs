@@ -1,6 +1,6 @@
 use crate::club::Team;
 use crate::{Club, Country, TeamInfo};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Which badge a squad's career history hangs under.
 ///
@@ -8,19 +8,19 @@ use std::collections::HashMap;
 /// the main brand consistently across all their players. Senior reserves
 /// (B, Second) keep their own identity because they compete in real
 /// lower divisions and players' histories should show that.
-pub struct ClubIdentity {
+pub struct ClubIdentity<'a> {
     main_name: Option<String>,
     main_slug: Option<String>,
     main_reputation: u16,
     main_league_name: String,
     main_league_slug: String,
-    league_lookup: HashMap<u32, (String, String)>,
+    league_lookup: &'a FxHashMap<u32, (String, String)>,
 }
 
-impl ClubIdentity {
+impl<'a> ClubIdentity<'a> {
     /// Per-country `league_id -> (name, slug)` cache. Built once at the
     /// start of a country's sweep so the per-club main-team lookup is O(1).
-    pub fn league_lookup(country: &Country) -> HashMap<u32, (String, String)> {
+    pub fn league_lookup(country: &Country) -> FxHashMap<u32, (String, String)> {
         country
             .leagues
             .leagues
@@ -29,7 +29,7 @@ impl ClubIdentity {
             .collect()
     }
 
-    pub fn resolve(club: &Club, league_lookup: &HashMap<u32, (String, String)>) -> Self {
+    pub fn resolve(club: &Club, league_lookup: &'a FxHashMap<u32, (String, String)>) -> Self {
         let main_team = club.teams.main();
         let main_name = main_team.map(|t| t.name.clone());
         let main_slug = main_team.map(|t| t.slug.clone());
@@ -45,7 +45,7 @@ impl ClubIdentity {
             main_reputation,
             main_league_name,
             main_league_slug,
-            league_lookup: league_lookup.clone(),
+            league_lookup,
         }
     }
 

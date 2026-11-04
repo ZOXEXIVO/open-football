@@ -6,6 +6,7 @@
 //! roll). Engine-side condition drain already happened tick by tick;
 //! everything here is *post-match* only.
 
+use crate::utils::random::engine::RandomEngine;
 use chrono::{Datelike, NaiveDate};
 
 use crate::PlayerPositionType;
@@ -512,7 +513,7 @@ impl Player {
             now,
         });
 
-        if rand::random::<f32>() < chance {
+        if RandomEngine::gen_f32() < chance {
             let injury = InjuryType::random_match_injury(
                 minutes,
                 age,

@@ -27,12 +27,11 @@ use crate::transfers::{CompletedTransfer, TransferType};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct TransferMarket {
     pub listings: Vec<TransferListing>,
-    pub negotiations: HashMap<u32, TransferNegotiation>,
+    pub negotiations: FxHashMap<u32, TransferNegotiation>,
     pub transfer_window_open: bool,
     pub transfer_history: Vec<CompletedTransfer>,
     pub next_negotiation_id: u32,
@@ -284,7 +283,7 @@ impl TransferMarket {
     pub fn new() -> Self {
         TransferMarket {
             listings: Vec::new(),
-            negotiations: HashMap::new(),
+            negotiations: FxHashMap::default(),
             transfer_window_open: false,
             transfer_history: Vec::new(),
             next_negotiation_id: 1,

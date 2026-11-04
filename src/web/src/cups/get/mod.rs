@@ -165,11 +165,11 @@ pub async fn cup_get_action(
     // mirroring the league page's `map_item`.
     let build_tie = |item: &ScheduleItem| -> CupTie {
         let (home_name, home_slug) = simulator_data
-            .team_data(item.home_team_id)
+            .team(item.home_team_id)
             .map(|d| (d.name.clone(), d.slug.clone()))
             .unwrap_or_default();
         let (away_name, away_slug) = simulator_data
-            .team_data(item.away_team_id)
+            .team(item.away_team_id)
             .map(|d| (d.name.clone(), d.slug.clone()))
             .unwrap_or_default();
 
@@ -244,7 +244,7 @@ pub async fn cup_get_action(
             byes: byes_per_round[r]
                 .iter()
                 .filter_map(|&tid| {
-                    simulator_data.team_data(tid).map(|d| CupByeTeam {
+                    simulator_data.team(tid).map(|d| CupByeTeam {
                         name: d.name.clone(),
                         slug: d.slug.clone(),
                     })
@@ -262,7 +262,7 @@ pub async fn cup_get_action(
         .and_then(cup::tie_winner);
     let is_decided = champion_id.is_some();
     let (champion_name, champion_slug) = champion_id
-        .and_then(|id| simulator_data.team_data(id))
+        .and_then(|id| simulator_data.team(id))
         .map(|d| (d.name.clone(), d.slug.clone()))
         .unwrap_or_default();
 

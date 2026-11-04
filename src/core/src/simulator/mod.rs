@@ -21,11 +21,13 @@
 //! on its own, is never correct.
 
 mod matchday;
+mod observer;
 mod panic;
 pub(crate) mod phase;
 mod result;
 
 pub use matchday::WorldMatchdayResult;
+pub use observer::PhaseObserver;
 pub use panic::ContinentPanicMetrics;
 pub use result::SimulationResult;
 
@@ -52,14 +54,20 @@ impl FootballSimulator {
         let mut result = SimulationResult::new();
 
         let ctx = Prologue::run(data, &mut result);
+        PhaseObserver::notify("prologue", data);
 
         let matchday = MatchdayPhase::run(data, &ctx);
         result.panicked_continents = matchday.panicked_continents;
+        PhaseObserver::notify("matchday", data);
 
         PeriodicPasses::run(data, matchday, &mut result);
+        PhaseObserver::notify("periodic", data);
         WorldPass::run(data);
+        PhaseObserver::notify("world", data);
         Epilogue::run(data, config);
+        PhaseObserver::notify("epilogue", data);
         Honours::run(data);
+        PhaseObserver::notify("honours", data);
 
         data.next_date();
 

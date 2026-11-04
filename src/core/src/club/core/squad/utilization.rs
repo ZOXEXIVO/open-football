@@ -18,7 +18,7 @@ use crate::{
     Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
 };
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::super::treasury::WageReliefSale;
 use super::decision::SquadDecision;
@@ -400,7 +400,7 @@ impl Club {
         // much anyone has played.
         const SIZE_TRIM_MARGIN: usize = 5;
         if total_squad > max_squad + SIZE_TRIM_MARGIN {
-            let already: HashSet<u32> = loan_players
+            let already: FxHashSet<u32> = loan_players
                 .iter()
                 .chain(transfer_players.iter())
                 .map(|d| d.player_id)
@@ -410,7 +410,8 @@ impl Club {
             // normal complement is not where the excess lives — trimming its
             // weakest body (classically the third keeper) just forces the
             // depth sweeps to re-buy the same profile next window.
-            let mut main_group_counts: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
+            let mut main_group_counts: FxHashMap<PlayerFieldPositionGroup, usize> =
+                FxHashMap::default();
             for p in self.teams.teams[main_idx].players.iter() {
                 *main_group_counts
                     .entry(p.position().position_group())
@@ -507,7 +508,7 @@ impl Club {
         let standing = self.finance.debt.standing;
         let distress = self.finance.distress_level;
 
-        let already: HashSet<u32> = transfer_players.iter().map(|d| d.player_id).collect();
+        let already: FxHashSet<u32> = transfer_players.iter().map(|d| d.player_id).collect();
 
         // Wages already committed to leaving: players on the market from a
         // previous pass, plus anyone the sporting sweeps listed earlier in

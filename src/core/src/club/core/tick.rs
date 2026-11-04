@@ -167,13 +167,20 @@ impl Club {
             .map(LeagueStanding::from_context)
             .unwrap_or_default();
 
-        let mut result = ClubResult::new(
-            self.id,
-            self.finance.simulate(ctx.with_finance()),
-            self.teams.simulate(club_ctx.clone()),
-            self.board.simulate(ctx.with_board_data(board_ctx)),
-            self.academy.simulate(club_ctx.clone()),
+        let finance = self.finance.simulate(&ctx);
+        // The squads, the board and the academy each own their state, so
+        // the squads run beside the other two; on one worker the order is
+        // still teams, board, academy.
+        let (teams, (board, academy)) = rayon::join(
+            || self.teams.simulate(club_ctx.clone()),
+            || {
+                (
+                    self.board.simulate(ctx.with_board_data(board_ctx)),
+                    self.academy.simulate(club_ctx.clone()),
+                )
+            },
         );
+        let mut result = ClubResult::new(self.id, finance, teams, board, academy);
 
         // Intake day. The academy takes boys in on one morning a year
         // and then the only evidence is a longer squad list, so the

@@ -10,8 +10,8 @@ use crate::club::relations::ChemistryContext;
 use crate::club::team::Team;
 use crate::club::team::squad_life::social_snapshot::TeamSocialSnapshot;
 use chrono::NaiveDate;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 /// How many top leaders / influencers are surfaced to the chemistry model.
 /// Tuned to the natural size of a dressing-room leadership core.
@@ -54,7 +54,7 @@ impl ChemistryContextBuilder {
     /// each player from every other player. Captures dressing-room
     /// standing distinct from raw leadership.
     fn top_influence_scores(team: &Team) -> Vec<f32> {
-        let mut influence_totals: HashMap<u32, f32> = HashMap::new();
+        let mut influence_totals: FxHashMap<u32, f32> = FxHashMap::default();
         for p in team.players.players.iter() {
             for (id, rel) in p.relations.player_relations_iter() {
                 *influence_totals.entry(*id).or_insert(0.0) += rel.influence;

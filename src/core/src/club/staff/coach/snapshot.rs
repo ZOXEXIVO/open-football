@@ -17,7 +17,7 @@ use super::memory::CoachMemoryStore;
 use super::strategy::CoachStrategy;
 use crate::club::staff::CoachProfile;
 use chrono::NaiveDate;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Live-match coach snapshot. Cloned from the head coach at
 /// squad-construction time. The memory store is the only field with
@@ -35,7 +35,7 @@ pub struct CoachMatchSnapshot {
     /// first of January 2000, which read as every protection having
     /// lapsed two centuries ago.
     pub date: NaiveDate,
-    pub player_intents: HashMap<u32, PlayerMatchIntent>,
+    pub player_intents: FxHashMap<u32, PlayerMatchIntent>,
 }
 
 impl CoachMatchSnapshot {
@@ -50,7 +50,7 @@ impl CoachMatchSnapshot {
             profile,
             strategy,
             date,
-            player_intents: HashMap::new(),
+            player_intents: FxHashMap::default(),
         }
     }
 }

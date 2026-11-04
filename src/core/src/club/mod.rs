@@ -32,10 +32,9 @@ pub use status::*;
 
 // Finance exports
 pub use finance::{
-    ClubFinanceContext, ClubFinanceResult, ClubFinances, ClubFinancialBalance,
-    ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract, DistressLevel,
-    SeasonTransferFees, SponsorPerformance, SponsorRenewalContext, TransferObligation,
-    classify_distress,
+    ClubFinanceResult, ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,
+    ClubSponsorship, ClubSponsorshipContract, DistressLevel, SeasonTransferFees,
+    SponsorPerformance, SponsorRenewalContext, TransferObligation, classify_distress,
 };
 
 // Club press exports
@@ -151,7 +150,6 @@ pub use player::{
     PlayerCollection,
     PlayerCollectionResult,
     PlayerCompetitionStatsRow,
-    PlayerContext,
     PlayerContractProposal,
     PlayerContractResult,
     PlayerDecision,
@@ -250,8 +248,6 @@ pub use player::{
 // Also export the missing types
 pub use player::mailbox::handlers::{AcceptContractHandler, ProcessContractHandler};
 pub use player::training::result::PlayerTrainingResult;
-// Also export context module for those who want to import from it
-pub use player::context as player_context;
 // Also keep module aliases for those who want to import from the module
 pub use player::attributes as player_attributes_mod;
 pub use player::builder as player_builder_mod;
@@ -259,23 +255,20 @@ pub use player::contract as player_contract_mod;
 pub use player::mailbox::handlers;
 
 // Staff exports (except conflicting modules)
+pub use staff::focus;
+pub use staff::responsibility;
+pub use staff::staff_stub;
 pub use staff::{
     BoardResponsibility, CoachFocus, CoachingStyle, ContractRenewalResponsibility, HealthIssue,
     IncomingTransfersResponsibility, MentalFocusType, OutgoingTransfersResponsibility,
     PhysicalFocusType, RecruitmentResponsibility, RegionFamiliarity, RelationshipEvent,
-    ResignationReason, ScoutRecommendation, ScoutingReport, ScoutingResponsibility, Staff,
-    StaffAttributes, StaffClubContract, StaffCoaching, StaffCollection, StaffCollectionResult,
-    StaffContext, StaffContractResult, StaffDataAnalysis, StaffEvent, StaffEventType,
-    StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
-    StaffMoraleEvent, StaffPerformance, StaffPosition, StaffResponsibility, StaffResult,
-    StaffStatus, StaffStub, StaffTrainingResult, StaffTrainingSession, StaffWarning,
-    TechnicalFocusType, TrainingResponsibility,
+    ResignationReason, ScoutingResponsibility, Staff, StaffAttributes, StaffClubContract,
+    StaffCoaching, StaffCollection, StaffCollectionResult, StaffContractResult, StaffDataAnalysis,
+    StaffEvent, StaffEventType, StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType,
+    StaffMedical, StaffMental, StaffPerformance, StaffPosition, StaffResponsibility, StaffResult,
+    StaffStatus, StaffStub, StaffTrainingResult, StaffTrainingSession, TechnicalFocusType,
+    TrainingResponsibility,
 };
-// Also export context module for those who want to import from it
-pub use staff::context as staff_context;
-pub use staff::focus;
-pub use staff::responsibility;
-pub use staff::staff_stub;
 // Also keep module aliases for those who want to import from the module
 pub use staff::attributes as staff_attributes_mod;
 pub use staff::contract as staff_contract_mod;

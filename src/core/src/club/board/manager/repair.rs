@@ -5,6 +5,7 @@ use crate::club::board::manager::seat::ManagerSeat;
 use crate::club::news::ClubAffair;
 use crate::club::staff::StaffPosition;
 use chrono::NaiveDate;
+use rayon::prelude::*;
 
 /// Daily maintenance pass that guarantees the FM-style invariant: every
 /// active main team is run by either a permanent `Manager` or an interim
@@ -22,17 +23,15 @@ pub struct ManagerSeatRepair;
 
 impl ManagerSeatRepair {
     /// Walk every club with a main team and enforce the seat invariant.
-    /// Serial mutable walk — mirrors `pool::harvest_expired_staff`; the
-    /// work is a couple of position scans per club plus, in the rare vacant
-    /// case, an interim promotion.
+    /// The work is a couple of position scans per club plus, in the rare
+    /// vacant case, an interim promotion — all of it inside the club, so
+    /// the clubs fan out.
     pub fn run(data: &mut SimulatorData, today: NaiveDate) {
-        for continent in &mut data.continents {
-            for country in &mut continent.countries {
-                for club in &mut country.clubs {
-                    Self::repair_club(club, today);
-                }
-            }
-        }
+        data.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .flat_map(|country| country.clubs.par_iter_mut())
+            .for_each(|club| Self::repair_club(club, today));
     }
 
     /// Enforce the head-coach-seat invariant for a single club.

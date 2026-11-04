@@ -22,7 +22,7 @@ use crate::{
     Club, Country, NationalMatchImportance, NationalSelectionPolicy, NationalTeam,
     NationalTeamLevel,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 static EMERGENCY_CALLUPS: AtomicU64 = AtomicU64::new(0);
 
@@ -257,18 +257,15 @@ impl NationalSquadBuilder {
             NationalTeamLevel::Under21 => NationalSelectionPolicy::under21(),
         };
 
-        let mut candidates_by_country = NationalTeam::collect_all_candidates_by_country_with_policy(
-            continents.iter().flat_map(|c| c.countries.iter()),
-            date,
-            &policy,
-        );
+        let mut candidates_by_country =
+            NationalTeam::collect_all_candidates_by_country_with_policy(continents, date, &policy);
         let mut candidates = candidates_by_country
             .remove(&country_id)
             .unwrap_or_default();
 
         // For U21, keep the youth pool disjoint from the current senior squad.
         if level == NationalTeamLevel::Under21 {
-            let senior_selected: HashSet<u32> = continents
+            let senior_selected: FxHashSet<u32> = continents
                 .iter()
                 .flat_map(|c| c.countries.iter())
                 .flat_map(|c| c.national_team.squad.iter().map(|sp| sp.player_id))

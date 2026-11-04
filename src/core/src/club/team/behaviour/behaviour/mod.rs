@@ -20,7 +20,7 @@ use crate::{PlayerCollection, StaffCollection};
 use chrono::Datelike;
 use chrono::NaiveDateTime;
 use chrono::Weekday;
-use log::debug;
+use log::{Level, debug, log_enabled};
 
 mod calculations;
 pub(crate) mod conflict_escalation;
@@ -364,6 +364,9 @@ impl TeamBehaviour {
     }
 
     fn log_team_state(players: &PlayerCollection, context: &str) {
+        if !log_enabled!(Level::Debug) {
+            return;
+        }
         debug!("Team State {}: {} players", context, players.players.len());
 
         let mut happy_players = 0;

@@ -14,7 +14,7 @@ use crate::{
 use chrono::NaiveDate;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelRefMutIterator;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 impl NationalTeam {
     /// Apply / release `PlayerStatusType::Int` across every club in
@@ -29,7 +29,7 @@ impl NationalTeam {
         continents: &mut [Continent],
         date: NaiveDate,
     ) {
-        let mut called_up: HashSet<u32> = HashSet::new();
+        let mut called_up: FxHashSet<u32> = FxHashSet::default();
         for continent in continents.iter() {
             for country in continent.countries.iter() {
                 for sp in &country.national_team.squad {
@@ -151,7 +151,7 @@ impl NationalTeam {
         continents: &mut [Continent],
         date: NaiveDate,
     ) {
-        let mut called_up: HashSet<u32> = HashSet::new();
+        let mut called_up: FxHashSet<u32> = FxHashSet::default();
         for continent in continents.iter() {
             for country in continent.countries.iter() {
                 for sp in &country.u21_national_team.squad {
@@ -184,7 +184,7 @@ impl NationalTeam {
     /// players. Removes only the U21 status — a player who is also a
     /// senior international keeps their `Int` flag untouched.
     pub(crate) fn release_u21_callup_statuses_across_world(continents: &mut [Continent]) {
-        let mut released_ids: HashSet<u32> = HashSet::new();
+        let mut released_ids: FxHashSet<u32> = FxHashSet::default();
         for continent in continents.iter() {
             for country in continent.countries.iter() {
                 for sp in &country.u21_national_team.squad {
@@ -211,7 +211,7 @@ impl NationalTeam {
 
     /// World-wide variant of `release_callup_statuses_across_continent`.
     pub(crate) fn release_callup_statuses_across_world(continents: &mut [Continent]) {
-        let mut released_ids: HashSet<u32> = HashSet::new();
+        let mut released_ids: FxHashSet<u32> = FxHashSet::default();
         for continent in continents.iter() {
             for country in continent.countries.iter() {
                 for sp in &country.national_team.squad {

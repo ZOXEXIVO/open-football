@@ -6,7 +6,7 @@ use crate::world::SimulatorData;
 use chrono::{Datelike, NaiveDate};
 use log::info;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 impl CountryResult {
     /// Snapshot every player's statistics into career history for one or
@@ -116,7 +116,7 @@ impl CountryResult {
         );
 
         // Build league lookup so we can resolve team.league_id -> (name, slug)
-        let league_lookup: HashMap<u32, (String, String)> = country
+        let league_lookup: FxHashMap<u32, (String, String)> = country
             .leagues
             .leagues
             .iter()

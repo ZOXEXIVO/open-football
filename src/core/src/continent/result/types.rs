@@ -1,7 +1,7 @@
 use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalRankings};
 use crate::r#match::MatchResult;
 use crate::transfers::CompletedTransfer;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct ContinentalCompetitionResults {
@@ -61,7 +61,7 @@ pub struct CrossBorderTransferSummary {
     pub completed_transfers: Vec<CompletedTransfer>,
     pub total_value: f64,
     pub most_expensive: Option<CompletedTransfer>,
-    pub by_country_flow: HashMap<u32, TransferFlow>, // country_id -> flow stats
+    pub by_country_flow: FxHashMap<u32, TransferFlow>, // country_id -> flow stats
 }
 
 #[derive(Debug, Clone)]

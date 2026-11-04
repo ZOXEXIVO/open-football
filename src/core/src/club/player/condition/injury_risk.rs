@@ -67,7 +67,7 @@ pub struct InjuryRiskInputs {
 impl Player {
     /// Run the unified risk recipe and return a per-tick / per-event
     /// injury chance, capped at 8%. The caller compares the result
-    /// against `rand::random::<f32>()` and applies the actual injury.
+    /// against `RandomEngine::gen_f32()` and applies the actual injury.
     pub fn compute_injury_risk(&self, inputs: InjuryRiskInputs) -> f32 {
         let proneness = self.player_attributes.injury_proneness as f32;
         // 0..20 → roughly 0.4..1.8 with a square-root shape (so a 10

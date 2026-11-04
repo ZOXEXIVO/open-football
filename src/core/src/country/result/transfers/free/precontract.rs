@@ -35,7 +35,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// A staged pre-contract decision produced by the read phase, applied to
 /// the player in the write phase. Split so the matcher can scan clubs
@@ -114,7 +114,7 @@ impl PreContractManager {
 
         // Destination names for the decision register — resolved before
         // the write loop takes its mutable borrow on the rosters.
-        let club_names: HashMap<u32, String> = country
+        let club_names: FxHashMap<u32, String> = country
             .clubs
             .iter()
             .map(|c| (c.id, c.name.clone()))

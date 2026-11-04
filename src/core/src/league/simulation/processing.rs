@@ -10,8 +10,8 @@ use crate::utils::DateUtils;
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
+use rustc_hash::FxHashMap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 
 impl League {
     pub(in crate::league) fn process_match_day_results(
@@ -288,7 +288,7 @@ impl League {
         // Build a player-id → (age, position-group, club-team-id) lookup
         // from the league's clubs once so per-candidate filtering doesn't
         // walk the world.
-        let mut player_meta: HashMap<u32, (u8, Option<u32>)> = HashMap::new();
+        let mut player_meta: FxHashMap<u32, (u8, Option<u32>)> = FxHashMap::default();
         for club in clubs {
             for team in &club.teams.teams {
                 if team.league_id != Some(self.id) {

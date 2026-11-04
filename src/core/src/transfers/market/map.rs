@@ -24,7 +24,7 @@
 //! may iterate an export list to choose where a player goes, or the card
 //! stops being a prior and becomes a routing table.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::club::player::personality::Language;
@@ -250,11 +250,11 @@ impl CorridorPrior {
 /// short linear scan of one country's list.
 #[derive(Debug, Clone, Default)]
 pub struct MarketMap {
-    profiles: HashMap<u32, CountryTransferProfile>,
-    facts: HashMap<u32, MarketCountryFacts>,
+    profiles: FxHashMap<u32, CountryTransferProfile>,
+    facts: FxHashMap<u32, MarketCountryFacts>,
     /// Precomputed per country — the money axis needs a world median, so it
     /// cannot be answered one country at a time.
-    import_capacity: HashMap<u32, f32>,
+    import_capacity: FxHashMap<u32, f32>,
     /// The neutral profile handed out for a country with no card at all.
     empty: CountryTransferProfile,
 }
@@ -269,13 +269,13 @@ impl MarketMap {
     const WAGE_SPAN: f32 = 2.5;
 
     pub fn new(
-        profiles: HashMap<u32, CountryTransferProfile>,
-        facts: HashMap<u32, MarketCountryFacts>,
+        profiles: FxHashMap<u32, CountryTransferProfile>,
+        facts: FxHashMap<u32, MarketCountryFacts>,
     ) -> MarketMap {
         let mut map = MarketMap {
             profiles,
             facts,
-            import_capacity: HashMap::new(),
+            import_capacity: FxHashMap::default(),
             empty: CountryTransferProfile::default(),
         };
         map.recompute_import_capacity();
@@ -358,7 +358,7 @@ impl MarketMap {
     /// Read by the scout desk's exploration draw. It is a MENU, never a
     /// route: nothing here decides where a player goes.
     pub fn top_exporters(&self, limit: usize) -> Vec<u32> {
-        let mut totals: HashMap<u32, f32> = HashMap::new();
+        let mut totals: FxHashMap<u32, f32> = FxHashMap::default();
         for profile in self.profiles.values() {
             for corridor in &profile.import {
                 *totals.entry(corridor.country_id).or_insert(0.0) += corridor.weight;
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn import_capacity_separates_the_gulf_from_west_africa() {
-        let mut facts_map = HashMap::new();
+        let mut facts_map = FxHashMap::default();
         let mut saudi = facts(1, "sa", 4, 6000, 6200);
         saudi.median_top_flight_wage = 4_000_000;
         let mut cameroon = facts(2, "cm", 0, 4000, 2000);
@@ -605,7 +605,7 @@ mod tests {
         for f in [saudi, cameroon, england, turkey] {
             facts_map.insert(f.id, f);
         }
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         for (id, share) in [(1u32, 0.28f32), (2, 0.06), (3, 0.60), (4, 0.58)] {
             profiles.insert(
                 id,
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn region_prestige_table_reads_the_world_not_the_hand_table() {
-        let mut facts_map = HashMap::new();
+        let mut facts_map = FxHashMap::default();
         // Süper Lig above the RPL — the inversion the authored table shipped.
         for f in [
             facts(1, "tr", 1, 6700, 7000),
@@ -632,7 +632,7 @@ mod tests {
         ] {
             facts_map.insert(f.id, f);
         }
-        let map = MarketMap::new(HashMap::new(), facts_map);
+        let map = MarketMap::new(FxHashMap::default(), facts_map);
         let table = map.region_prestige_table();
         assert!(
             table[ScoutingRegion::MiddleEastEurope.index()]
@@ -698,7 +698,7 @@ mod tests {
 
     #[test]
     fn the_world_exporters_menu_ranks_by_total_import_weight() {
-        let mut facts_map = HashMap::new();
+        let mut facts_map = FxHashMap::default();
         for f in [
             facts(1, "br", 3, 8000, 7800),
             facts(2, "ru", 1, 6500, 6500),
@@ -707,7 +707,7 @@ mod tests {
         ] {
             facts_map.insert(f.id, f);
         }
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         // Three countries import Brazilians; one imports Russians.
         for (id, imports) in [
             (2u32, vec![(1u32, 1.0f32)]),

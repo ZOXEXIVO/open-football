@@ -12,14 +12,14 @@ use super::player_stats::{PlayerMatchEndStats, PlayerMatchPhysicalSnapshot};
 use super::score::Score;
 use super::substitution::SubstitutionInfo;
 use super::tally::MatchTally;
+use crate::league::LeagueMatch;
 use crate::r#match::engine::environment::{Pitch, Weather};
 use crate::r#match::engine::teamplay::standard::MatchStandard;
-use crate::league::LeagueMatch;
 use crate::r#match::squad::OmittedPlayer;
 use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
 use crate::{MatchTacticType, PlayerPositionType};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PenaltyShootoutKick {
@@ -68,7 +68,7 @@ pub struct MatchResultRaw {
     pub match_time_ms: u64,
     pub additional_time_ms: u64,
 
-    pub player_stats: HashMap<u32, PlayerMatchEndStats>,
+    pub player_stats: FxHashMap<u32, PlayerMatchEndStats>,
 
     pub substitutions: Vec<SubstitutionInfo>,
 
@@ -91,7 +91,7 @@ pub struct MatchResultRaw {
     /// formula. Missing entries fall back to the legacy minutes-only
     /// path so callers that don't construct `MatchResultRaw` via the
     /// engine continue to work.
-    pub physical_snapshots: HashMap<u32, PlayerMatchPhysicalSnapshot>,
+    pub physical_snapshots: FxHashMap<u32, PlayerMatchPhysicalSnapshot>,
 
     pub penalty_shootout: Vec<PenaltyShootoutKick>,
 
@@ -176,16 +176,16 @@ impl MatchResultRaw {
     pub fn with_match_time(match_time_ms: u64) -> Self {
         MatchResultRaw {
             score: None,
-            position_data: ResultMatchPositionData::new(),
+            position_data: ResultMatchPositionData::empty(),
             recording_artifacts: None,
             left_team_players: FieldSquad::new(),
             right_team_players: FieldSquad::new(),
             match_time_ms,
             additional_time_ms: 0,
-            player_stats: HashMap::new(),
+            player_stats: FxHashMap::default(),
             substitutions: Vec::new(),
             chances: Vec::new(),
-            physical_snapshots: HashMap::new(),
+            physical_snapshots: FxHashMap::default(),
             penalty_shootout: Vec::new(),
             player_of_the_match_id: None,
             starting_home_tactic: None,
@@ -205,7 +205,7 @@ impl MatchResultRaw {
     pub fn copy_without_data_positions(&self) -> Self {
         MatchResultRaw {
             score: self.score.clone(),
-            position_data: ResultMatchPositionData::new(),
+            position_data: ResultMatchPositionData::empty(),
             recording_artifacts: None,
             left_team_players: self.left_team_players.clone(),
             right_team_players: self.right_team_players.clone(),

@@ -47,7 +47,6 @@ use crate::{
 };
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{HashMap, HashSet};
 
 use super::*;
 
@@ -110,7 +109,7 @@ impl<'a> LoanPushBorrower<'a> {
         club: &'a Club,
         date: NaiveDate,
         active_counts: &FxHashMap<u32, u32>,
-        pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+        pending_loans: &FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
     ) -> Option<Self> {
         if active_counts.get(&club.id).copied().unwrap_or(0)
             >= club.transfer_plan.max_concurrent_negotiations
@@ -252,7 +251,7 @@ impl ListingBroadcast {
         // resolved rows are retained ~30 days for diagnostics, and the
         // status-blind set froze a player's cascade for weeks after a
         // rejection, contradicting the resume-where-it-left-off contract.
-        let in_negotiation: HashSet<u32> = country
+        let in_negotiation: FxHashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
@@ -285,7 +284,7 @@ impl ListingBroadcast {
     fn loan_read(
         country: &mut Country,
         date: NaiveDate,
-        _in_negotiation: &HashSet<u32>,
+        _in_negotiation: &FxHashSet<u32>,
     ) -> Option<(Vec<Broadcastable>, Vec<u32>)> {
         // ── Pass 1 (read): broadcastable players ────────────────────────
         // A player is broadcastable when he carries an Available loan
@@ -416,7 +415,7 @@ impl ListingBroadcast {
         country: &mut Country,
         date: NaiveDate,
         broadcastable: &[Broadcastable],
-        in_negotiation: &HashSet<u32>,
+        in_negotiation: &FxHashSet<u32>,
     ) {
         // ── Pass 2 (mut clubs): advance each broadcast's tier ───────────
         // Open a broadcast at the parent's own tier; widen one tier down
@@ -473,8 +472,8 @@ impl ListingBroadcast {
         country: &Country,
         date: NaiveDate,
         broadcastable: &[Broadcastable],
-        pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
-        in_negotiation: &HashSet<u32>,
+        pending_loans: &FxHashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
+        in_negotiation: &FxHashSet<u32>,
     ) -> Vec<LoanPushAction> {
         let mid_season_window = MarketCadence::is_mid_season_window_for(&country.code, date);
         let domestic_region = ScoutingRegion::from_country(country.continent_id, &country.code);
@@ -511,7 +510,7 @@ impl ListingBroadcast {
         // Broadcast actions aren't opened as negotiations until Pass 4, so
         // neither `active_pairs` nor the registered-loan snapshot can see a
         // loan handed out earlier in this same pass.
-        let mut claimed_loans: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+        let mut claimed_loans: FxHashSet<(u32, PlayerFieldPositionGroup)> = FxHashSet::default();
         for (b, slate) in broadcastable.iter().zip(slates) {
             let Some(slate) = slate else {
                 continue;
@@ -542,7 +541,7 @@ impl ListingBroadcast {
         country: &Country,
         b: &Broadcastable,
         date: NaiveDate,
-        in_negotiation: &HashSet<u32>,
+        in_negotiation: &FxHashSet<u32>,
         borrowers: &[LoanPushBorrower<'_>],
         market: &LoanPushMarket<'_>,
     ) -> Option<Vec<(u32, f32)>> {
@@ -922,7 +921,7 @@ impl ListingBroadcast {
         // only, mirroring the loan push: resolved rows are retained ~30
         // days for diagnostics, and a status-blind set froze a player's
         // cascade for weeks after every rejected bid.
-        let in_negotiation: HashSet<u32> = country
+        let in_negotiation: FxHashSet<u32> = country
             .transfer_market
             .negotiations
             .values()
@@ -947,7 +946,7 @@ impl ListingBroadcast {
     fn transfer_read(
         country: &mut Country,
         date: NaiveDate,
-        _in_negotiation: &HashSet<u32>,
+        _in_negotiation: &FxHashSet<u32>,
     ) -> Option<Vec<Sellable>> {
         // ── Pass 1 (read): stale genuine seller listings ────────────────
         // Synthetic / unsolicited listings never enter the push — only a
@@ -1024,7 +1023,7 @@ impl ListingBroadcast {
         country: &mut Country,
         date: NaiveDate,
         sellable: &[Sellable],
-        in_negotiation: &HashSet<u32>,
+        in_negotiation: &FxHashSet<u32>,
     ) {
         // ── Pass 2 (mut clubs): open / advance each broadcast's tier ────
         // A first-time entry is the player's ask made real — remember him
@@ -1112,13 +1111,13 @@ impl ListingBroadcast {
         country: &Country,
         date: NaiveDate,
         sellable: &[Sellable],
-        in_negotiation: &HashSet<u32>,
+        in_negotiation: &FxHashSet<u32>,
     ) -> Vec<TransferPushAction> {
         let mut actions: Vec<TransferPushAction> = Vec::new();
         // One buyer must not be handed two same-group purchases in a
         // single broadcast tick — the actions aren't negotiations yet, so
         // `has_active_negotiation_for` can't see them.
-        let mut claimed: HashSet<(u32, PlayerFieldPositionGroup)> = HashSet::new();
+        let mut claimed: FxHashSet<(u32, PlayerFieldPositionGroup)> = FxHashSet::default();
         // Every club's own surplus maths, per position group in play.
         // Answering a broadcast IS a signing, so it has to clear the same
         // fit test the scouted recruitment paths already apply: a club
@@ -1127,10 +1126,10 @@ impl ListingBroadcast {
         // move him straight back out. Built once here (the tier walk
         // below re-reads the same clubs for every listing) and keyed by
         // club id so the borrow stays read-only.
-        let broadcast_groups: HashSet<PlayerFieldPositionGroup> =
+        let broadcast_groups: FxHashSet<PlayerFieldPositionGroup> =
             sellable.iter().map(|s| s.group).collect();
-        let mut fit_by_club_group: HashMap<(u32, PlayerFieldPositionGroup), SquadFitSnapshot> =
-            HashMap::new();
+        let mut fit_by_club_group: FxHashMap<(u32, PlayerFieldPositionGroup), SquadFitSnapshot> =
+            FxHashMap::default();
         let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         for club in &country.clubs {
             for &group in &broadcast_groups {

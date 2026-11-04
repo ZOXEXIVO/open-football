@@ -1,6 +1,6 @@
 use crate::world::SimulatorData;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 /// The half of a loanee's wages the borrower never agreed to pay.
 ///
@@ -18,7 +18,7 @@ impl LoanWageSettlement {
     /// residual arithmetic is correct without a separate pct path.
     /// Negative residuals are clamped to zero so we never accidentally
     /// credit the parent.
-    fn owed_by_parent(data: &SimulatorData) -> HashMap<u32, i64> {
+    fn owed_by_parent(data: &SimulatorData) -> FxHashMap<u32, i64> {
         // Read pass: the world-wide walk parallelises across countries,
         // and the per-parent merge happens serially below, so no borrow
         // is held across the credit pass.
@@ -42,7 +42,7 @@ impl LoanWageSettlement {
             })
             .collect();
 
-        let mut owed: HashMap<u32, i64> = HashMap::new();
+        let mut owed: FxHashMap<u32, i64> = FxHashMap::default();
         for (parent_id, monthly) in entries {
             *owed.entry(parent_id).or_insert(0) += monthly;
         }

@@ -296,7 +296,7 @@ impl MarketAffinity {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
 
     use super::*;
     use crate::transfers::ScoutingRegion;
@@ -351,7 +351,7 @@ mod tests {
 
     /// A miniature world with the corridors the design argues about.
     fn world() -> MarketMap {
-        let mut facts_map = HashMap::new();
+        let mut facts_map = FxHashMap::default();
         for f in [
             facts(BR, "br", 3, 8000, 7800, 500_000),
             facts(RU, "ru", 1, 6500, 6500, 900_000),
@@ -366,7 +366,7 @@ mod tests {
             facts_map.insert(f.id, f);
         }
 
-        let mut profiles = HashMap::new();
+        let mut profiles = FxHashMap::default();
         profiles.insert(
             TR,
             CountryTransferProfile {
