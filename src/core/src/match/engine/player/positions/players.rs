@@ -320,7 +320,7 @@ impl From<&MatchField> for PlayerFieldData {
 }
 
 #[derive(PartialEq, Debug, Clone, Copy)]
-pub enum PlayerDistanceFromStartPosition {
+pub enum PlayerDistanceFromPosition {
     Small,
     Medium,
     Big,

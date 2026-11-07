@@ -11833,7 +11833,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     }
 
     // ── FOUL SOURCE CENSUS ─────────────────────────────────────────────
-    // Which state emitted each foul, and how many had the ball inside the
+    // Which state decided each foul, and how many had the ball inside the
     // fouler's own box (penalty candidates). The aggregate foul/penalty
     // counts cannot say which model to tune.
     {
@@ -11846,7 +11846,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!("--- FOUL SOURCE CENSUS (contacts emitted, before the referee gate) ---");
             println!(
                 "  {:<34} {:>8}  {:>7}  {:>9}  {:>7}",
-                "emitting state", "fouls", "share", "ball-in-box", "in-box%"
+                "deciding state", "fouls", "share", "ball-in-box", "in-box%"
             );
             for (id, n, in_box) in rows.iter() {
                 if *n * 100 < total {
@@ -12949,6 +12949,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         if !unobserved.is_empty() {
             println!("  never entered  : {}", unobserved.join(", "));
         }
+        StateCensusReport::print_rare_entries(n_matches);
         if real.is_empty() {
             println!("  invariants: OK (no observed unreachable / dead-end states)");
         } else {
@@ -13063,7 +13064,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         s[8],
     );
 
-    // Tackle flow per role: entries (state process() calls), attempts
+    // Tackle flow per role: ticks in state (state process() calls), attempts
     // (dice rolled), successes (TacklingBall emitted). The success→stat
     // mapping is 1:1 so the sum of role successes should match the
     // tackles/team column in the AGGREGATE block above.
@@ -13071,12 +13072,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     println!();
     println!("--- TACKLE FLOW per role (cumulative, all matches) ---");
     let roles = ["DEF", "MID", "FWD", "GK"];
-    let total_entries: u64 = t[0..4].iter().sum();
+    let total_ticks_in_state: u64 = t[0..4].iter().sum();
     let total_attempts: u64 = t[4..8].iter().sum();
     let total_successes: u64 = t[8..12].iter().sum();
     println!(
         "  {:<4}  {:>10}  {:>10}  {:>10}",
-        "role", "entries", "attempts", "successes"
+        "role", "ticks", "attempts", "successes"
     );
     for (i, role) in roles.iter().enumerate() {
         println!(
@@ -13089,7 +13090,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     }
     println!(
         "  {:<4}  {:>10}  {:>10}  {:>10}",
-        "ALL", total_entries, total_attempts, total_successes
+        "ALL", total_ticks_in_state, total_attempts, total_successes
     );
     let success_per_match_per_team = total_successes as f64 / (n_matches as f64 * 2.0);
     println!(
@@ -13589,6 +13590,8 @@ fn run_trace(matches: usize, level: u8) {
         println!("  {:>9}  {:<14}  {}  <->  {}", n, src.as_tag(), a, b);
     }
 
+    StateCensusReport::print(matches, &snap);
+
     // ── self-transitions: the timer-reset trap ─────────────────────────
     let mut selfs: Vec<_> = snap
         .self_edges
@@ -13604,6 +13607,274 @@ fn run_trace(matches: usize, level: u8) {
     }
     if selfs.is_empty() {
         println!("  none");
+    }
+}
+
+/// The state machine's census, per match: every transition with its dwell
+/// histogram, the loops a reversal test cannot see, what the commitment
+/// guard held back, which code proposes what, and what each state looks like
+/// to somebody watching it. See `core::motion_diag::StateCensus`.
+struct StateCensusReport;
+
+impl StateCensusReport {
+    fn print(matches: usize, snap: &core::motion_diag::Snapshot) {
+        let per = |n: u64| n as f64 / matches.max(1) as f64;
+        Self::print_edges(snap, &per);
+        Self::print_pairs(snap, &per);
+        Self::print_states(snap, &per);
+        Self::print_holds(&per);
+        Self::print_cycles(snap, &per);
+        Self::print_doors(&per);
+        Self::print_possession(&per);
+        Self::print_recovery();
+    }
+
+    /// Entries per 100 matches of every state entered less than once a match,
+    /// which is what deciding whether a state earns its keep needs.
+    fn print_rare_entries(matches: usize) {
+        let snap = core::motion_diag::snapshot();
+        let mut entries: std::collections::BTreeMap<u16, u64> = Default::default();
+        for ((_, to, _), edge) in &snap.edges {
+            *entries.entry(*to).or_insert(0) += edge.n;
+        }
+        let mut rare: Vec<(u16, u64)> = entries
+            .into_iter()
+            .filter(|(_, n)| (*n as usize) < matches)
+            .collect();
+        rare.sort_by_key(|(_, n)| *n);
+        let rows: Vec<String> = rare
+            .iter()
+            .map(|(id, n)| {
+                format!(
+                    "{} {:.1}",
+                    StateNames::of(*id),
+                    *n as f64 * 100.0 / matches.max(1) as f64
+                )
+            })
+            .collect();
+        println!(
+            "  entered under once a match (entries per 100): {}",
+            rows.join(", ")
+        );
+    }
+
+    fn print_edges(snap: &core::motion_diag::Snapshot, per: &impl Fn(u64) -> f64) {
+        use core::motion_diag::DWELL_BIN_LABELS;
+        let mut rows: Vec<_> = snap.edges.iter().collect();
+        rows.sort_by_key(|(_, e)| Reverse(e.n));
+        println!();
+        println!(
+            "--- TRANSITIONS per match, with the dwell left behind (AI ticks, % of exits) ---"
+        );
+        println!(
+            "  {:<32} {:<32} {:<20} {:>9} {:>7} {:>6}  {}",
+            "from",
+            "to",
+            "source",
+            "n/match",
+            "dwell",
+            "back%",
+            DWELL_BIN_LABELS.join(" "),
+        );
+        for ((from, to, source), edge) in rows {
+            let bins: Vec<String> = edge
+                .bins
+                .iter()
+                .map(|b| format!("{:.0}", *b as f64 / edge.n.max(1) as f64 * 100.0))
+                .collect();
+            println!(
+                "  {:<32} {:<32} {:<20} {:>9.1} {:>7.1} {:>5.0}%  {}",
+                StateNames::of(*from),
+                StateNames::of(*to),
+                source.as_tag(),
+                per(edge.n),
+                edge.mean_dwell(),
+                edge.bounces as f64 / edge.n.max(1) as f64 * 100.0,
+                bins.join(" "),
+            );
+        }
+    }
+
+    /// Both directions of each state pair together. A round trip is the
+    /// smaller direction: the larger can only exceed it by leaving by
+    /// another door.
+    fn print_pairs(snap: &core::motion_diag::Snapshot, per: &impl Fn(u64) -> f64) {
+        let mut directed: std::collections::BTreeMap<(u16, u16), u64> = Default::default();
+        for ((from, to, _), edge) in &snap.edges {
+            *directed.entry((*from, *to)).or_insert(0) += edge.n;
+        }
+        let mut pairs: Vec<(u64, u64, u16, u16)> = directed
+            .iter()
+            .filter(|((a, b), _)| a < b || !directed.contains_key(&(*b, *a)))
+            .map(|((a, b), forth)| {
+                let back = directed.get(&(*b, *a)).copied().unwrap_or(0);
+                (forth + back, (*forth).min(back), *a, *b)
+            })
+            .collect();
+        pairs.sort_by_key(|p| Reverse(p.0));
+        let total: u64 = pairs.iter().map(|p| p.0).sum();
+        println!();
+        println!("--- STATE PAIRS per match (flips, and round trips = the smaller direction) ---");
+        println!("  total flips/match {:.0}", per(total));
+        for (flips, round_trips, a, b) in pairs.iter().take(40) {
+            println!(
+                "  {:>9.0} {:>9.0}  {}  <->  {}",
+                per(*flips),
+                per(*round_trips),
+                StateNames::of(*a),
+                StateNames::of(*b),
+            );
+        }
+    }
+
+    fn print_states(snap: &core::motion_diag::Snapshot, per: &impl Fn(u64) -> f64) {
+        let exits = snap.exits_by_state();
+        println!();
+        println!("--- STATES per match (AI ticks in the state; effort tiers VH/H/M/L/R) ---");
+        println!(
+            "  {:<40} {:>8} {:>7} {:>6} {:>9} {:>8} {:>7} {:>6}  {}",
+            "state", "exits", "dwell", "<=1", "ticks", "on-ball", "still", "m/s", "tiers %",
+        );
+        for row in core::motion_diag::StateCensus::state_rows() {
+            let exit = row
+                .compact_id
+                .and_then(|id| exits.get(&id).copied())
+                .unwrap_or_default();
+            let tiers: Vec<String> = row
+                .tiers
+                .iter()
+                .map(|t| format!("{:.0}", row.share(*t)))
+                .collect();
+            println!(
+                "  {:<40} {:>8.0} {:>7.1} {:>5.0}% {:>9.0} {:>7.1}% {:>6.0}% {:>6.2}  {}",
+                row.label,
+                per(exit.n),
+                exit.mean_dwell(),
+                exit.bins[0] as f64 / exit.n.max(1) as f64 * 100.0,
+                per(row.ticks),
+                row.share(row.on_ball),
+                row.share(row.still),
+                row.mean_speed_ms(),
+                tiers.join("/"),
+            );
+        }
+    }
+
+    fn print_holds(per: &impl Fn(u64) -> f64) {
+        use core::motion_diag::StateCensus;
+        for (title, rows) in [
+            ("COMMITMENT HOLDS", StateCensus::holds()),
+            (
+                "RESOLVER REFUSALS (stayed in the first)",
+                StateCensus::refusals(),
+            ),
+            (
+                "RESOLVER SHORTCUTS (hop states skipped)",
+                StateCensus::shortcuts(),
+            ),
+        ] {
+            let total: u64 = rows.iter().map(|r| r.2).sum();
+            println!();
+            println!("--- {title} per match: TOTAL {:.0} ---", per(total));
+            for (from, to, n) in rows.iter().take(40) {
+                println!(
+                    "  {:>9.1}  {} -> {}",
+                    per(*n),
+                    StateNames::of(*from),
+                    StateNames::of(*to)
+                );
+            }
+        }
+    }
+
+    fn print_cycles(snap: &core::motion_diag::Snapshot, per: &impl Fn(u64) -> f64) {
+        let mut rows: Vec<_> = snap.three_cycles.iter().collect();
+        rows.sort_by_key(|(_, n)| Reverse(**n));
+        let total: u64 = rows.iter().map(|(_, n)| **n).sum();
+        println!();
+        println!(
+            "--- THREE-CYCLES per match (A -> B -> C -> A, each rotation its own row): TOTAL {:.0} ---",
+            per(total)
+        );
+        for ((a, b, c), n) in rows.iter().filter(|(_, n)| per(**n) >= 1.0) {
+            println!(
+                "  {:>9.1}  {} -> {} -> {}",
+                per(**n),
+                StateNames::of(*a),
+                StateNames::of(*b),
+                StateNames::of(*c)
+            );
+        }
+
+        let mut rows: Vec<_> = snap.double_hops.iter().collect();
+        rows.sort_by_key(|(_, n)| Reverse(**n));
+        println!();
+        println!("--- SAME-TICK DOUBLE HOPS per match (override, then handler) ---");
+        for ((a, b, c), n) in rows.iter().take(25) {
+            println!(
+                "  {:>9.1}  {} -> {} -> {}",
+                per(**n),
+                StateNames::of(*a),
+                StateNames::of(*b),
+                StateNames::of(*c)
+            );
+        }
+    }
+
+    fn print_doors(per: &impl Fn(u64) -> f64) {
+        let rows = core::motion_diag::DoorCensus::snapshot();
+        let total: u64 = rows.iter().map(|r| r.1).sum();
+        println!();
+        println!(
+            "--- DOORS per match (proposals per site, taken or not): {} sites, TOTAL {:.0} ---",
+            rows.len(),
+            per(total)
+        );
+        for (site, n) in &rows {
+            let short = site.rsplit("strategies").next().unwrap_or(site);
+            println!("  {:>10.1}  {}", per(*n), short.replace('\\', "/"));
+        }
+    }
+
+    fn print_recovery() {
+        let (injured_owner, injured_taker) = core::motion_diag::StateCensus::injured_ticks();
+        println!();
+        println!(
+            "--- A MAN DOWN --- AI ticks owning the ball {injured_owner}, due a restart {injured_taker}"
+        );
+        let (outfield, after_miss, ticks) = core::motion_diag::StateCensus::speed_after_a_miss();
+        println!();
+        println!(
+            "--- AFTER A MISSED CHALLENGE --- first 0.5 s {after_miss:.2} m/s (n {ticks}), outfield mean {outfield:.2} m/s"
+        );
+    }
+
+    fn print_possession(per: &impl Fn(u64) -> f64) {
+        let r = core::motion_diag::POSSESSION_CENSUS.snapshot();
+        println!();
+        println!("--- POSSESSION READINGS per match ---");
+        println!(
+            "  first reads per player-tick {:.0}, on an unowned ball {:.0}",
+            per(r.reads),
+            per(r.reads_unowned)
+        );
+        println!(
+            "  flips {:.0}: ball owned {:.0}, unowned {:.0} (own pass in flight {:.0})",
+            per(r.flips_owned + r.flips_unowned),
+            per(r.flips_owned),
+            per(r.flips_unowned),
+            per(r.flips_own_pass_in_flight)
+        );
+        println!(
+            "  team-ticks team-mates disagreed {:.0}, of {:.0} unowned team-ticks",
+            per(r.disagreeing_team_ticks),
+            per(r.unowned_team_ticks)
+        );
+        println!(
+            "  ticks both sides claim {:.0}; neither {:.0}",
+            per(r.both_claim_ticks),
+            per(r.neither_claim_ticks)
+        );
     }
 }
 

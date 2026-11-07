@@ -1,16 +1,14 @@
+use crate::r#match::forwarders::states::ForwardCreatingSpaceState;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardPress,
+};
 use crate::r#match::player::strategies::common::states::{ClosingPoint, TackleEngagement};
 use crate::r#match::{
     ConditionContext, MatchContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-
-/// Maximum distance from start position before forward stops pressing and returns
-const MAX_PRESS_DISTANCE_FROM_START: f32 = 200.0;
-/// Ball must be within this range to keep pressing
-const MAX_PRESS_BALL_DISTANCE: f32 = 120.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardPressingState {}
@@ -63,7 +61,11 @@ impl StateProcessingHandler for ForwardPressingState {
 
         if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Assisting,
+                if ctx.player.has_ball(ctx) {
+                    ForwardState::Running
+                } else {
+                    ForwardCreatingSpaceState::off_ball_support(ctx)
+                },
             ));
         }
 
@@ -76,27 +78,10 @@ impl StateProcessingHandler for ForwardPressingState {
         // violation `TackleEngagement` was written to remove, restated in
         // the press. He holds the duty until the plan takes it off him,
         // which is at most one tactical refresh (250 ms) away.
-        let nominated = TackleEngagement::is_nominated_presser(ctx);
-        if !nominated {
-            // Ball moved away — stop pressing and return to position
-            if ctx.ball().distance() > MAX_PRESS_BALL_DISTANCE {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Returning,
-                ));
-            }
-
-            // Too far from start position — don't chase forever, return
-            if ctx.player().distance_from_start_position() > MAX_PRESS_DISTANCE_FROM_START {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Returning,
-                ));
-            }
-
-            if ctx.ball().on_own_side() {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Returning,
-                ));
-            }
+        if ForwardPress::called_off(ctx) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Returning,
+            ));
         }
 
         None
@@ -112,7 +97,7 @@ impl StateProcessingHandler for ForwardPressingState {
         let carrier_reach = if nominated {
             f32::INFINITY
         } else {
-            MAX_PRESS_BALL_DISTANCE
+            ForwardPress::MAX_BALL_DISTANCE
         };
         let loose_reach = if nominated { f32::INFINITY } else { 80.0 };
 
@@ -153,7 +138,7 @@ impl StateProcessingHandler for ForwardPressingState {
         // Ball too far or teammate has it — drift back toward start position
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: ctx.team().my_anchor(),
                 slowing_distance: 30.0,
             }
             .calculate(ctx.player)

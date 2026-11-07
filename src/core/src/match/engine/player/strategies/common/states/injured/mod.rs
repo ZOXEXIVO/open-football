@@ -74,7 +74,7 @@ impl StateProcessingHandler for CommonInjuredState {
 
 impl CommonInjuredState {
     /// Role default to rejoin in — mirrors `MatchPlayer::default_state`.
-    fn default_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
+    pub(crate) fn default_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
         match group {
             PlayerFieldPositionGroup::Goalkeeper => {
                 PlayerState::Goalkeeper(GoalkeeperState::Standing)

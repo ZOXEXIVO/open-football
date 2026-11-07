@@ -4,8 +4,7 @@ use crate::r#match::player::strategies::players::{
 };
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
-    MatchPlayer, MatchPlayerLite, PassEvaluator, PlayerDistanceFromStartPosition, PlayerSide,
-    StateProcessingContext,
+    MatchPlayerLite, PassEvaluator, PlayerDistanceFromPosition, PlayerSide, StateProcessingContext,
 };
 use crate::{PlayerAttributes, PlayerPositionType, PlayerSkills};
 use nalgebra::Vector3;
@@ -272,15 +271,16 @@ impl<'p> PlayerOperationsImpl<'p> {
         }
     }
 
-    pub fn distance_from_start_position(&self) -> f32 {
+    /// How far he has strayed from where his team's shape wants him now.
+    pub fn distance_from_position(&self) -> f32 {
         self.ctx
-            .player
-            .start_position
+            .team()
+            .my_anchor()
             .distance_to(&self.ctx.player.position)
     }
 
-    pub fn position_to_distance(&self) -> PlayerDistanceFromStartPosition {
-        MatchPlayerLogic::distance_to_start_position(self.ctx.player)
+    pub fn position_to_distance(&self) -> PlayerDistanceFromPosition {
+        MatchPlayerLogic::distance_band(self.distance_from_position())
     }
 
     /// True when the player's condition has fallen into the tired band
@@ -976,15 +976,13 @@ impl<'p> PlayerOperationsImpl<'p> {
 pub struct MatchPlayerLogic;
 
 impl MatchPlayerLogic {
-    pub fn distance_to_start_position(player: &MatchPlayer) -> PlayerDistanceFromStartPosition {
-        let start_position_distance = player.position.distance_to(&player.start_position);
-
-        if start_position_distance < 100.0 {
-            PlayerDistanceFromStartPosition::Small
-        } else if start_position_distance < 250.0 {
-            PlayerDistanceFromStartPosition::Medium
+    pub fn distance_band(distance: f32) -> PlayerDistanceFromPosition {
+        if distance < 100.0 {
+            PlayerDistanceFromPosition::Small
+        } else if distance < 250.0 {
+            PlayerDistanceFromPosition::Medium
         } else {
-            PlayerDistanceFromStartPosition::Big
+            PlayerDistanceFromPosition::Big
         }
     }
 }

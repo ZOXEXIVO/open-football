@@ -54,6 +54,7 @@ fn setup(side: PlayerSide) -> (MatchField, MatchContext) {
         &mut context.defence_away,
         &DefenceRefreshInputs {
             field: &field,
+            possession_holder: Some(2),
             home_team_id: 1,
             away_team_id: 2,
             home_keeper_voice: 0.5,

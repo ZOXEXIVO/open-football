@@ -141,8 +141,12 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // `innermost` the dispatcher uses, which keeps the ordering.
         if ctx.tick_context.ball.restart_taker != Some(ctx.player.id) {
             let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-            let meeting = ctx.tick_context.positions.ball.landing_position;
-            if !KeeperSweepLimit::covers(ctx, meeting, &prof) {
+            if KeeperSweepLimit::ball_has_left(
+                ctx.player.id,
+                ctx.tick_context,
+                ctx.ball().direction_to_own_goal(),
+                KeeperSweepLimit::axes(&prof),
+            ) {
                 Self::note_exit(ctx, 3);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,

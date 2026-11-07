@@ -1,7 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition, ShapeStation,
+    ActivityIntensity, Interception, MidfielderCondition, PressOwnership, ShapeStation,
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
@@ -49,7 +49,7 @@ impl StateProcessingHandler for MidfielderReturningState {
                     MidfielderState::Tackling,
                 ));
             }
-            if opponent_distance < 100.0 {
+            if opponent_distance < 100.0 && !PressOwnership::belongs_to_a_team_mate(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
@@ -88,6 +88,7 @@ impl StateProcessingHandler for MidfielderReturningState {
             && !ctx.team().is_control_ball()
             && let Some(man) = ctx.team().my_mark()
             && (man.position - ctx.player.position).magnitude() < MARK_RECOVERY_DISTANCE
+            && !MidfielderGuardingState::refuses_him(ctx)
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Guarding,
@@ -99,6 +100,7 @@ impl StateProcessingHandler for MidfielderReturningState {
             && MidfielderGuardingState::default()
                 .find_committable_guard_target(ctx)
                 .is_some()
+            && !MidfielderGuardingState::refuses_him(ctx)
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Guarding,

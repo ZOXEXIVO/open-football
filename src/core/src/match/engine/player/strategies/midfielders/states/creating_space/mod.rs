@@ -1,7 +1,7 @@
 use crate::TacticalStyle;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition,
+    ActivityIntensity, Interception, MidfieldSupport, MidfielderCondition,
 };
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -62,7 +62,8 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         }
 
         // Check if created sufficient space and ready to receive
-        if self.has_created_quality_space(ctx) && self.is_ready_to_receive(ctx) {
+        let kept_here = MidfieldSupport::keeps_him_in(ctx, MidfielderState::CreatingSpace);
+        if !kept_here && self.has_created_quality_space(ctx) && self.is_ready_to_receive(ctx) {
             // Signal availability by slight movement
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -77,7 +78,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         }
 
         // Don't stay in this state too long
-        if ctx.in_state_time > 100 && !self.is_space_creation_valuable(ctx) {
+        if !kept_here && ctx.in_state_time > 100 && !self.is_space_creation_valuable(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

@@ -52,7 +52,7 @@ impl CounterPress {
         tick_context: &GameTickContext,
     ) -> CounterPressCall {
         if context.current_tick().saturating_sub(lost_at) > Self::WINDOW_TICKS
-            || player.state == PlayerState::Injured
+            || matches!(player.state, PlayerState::Injured | PlayerState::Recovering)
             || player.off_pitch
             || tick_context.ball.restart_taker.is_some()
             || tick_context.ball.held_in_hands

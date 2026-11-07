@@ -1499,6 +1499,49 @@ impl Ball {
     /// kick or the throw is made, not when the taker has it: the man
     /// standing over a free kick and the thrower with the ball in his hands
     /// are still restarting the game.
+    /// Is a restart waiting on this man, or in his hands?
+    pub fn restart_is_due_from(&self, player_id: u32) -> bool {
+        self.awaiting_restart
+            .is_some_and(|r| r.taker_id == player_id)
+            || [
+                self.set_piece_kicker,
+                self.throw_in_taker,
+                self.kickoff_taker,
+                self.goal_kick_taker,
+            ]
+            .contains(&Some(player_id))
+    }
+
+    /// The restart `from` was due to take is `to`'s now. A ball already in
+    /// his hands has to be put in the other man's, which only a teleport can
+    /// do: the man taking it over is somewhere else.
+    pub fn hand_restart_over(&mut self, from: u32, to: u32, was_in_his_hands: bool) {
+        if let Some(restart) = self
+            .awaiting_restart
+            .as_mut()
+            .filter(|r| r.taker_id == from)
+        {
+            restart.taker_id = to;
+            restart.settled = false;
+            restart.settled_tick = None;
+            restart.carrying = false;
+        }
+        for taker in [
+            &mut self.set_piece_kicker,
+            &mut self.throw_in_taker,
+            &mut self.kickoff_taker,
+            &mut self.goal_kick_taker,
+        ] {
+            if *taker == Some(from) {
+                *taker = Some(to);
+            }
+        }
+        if was_in_his_hands {
+            self.current_owner = Some(to);
+            self.pending_set_piece_teleport = Some((to, self.position));
+        }
+    }
+
     pub fn restart_in_progress(&self) -> Option<(PassOriginRestart, u32)> {
         match self.awaiting_restart {
             Some(restart) => Some((restart.origin, restart.taker_id)),

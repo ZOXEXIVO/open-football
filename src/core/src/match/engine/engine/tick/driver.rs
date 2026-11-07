@@ -18,6 +18,8 @@ use crate::r#match::engine::engine::diagnostics::teleport_probe::TeleportProbe;
 use crate::r#match::engine::engine::phase_prof::PhaseProf;
 use crate::r#match::engine::engine::*;
 use crate::r#match::engine::player::events::players::FoulResolver;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag;
 use std::time::Instant;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
@@ -106,10 +108,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let (ball_pos, ball_vel) = (field.ball.position, field.ball.velocity);
         #[cfg(feature = "match-logs")]
         {
-            crate::r#match::player::motion_diag::note_ball(
-                ball_vel,
-                tick_ctx.positions.ball.velocity,
-            );
+            motion_diag::note_ball(ball_vel, tick_ctx.positions.ball.velocity);
         }
 
         // Read before the loop borrows `field.players` — the man fetching a

@@ -8,13 +8,15 @@ use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderC
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::states::{
-    TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
+    ChallengeKind, TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::tackle_stats::MID_TICKS_IN_STATE;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -25,7 +27,7 @@ pub struct MidfielderTacklingState {}
 impl StateProcessingHandler for MidfielderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::MID_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        MID_TICKS_IN_STATE.fetch_add(1, Ordering::Relaxed);
 
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -114,7 +116,11 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 }
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                let mut result = self.settle(ctx, self.attempt_tackle(ctx, &opponent));
+                let mut result = self.settle(
+                    ctx,
+                    self.attempt_tackle(ctx, &opponent),
+                    ChallengeKind::Block,
+                );
                 result.start_tackle_cooldown = true;
                 return Some(result);
             }
@@ -155,7 +161,12 @@ impl StateProcessingHandler for MidfielderTacklingState {
 
 impl MidfielderTacklingState {
     /// One resolved challenge, turned into the state change it implies.
-    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+    fn settle(
+        &self,
+        ctx: &StateProcessingContext,
+        outcome: TackleOutcome,
+        kind: ChallengeKind,
+    ) -> StateChangeResult {
         match outcome {
             TackleOutcome::Won => {
                 #[cfg(feature = "match-logs")]
@@ -169,9 +180,7 @@ impl MidfielderTacklingState {
                 MidfielderState::Standing,
                 Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
-            TackleOutcome::Missed => {
-                StateChangeResult::with_midfielder_state(MidfielderState::Pressing)
-            }
+            TackleOutcome::Missed => StateChangeResult::with_missed_challenge(kind),
         }
     }
 

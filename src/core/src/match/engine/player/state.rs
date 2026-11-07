@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::skills::GoalkeeperSpeedContext;
+use crate::r#match::common_states::ChallengeKind;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
@@ -8,6 +9,8 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::common::KeeperSplitStep;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag::StateCensus;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
@@ -22,6 +25,7 @@ use std::fmt::Result;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlayerState {
     Injured,
+    Recovering,
     Goalkeeper(GoalkeeperState),
     Defender(DefenderState),
     Midfielder(MidfielderState),
@@ -52,6 +56,7 @@ impl PlayerState {
     pub fn compact_id(&self) -> u16 {
         match self {
             PlayerState::Injured => 0,
+            PlayerState::Recovering => 1,
             PlayerState::Goalkeeper(s) => 100 + (*s as u16),
             PlayerState::Defender(s) => 200 + (*s as u16),
             PlayerState::Midfielder(s) => 300 + (*s as u16),
@@ -65,12 +70,13 @@ impl PlayerState {
     /// registry, so adding a state in one place flows through here.
     pub fn all() -> Vec<PlayerState> {
         let mut states = Vec::with_capacity(
-            1 + GoalkeeperState::ALL.len()
+            2 + GoalkeeperState::ALL.len()
                 + DefenderState::ALL.len()
                 + MidfielderState::ALL.len()
                 + ForwardState::ALL.len(),
         );
         states.push(PlayerState::Injured);
+        states.push(PlayerState::Recovering);
         states.extend(GoalkeeperState::ALL.map(PlayerState::Goalkeeper));
         states.extend(DefenderState::ALL.map(PlayerState::Defender));
         states.extend(MidfielderState::ALL.map(PlayerState::Midfielder));
@@ -119,7 +125,7 @@ impl PlayerState {
     /// stranding the ball.
     ///
     /// Deliberately narrow: only sub-second actions belong here. Longer
-    /// deliberative states (`Passing`, `Distributing`, `Assisting`,
+    /// deliberative states (`Passing`, `Distributing`,
     /// `SwitchingPlay`) stay interruptible so a player can never be
     /// frozen out of a chase for a meaningful stretch of play. Even if
     /// every nearby player were committed, the per-state
@@ -181,6 +187,8 @@ impl PlayerState {
         match self {
             // An injured player is on the floor — they chase nothing.
             PlayerState::Injured => true,
+            // Nor does a man getting back up from a challenge he missed.
+            PlayerState::Recovering => true,
             // Only the strike itself — the dive, the leap, the punch, the
             // claim. `PreparingForSave` is deliberately NOT here: it is a
             // set STANCE the keeper can hold for a long time, not an
@@ -237,6 +245,7 @@ impl Display for PlayerState {
     fn fmt(&self, f: &mut Formatter) -> Result {
         match self {
             PlayerState::Injured => write!(f, "Injured"),
+            PlayerState::Recovering => write!(f, "Recovering"),
             PlayerState::Goalkeeper(state) => write!(f, "Goalkeeper: {}", state),
             PlayerState::Defender(state) => write!(f, "Defender: {}", state),
             PlayerState::Midfielder(state) => write!(f, "Midfielder: {}", state),
@@ -312,8 +321,12 @@ impl DecisionCommitment {
     ///   * neither end is a committed physical action — a strike, a
     ///     header, a dive resolves the moment it is decided.
     ///
-    /// Blocking one leg is enough to break a two-cycle, so exempting the
-    /// committed-action end costs nothing.
+    /// This rate-limits a reversal and does not stop one: holding one leg
+    /// only sets how fast a two-cycle runs. Removing what causes them is the
+    /// work of the doors and of [`DecisionResolver`]. What it still earns, once
+    /// they have landed, is the reversal neither can see: one whose destination
+    /// would have kept him. Measured without it, exits within a tick of entry
+    /// went from 20% to 36%.
     ///
     /// Being ON THE BALL is deliberately NOT an exemption. It was one at
     /// first, on the reasoning that the picture changes under a carrier's
@@ -327,12 +340,7 @@ impl DecisionCommitment {
     /// merely changes his mind about what he might do is exactly the case
     /// this guard exists for. A real player cannot re-decide a pass into
     /// a shot and back twice in a tenth of a second either.
-    fn holds(
-        player: &MatchPlayer,
-        target: PlayerState,
-        result: &StateProcessingResult,
-        _on_ball: bool,
-    ) -> bool {
+    fn holds(player: &MatchPlayer, target: PlayerState, result: &StateProcessingResult) -> bool {
         if player.state == PlayerState::Injured {
             return false;
         }
@@ -352,6 +360,113 @@ impl DecisionCommitment {
     }
 }
 
+/// What a decision came to once every state it handed on to had its say.
+#[derive(Default)]
+pub(crate) struct ResolvedDecision {
+    /// Where he ends the tick. `None` when the chain came back to a state it
+    /// had already been in: he stays where he was and his timer keeps running.
+    pub landing: Option<PlayerState>,
+    /// The state that performed an action on the way, which is recorded as
+    /// visited however briefly he was in it.
+    pub performer: Option<PlayerState>,
+    pub events: Option<EventCollection>,
+    pub shot_reason: Option<&'static str>,
+    pub dive_aim: Option<f32>,
+    /// The state he was tried in went in and missed.
+    pub missed_challenge: Option<ChallengeKind>,
+}
+
+/// A decision resolves within its tick. Each state owns its own exits and
+/// nothing obliges an entry door to agree with its destination, so a player
+/// could be handed on or back by a state that did nothing with him, one AI
+/// tick at a time: 39% of all exits came within one tick of entry. This asks
+/// the destination's decision now, on the same evidence, and only occupies a
+/// state he could stay in.
+///
+/// A longer guard cannot do this. It slows an oscillation without stopping it,
+/// and what it delays is the very reversal the destination would have refused.
+pub struct DecisionResolver;
+
+impl DecisionResolver {
+    const MAX_HOPS: usize = 3;
+
+    /// Anything carrying an event or a shot reason takes effect as it is, as
+    /// does a move into or out of an action that cannot be abandoned.
+    pub(crate) fn applies(
+        player: &MatchPlayer,
+        target: PlayerState,
+        result: &StateProcessingResult,
+    ) -> bool {
+        !result.events.has_events()
+            && result.shot_reason.is_none()
+            && result.missed_challenge.is_none()
+            && !target.is_committed_action()
+            && !player.state.is_committed_action()
+    }
+
+    /// Follow `first` until a state keeps him. `decide` is what each state
+    /// would decide with him standing in it.
+    pub(crate) fn resolve(
+        player: &mut MatchPlayer,
+        first: PlayerState,
+        mut decide: impl FnMut(&mut MatchPlayer) -> StateProcessingResult,
+    ) -> ResolvedDecision {
+        let mut visited = [player.state.compact_id(), first.compact_id(), 0, 0, 0];
+        let mut seen = 2;
+        let mut at = first;
+        for _ in 0..Self::MAX_HOPS {
+            let outcome = player.trying_state(at, &mut decide);
+            if outcome.start_tackle_cooldown {
+                player.start_tackle_cooldown();
+            }
+            if outcome.start_keeper_cooldown {
+                player.start_keeper_cooldown();
+            }
+            if outcome.missed_challenge.is_some() {
+                return ResolvedDecision {
+                    performer: Some(at),
+                    missed_challenge: outcome.missed_challenge,
+                    ..ResolvedDecision::default()
+                };
+            }
+            let acted = outcome.events.has_events();
+            let armed = outcome.shot_reason.is_some();
+            let handed_on = outcome
+                .state
+                .filter(|next| next.compact_id() != at.compact_id());
+            let Some(next) = handed_on else {
+                return ResolvedDecision {
+                    landing: Some(at),
+                    events: acted.then_some(outcome.events),
+                    shot_reason: outcome.shot_reason,
+                    dive_aim: outcome.dive_aim,
+                    ..ResolvedDecision::default()
+                };
+            };
+            if acted || armed || next.is_committed_action() {
+                return ResolvedDecision {
+                    landing: Some(next),
+                    performer: acted.then_some(at),
+                    events: acted.then_some(outcome.events),
+                    shot_reason: outcome.shot_reason,
+                    dive_aim: outcome.dive_aim,
+                    ..ResolvedDecision::default()
+                };
+            }
+            if visited[..seen].contains(&next.compact_id()) {
+                return ResolvedDecision::default();
+            }
+            visited[seen] = next.compact_id();
+            seen += 1;
+            at = next;
+        }
+        ResolvedDecision {
+            landing: Some(at),
+            ..ResolvedDecision::default()
+        }
+    }
+}
+
 pub struct PlayerMatchState;
 
 impl PlayerMatchState {
@@ -362,9 +477,16 @@ impl PlayerMatchState {
         events: &mut EventCollection,
     ) {
         let player_position_group = player.tactical_position.current_position.position_group();
+        #[cfg(feature = "match-logs")]
+        let state_before_overrides = player.state;
 
         let state_change_result =
             player_position_group.process(player.in_state_time, player, context, tick_context);
+
+        #[cfg(feature = "match-logs")]
+        {
+            player.motion_trace.decided_in = Some(player.state);
+        }
 
         if state_change_result.start_tackle_cooldown {
             player.start_tackle_cooldown();
@@ -378,7 +500,10 @@ impl PlayerMatchState {
         // the picture (see `DecisionCommitment`). Resolved here, before
         // anything else consumes the result, so the shot-reason bookkeeping
         // and the transition itself see one consistent decision.
-        let on_ball = tick_context.ball.current_owner == Some(player.id);
+        #[cfg(feature = "match-logs")]
+        if state_change_result.missed_challenge.is_some() {
+            player.motion_trace.after_miss_ticks = StateCensus::AFTER_MISS_TICKS;
+        }
         let new_state = state_change_result
             .state
             // A handler returning its OWN state is not a transition, it is
@@ -392,8 +517,67 @@ impl PlayerMatchState {
             // leaves the timer running, which is what a no-op tick means.
             .filter(|target| target.compact_id() != player.state.compact_id())
             .filter(|target| {
-                !DecisionCommitment::holds(player, *target, &state_change_result, on_ball)
+                let held = DecisionCommitment::holds(player, *target, &state_change_result);
+                #[cfg(feature = "match-logs")]
+                if held {
+                    StateCensus::note_hold(player.state, *target);
+                }
+                !held
             });
+
+        #[cfg(feature = "match-logs")]
+        if state_before_overrides.compact_id() != player.state.compact_id()
+            && let Some(after_handler) = new_state
+        {
+            StateCensus::note_double_hop(state_before_overrides, player.state, after_handler);
+        }
+
+        if let Some(kind) = state_change_result.missed_challenge {
+            player.on_challenge_missed(kind);
+        }
+        let resolved = new_state
+            .filter(|first| DecisionResolver::applies(player, *first, &state_change_result))
+            .map(|first| {
+                let decision = DecisionResolver::resolve(player, first, |p| {
+                    PlayerFieldPositionGroup::decide(p, context, tick_context)
+                });
+                #[cfg(feature = "match-logs")]
+                match decision.landing {
+                    None if decision.missed_challenge.is_some() => {}
+                    None => StateCensus::note_refusal(player.state, first),
+                    Some(landing) if landing.compact_id() != first.compact_id() => {
+                        StateCensus::note_shortcut(player.state, landing)
+                    }
+                    Some(_) => {}
+                }
+                decision
+            });
+        let (new_state, chain_reason, chain_dive) = match &resolved {
+            Some(decision) => (decision.landing, decision.shot_reason, decision.dive_aim),
+            None => (new_state, None, None),
+        };
+        let shot_reason = state_change_result.shot_reason.or(chain_reason);
+        if let Some(ResolvedDecision {
+            performer: Some(performer),
+            ..
+        }) = &resolved
+        {
+            Self::change_state(player, *performer);
+            #[cfg(feature = "match-logs")]
+            {
+                player.motion_trace.decided_in = Some(*performer);
+            }
+        }
+        if let Some(ResolvedDecision {
+            missed_challenge: Some(kind),
+            ..
+        }) = &resolved
+        {
+            player.on_challenge_missed(*kind);
+        }
+        if let Some(chain_events) = resolved.and_then(|decision| decision.events) {
+            events.add_from_collection(chain_events);
+        }
 
         // Stash the shot reason on the player. The Shooting state will
         // consume and clear this when it composes the Shoot event.
@@ -403,7 +587,7 @@ impl PlayerMatchState {
         // Shooting — from any path — skipped the unified shot helper
         // entirely and fired ungated. A blocked shot must not convert
         // into a guaranteed free shot later.
-        if let Some(reason) = state_change_result.shot_reason {
+        if let Some(reason) = shot_reason {
             player.pending_shot_reason = Some(reason);
         } else if let Some(new_state) = new_state
             && !Self::is_shot_emitting_state(new_state)
@@ -447,7 +631,7 @@ impl PlayerMatchState {
             // A committed dive keeps the side it committed to for as long
             // as it lasts, and no longer — see `MatchPlayer::dive_aim`.
             player.dive_aim = if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
-                state_change_result.dive_aim
+                state_change_result.dive_aim.or(chain_dive)
             } else {
                 None
             };
@@ -756,6 +940,29 @@ impl PlayerMatchState {
             }
         }
 
+        #[cfg(feature = "match-logs")]
+        {
+            let step = player.velocity.norm();
+            StateCensus::note_tick(
+                player.state,
+                tick_context.ball.restart_taker == Some(player.id),
+                tick_context.ball.current_owner == Some(player.id),
+                step,
+                player.last_activity_intensity,
+            );
+            if player_position_group != PlayerFieldPositionGroup::Goalkeeper {
+                StateCensus::note_outfield_speed(step, player.motion_trace.after_miss_ticks > 0);
+            }
+            if player.state == PlayerState::Injured {
+                StateCensus::note_injured_tick(
+                    tick_context.ball.current_owner == Some(player.id),
+                    tick_context.ball.restart_taker == Some(player.id),
+                );
+            }
+            player.motion_trace.after_miss_ticks =
+                player.motion_trace.after_miss_ticks.saturating_sub(1);
+        }
+
         if state_change_result.events.has_events() {
             events.add_from_collection(state_change_result.events);
         }
@@ -859,7 +1066,6 @@ impl PlayerMatchState {
             | GoalkeeperState::Distributing
             | GoalkeeperState::Throwing
             | GoalkeeperState::Kicking
-            | GoalkeeperState::Passing
             | GoalkeeperState::Clearing => GoalkeeperSpeedContext::Casual,
         }
     }
@@ -947,35 +1153,38 @@ mod state_id_tests {
         // or renumbered, this fails — the signal to bump the replay format
         // intentionally rather than by accident.
         //
-        // The GK band deliberately has holes (101 / 115 / 116 / 120) where
-        // `Resting`, `Tackling`, `Shooting` and `Running` were retired.
+        // The GK band deliberately has holes (101 / 113 / 115 / 116 / 120)
+        // where `Resting`, `Passing`, `Tackling`, `Shooting` and `Running` were
+        // retired, and the forward band one at 414 where `Assisting` was.
         // Ids are never reused, so recordings made before the removal
         // still decode every surviving state to the same name.
         let all = PlayerState::all();
-        assert_eq!(all.len(), 1 + 17 + 22 + 21 + 20, "state count changed");
-        assert_eq!(GoalkeeperState::ALL.len(), 17);
+        assert_eq!(all.len(), 2 + 16 + 22 + 21 + 19, "state count changed");
+        assert_eq!(GoalkeeperState::ALL.len(), 16);
         assert_eq!(DefenderState::ALL.len(), 22);
         assert_eq!(MidfielderState::ALL.len(), 21);
-        assert_eq!(ForwardState::ALL.len(), 20);
+        assert_eq!(ForwardState::ALL.len(), 19);
 
         let mut ids: Vec<u16> = all.iter().map(|s| s.compact_id()).collect();
         let unique: std::collections::BTreeSet<u16> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "compact_ids must be unique");
 
         ids.sort_unstable();
-        let mut expected: Vec<u16> = vec![0]; // Injured
-        // 17 GK — 101/115/116/120 retired, ids never reused.
+        let mut expected: Vec<u16> = vec![0, 1]; // Injured, Recovering
+        // 16 GK — 101/113/115/116/120 retired, ids never reused.
         expected.extend([
-            100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 117, 118, 119,
+            100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 114, 117, 118, 119,
         ]);
         expected.extend(200..=221u16); // 22 DEF (221 = Overlapping)
         expected.extend(300..=320u16); // 21 MID (320 = HoldingWidth)
-        expected.extend(400..=419u16); // 20 FWD (419 = HoldingWidth)
+        // 19 FWD (419 = HoldingWidth) — 414 retired, never reused.
+        expected.extend((400..=419u16).filter(|id| *id != 414));
         assert_eq!(ids, expected, "compact_id space drifted");
 
         // Anchor a few named states so an intra-band reorder is caught
         // even though the band-set check above would not notice it.
         assert_eq!(PlayerState::Injured.compact_id(), 0);
+        assert_eq!(PlayerState::Recovering.compact_id(), 1);
         assert_eq!(
             PlayerState::Goalkeeper(GoalkeeperState::Standing).compact_id(),
             100

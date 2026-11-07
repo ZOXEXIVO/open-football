@@ -71,10 +71,21 @@ impl StateProcessingHandler for MidfielderInterceptingState {
                 ));
             }
 
-            if !self.can_reach_before_opponent(ctx) {
+            // Somebody has it: there is nothing left to intercept.
+            if ctx.players().opponents().with_ball().next().is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
+            }
+
+            if !self.can_reach_before_opponent(ctx) {
+                // Nobody to press unless somebody has it or the plan named him.
+                let press = ctx.ball().is_owned() || TackleEngagement::is_nominated_presser(ctx);
+                return Some(StateChangeResult::with_midfielder_state(if press {
+                    MidfielderState::Pressing
+                } else {
+                    MidfielderState::Returning
+                }));
             }
         }
 
@@ -109,36 +120,6 @@ impl StateProcessingHandler for MidfielderInterceptingState {
 
 impl MidfielderInterceptingState {
     fn can_reach_before_opponent(&self, ctx: &StateProcessingContext) -> bool {
-        LooseBallChase::wins_the_race(ctx, self.calculate_interception_point(ctx))
-    }
-
-    /// Where the ball can actually be met.
-    ///
-    /// # What this used to compute
-    ///
-    /// A ground ball was led by `distance / (pace + ball_speed)`, and
-    /// `pace` is a 1-20 SKILL, not a speed — the divisor was dominated
-    /// by an attribute in the wrong units, so the "time to intercept"
-    /// came out around `distance / 15` whatever the ball was doing, and
-    /// the lead it bought was a few tens of centimetres. The number was
-    /// then fed to [`Self::can_reach_before_opponent`], which races it
-    /// against opponents measured the same wrong way — the ratio hid the
-    /// unit error, which is why it survived.
-    ///
-    /// One solve now, shared with the `TakeBall` states and with the
-    /// steering above, so where a player is sent and where he is steered
-    /// cannot disagree. See [`LooseBallChase::meeting_point`].
-    fn calculate_interception_point(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let landing_position = ctx.tick_context.positions.ball.landing_position;
-
-        // A ball still in the air has to come down before anyone can play
-        // it, and where it lands is the meeting point.
-        let is_aerial = (ball_position - landing_position).norm_squared() > 5.0 * 5.0;
-        if is_aerial {
-            return landing_position;
-        }
-
-        LooseBallChase::meeting_point(ctx, ball_position, ctx.tick_context.positions.ball.velocity)
+        LooseBallChase::can_contest(ctx)
     }
 }

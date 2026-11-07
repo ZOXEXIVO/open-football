@@ -4,6 +4,7 @@
 use super::goal_celebration_tests::squad;
 use crate::r#match::common_states::KeeperReleaseSpace;
 use crate::r#match::engine::result::Score;
+use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::{
@@ -51,6 +52,7 @@ fn setup(side: PlayerSide) -> (MatchField, MatchContext, u32, u32, u32, u32) {
         &mut context.defence_home,
         &mut context.defence_away,
         &crate::r#match::DefenceRefreshInputs {
+            possession_holder: TeamPossession::read(&field).holder(),
             field: &field,
             home_team_id: 1,
             away_team_id: 2,

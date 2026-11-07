@@ -6,6 +6,7 @@ use crate::r#match::engine::ball::ball::{
     Ball, CONTROL_DISTANCE, LOOSE_CLAIM_DISTANCE, RunUpPhase,
 };
 use crate::r#match::engine::set_pieces::CornerRoutine;
+use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -59,6 +60,8 @@ pub struct GameTickContext {
     /// context (single match thread) rather than `MatchPlayer` so the
     /// player stays `Sync` for the parallel league/world harnesses.
     pub profile_memos: RefCell<ProfileMemos>,
+    /// Which side holds the ball, once per tick, for every reader.
+    pub possession: TeamPossession,
 }
 
 /// Cross-tick `(player_id, packed key, profile)` memo rows for the role
@@ -166,7 +169,6 @@ impl ProfileMemos {
 pub struct PlayerTickCache {
     player_id: u32,
     tick: u64,
-    pub is_control_ball: Option<bool>,
     pub is_teammate_chasing_ball: Option<bool>,
     pub counter_window: Option<bool>,
     pub is_attack_ready: Option<bool>,
@@ -249,7 +251,6 @@ impl PlayerTickCache {
             // u64::MAX is never a real tick, so the first access always
             // resets.
             tick: u64::MAX,
-            is_control_ball: None,
             is_teammate_chasing_ball: None,
             counter_window: None,
             is_attack_ready: None,
@@ -275,7 +276,6 @@ impl PlayerTickCache {
         if self.player_id != player_id || self.tick != tick {
             self.player_id = player_id;
             self.tick = tick;
-            self.is_control_ball = None;
             self.is_teammate_chasing_ball = None;
             self.counter_window = None;
             self.is_attack_ready = None;
@@ -315,6 +315,7 @@ impl GameTickContext {
             roster,
             player_agg_cache: RefCell::new(PlayerTickCache::new()),
             profile_memos: RefCell::new(ProfileMemos::new()),
+            possession: TeamPossession::read(field),
         }
     }
 
@@ -324,13 +325,10 @@ impl GameTickContext {
         self.positions.update(field);
         self.grid.update(field);
         self.space.update(field);
-        // `chase` and the roster's per-team ball-distance `control` table
-        // are NOT refreshed here: their only readers run in play_players,
-        // and `refresh_ball` (between play_ball and play_players) rebuilds
-        // both against the post-physics ball anyway — computing them here
-        // was pure dead work (verified: nothing in the ball module touches
-        // `tick_context.chase` / `roster.control_*`).
-        self.roster.update_entries(players, &self.positions);
+        // `chase` is NOT refreshed here: its only readers run in play_players,
+        // and `refresh_ball` (between play_ball and play_players) rebuilds it
+        // against the post-physics ball anyway.
+        self.roster.update(players, &self.positions);
     }
 
     /// Cheaper refresh used during shot-flight light ticks where only
@@ -350,6 +348,7 @@ impl GameTickContext {
         self.grid.update(field);
         self.chase.update(&self.positions, &field.ball);
         self.roster.update(players, &self.positions);
+        self.possession.update(field);
     }
 
     /// Refresh just the ball view. Used between `play_ball` and
@@ -362,24 +361,9 @@ impl GameTickContext {
         self.ball.update(field);
         self.positions.ball.update_from(&field.ball);
         // The ball may have moved (restart, deflection inside play_ball)
-        // — the chase table keys off its path, so recompute. Same for
-        // the roster's control table (keys off the ball position).
+        // — the chase table keys off its path, so recompute.
         self.chase.update(&self.positions, &field.ball);
-        self.roster.refresh_control(self.positions.ball.position);
-    }
-}
-
-/// One entry in the roster's ball-distance control table.
-#[derive(Debug, Clone, Copy)]
-pub struct ChaseEntry {
-    pub dist_sq: f32,
-    pub id: u32,
-}
-
-impl ChaseEntry {
-    #[inline]
-    fn beats(self, other: ChaseEntry) -> bool {
-        self.dist_sq < other.dist_sq || (self.dist_sq == other.dist_sq && self.id < other.id)
+        self.possession.update(field);
     }
 }
 
@@ -677,13 +661,6 @@ pub struct RosterEntryLive {
 /// consumers are bit-identical, they just stop hashing per element.
 pub struct RosterJoin {
     entries: Vec<RosterEntryLive>,
-    /// Per-team two-smallest `(dist_sq, id)` against the CURRENT ball
-    /// position (not the landing position — that's `LooseBallChase`).
-    /// Backs `is_control_ball`'s "closest teammate vs closest opponent"
-    /// fallback, which previously re-scanned both teams per asking
-    /// player per tick. Lexicographic (dist_sq, id) with a second slot
-    /// so a query can exclude the asking player exactly.
-    control: [(u32, [Option<ChaseEntry>; 2]); 2],
     /// Per-team entry indices, ascending — the team-filtered iterators
     /// (`teammates().all()`, `opponents().all()`, by-position variants)
     /// walk only their ~11 relevant entries instead of filtering all 22
@@ -696,25 +673,11 @@ impl RosterJoin {
     pub fn new() -> Self {
         RosterJoin {
             entries: Vec::with_capacity(22),
-            control: [(0, [None; 2]), (0, [None; 2])],
             team_rows: [(0, Vec::with_capacity(12)), (0, Vec::with_capacity(12))],
         }
     }
 
     pub fn update(&mut self, players: &MatchPlayerCollection, positions: &MatchObjectsPositions) {
-        self.update_entries(players, positions);
-        self.refresh_control(positions.ball.position);
-    }
-
-    /// Refresh the joined entries WITHOUT rebuilding the per-team ball
-    /// `control` table. Used by the per-tick context update, whose
-    /// control table would be dead work — `refresh_ball` rebuilds it
-    /// against the post-physics ball before any consumer runs.
-    pub fn update_entries(
-        &mut self,
-        players: &MatchPlayerCollection,
-        positions: &MatchObjectsPositions,
-    ) {
         let n = players.entries.len();
         self.entries.truncate(n);
         for (i, entry) in players.entries.iter().enumerate() {
@@ -776,80 +739,6 @@ impl RosterJoin {
         self.row(team_id, false)
             .iter()
             .map(move |&i| &self.entries[i as usize])
-    }
-
-    /// Rebuild the per-team ball-distance table from the joined entries.
-    /// Split out of `update` because the ball may move within a tick
-    /// (`refresh_ball` after `play_ball`) while player positions stay
-    /// frozen — only this table needs recomputing then. Operand order
-    /// mirrors the scan it replaced (`entry.position - ball_pos`).
-    pub fn refresh_control(&mut self, ball_pos: Vector3<f32>) {
-        self.control = [(0, [None; 2]), (0, [None; 2])];
-        for entry in &self.entries {
-            let d = entry.position - ball_pos;
-            let candidate = ChaseEntry {
-                dist_sq: d.norm_squared(),
-                id: entry.id,
-            };
-            let slot = if self.control[0].1[0].is_none() || self.control[0].0 == entry.team_id {
-                self.control[0].0 = entry.team_id;
-                &mut self.control[0].1
-            } else {
-                self.control[1].0 = entry.team_id;
-                &mut self.control[1].1
-            };
-            match slot[0] {
-                None => slot[0] = Some(candidate),
-                Some(best) if candidate.beats(best) => {
-                    slot[1] = slot[0];
-                    slot[0] = Some(candidate);
-                }
-                Some(_) => match slot[1] {
-                    None => slot[1] = Some(candidate),
-                    Some(second) if candidate.beats(second) => slot[1] = Some(candidate),
-                    Some(_) => {}
-                },
-            }
-        }
-    }
-
-    /// Minimum ball-distance (squared) among `team_id`'s entries,
-    /// excluding `exclude_id`. `None` when the team has no other entry —
-    /// matching the empty-iterator `min_by` of the scan it replaces.
-    #[inline]
-    pub fn control_min_excluding(&self, team_id: u32, exclude_id: u32) -> Option<f32> {
-        let slots = if self.control[0].0 == team_id {
-            &self.control[0].1
-        } else if self.control[1].0 == team_id {
-            &self.control[1].1
-        } else {
-            return None;
-        };
-        Self::min_from_slots(slots, exclude_id)
-    }
-
-    /// Same as [`control_min_excluding`](Self::control_min_excluding)
-    /// but for the team that is NOT `my_team_id` — saves callers a scan
-    /// to discover the opposing team id.
-    #[inline]
-    pub fn control_min_other_team(&self, my_team_id: u32, exclude_id: u32) -> Option<f32> {
-        let slots = if self.control[0].0 != my_team_id && self.control[0].1[0].is_some() {
-            &self.control[0].1
-        } else if self.control[1].0 != my_team_id && self.control[1].1[0].is_some() {
-            &self.control[1].1
-        } else {
-            return None;
-        };
-        Self::min_from_slots(slots, exclude_id)
-    }
-
-    #[inline]
-    fn min_from_slots(slots: &[Option<ChaseEntry>; 2], exclude_id: u32) -> Option<f32> {
-        match slots[0] {
-            Some(best) if best.id != exclude_id => Some(best.dist_sq),
-            Some(_) => slots[1].map(|e| e.dist_sq),
-            None => None,
-        }
     }
 
     #[inline]

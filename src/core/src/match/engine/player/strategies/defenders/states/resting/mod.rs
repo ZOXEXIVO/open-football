@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, Interception,
+    ActivityIntensity, DefenderCondition, DefensiveRest, Interception,
 };
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -52,6 +52,12 @@ impl StateProcessingHandler for DefenderRestingState {
         if ctx.player().defensive().is_defensive_crisis() && stamina >= CRISIS_ENGAGE_STAMINA {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
+            ));
+        }
+
+        if DefensiveRest::is_wanted(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::HoldingLine,
             ));
         }
 

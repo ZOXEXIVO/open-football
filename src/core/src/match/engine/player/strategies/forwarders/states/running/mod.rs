@@ -3,7 +3,9 @@ use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, ForwardPress, InterceptionRange,
+};
 use crate::r#match::midfielders::states::common::{CarryHeading, LaneAhead};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
@@ -18,7 +20,7 @@ use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -167,10 +169,10 @@ pub mod shot_gate_stats {
 pub mod tackle_stats {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    pub static DEF_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    pub static MID_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    pub static FWD_ENTRIES: AtomicU64 = AtomicU64::new(0);
-    pub static GK_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
+    pub static MID_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
+    pub static FWD_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
+    pub static GK_TICKS_IN_STATE: AtomicU64 = AtomicU64::new(0);
 
     pub static DEF_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
     pub static MID_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
@@ -184,10 +186,10 @@ pub mod tackle_stats {
 
     pub fn reset() {
         for c in [
-            &DEF_ENTRIES,
-            &MID_ENTRIES,
-            &FWD_ENTRIES,
-            &GK_ENTRIES,
+            &DEF_TICKS_IN_STATE,
+            &MID_TICKS_IN_STATE,
+            &FWD_TICKS_IN_STATE,
+            &GK_TICKS_IN_STATE,
             &DEF_ATTEMPTS,
             &MID_ATTEMPTS,
             &FWD_ATTEMPTS,
@@ -203,10 +205,10 @@ pub mod tackle_stats {
 
     pub fn snapshot() -> [u64; 12] {
         [
-            DEF_ENTRIES.load(Ordering::Relaxed),
-            MID_ENTRIES.load(Ordering::Relaxed),
-            FWD_ENTRIES.load(Ordering::Relaxed),
-            GK_ENTRIES.load(Ordering::Relaxed),
+            DEF_TICKS_IN_STATE.load(Ordering::Relaxed),
+            MID_TICKS_IN_STATE.load(Ordering::Relaxed),
+            FWD_TICKS_IN_STATE.load(Ordering::Relaxed),
+            GK_TICKS_IN_STATE.load(Ordering::Relaxed),
             DEF_ATTEMPTS.load(Ordering::Relaxed),
             MID_ATTEMPTS.load(Ordering::Relaxed),
             FWD_ATTEMPTS.load(Ordering::Relaxed),
@@ -1158,7 +1160,7 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // Priority 2: Pressing opportunity
-            if self.should_press(ctx) {
+            if self.should_press(ctx) && !ForwardPress::called_off(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Pressing,
                 ));
@@ -1207,7 +1209,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     ));
                 }
 
-                if self.should_help_defend(ctx) {
+                if self.should_help_defend(ctx) && !ForwardPress::called_off(ctx) {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Pressing,
                     ));
@@ -1221,13 +1223,15 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Prevent getting stuck in running state
             if ctx.in_state_time > 300 {
-                return if ctx.team().is_control_ball() {
-                    Some(StateChangeResult::with_forward_state(
+                if ctx.team().is_control_ball() {
+                    return Some(StateChangeResult::with_forward_state(
                         ForwardState::CreatingSpace,
-                    ))
-                } else {
-                    Some(StateChangeResult::with_forward_state(ForwardState::Walking))
-                };
+                    ));
+                }
+                // `Walking` sends him straight back while somebody has the ball.
+                if !ctx.ball().is_owned() {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
+                }
             }
         }
 
@@ -1611,6 +1615,13 @@ impl ForwardRunningState {
 
     /// Enhanced interception check
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.team().is_control_ball()
+            || ctx.ball().distance() > InterceptionRange::GIVE_UP
+            || !LooseBallChase::can_contest(ctx)
+        {
+            return false;
+        }
+
         // Don't try to intercept if ball is already owned by teammate
         if ctx.ball().is_owned()
             && let Some(owner_id) = ctx.ball().owner_id()
@@ -1943,7 +1954,7 @@ impl ForwardRunningState {
 
     /// Determine if should return to defensive position
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big
+        ctx.player().position_to_distance() == PlayerDistanceFromPosition::Big
     }
 
     /// A hard-working forward drops into his own third late on when his

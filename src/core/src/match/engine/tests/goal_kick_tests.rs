@@ -907,10 +907,13 @@ fn the_keeper_waits_over_his_goal_kick_and_kicks_it_off_the_grass() {
 
     let mut handed = false;
     let mut waited = 0;
-    let mut last_state = None;
+    let mut played_from = None;
     for _ in 0..6000 {
-        last_state = Some(field.get_player(gk).unwrap().state);
         tick(&mut field, &mut context);
+        // The state that struck it is the one he has just left: a decision
+        // resolves on its own tick, and he ends it in the state the kick
+        // hands him to.
+        played_from = field.get_player(gk).unwrap().previous_state;
         assert!(
             !field.ball.held_in_hands,
             "the goal kick went into his gloves"
@@ -955,12 +958,12 @@ fn the_keeper_waits_over_his_goal_kick_and_kicks_it_off_the_grass() {
     );
     assert!(
         matches!(
-            last_state,
+            played_from,
             Some(PlayerState::Goalkeeper(
                 GoalkeeperState::Distributing | GoalkeeperState::Kicking
             ))
         ),
-        "the goal kick was released from {last_state:?}, not by a pass off the floor"
+        "the goal kick was released from {played_from:?}, not by a pass off the floor"
     );
 }
 

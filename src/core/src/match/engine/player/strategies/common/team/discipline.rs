@@ -348,7 +348,10 @@ impl ShapeDiscipline {
         }
 
         // Injured players are not doing positional play.
-        if matches!(ctx.player.state, PlayerState::Injured) {
+        if matches!(
+            ctx.player.state,
+            PlayerState::Injured | PlayerState::Recovering
+        ) {
             return true;
         }
 

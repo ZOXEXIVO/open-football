@@ -171,14 +171,9 @@ impl TeamTacticalState {
         let ball_x = field.ball.position.x;
         let ball_y = field.ball.position.y;
 
-        // Determine which side the ball owner plays on. If no owner,
-        // keep the previous possession flag (we're in a loose-ball
-        // moment and the prior team still has "last touch" status).
-        let owning_team_id = field
-            .ball
-            .current_owner
-            .and_then(|id| field.players.iter().find(|p| p.id == id))
-            .map(|p| p.team_id);
+        // The shared fact. With nobody on the pitch to say, keep the previous
+        // flag.
+        let owning_team_id = inputs.possession_holder;
 
         let prev_home_possession = home.in_possession;
         let home_now_has_ball = match owning_team_id {

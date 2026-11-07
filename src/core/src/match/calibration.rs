@@ -143,7 +143,8 @@ impl MatchCalibrationStats {
             accept_max,
         };
 
-        vec![
+        #[allow(unused_mut)]
+        let mut lines = vec![
             line("goals/match", per(all_goals as f64), 2.3, 3.4),
             line("shots/match", per(self.shots as f64), 18.0, 32.0),
             line("shots-on-target %", ratio(self.shots_on_target, self.shots), 0.28, 0.42),
@@ -207,7 +208,35 @@ impl MatchCalibrationStats {
             line("home win % (equal teams)", ratio(self.home_wins, decided), 0.42, 0.48),
             line("draw % (equal teams)", ratio(self.draws, decided), 0.23, 0.30),
             line("away win % (equal teams)", ratio(self.away_wins, decided), 0.27, 0.34),
-        ]
+        ];
+        #[cfg(feature = "match-logs")]
+        {
+            let motion = &self.tally.outfield_motion;
+            let minutes_played = motion.ticks as f64 / 6000.0;
+            let per_player_minute = if motion.ticks == 0 {
+                0.0
+            } else {
+                motion.state_changes as f64 / minutes_played
+            };
+            let km_per_90 = if motion.ticks == 0 {
+                0.0
+            } else {
+                motion.path_mm as f64 / 1_000_000.0 / minutes_played * 90.0
+            };
+            lines.push(line(
+                "state changes/player/minute",
+                per_player_minute,
+                0.0,
+                45.0,
+            ));
+            lines.push(line(
+                "distance km/outfield player/90",
+                km_per_90,
+                10.0,
+                13.0,
+            ));
+        }
+        lines
     }
 
     pub fn print_report(&self) {

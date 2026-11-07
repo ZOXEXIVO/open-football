@@ -5,8 +5,8 @@
 
 use super::substitution_break_tests::kickoff;
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::common_states::CounterPress;
 use crate::r#match::engine::engine::FootballEngine;
-use crate::r#match::engine::player::counter_press::CounterPress;
 use crate::r#match::engine::player::events::players::{PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;

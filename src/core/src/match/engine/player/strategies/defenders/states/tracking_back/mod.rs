@@ -3,7 +3,7 @@ use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, Interception,
 };
 use crate::r#match::{
-    ConditionContext, MATCH_TIME_MS, PlayerDistanceFromStartPosition, StateChangeResult,
+    ConditionContext, MATCH_TIME_MS, PlayerDistanceFromPosition, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -14,7 +14,7 @@ use nalgebra::Vector3;
 /// that holds it.
 const MARK_RECOVERY_DISTANCE: f32 = 150.0;
 
-const CLOSE_TO_START_DISTANCE: f32 = 10.0;
+const CLOSE_TO_POSITION_DISTANCE: f32 = 10.0;
 const BALL_INTERCEPTION_DISTANCE: f32 = 30.0;
 
 #[derive(Default, Clone)]
@@ -58,7 +58,7 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         }
 
         // Check if the defender has reached their starting position
-        if ctx.player().distance_from_start_position() < CLOSE_TO_START_DISTANCE {
+        if ctx.player().distance_from_position() < CLOSE_TO_POSITION_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));
@@ -96,13 +96,13 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         // If the ball is on the team's own side, prioritize defensive positioning
         if ctx.ball().on_own_side() {
             match ctx.player().position_to_distance() {
-                PlayerDistanceFromStartPosition::Big => None, // Continue tracking back
-                PlayerDistanceFromStartPosition::Medium => Some(
-                    StateChangeResult::with_defender_state(DefenderState::HoldingLine),
-                ),
-                PlayerDistanceFromStartPosition::Small => Some(
-                    StateChangeResult::with_defender_state(DefenderState::Standing),
-                ),
+                PlayerDistanceFromPosition::Big => None, // Continue tracking back
+                PlayerDistanceFromPosition::Medium => Some(StateChangeResult::with_defender_state(
+                    DefenderState::HoldingLine,
+                )),
+                PlayerDistanceFromPosition::Small => Some(StateChangeResult::with_defender_state(
+                    DefenderState::Standing,
+                )),
             }
         } else {
             None // Continue tracking back if the ball is on the opponent's side
@@ -110,8 +110,8 @@ impl StateProcessingHandler for DefenderTrackingBackState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let start_position = ctx.player.start_position;
-        let distance_from_start = ctx.player().distance_from_start_position();
+        let station = ctx.team().my_anchor();
+        let distance_from_start = (ctx.player.position - station).magnitude();
 
         // Calculate urgency based on game situation
         let urgency = if ctx.ball().on_own_side() {
@@ -135,7 +135,7 @@ impl StateProcessingHandler for DefenderTrackingBackState {
 
         Some(
             SteeringBehavior::Arrive {
-                target: start_position,
+                target: station,
                 slowing_distance,
             }
             .calculate(ctx.player)

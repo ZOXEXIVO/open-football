@@ -222,6 +222,43 @@ impl MatchField {
         });
     }
 
+    /// **He has gone down.** A ball he was carrying comes loose, and a restart
+    /// he was due to take passes to the nearest team-mate on his feet.
+    pub fn on_player_down(&mut self, player_id: u32) {
+        let had_it = self.ball.current_owner == Some(player_id);
+        if had_it {
+            self.ball.previous_owner = self.ball.current_owner;
+            self.ball.current_owner = None;
+            self.ball.pass_target_player_id = None;
+        }
+        if !self.ball.restart_is_due_from(player_id) {
+            return;
+        }
+        let Some(down) = self.get_player(player_id) else {
+            return;
+        };
+        let (team_id, from) = (down.team_id, down.position);
+        let stand_in = self
+            .players
+            .iter()
+            .filter(|p| {
+                p.team_id == team_id
+                    && p.id != player_id
+                    && !p.off_pitch
+                    && !p.state.is_committed_action()
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .min_by(|a, b| {
+                (a.position - from)
+                    .norm_squared()
+                    .total_cmp(&(b.position - from).norm_squared())
+            })
+            .map(|p| p.id);
+        if let Some(stand_in) = stand_in {
+            self.ball.hand_restart_over(player_id, stand_in, had_it);
+        }
+    }
+
     /// **He is gone for the rest of the match** — sent off, or carried off
     /// injured with no change left to replace him. Out of every on-pitch
     /// scan from here, parked beyond the touchline, and his side re-formed

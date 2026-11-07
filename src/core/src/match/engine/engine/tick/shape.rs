@@ -378,6 +378,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(crate) fn refresh_tactical_states(
         field: &MatchField,
         context: &mut MatchContext,
+        possession: TeamPossession,
         tick_interval: u32,
     ) {
         let home_high_press = matches!(
@@ -486,6 +487,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let inputs = TacticalRefreshInputs {
             field,
+            possession_holder: possession.holder(),
             home_team_id: context.field_home_team_id,
             home_side,
             tick_interval,
@@ -545,6 +547,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // the back line computing its position from the ball alone.
         let defence_inputs = DefenceRefreshInputs {
             field,
+            possession_holder: possession.holder(),
             home_team_id: context.field_home_team_id,
             away_team_id: context.field_away_team_id,
             // The voice behind each back line — see `KeeperVoice`. Read

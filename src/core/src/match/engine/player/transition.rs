@@ -482,9 +482,11 @@ mod tests {
         let hits = StateAssignmentScanner::scan(&match_dir);
 
         // The ONLY approved `.state =` writes are the two transition
-        // primitives: `MatchPlayer::transition_to` (player.rs) and
-        // `StateProcessingResult::merge_state_change` (processor.rs).
-        // Everything else must route through `transition_to`.
+        // primitives, `MatchPlayer::transition_to` (player.rs) and
+        // `StateProcessingResult::merge_state_change` (processor.rs), and the
+        // set and restore of `MatchPlayer::trying_state` (player.rs), which
+        // is not a transition. Everything else must route through
+        // `transition_to`.
         let mut by_file: Vec<(String, usize)> = hits
             .iter()
             .map(|(p, c)| (p.file_name().unwrap().to_string_lossy().into_owned(), *c))
@@ -494,7 +496,7 @@ mod tests {
         assert_eq!(
             by_file,
             vec![
-                ("player.rs".to_string(), 1),
+                ("player.rs".to_string(), 3),
                 ("processor.rs".to_string(), 1),
             ],
             "unexpected raw `.state =` assignment(s) found: {hits:?}"

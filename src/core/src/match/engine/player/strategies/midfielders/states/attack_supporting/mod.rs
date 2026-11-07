@@ -2,15 +2,15 @@ use crate::PlayerSkills;
 use crate::r#match::MatchContext;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfieldPlay, MidfielderCondition,
+    ActivityIntensity, Interception, MidfieldPlay, MidfieldSupport, MidfielderCondition,
 };
 use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromPosition, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
@@ -109,8 +109,10 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         }
 
         // Timeout check
-        if ctx.in_state_time > ATTACK_SUPPORT_TIME_LIMIT {
-            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+        if ctx.in_state_time > ATTACK_SUPPORT_TIME_LIMIT
+            && !MidfieldSupport::keeps_him_in(ctx, MidfielderState::AttackSupporting)
+        {
+            if ctx.player().position_to_distance() == PlayerDistanceFromPosition::Big {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Returning,
                 ));
@@ -182,7 +184,7 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         if !ctx.team().is_control_ball() && ctx.ball().is_owned() {
             return Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.player.start_position,
+                    target: ctx.team().my_anchor(),
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)

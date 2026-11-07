@@ -69,3 +69,51 @@ A back line holding its line SHALL be able to step up together to leave an attac
 #### Scenario: Poorly organised line is caught out
 - **WHEN** a disorganised back line attempts the same step-up and one defender is late
 - **THEN** the attacker is played onside behind the line and the attempt is recorded as a failed trap
+
+### Requirement: Exactly one side holds possession
+At every moment of live play exactly one side SHALL hold possession, and every player on the pitch SHALL read the same answer, whatever his own position relative to the ball. The side holding possession SHALL be:
+- the side of the player who has the ball;
+- while a restart is waiting to be taken, the side taking it;
+- while nobody has the ball, the side that last had it, for as long as its own pass is still travelling to its team-mate;
+- once no such pass is travelling, the side that last had it until the other side is decisively closer to the ball.
+
+The direction and speed of the ball SHALL NOT decide possession.
+
+#### Scenario: A backward pass stays in possession
+- **WHEN** a side plays a slow or backward pass to a team-mate and nobody has the ball while it travels
+- **THEN** that side holds possession throughout the pass, for every one of its players
+
+#### Scenario: Team-mates agree
+- **WHEN** the ball is loose and two team-mates stand at different distances from it
+- **THEN** both read the same answer about whether their side holds possession
+
+#### Scenario: Only one side claims it
+- **WHEN** any live tick of a batch of matches is sampled
+- **THEN** exactly one side holds possession, with no tick on which both sides or neither side claim it, against 10,587 and 47,191 such ticks a match before this change
+
+#### Scenario: A loose ball changes hands when it is decisively theirs
+- **WHEN** a side's pass is deflected and the ball runs loose with an opponent decisively closer to it than any of that side's players
+- **THEN** possession passes to the opponent's side
+
+#### Scenario: A throw-in belongs to the side taking it
+- **WHEN** a throw-in has been awarded and is waiting to be taken, wherever the ball and the players are
+- **THEN** the side awarded it holds possession
+
+#### Scenario: Possession does not flicker during passes
+- **WHEN** 30 equal-strength level-14 matches are played
+- **THEN** players' readings of whether their side holds possession change at most 20,000 times a match in total, against 61,560 before this change
+
+### Requirement: The side in possession holds no marking duties
+Marking, pressing and covering duties SHALL be assigned only to the side not holding possession. A side SHALL hold no defensive duties while its own pass is travelling, and SHALL receive them on the first tactical refresh after it loses possession.
+
+#### Scenario: A side's own pass in flight
+- **WHEN** a side plays a pass to a team-mate and the ball is in the air or rolling
+- **THEN** none of its players is assigned a man to mark, and none of them leaves his attacking movement to mark one
+
+#### Scenario: A turnover assigns duties
+- **WHEN** a side loses the ball to an opponent
+- **THEN** its players are assigned defensive duties within one tactical refresh
+
+#### Scenario: A marker is not sent back and forth by a pass
+- **WHEN** 30 equal-strength level-14 matches are played
+- **THEN** defenders exchange between marking and general running at most 3,000 round trips a match, against about 17,000 before this change, and a defender's mean spell of marking lasts at least 1.5 s, against 0.6 s before this change

@@ -7,6 +7,7 @@
 use super::substitution_break_tests::kickoff;
 use crate::PlayerPositionType;
 use crate::r#match::defenders::states::common::LineStep;
+use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent, PlayerEventDispatcher};
 use crate::r#match::{
     DefenceRefreshInputs, DefensivePlan, GameTickContext, MatchContext, MatchField, PlayerSide,
@@ -92,6 +93,7 @@ fn call(field: &MatchField, context: &mut MatchContext) {
         &mut context.defence_away,
         &DefenceRefreshInputs {
             field,
+            possession_holder: TeamPossession::read(field).holder(),
             home_team_id: 1,
             away_team_id: 2,
             home_keeper_voice: 0.56,

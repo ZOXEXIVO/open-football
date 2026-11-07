@@ -326,6 +326,40 @@ impl LooseBallChase {
         mine <= theirs + Self::CONTEST_MARGIN_TICKS
     }
 
+    /// Where this player can actually meet the ball.
+    ///
+    /// A ball still in the air has to come down before anyone can play it,
+    /// so where it lands is the meeting point. One solve, shared with the
+    /// `TakeBall` states and the steering, so where a player is sent and
+    /// where he is steered cannot disagree.
+    pub fn interception_point(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball = &ctx.tick_context.positions.ball;
+        let is_aerial = (ball.position - ball.landing_position).norm_squared() > 5.0 * 5.0;
+        if is_aerial {
+            return ball.landing_position;
+        }
+        Self::meeting_point(ctx, ball.position, ball.velocity)
+    }
+
+    /// Can he get to this ball no later than the opposition? The door into
+    /// an interception and the state's own give-up both ask this, so neither
+    /// can send him somewhere the other refuses.
+    ///
+    /// Read off the chase table, which prices every man along the ball's
+    /// path and ends a pass at its receiver. Racing to his own meeting point
+    /// cannot see that: a pass that reaches its man long before it would
+    /// reach him still looks like a race he wins.
+    pub fn can_contest(ctx: &StateProcessingContext) -> bool {
+        let chase = &ctx.tick_context.chase;
+        let (Some(side), Some(mine)) = (ctx.player.side, chase.cost_of(ctx.player.id)) else {
+            return false;
+        };
+        let theirs = chase
+            .best(side.opposite())
+            .map_or(f32::MAX, |opponent| opponent.cost);
+        mine <= theirs + Self::CONTEST_MARGIN_TICKS
+    }
+
     /// Where to run for a loose ball, and the velocity to run there with.
     ///
     /// Returns `(target, velocity)` — the target is also what the caller

@@ -4,20 +4,27 @@
 
 #![cfg(test)]
 
+use super::goal_celebration_tests::squad;
 use super::substitution_break_tests::kickoff;
 use crate::PlayerPositionType;
-use crate::r#match::engine::ball::ball::PassOriginRestart;
+use crate::r#match::common_states::SetPieceHold;
+use crate::r#match::engine::ball::ball::{
+    AwaitedRestart, PassOriginRestart, PlayerReach, RestartQuiet,
+};
 use crate::r#match::engine::flow::arena::formation_variant::FormationLine;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 use crate::r#match::engine::player::events::players::FoulSeverity;
 use crate::r#match::engine::player::injury::{InjuryCause, InjuryGrade, InjuryRisk, MatchInjury};
-use crate::r#match::engine::result::{DeadTime, PlayingTime};
+use crate::r#match::engine::result::{DeadTime, PlayingTime, Score};
 use crate::r#match::engine::substitutions::Substitutions;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
 };
-use crate::r#match::{MatchField, MatchPlayer, MatchState, PlayerSide};
+use crate::r#match::{
+    GameTickContext, MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, MatchState,
+    PlayerSide, StateProcessingResult,
+};
 use nalgebra::Vector3;
 
 fn home_player(field: &MatchField, position: PlayerPositionType) -> u32 {
@@ -276,4 +283,126 @@ fn the_injury_a_player_carries_out_is_the_one_he_got() {
         player.to_physical_snapshot(60 * 60_000)
     };
     assert_eq!(snapshot.injury, Some(InjuryGrade::Serious));
+}
+
+/// **A man down does not go to a set-piece station.**
+#[test]
+fn an_injured_player_stays_down_through_a_set_piece() {
+    let mut m = InjuryMatch::new();
+    let id = m.outfielder();
+    let origin_station = Vector3::new(100.0, 100.0, 0.0);
+    {
+        let player = m.field.get_player_mut(id).expect("him");
+        player.on_injury(InjuryGrade::Hurt, 0);
+        player.set_piece_station = Some(origin_station);
+    }
+    m.field.ball.pass_origin_restart = PassOriginRestart::Corner;
+    let tick = GameTickContext::new(&m.field, &m.context.players);
+    let player = m.field.get_player(id).expect("him");
+    let mut result = StateProcessingResult::new();
+    result.velocity = Some(Vector3::zeros());
+    SetPieceHold::apply(player, &tick, &mut result);
+    assert_eq!(result.velocity, Some(Vector3::zeros()));
+}
+
+#[test]
+fn a_restart_he_was_due_to_take_passes_to_a_team_mate() {
+    let mut m = InjuryMatch::new();
+    let id = m.outfielder();
+    m.field.ball.awaiting_restart = Some(AwaitedRestart {
+        taker_id: id,
+        spot: Vector3::new(420.0, 0.0, 0.0),
+        take_from: None,
+        settled: true,
+        carrying: false,
+        origin: PassOriginRestart::ThrowIn,
+        awarded_tick: 0,
+        patience_ticks: AwaitedRestart::PATIENCE_TICKS,
+        settled_tick: Some(0),
+        hold: None,
+        quiet: RestartQuiet::default(),
+    });
+    MatchInjury::befall(
+        &mut m.field,
+        &mut m.context,
+        id,
+        InjuryCause::Contact,
+        InjuryGrade::Knock,
+    );
+    let taker = m
+        .field
+        .ball
+        .awaiting_restart
+        .expect("still to be taken")
+        .taker_id;
+    let (down, stand_in) = (
+        m.field.get_player(id).expect("him"),
+        m.field.get_player(taker).expect("the stand-in"),
+    );
+    assert_ne!(taker, id, "the injured player does not play the ball");
+    assert_eq!(stand_in.team_id, down.team_id);
+    assert_ne!(stand_in.state, PlayerState::Injured);
+}
+
+#[test]
+fn a_ball_he_was_carrying_is_released() {
+    let mut m = InjuryMatch::new();
+    let id = m.outfielder();
+    m.field.ball.current_owner = Some(id);
+    MatchInjury::befall(
+        &mut m.field,
+        &mut m.context,
+        id,
+        InjuryCause::Contact,
+        InjuryGrade::Knock,
+    );
+    assert_eq!(m.field.ball.current_owner, None);
+    assert_eq!(m.field.ball.previous_owner, Some(id));
+}
+
+#[test]
+fn a_man_down_cannot_touch_a_ball_at_his_feet() {
+    let mut m = InjuryMatch::new();
+    let id = m.outfielder();
+    let at = m.field.get_player(id).expect("him").position;
+    m.field.ball.position = at;
+    assert!(PlayerReach::can_touch(
+        &m.field.ball,
+        m.field.get_player(id).expect("him")
+    ));
+    m.field
+        .get_player_mut(id)
+        .expect("him")
+        .on_injury(InjuryGrade::Knock, 0);
+    assert!(!PlayerReach::can_touch(
+        &m.field.ball,
+        m.field.get_player(id).expect("him")
+    ));
+}
+
+struct InjuryMatch {
+    field: MatchField,
+    context: MatchContext,
+}
+
+impl InjuryMatch {
+    fn new() -> Self {
+        let home = squad(1, 100);
+        let away = squad(2, 200);
+        let players = MatchPlayerCollection::from_squads(&home, &away);
+        let mut field = MatchField::new(840, 545, home, away);
+        field.ball.current_owner = None;
+        field.ball.kickoff_taker = None;
+        let context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
+        InjuryMatch { field, context }
+    }
+
+    fn outfielder(&self) -> u32 {
+        self.field
+            .players
+            .iter()
+            .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+            .expect("a home defender")
+            .id
+    }
 }

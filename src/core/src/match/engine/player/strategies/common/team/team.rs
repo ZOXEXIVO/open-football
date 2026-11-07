@@ -1,4 +1,6 @@
 use crate::Tactics;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag::POSSESSION_CENSUS;
 use crate::r#match::player::strategies::players::ops::skill::traits_bias::movement_bias;
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
@@ -7,10 +9,6 @@ use crate::r#match::{
     TeamTacticalState, WidePlan,
 };
 use nalgebra::Vector3;
-// Only the debug-assert reference recomputation still needs `Ordering`;
-// in release the cfg-gated block compiles out along with this import.
-#[cfg(debug_assertions)]
-use std::cmp::Ordering;
 
 pub struct TeamOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -146,6 +144,12 @@ impl<'b> TeamOperationsImpl<'b> {
     /// What THIS player is responsible for defensively. `HoldZone` when
     /// nothing has been assigned, which is the pre-plan behaviour.
     pub fn my_duty(&self) -> DefensiveDuty {
+        // The plan refreshes four times a second and possession does not wait
+        // for it: a side that has just won the ball still holds its marks for
+        // up to 250 ms, and every one of them is a door `Marking` refuses.
+        if self.is_control_ball() {
+            return DefensiveDuty::HoldZone;
+        }
         self.defensive_plan().duty_of(self.ctx.player.id)
     }
 
@@ -665,131 +669,34 @@ impl<'b> TeamOperationsImpl<'b> {
     }
 
     pub fn is_control_ball(&self) -> bool {
-        let player_id = self.ctx.player.id;
-        let tick = self.ctx.current_tick();
-        let cached = self
+        let held = self
             .ctx
             .tick_context
-            .player_agg_cache
-            .borrow_mut()
-            .slot_mut(player_id, tick)
-            .is_control_ball;
-        if let Some(v) = cached {
-            debug_assert_eq!(
-                v,
-                self.compute_is_control_ball(),
-                "is_control_ball cache mismatch"
-            );
-            return v;
-        }
-        let v = self.compute_is_control_ball();
-        self.ctx
-            .tick_context
-            .player_agg_cache
-            .borrow_mut()
-            .slot_mut(player_id, tick)
-            .is_control_ball = Some(v);
-        v
+            .possession
+            .held_by(self.ctx.player.team_id);
+        #[cfg(feature = "match-logs")]
+        self.note_possession_reading(held);
+        held
     }
 
-    fn compute_is_control_ball(&self) -> bool {
-        let current_player_team_id = self.ctx.player.team_id;
-
-        // First check: if a player from player's team has the ball
-        if let Some(owner_id) = self.ctx.ball().owner_id()
-            && let Some(ball_owner) = self.ctx.context.players.by_id(owner_id)
-        {
-            return ball_owner.team_id == current_player_team_id;
-        }
-
-        // Second check: if previous owner was from player's team
-        if let Some(prev_owner_id) = self.ctx.ball().previous_owner_id()
-            && let Some(prev_ball_owner) = self.ctx.context.players.by_id(prev_owner_id)
-            && prev_ball_owner.team_id == current_player_team_id
-        {
-            // Check if the ball is still heading in a favorable direction for the team
-            // or if a teammate is clearly going to get it
-            let ball_velocity = self.ctx.tick_context.positions.ball.velocity;
-
-            // If ball has significant velocity and is heading toward opponent's goal
-            if ball_velocity.norm_squared() > 1.0 {
-                // Determine which way is "forward" based on team side
-                let forward_direction = match self.ctx.player.side {
-                    Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0), // Left team attacks right
-                    Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0), // Right team attacks left
-                    None => Vector3::new(0.0, 0.0, 0.0),
-                };
-
-                // If ball is moving forward or toward a teammate
-                let dot_product = ball_velocity.normalize().dot(&forward_direction);
-                if dot_product > 0.1 {
-                    return true;
-                }
-
-                // If a teammate is clearly going for the ball and is close
-                if self.is_teammate_chasing_ball() {
-                    return true;
-                }
-            }
-        }
-
-        // If we get here, we need to check if any player from our team
-        // is closer to the ball than any opponent. Reads the roster
-        // join's per-team control table instead of re-scanning both
-        // teams — the min values are identical (same entries, same
-        // operand order); the table just computes them once per tick.
-        let my_id = self.ctx.player.id;
-        let closest_teammate_dist_sq = self
-            .ctx
-            .tick_context
-            .roster
-            .control_min_excluding(current_player_team_id, my_id);
-
-        // Opponent lookup: `my_id` is not on the opposing team, so the
-        // exclusion is a no-op — matching the old opponents().all() scan
-        // (which filtered `entry.id == player_id` to no effect).
-        let closest_opponent_dist_sq = self
-            .ctx
-            .tick_context
-            .roster
-            .control_min_other_team(current_player_team_id, my_id);
-
-        #[cfg(debug_assertions)]
-        {
-            let ball_pos = self.ctx.tick_context.positions.ball.position;
-            let ref_team = self
-                .ctx
-                .players()
-                .teammates()
-                .all()
-                .map(|p| (p.position - ball_pos).norm_squared())
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            let ref_opp = self
-                .ctx
-                .players()
-                .opponents()
-                .all()
-                .map(|p| (p.position - ball_pos).norm_squared())
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-            debug_assert_eq!(
-                closest_teammate_dist_sq, ref_team,
-                "control table teammate-min mismatch"
-            );
-            debug_assert_eq!(
-                closest_opponent_dist_sq, ref_opp,
-                "control table opponent-min mismatch"
-            );
-        }
-
-        // If a teammate is significantly closer to the ball than any opponent
-        // 0.7 distance ratio = 0.49 squared ratio
-        if let (Some(team_sq), Some(opp_sq)) = (closest_teammate_dist_sq, closest_opponent_dist_sq)
-            && team_sq < opp_sq * 0.49
-        {
-            return true;
-        }
-
-        false
+    #[cfg(feature = "match-logs")]
+    fn note_possession_reading(&self, reading: bool) {
+        let ball = &self.ctx.tick_context.ball;
+        let own_team = self.ctx.player.team_id;
+        let own_pass_in_flight = ball.is_in_flight_state > 0
+            && ball.pass_target.is_some()
+            && ball
+                .last_owner
+                .and_then(|id| self.ctx.context.players.by_id(id))
+                .is_some_and(|p| p.team_id == own_team);
+        POSSESSION_CENSUS.note(
+            self.ctx.player.id,
+            own_team,
+            reading,
+            ball.is_owned,
+            own_pass_in_flight,
+            self.ctx.current_tick(),
+        );
     }
 
     /// Check if team has JUST lost possession (previous owner was teammate, ball now with opponent).

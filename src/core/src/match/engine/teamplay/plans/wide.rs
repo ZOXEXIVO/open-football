@@ -239,6 +239,9 @@ impl WideBuilder<'_> {
     /// the game ships.
     const WIDE_SLOT: f32 = 0.5;
 
+    /// A slot this far up the shape is in its front line.
+    const FRONT_LINE_DEPTH: f32 = 0.9;
+
     /// A slot this far up the shape or better is a *winger*; below it he
     /// is a full-back, and full-backs hold width only when there is
     /// nobody in front of them to do it. 0.45 puts the bar just below a
@@ -281,7 +284,7 @@ impl WideBuilder<'_> {
                 .filter(|p| Flank::of(p.start_position.y, field_height) == flank)
                 .filter_map(|p| {
                     let (lat, depth) = self.slot_fractions(p);
-                    if (lat - 0.5).abs() * 2.0 < Self::WIDE_SLOT {
+                    if !self.holds_a_wide_slot(p, lat, depth) {
                         return None;
                     }
                     let mut score = self.width_fit(p, depth);
@@ -358,6 +361,39 @@ impl WideBuilder<'_> {
                     .then(b.0.cmp(&a.0))
             })
             .map(|(id, _)| id);
+    }
+
+    /// Is this slot a wide one? Drawn in the outer quarter of the shape, or
+    /// on the outside of a front line of three or more.
+    ///
+    /// The second half is what lets a 4-3-3's front three win their flanks.
+    /// Their slots are drawn where a strike pair stands, inside the outer
+    /// quarter, so the only men the first half found were the full-backs: and
+    /// a full-back holding a flank is in no state that acts on it, which left
+    /// the shape with no `Holding Width` and no `Overlapping` at all. A pair
+    /// up front stays central, because a line of two has no outside man.
+    fn holds_a_wide_slot(&self, p: &MatchPlayer, lat: f32, depth: f32) -> bool {
+        if (lat - 0.5).abs() * 2.0 >= Self::WIDE_SLOT {
+            return true;
+        }
+        if depth < Self::FRONT_LINE_DEPTH {
+            return false;
+        }
+        let field_height = self.field.size.height as f32;
+        let flank = Flank::of(p.start_position.y, field_height);
+        let mut line_mates = 0;
+        for mate in self.outfielders().filter(|mate| mate.id != p.id) {
+            let (mate_lat, mate_depth) = self.slot_fractions(mate);
+            if mate_depth < Self::FRONT_LINE_DEPTH {
+                continue;
+            }
+            line_mates += 1;
+            let further_out = (mate_lat - 0.5).abs() > (lat - 0.5).abs();
+            if further_out && Flank::of(mate.start_position.y, field_height) == flank {
+                return false;
+            }
+        }
+        line_mates >= 2
     }
 
     /// (lateral, depth) of this player's formation slot as fractions of

@@ -1,11 +1,12 @@
 use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, RunInBehind,
+};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -89,7 +90,7 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         }
 
         // Check if the run is still viable
-        if !self.is_run_viable(ctx) {
+        if !RunInBehind::stays_viable(ctx) {
             // If the run is no longer viable, transition to Creating Space
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::CreatingSpace,
@@ -222,98 +223,6 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
     fn process_conditions(&self, ctx: ConditionContext) {
         // Running in behind is very high intensity - explosive sprinting
         ForwardCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
-    }
-}
-
-impl ForwardRunningInBehindState {
-    fn is_run_viable(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if there's still space to run into
-        let space_ahead = self.space_ahead(ctx);
-
-        // Check if the player is still in a good position to receive a pass
-        let in_passing_lane = self.in_passing_lane(ctx);
-
-        // Check if the player has the stamina to continue the run
-        let has_stamina = !ctx.player().is_tired();
-
-        // Check passer's ability (if passer has low vision, run is less viable)
-        let passer_capable = self.is_passer_capable(ctx);
-
-        space_ahead && in_passing_lane && has_stamina && passer_capable
-    }
-
-    /// Check if the teammate with ball can deliver a pass
-    fn is_passer_capable(&self, ctx: &StateProcessingContext) -> bool {
-        if let Some(owner_id) = ctx.ball().owner_id()
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            let vision = owner.skills.mental.vision / 20.0;
-            let passing = owner.skills.technical.passing / 20.0;
-            // Low skill passers can't deliver through-balls
-            return (vision + passing) / 2.0 > 0.3;
-        }
-        // No teammate has ball — run is still viable (ball might be loose)
-        true
-    }
-
-    fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal = (goal_pos - player_pos).normalize();
-
-        // Check for opponents blocking the path ahead (within 30 units, in forward direction)
-        let blockers = ctx
-            .players()
-            .opponents()
-            .nearby(30.0)
-            .filter(|opp| {
-                let to_opp = (opp.position - player_pos).normalize();
-                to_opp.dot(&to_goal) > 0.3
-            })
-            .count();
-
-        // Allow runs with one blocker if the forward is fast
-        if blockers == 0 {
-            return true;
-        }
-
-        if blockers == 1 {
-            // Pace decides the chance of beating a single blocker on
-            // a run-in-behind. Sigmoid pivot at 12/20 so the full
-            // 1-20 range matters instead of a hard cliff.
-            //
-            // NOTE: this per-tick re-roll makes a mid-pace forward flip
-            // RunningInBehind↔CreatingSpace frequently against a single
-            // blocker — but the flicker is load-bearing: it acts as the
-            // run's timebox, cycling the forward back through Running
-            // (where receiving/shot logic lives). A "commit to the run"
-            // variant (return true) parked runners behind the line and
-            // cut forward shots ~4× in dev_match. Change only together
-            // with a chance-economy recalibration.
-            let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
-            return ctx.context.rng.unit_f32() < p;
-        }
-
-        false
-    }
-
-    fn in_passing_lane(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the player is ahead of the ball holder (toward opponent goal)
-        // Diagonal runs are valid — only reject if player is behind the passer
-        if let Some(owner_id) = ctx.ball().owner_id()
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            let passer_pos = ctx.tick_context.positions.players.position(owner_id);
-            let goal_pos = ctx.player().opponent_goal_position();
-            let to_goal = (goal_pos - passer_pos).normalize();
-            let to_runner = (ctx.player.position - passer_pos).normalize();
-            // Runner must be at least somewhat ahead of passer (dot > 0.0)
-            // This allows wide diagonal runs while rejecting backward positions
-            return to_runner.dot(&to_goal) > 0.0;
-        }
-        true
     }
 }
 

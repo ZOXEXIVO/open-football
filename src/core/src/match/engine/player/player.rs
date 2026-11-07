@@ -2,9 +2,15 @@ use crate::club::player::events::PositionLoad;
 use crate::club::player::mind::KickoffMind;
 use crate::club::player::traits::PlayerTrait;
 #[cfg(feature = "match-logs")]
+use crate::r#match::MatchTally;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag::{self, M_PER_UNIT};
+#[cfg(feature = "match-logs")]
 use crate::r#match::MovementEffort;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::common_states::{FatigueLoad, RecoveryChallenge, TackleEngagement};
+use crate::r#match::common_states::{
+    ChallengeKind, CounterPress, CounterPressCall, FatigueLoad, RecoveryChallenge, TackleEngagement,
+};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
 #[cfg(feature = "match-logs")]
@@ -12,7 +18,6 @@ use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::flow::touchline::TouchlineStand;
-use crate::r#match::engine::player::counter_press::{CounterPress, CounterPressCall};
 use crate::r#match::engine::player::injury::{InjuryRisk, InjuryGrade};
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
@@ -207,6 +212,10 @@ pub struct MatchPlayer {
     /// Counting CONTACT instead makes the roll happen on the tick he
     /// arrives, which is when a real defender either goes or does not.
     pub contact_ticks: u16,
+    /// AI ticks `Recovering` holds him for.
+    pub(crate) recovery_ticks: u64,
+    /// Ticks spent below the low-condition line since jadedness last rose.
+    low_condition_ticks: u64,
     /// Consecutive AI ticks within [`RecoveryChallenge::REACH`] of an
     /// opposing carrier — the dwell a stretched challenge is a function
     /// of, as `contact_ticks` is for a block tackle. See
@@ -350,7 +359,7 @@ pub struct MatchPlayer {
     /// tracer. Dev-only: the field, and every site that touches it,
     /// compile out without `match-logs`.
     #[cfg(feature = "match-logs")]
-    pub(crate) motion_trace: crate::r#match::player::motion_diag::MotionTrace,
+    pub(crate) motion_trace: motion_diag::MotionTrace,
 
     /// Memo for the fatigue processor's velocity curve, keyed on
     /// `(intensity_ratio_sq bits, sprint_peak bits)` — see
@@ -678,6 +687,8 @@ impl MatchPlayer {
             off_pitch: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
+            low_condition_ticks: 0,
+            recovery_ticks: 0,
             stretch_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
@@ -764,6 +775,8 @@ impl MatchPlayer {
             off_pitch: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
+            low_condition_ticks: 0,
+            recovery_ticks: 0,
             stretch_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
@@ -1414,14 +1427,16 @@ impl MatchPlayer {
             // Dwell = how long the player actually stayed. The graph
             // dedups edges, so only this number tells a real hand-off
             // apart from a per-tick oscillation.
-            crate::r#match::player::motion_diag::record_transition(
+            motion_diag::record_transition(
                 self.id,
                 _from,
                 state,
                 self.in_state_time,
                 source,
                 self.previous_state,
+                &mut self.motion_trace.chain,
             );
+            self.motion_trace.total_state_changes += 1;
         }
         #[cfg(not(feature = "match-logs"))]
         let _ = source;
@@ -1769,8 +1784,6 @@ impl MatchPlayer {
         ball_pos: Vector3<f32>,
         ball_vel: Vector3<f32>,
     ) {
-        use crate::r#match::player::motion_diag;
-
         let pos = self.position;
         let vel = self.velocity;
         let state = self.state;
@@ -1796,6 +1809,8 @@ impl MatchPlayer {
         t.prev_pos = pos;
         t.win_path += step;
         t.win_ticks += 1;
+        t.total_path_u += step as f64;
+        t.total_ticks += 1;
         if step < motion_diag::STILL_STEP_U {
             t.win_still += 1;
         }
@@ -1873,6 +1888,69 @@ impl MatchPlayer {
             t.win_state_changes = 0;
             t.win_still = 0;
         }
+    }
+
+    /// Can he play the ball at all right now? Not while he is on the floor,
+    /// from an injury or a challenge he missed.
+    #[inline]
+    pub fn can_play_ball(&self) -> bool {
+        !matches!(self.state, PlayerState::Injured | PlayerState::Recovering)
+    }
+
+    /// He went in and did not get it: he loses the time it takes to get back
+    /// up, and no more. A man who wins the ball never comes here.
+    pub fn on_challenge_missed(&mut self, kind: ChallengeKind) {
+        self.recovery_ticks =
+            kind.recovery_ticks(self.skills.physical.agility, self.skills.physical.balance);
+        self.transition_to(PlayerState::Recovering, TransitionSource::Handler);
+    }
+
+    /// Stand him in `state` as if he had just entered it, ask `decide`, and
+    /// put him back exactly as he was. Handlers read his state for their own
+    /// hysteresis, so it has to really be set for the question to mean anything.
+    pub(crate) fn trying_state<R>(
+        &mut self,
+        state: PlayerState,
+        decide: impl FnOnce(&mut MatchPlayer) -> R,
+    ) -> R {
+        let (state_before, previous_before, time_before) =
+            (self.state, self.previous_state, self.in_state_time);
+        self.previous_state = Some(state_before);
+        self.state = state;
+        self.in_state_time = 0;
+        let decided = decide(self);
+        self.state = state_before;
+        self.previous_state = previous_before;
+        self.in_state_time = time_before;
+        decided
+    }
+
+    /// One tick spent below the low-condition line. True once a whole
+    /// `interval` of them has gone by, however many states it passed through.
+    pub(crate) fn spent_low_condition_interval(&mut self, interval: u64) -> bool {
+        self.low_condition_ticks += 1;
+        if self.low_condition_ticks >= interval {
+            self.low_condition_ticks = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Fold this man's whole-match churn and distance into the batch tally.
+    /// Keepers stay out: the bands describe outfield running.
+    #[cfg(feature = "match-logs")]
+    pub fn tally_motion(&self, tally: &mut MatchTally) {
+        if self.tactical_position.current_position.position_group()
+            == PlayerFieldPositionGroup::Goalkeeper
+        {
+            return;
+        }
+        let trace = &self.motion_trace;
+        let motion = &mut tally.outfield_motion;
+        motion.state_changes += trace.total_state_changes;
+        motion.path_mm += (trace.total_path_u * M_PER_UNIT as f64 * 1000.0) as u64;
+        motion.ticks += trace.total_ticks;
     }
 
     pub fn heading(&self) -> f32 {

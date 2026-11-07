@@ -128,7 +128,8 @@ impl PlayerReach {
     /// air, which is where a chest or a head brings one down.
     #[inline]
     pub fn can_touch(ball: &Ball, player: &MatchPlayer) -> bool {
-        ball.position.z <= Self::strike_ceiling(player, true)
+        player.can_play_ball()
+            && ball.position.z <= Self::strike_ceiling(player, true)
             && Self::within(ball.position, player.position, LOOSE_CLAIM_DISTANCE)
     }
 
@@ -141,7 +142,8 @@ impl PlayerReach {
     /// refuses; the same ball half a second later, on the deck, is his.
     #[inline]
     pub fn can_strike(ball: &Ball, player: &MatchPlayer, aerial: bool) -> bool {
-        ball.position.z <= Self::strike_ceiling(player, aerial)
+        player.can_play_ball()
+            && ball.position.z <= Self::strike_ceiling(player, aerial)
             && Self::within(ball.position, player.position, KICKABLE_DISTANCE)
     }
 

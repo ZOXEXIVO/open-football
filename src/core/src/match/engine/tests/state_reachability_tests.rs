@@ -20,6 +20,17 @@
 //! * [`observed_graph_has_no_dead_states`] — `match-logs` only. Runs the
 //!   real recorder's audit over an observed edge set, which is precise
 //!   where the source scan is merely conservative.
+//!
+//! # States a formation does not enter
+//!
+//! Measured over 400 matches each of 4-4-2, 4-3-3, 4-2-3-1, 3-4-3 and 3-5-2.
+//! Every other state is entered in all five.
+//!
+//! * `Forward: Holding Width` in 4-4-2 and 4-2-3-1. The forwards there are a
+//!   central pair and a lone striker, and the wide midfielders hold the flanks.
+//! * `Forward: Resting` in 3-5-2. Its door asks for condition below 60%, in the
+//!   tail of a forward's match, and a 3-5-2's forwards finish about three points
+//!   fresher than a 4-4-2's (76.9% against 73.7% over the last fifteen minutes).
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::forwarders::states::ForwardState;
@@ -126,7 +137,7 @@ impl TransitionSiteScanner {
 /// format. `Injured` has no role enum, so it is handled by the caller.
 fn scanner_key(state: PlayerState) -> Option<String> {
     let name = match state {
-        PlayerState::Injured => return None,
+        PlayerState::Injured | PlayerState::Recovering => return None,
         PlayerState::Goalkeeper(s) => format!("GoalkeeperState::{s:?}"),
         PlayerState::Defender(s) => format!("DefenderState::{s:?}"),
         PlayerState::Midfielder(s) => format!("MidfielderState::{s:?}"),
@@ -161,16 +172,16 @@ fn static_reachability() {
             // `Injured` — reached through `PlayerState::Injured` in the
             // substitution layer's injury roll, which the enum-keyed scan
             // above doesn't cover. Check it directly.
-            let injured_wired = TransitionSiteScanner::source_files().iter().any(|p| {
+            let name = format!("PlayerState::{state:?}");
+            let wired = TransitionSiteScanner::source_files().iter().any(|p| {
                 std::fs::read_to_string(p)
-                    .map(|s| s.contains("PlayerState::Injured"))
+                    .map(|s| s.contains(&name))
                     .unwrap_or(false)
             });
             assert!(
-                injured_wired,
-                "PlayerState::Injured has no transition site — it is either wired \
-                 into the match (via the in-match injury roll) or listed in \
-                 `PlayerState::reserved_states()`"
+                wired,
+                "{name} has no transition site — it is either wired into the \
+                 match or listed in `PlayerState::reserved_states()`"
             );
             continue;
         };
@@ -204,7 +215,7 @@ fn every_state_has_a_handler_and_a_distinct_id() {
 
     assert_eq!(
         all.len(),
-        1 + GoalkeeperState::ALL.len()
+        2 + GoalkeeperState::ALL.len()
             + DefenderState::ALL.len()
             + MidfielderState::ALL.len()
             + ForwardState::ALL.len(),

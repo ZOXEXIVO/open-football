@@ -80,9 +80,7 @@ impl StateProcessingHandler for DefenderMarkingState {
         //
         // `Running` rather than `Standing`, mirroring the midfielder: it
         // is the defender's phase dispatch, which is what decides between
-        // holding the line, pushing up and dropping into a block. The
-        // plan is idle while we have the ball, so `my_mark()` is `None`
-        // and this cannot bounce straight back.
+        // holding the line, pushing up and dropping into a block.
         if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
@@ -131,12 +129,7 @@ impl StateProcessingHandler for DefenderMarkingState {
             // He is going past me if he is moving and I am not with
             // him — the moment a beaten defender reaches out.
             let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
-            if ContactFoul::is_decision_tick(ctx)
-                && ctx
-                    .context
-                    .rng
-                    .bernoulli(ContactFoul::probability(ctx, gap, losing_him))
-            {
+            if ContactFoul::commits_now(ctx, gap, losing_him) {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::CommitFoul(

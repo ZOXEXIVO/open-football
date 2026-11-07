@@ -322,10 +322,14 @@ fn the_keeper_fetches_it_from_behind_the_goal_and_restarts_on_the_pitch() {
         "the keeper never left the pitch, so he cannot have fetched a ball \
          that was behind the goal"
     );
-    assert_eq!(
+    // His, and possibly already played: a decision resolves on its own tick,
+    // so the kick can leave his foot on the tick the restart is handed over.
+    assert!(
+        m.field.ball.current_owner == Some(taker)
+            || m.field.ball.last_release_player_id == Some(taker),
+        "and it has to end up his: owner {:?}, played by {:?}",
         m.field.ball.current_owner,
-        Some(taker),
-        "and it has to end up his"
+        m.field.ball.last_release_player_id,
     );
     assert!(
         m.field.ball.position.x >= 0.0,

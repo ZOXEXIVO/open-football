@@ -1,6 +1,7 @@
 use crate::r#match::DefensiveDuty;
 use crate::r#match::MatchContext;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::engine::player::strategies::common::{
@@ -110,10 +111,49 @@ pub struct DefensiveRecovery;
 pub struct Interception;
 
 impl Interception {
+    /// `Intercepting` gives up a moving ball beyond this, so a door further
+    /// out sends him to a state that refuses him on arrival.
+    pub const GIVE_UP: f32 = 130.0;
+
     pub fn is_available(ctx: &StateProcessingContext) -> bool {
         !ctx.player.has_ball(ctx)
             && !ctx.ball().is_owned()
             && ctx.tick_context.chase.may_go(ctx.player.id)
+            && !ctx.team().is_control_ball()
+            && LooseBallChase::can_contest(ctx)
+    }
+}
+
+/// When a tired defender may stand down, and when he has to come back. The
+/// midfielder's and forward's terms: genuinely tired, after a sustained run,
+/// with the ball far enough away. Entry sits inside the exit, so a man who is
+/// sent to rest is not sent straight back.
+pub struct DefensiveRest;
+
+impl DefensiveRest {
+    /// A fitness below which he eases off. Below the 65% he rests back up to,
+    /// and inside the range a match reaches: the old doors asked for 15-25%,
+    /// and players finish around 65-70%.
+    const STAMINA: u32 = 60;
+    const MIN_RUN_TICKS: u64 = 60;
+    /// 25 m: he stands down only with the ball well away.
+    const BALL_DISTANCE: f32 = 200.0;
+    /// 20 m: a play that comes this close wants him whatever his legs say.
+    const DEMAND_RANGE: f32 = 160.0;
+    /// A man inside this is a threat he cannot leave alone.
+    const THREAT_RADIUS: f32 = 100.0;
+
+    pub fn may_stand_down(ctx: &StateProcessingContext) -> bool {
+        ctx.player.player_attributes.condition_percentage() < Self::STAMINA
+            && ctx.in_state_time > Self::MIN_RUN_TICKS
+            && ctx.ball().distance() > Self::BALL_DISTANCE
+            && !ctx.players().opponents().exists(Self::THREAT_RADIUS)
+    }
+
+    /// The ball or a man has come close enough to want him back.
+    pub fn is_wanted(ctx: &StateProcessingContext) -> bool {
+        ctx.ball().distance() < Self::DEMAND_RANGE
+            || ctx.players().opponents().exists(Self::THREAT_RADIUS)
     }
 }
 

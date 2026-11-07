@@ -95,6 +95,9 @@ impl Default for TeamSkillAggregates {
 
 pub struct TacticalRefreshInputs<'a> {
     pub field: &'a MatchField,
+    /// [`TeamPossession`](crate::r#match::engine::teamplay::possession::TeamPossession)'s
+    /// answer.
+    pub possession_holder: Option<u32>,
     pub home_team_id: u32,
     /// Which end the HOME side is defending right now. Sides swap at
     /// half time (`MatchField::swap_squads`), so this cannot be assumed:

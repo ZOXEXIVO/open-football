@@ -19,11 +19,16 @@
 //!   [`PenaltyRisk`], which both consult so restraint in the box asks
 //!   the referee's question in the referee's terms — the BALL's
 //!   position, not the fouler's.
+//! * [`counter_press`] — whether he goes at all in the second after losing
+//!   the ball. [`CounterPress`] makes that call and the pressing state does
+//!   the rest.
 
 pub mod closing;
+pub mod counter_press;
 pub mod distances;
 pub mod duel;
 
 pub use closing::*;
+pub use counter_press::*;
 pub use distances::*;
 pub use duel::*;

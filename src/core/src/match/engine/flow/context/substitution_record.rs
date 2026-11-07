@@ -119,6 +119,8 @@ impl MatchContext {
             .push((player.id, player.to_match_end_stats(minutes)));
         self.substituted_out_physical_snapshots
             .push(player.to_physical_snapshot(self.total_match_time));
+        #[cfg(feature = "match-logs")]
+        player.tally_motion(&mut self.tally);
     }
 
     /// Extra time brings one more change and one more stoppage to make it

@@ -213,6 +213,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // surplus that remains (36%) tracks the engine's 2.3 goals a match,
         // not the home edge.
         //
+        // Re-read 2026-11-07 after the foul clock became a rate and decisions
+        // resolved within their tick, 400 seeded fixtures an arm (home goal
+        // edge): 0.050 +0.32 · 0.070 +0.38 · 0.095 +0.61. Left at 0.050, which
+        // lands 44.5 / 27.0 / 28.5.
+        //
         // The lesson the three re-titrations share: this constant is not
         // a property of home advantage, it is a property of how strongly
         // THIS engine converts skill into goals, so it has to be re-read
@@ -548,7 +553,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let interval = tactical_eval_counter;
                 tactical_eval_counter = 0;
                 let prof_t = prof_on.then(Instant::now);
-                Self::refresh_tactical_states(field, context, interval);
+                Self::refresh_tactical_states(field, context, tick_ctx.possession, interval);
                 if let Some(t) = prof_t {
                     PhaseProf::add(PhaseProf::P_TACTICAL, t.elapsed().as_nanos() as u64);
                 }

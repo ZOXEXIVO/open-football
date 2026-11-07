@@ -1,6 +1,9 @@
 use crate::TacticalStyle;
+use crate::r#match::common_states::EngagementClock;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, RunInBehind,
+};
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -80,31 +83,13 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // with a pass coming to him abandoned his run. See the note in
         // `assisting`; the receiver is the dispatcher's business.
 
-        // Check if created good space
-        //
-        // ⚠ THE HOP THROUGH `Assisting` LOOKS POINTLESS AND IS NOT.
-        // `Assisting` is an on-ball state by design — its first act for a
-        // player without the ball is to hand him to `CreatingSpace` or
-        // `Running` — and a forward who has just created space does not
-        // have the ball, so this transition always bounces.
-        // `Creating Space <-> Assisting` is the third-largest loop in the
-        // engine at ~15,000 round trips per three matches.
-        //
-        // Routing straight to `Running` when off-ball (the destination
-        // `Assisting` picks for him a tick later) was measured and is
-        // WORSE: FWD goal share 60% -> 47-53%, FWD shots 1120 -> ~965,
-        // and flips/min went UP 149 -> 154. The bounce is doing work —
-        // `Assisting` re-asks `should_create_space` on the way through,
-        // so the round trip is how a forward decides to keep making the
-        // run instead of dropping into the generic off-ball repertoire.
-        //
-        // Third measured case in this engine of a two-state cycle being
-        // load-bearing; see also `defenders/states/marking` and the
-        // in-flight chase designation in `strategies/processor.rs`.
+        // A forward who has created space re-asks whether to keep making the
+        // run. Sending him straight to `Running` instead was measured worse:
+        // FWD goal share 60% -> 47-53%, FWD shots 1120 -> ~965.
         if self.has_created_good_space(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Assisting,
-            ));
+            if !Self::keeps_making_the_run(ctx) {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            }
         }
 
         // Check for forward run opportunity
@@ -1246,6 +1231,40 @@ impl ForwardCreatingSpaceState {
     }
 
     // Keep existing helper methods for compatibility
+    /// Seconds between a forward re-asking whether to keep making his run,
+    /// so the question's rate is not set by how often he is asked it.
+    const RE_ASK_WINDOW: f32 = 0.46;
+
+    /// With men around him in their half he always does. Otherwise off-the-
+    /// ball skill scales the urge smoothly: elite movers (15+) almost always
+    /// carry on, ordinary 10s sometimes, and nobody without a team-mate near.
+    fn keeps_making_the_run(ctx: &StateProcessingContext) -> bool {
+        if !ctx.player().on_own_side() && ctx.players().opponents().exists(100.0) {
+            return true;
+        }
+        let leaves = 1.0 - Self::urge_to_create_space(ctx);
+        !ctx.context
+            .rng
+            .bernoulli(EngagementClock::per_tick(leaves, Self::RE_ASK_WINDOW))
+    }
+
+    fn urge_to_create_space(ctx: &StateProcessingContext) -> f32 {
+        if !ctx.players().teammates().exists(100.0) {
+            return 0.0;
+        }
+        SkillCurve::new(ctx.player.skills.mental.off_the_ball, 15.0, 0.6).probability()
+    }
+
+    /// Where a forward without the ball goes when his team has it and his
+    /// last job is done.
+    pub fn off_ball_support(ctx: &StateProcessingContext) -> ForwardState {
+        if ctx.context.rng.bernoulli(Self::urge_to_create_space(ctx)) {
+            ForwardState::CreatingSpace
+        } else {
+            ForwardState::Running
+        }
+    }
+
     fn has_created_good_space(&self, ctx: &StateProcessingContext) -> bool {
         // Reduced strictness - forwards should transition to assisting more often
         let space_created = !ctx.players().opponents().exists(12.0); // Reduced from 20.0
@@ -1365,51 +1384,7 @@ impl ForwardCreatingSpaceState {
             return false;
         }
 
-        // Use the SAME space check that RunningInBehind uses to decide viability.
-        // This prevents oscillation: if RunningInBehind would immediately fail,
-        // don't start the run.
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal = (goal_pos - player_pos).normalize();
-
-        let blockers = ctx
-            .players()
-            .opponents()
-            .nearby(30.0)
-            .filter(|opp| {
-                let to_opp = (opp.position - player_pos).normalize();
-                to_opp.dot(&to_goal) > 0.3
-            })
-            .count();
-
-        if blockers >= 2 {
-            return false;
-        }
-        if blockers == 1 {
-            // Pace decides whether the runner can beat a single blocker.
-            // Smooth sigmoid (pivot 12/20) — a slow striker (pace=6) very
-            // occasionally still tries; a quick one (pace=17) almost
-            // always commits.
-            let p = SkillCurve::new(ctx.player.skills.physical.pace, 12.0, 0.6).probability();
-            if ctx.context.rng.unit_f32() >= p {
-                return false;
-            }
-        }
-
-        // Also check passing lane: runner must be ahead of the passer
-        if let Some(owner_id) = ctx.ball().owner_id()
-            && let Some(owner) = ctx.context.players.by_id(owner_id)
-            && owner.team_id == ctx.player.team_id
-        {
-            let passer_pos = ctx.tick_context.positions.players.position(owner_id);
-            let to_goal_from_passer = (goal_pos - passer_pos).normalize();
-            let to_runner = (player_pos - passer_pos).normalize();
-            if to_runner.dot(&to_goal_from_passer) <= 0.0 {
-                return false; // Behind the passer — run wouldn't be viable
-            }
-        }
-
-        true
+        RunInBehind::may_commit(ctx)
     }
 
     fn is_in_good_support_position(&self, ctx: &StateProcessingContext) -> bool {

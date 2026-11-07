@@ -1,10 +1,10 @@
 use crate::r#match::goalkeepers::states::{
     GoalkeeperCatchingState, GoalkeeperClearingState, GoalkeeperComingOutState,
     GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState,
-    GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState,
-    GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPunchingState,
-    GoalkeeperReturningGoalState, GoalkeeperStandingState, GoalkeeperTakeBallState,
-    GoalkeeperThrowingState, GoalkeeperWalkingState,
+    GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPickingUpState,
+    GoalkeeperPreparingForSaveState, GoalkeeperPunchingState, GoalkeeperReturningGoalState,
+    GoalkeeperStandingState, GoalkeeperTakeBallState, GoalkeeperThrowingState,
+    GoalkeeperWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
@@ -37,7 +37,6 @@ pub enum GoalkeeperState {
     PickingUpBall = 10,    // Picking up the ball from the ground
     Distributing = 11,     // Distributing the ball after catching it
     ComingOut = 12,        // Coming out of the goal to intercept
-    Passing = 13,          // Passing the ball
     ReturningToGoal = 14,  // Returning to the goal after coming out
     PreparingForSave = 17, // Preparing to make a save
     Walking = 18,          // Walking
@@ -47,7 +46,7 @@ pub enum GoalkeeperState {
 impl GoalkeeperState {
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [GoalkeeperState; 17] = [
+    pub const ALL: [GoalkeeperState; 16] = [
         GoalkeeperState::Standing,
         GoalkeeperState::Jumping,
         GoalkeeperState::Diving,
@@ -60,7 +59,6 @@ impl GoalkeeperState {
         GoalkeeperState::PickingUpBall,
         GoalkeeperState::Distributing,
         GoalkeeperState::ComingOut,
-        GoalkeeperState::Passing,
         GoalkeeperState::ReturningToGoal,
         GoalkeeperState::PreparingForSave,
         GoalkeeperState::Walking,
@@ -113,7 +111,6 @@ impl GoalkeeperStrategies {
                 state_processor.process(GoalkeeperPreparingForSaveState::default())
             }
             GoalkeeperState::Walking => state_processor.process(GoalkeeperWalkingState::default()),
-            GoalkeeperState::Passing => state_processor.process(GoalkeeperPassingState::default()),
             GoalkeeperState::TakeBall => {
                 state_processor.process(GoalkeeperTakeBallState::default())
             }
@@ -139,7 +136,6 @@ impl Display for GoalkeeperState {
             GoalkeeperState::ReturningToGoal => write!(f, "Returning to Goal"),
             GoalkeeperState::PreparingForSave => write!(f, "Preparing for Save"),
             GoalkeeperState::Walking => write!(f, "Walking"),
-            GoalkeeperState::Passing => write!(f, "Passing"),
             GoalkeeperState::TakeBall => write!(f, "Take Ball"),
         }
     }

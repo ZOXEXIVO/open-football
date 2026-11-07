@@ -3,8 +3,9 @@
 //!
 //! * [`exertion`] — how hard a player is working, what it costs his
 //!   condition, and the speed ceiling that tier imposes.
-//! * [`engagement`] — going to the man with the ball: where he commits,
-//!   where he gives up, whether he tackles, and whether it is a foul.
+//! * [`engagement`] — going to the man with the ball: whether he goes back
+//!   at it after losing it, where he commits, where he gives up, whether he
+//!   tackles, and whether it is a foul.
 //! * [`overrides`] — rules that move a player against his own state's
 //!   wishes (corner hold, restart carry, keeper release space, the
 //!   loose-ball race).
@@ -18,8 +19,10 @@ pub mod engagement;
 pub mod exertion;
 pub mod injured;
 pub mod overrides;
+pub mod recovering;
 
 pub use engagement::*;
 pub use exertion::*;
 pub use injured::*;
 pub use overrides::*;
+pub use recovering::*;

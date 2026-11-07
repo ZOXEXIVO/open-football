@@ -2,6 +2,7 @@ pub mod carry;
 pub mod role;
 
 use crate::r#match::StateProcessingContext;
+use crate::r#match::common_states::{LooseBallChase, TackleEngagement};
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
@@ -27,7 +28,7 @@ impl ShapeStation {
 
     /// Distance from the player's shape position.
     pub fn drift(ctx: &StateProcessingContext) -> f32 {
-        (ctx.player.position - ctx.player.start_position).magnitude()
+        (ctx.player.position - ctx.team().my_anchor()).magnitude()
     }
 
     /// Is there a recovery run left to make?
@@ -48,6 +49,106 @@ impl ShapeStation {
             Self::DISPLACED
         };
         Self::drift(ctx) > band
+    }
+}
+
+/// Where a midfielder goes to support when his side has the ball. `Running`
+/// sends him there, and the two states it sends him to ask before handing him
+/// back: their timeouts used to bounce off this every tick once they fired.
+pub struct MidfieldSupport;
+
+impl MidfieldSupport {
+    /// With nothing to run for, he walks. The one gate, whichever off-ball
+    /// state he is deciding from.
+    pub fn walks(ctx: &StateProcessingContext) -> bool {
+        const WALK_BALL_DISTANCE: f32 = 250.0;
+        const IN_POSITION_DISTANCE: f32 = 40.0;
+        const THREAT_RADIUS: f32 = 100.0;
+
+        let no_immediate_threat = ctx
+            .players()
+            .opponents()
+            .nearby(THREAT_RADIUS)
+            .next()
+            .is_none();
+        if !no_immediate_threat {
+            return false;
+        }
+
+        let ball_far = ctx.ball().distance() > WALK_BALL_DISTANCE;
+        // Against the live anchor, not the kickoff dot. The block slides
+        // all match, so `distance_from_position` was asking whether
+        // he is standing where he was DRAWN before the whistle — which a
+        // midfielder almost never is, so the fresh-player branch below
+        // (`ball_far && in_position`) essentially never fired and
+        // `Midfielder: Walking` measured **zero velocity evaluations
+        // across three matches** (`dev_match waypoints`). Same correction
+        // the walking state itself already made when it stopped steering
+        // at `start_position`.
+        let in_position = ctx.team().distance_from_anchor() < IN_POSITION_DISTANCE;
+
+        // Tired players take any excuse to walk; fresh ones only walk when
+        // there is genuinely nothing to run toward.
+        if ctx.player().is_tired() {
+            ball_far || in_position
+        } else {
+            ball_far && in_position
+        }
+    }
+
+    pub fn wanted(ctx: &StateProcessingContext) -> Option<MidfielderState> {
+        if Self::walks(ctx) {
+            return Some(MidfielderState::Walking);
+        }
+        let ball_distance = ctx.ball().distance();
+        // Too many team-mates nearby: go and find space.
+        if ctx.players().teammates().nearby(25.0).count() >= 2 && ball_distance > 30.0 {
+            return Some(MidfielderState::CreatingSpace);
+        }
+        // Ball in the attacking third and him nearby: make attacking runs.
+        let field_width = ctx.context.field_size.width as f32;
+        if ctx.ball().distance_to_opponent_goal() < field_width * 0.4 && ball_distance < 300.0 {
+            return Some(MidfielderState::AttackSupporting);
+        }
+        // Far from the ball: create space to offer a passing option.
+        if ball_distance > 200.0 {
+            return Some(MidfielderState::CreatingSpace);
+        }
+        None
+    }
+
+    /// `Running` would send him straight back to `state`.
+    pub fn keeps_him_in(ctx: &StateProcessingContext, state: MidfielderState) -> bool {
+        Self::wanted(ctx) == Some(state)
+    }
+}
+
+/// Whose press this is. `Pressing` hands over on this and the doors into it
+/// ask it first, so a midfielder is not sent to a press he would give straight
+/// back.
+///
+/// The plan nominates one engager and a nominated presser defers to nobody.
+/// Everyone else hands over only when a team-mate is clearly on it: the margin
+/// is a hand-over distance, not a tie-break. It used to be 10u, which is true
+/// of everybody but the closest man on almost every tick, so `Pressing` emptied
+/// itself and one player chased while the rest dropped back into `Running`.
+pub struct PressOwnership;
+
+impl PressOwnership {
+    const HANDOVER_MARGIN: f32 = 60.0;
+
+    pub fn belongs_to_a_team_mate(ctx: &StateProcessingContext) -> bool {
+        if TackleEngagement::is_nominated_presser(ctx) {
+            return false;
+        }
+        let ball_position = ctx.tick_context.positions.ball.position;
+        ctx.players()
+            .teammates()
+            .all()
+            .filter(|t| t.id != ctx.player.id)
+            .map(|t| (t.position - ball_position).magnitude())
+            .fold(f32::MAX, f32::min)
+            < ctx.ball().distance() - Self::HANDOVER_MARGIN
     }
 }
 
@@ -76,6 +177,7 @@ impl Interception {
             && !ctx.ball().is_owned()
             && !ctx.team().is_control_ball()
             && ctx.tick_context.chase.may_go(ctx.player.id)
+            && LooseBallChase::can_contest(ctx)
     }
 }
 

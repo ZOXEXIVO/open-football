@@ -36,10 +36,10 @@ impl GoalkeeperPreparingForSaveState {
 
 impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // If goalkeeper has the ball, transition to passing
+        // A keeper with the ball distributes it.
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
+                GoalkeeperState::Distributing,
             ));
         }
 
@@ -105,7 +105,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
 
         // Check if we should attempt a save — but only inside the space
         // he is prepared to defend. That bound used to be
-        // `distance_from_start_position() < 50.0`: six metres from his
+        // `distance_from_position() < 50.0`: six metres from his
         // kickoff dot, measured as a radius, so a keeper who had swept out
         // to the edge of his area could not enter `Catching` for a shot at
         // all. See [`KeeperSweepLimit`].

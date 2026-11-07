@@ -4,8 +4,8 @@ use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::onball_diag::{self, Exit};
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, CarryHeading, LaneAhead, MidfieldPlay, MidfieldRole, MidfielderCondition,
-    Opportunity, ShapeStation, TakeOn, U_PER_M,
+    ActivityIntensity, CarryHeading, LaneAhead, MidfieldPlay, MidfieldRole, MidfieldSupport,
+    MidfielderCondition, Opportunity, ShapeStation, TakeOn, U_PER_M,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay, ThroughBall};
@@ -1669,30 +1669,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                     ));
                 }
 
-                let ball_distance = ctx.ball().distance();
-                let goal_dist = ctx.ball().distance_to_opponent_goal();
-                let field_width = ctx.context.field_size.width as f32;
-
-                // ANTI-CLUSTERING: If too many teammates nearby, go find space
-                let nearby_teammates = ctx.players().teammates().nearby(25.0).count();
-                if nearby_teammates >= 2 && ball_distance > 30.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::CreatingSpace,
-                    ));
-                }
-
-                // If ball is in attacking third and we're nearby, make attacking runs
-                if goal_dist < field_width * 0.4 && ball_distance < 300.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::AttackSupporting,
-                    ));
-                }
-
-                // If far from ball, create space to offer a passing option
-                if ball_distance > 200.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::CreatingSpace,
-                    ));
+                if let Some(state) = MidfieldSupport::wanted(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state(state));
                 }
 
                 // Medium range: actively support (don't just drift)
@@ -1753,6 +1731,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             // gate, and the midfield could not.
             if let Some(man) = ctx.team().my_mark()
                 && (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE
+                && !MidfielderGuardingState::refuses_him(ctx)
             {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Guarding,

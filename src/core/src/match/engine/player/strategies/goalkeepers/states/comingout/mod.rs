@@ -140,7 +140,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // If goalkeeper has reached the ball, claim it immediately —
         // provided he is still inside the space he is prepared to defend.
-        // That bound used to be `distance_from_start_position() < 50.0`,
+        // That bound used to be `distance_from_position() < 50.0`,
         // i.e. six metres from his kickoff dot, so a keeper who had
         // correctly come twenty metres to meet a through-ball reached it
         // and was then forbidden from picking it up. See
@@ -274,7 +274,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // He has come as far as he is prepared to come.
         //
-        // ⚠ THIS WAS THE LEASH. It read `distance_from_start_position() >
+        // ⚠ THIS WAS THE LEASH. It read `distance_from_position() >
         // 40 * (0.85 + …)` — 34 to 54 units, **four to seven metres from
         // his kickoff dot**, as a RADIUS — against an entry condition that
         // commits to a carrier eighteen metres away. Measured over 60

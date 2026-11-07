@@ -16,7 +16,7 @@ const STAMINA_THRESHOLD: f32 = 15.0; // Guarding is tiring — need minimum stam
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
 const PREDICTION_TIME: f32 = 0.25; // Look ahead 250ms to mirror movement
-const MAX_DISTANCE_FROM_START: f32 = 120.0; // Don't follow opponent too far from tactical zone
+const MAX_DISTANCE_FROM_POSITION: f32 = 120.0; // Don't follow opponent too far from tactical zone
 const BOUNDARY_MARGIN: f32 = 15.0; // Stay away from field edges
 
 #[derive(Default, Clone)]
@@ -151,8 +151,7 @@ impl StateProcessingHandler for DefenderGuardingState {
             }
 
             // 7. Don't follow opponent too far from our tactical position
-            let dist_from_start = (ctx.player.position - ctx.player.start_position).magnitude();
-            if dist_from_start > MAX_DISTANCE_FROM_START {
+            if ctx.player().distance_from_position() > MAX_DISTANCE_FROM_POSITION {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Returning,
                 ));
@@ -199,7 +198,7 @@ impl StateProcessingHandler for DefenderGuardingState {
             // Blend with tactical position to avoid straying too far
             let tether_strength = 0.15;
             let desired_position = desired_position * (1.0 - tether_strength)
-                + ctx.player.start_position * tether_strength;
+                + ctx.team().my_anchor() * tether_strength;
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();

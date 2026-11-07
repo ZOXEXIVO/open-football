@@ -4484,6 +4484,9 @@ impl PlayerEventDispatcher {
         let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
             return false;
         };
+        if !player.can_play_ball() {
+            return false;
+        }
         if field.ball.within_possession_reach(player) {
             #[cfg(feature = "match-logs")]
             crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_grant(
@@ -6927,7 +6930,7 @@ impl PlayerEventDispatcher {
         // calls more, a lenient one waves play on). The card decision
         // is computed only when the whistle goes — a missed call costs
         // nobody a yellow.
-        // Foul-source census: which STATE emitted this contact, and was
+        // Foul-source census: which STATE decided this contact, and was
         // the ball in the fouler's own box at the time (i.e. is this a
         // penalty candidate). Recorded before the referee gate so the
         // emitted rate and the whistled rate can be told apart. Restraining
@@ -6944,7 +6947,10 @@ impl PlayerEventDispatcher {
                         .contains(&field.ball.position)
                 })
                 .unwrap_or(false);
-            FoulCensus::note(f.state.compact_id(), in_box);
+            FoulCensus::note(
+                f.motion_trace.decided_in.unwrap_or(f.state).compact_id(),
+                in_box,
+            );
         }
 
         let call_ctx =

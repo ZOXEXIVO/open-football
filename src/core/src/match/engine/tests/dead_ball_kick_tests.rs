@@ -15,6 +15,7 @@ use crate::r#match::engine::officiating::restart_shape::RestartShape;
 use crate::r#match::engine::player::events::players::{FoulSeverity, PlayerEventDispatcher};
 use crate::r#match::engine::result::Score;
 use crate::r#match::engine::set_pieces::CornerRoutine;
+use crate::r#match::engine::teamplay::possession::TeamPossession;
 use crate::r#match::squad::squad::MatchSquad;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PassOriginRestart,
@@ -165,7 +166,8 @@ fn pitch(level: f32, seed: u64) -> (MatchField, MatchContext) {
     context.rng = MatchRng::from_seed(seed);
     // The kickoff reading a match takes, so skills are read against the
     // standard of these two sides.
-    FootballEngine::<840, 545>::refresh_tactical_states(&field, &mut context, 1);
+    let possession = TeamPossession::read(&field);
+    FootballEngine::<840, 545>::refresh_tactical_states(&field, &mut context, possession, 1);
     (field, context)
 }
 

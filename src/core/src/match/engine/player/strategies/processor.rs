@@ -1,5 +1,5 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::common_states::CommonInjuredState;
+use crate::r#match::common_states::{ChallengeKind, CommonInjuredState, CommonRecoveringState};
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::environment::EnvModifiers;
@@ -11,6 +11,8 @@ use crate::r#match::goalkeepers::states::common::{
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
 use crate::r#match::player::memory::PlayerMemory;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::diagnostics::motion_diag::DoorCensus;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
@@ -25,6 +27,8 @@ use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPla
 use crate::mid_run_diag::ShapeCensus;
 use log::debug;
 use nalgebra::Vector3;
+#[cfg(feature = "match-logs")]
+use std::panic::Location;
 
 /// Whether the loose-ball election stands down while the ball is out of
 /// play, and who is exempt from it.
@@ -172,6 +176,7 @@ impl PlayerFieldPositionGroup {
         let mut result = match player_state {
             // Common states
             PlayerState::Injured => state_processor.process(CommonInjuredState::default()),
+            PlayerState::Recovering => state_processor.process(CommonRecoveringState::default()),
             // // Specific states
             Goalkeeper(state) => GoalkeeperStrategies::process(state, state_processor),
             Defender(state) => DefenderStrategies::process(state, state_processor),
@@ -190,6 +195,27 @@ impl PlayerFieldPositionGroup {
         // it. See `RestartCarry`.
         RestartCarry::apply(player, tick_context, &mut result);
         result
+    }
+
+    /// What the state he is in would decide right now, and nothing more. The
+    /// dispatcher's overrides are not consulted: they have had their say on
+    /// this tick already.
+    pub(crate) fn decide(
+        player: &mut MatchPlayer,
+        context: &MatchContext,
+        tick_context: &GameTickContext,
+    ) -> StateProcessingResult {
+        let player_state = player.state;
+        let mut processor =
+            StateProcessor::new(player.in_state_time, player, context, tick_context);
+        processor.decide_only = true;
+        match player_state {
+            PlayerState::Injured | PlayerState::Recovering => StateProcessingResult::new(),
+            Goalkeeper(state) => GoalkeeperStrategies::process(state, processor),
+            Defender(state) => DefenderStrategies::process(state, processor),
+            Midfielder(state) => MidfielderStrategies::process(state, processor),
+            Forward(state) => ForwardStrategies::process(state, processor),
+        }
     }
 
     /// TakeBall variant for this position group. Outfield players commit
@@ -571,7 +597,12 @@ impl PlayerFieldPositionGroup {
                 Some(PlayerSide::Right) => context.goal_positions.right,
                 Some(PlayerSide::Left) | None => context.goal_positions.left,
             };
-            if KeeperSweepLimit::strain(goal, ball_pos, KeeperSweepLimit::innermost()) > 1.0 {
+            if KeeperSweepLimit::ball_has_left(
+                player.id,
+                tick_context,
+                goal,
+                KeeperSweepLimit::innermost(),
+            ) {
                 return false;
             }
         }
@@ -636,6 +667,8 @@ impl PlayerFieldPositionGroup {
 }
 
 pub struct StateProcessor<'p> {
+    /// Ask the state's decision and nothing else: no fatigue, no movement.
+    decide_only: bool,
     in_state_time: u64,
     player: &'p mut MatchPlayer,
     context: &'p MatchContext,
@@ -650,6 +683,7 @@ impl<'p> StateProcessor<'p> {
         tick_context: &'p GameTickContext,
     ) -> Self {
         StateProcessor {
+            decide_only: false,
             in_state_time,
             player,
             context,
@@ -658,6 +692,15 @@ impl<'p> StateProcessor<'p> {
     }
 
     pub fn process<H: StateProcessingHandler>(self, handler: H) -> StateProcessingResult {
+        if self.decide_only {
+            let ctx = self.into_ctx();
+            let mut result = StateProcessingResult::new();
+            if let Some(change) = handler.process(&ctx) {
+                result.merge_state_change(change);
+            }
+            return result;
+        }
+
         // Match progress drives the late-game fatigue curve. Uses the
         // match half-time constant so debug / release builds both give
         // the correct 0..1 progression over their configured match length.
@@ -1185,6 +1228,8 @@ pub struct StateProcessingResult {
     /// while nominally `Standing` backs away at a twelfth of walking pace.
     /// See [`KeeperReleaseSpace`].
     pub effort_floor: f32,
+    /// He went in and did not get it. See [`StateChangeResult::missed_challenge`].
+    pub missed_challenge: Option<ChallengeKind>,
 }
 
 impl Default for StateProcessingResult {
@@ -1205,6 +1250,7 @@ impl StateProcessingResult {
             shot_reason: None,
             shape_recall_pull: 0.0,
             effort_floor: 0.0,
+            missed_challenge: None,
         }
     }
 
@@ -1234,6 +1280,7 @@ impl StateProcessingResult {
         self.start_keeper_cooldown = change.start_keeper_cooldown;
         self.dive_aim = change.dive_aim;
         self.shot_reason = change.shot_reason;
+        self.missed_challenge = change.missed_challenge;
         if change.state.is_some() {
             self.state = change.state;
             self.events = change.events;
@@ -1280,6 +1327,10 @@ pub struct StateChangeResult {
     /// pass events carry `with_reason(...)` — see Shooting state
     /// for the consumer.
     pub shot_reason: Option<&'static str>,
+    /// He went in and did not get it. Carried on the result for the same
+    /// reason as the cooldown, and `PlayerMatchState::process` hands it to
+    /// `MatchPlayer::on_challenge_missed`.
+    pub missed_challenge: Option<ChallengeKind>,
 }
 
 impl Default for StateChangeResult {
@@ -1297,6 +1348,16 @@ impl StateChangeResult {
             start_keeper_cooldown: false,
             dive_aim: None,
             shot_reason: None,
+            missed_challenge: None,
+        }
+    }
+
+    /// He went in and missed. `MatchPlayer::on_challenge_missed` takes it from
+    /// here.
+    pub fn with_missed_challenge(kind: ChallengeKind) -> Self {
+        StateChangeResult {
+            missed_challenge: Some(kind),
+            ..Self::new()
         }
     }
 
@@ -1308,21 +1369,30 @@ impl StateChangeResult {
         self
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with(state: PlayerState) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(state),
             ..Self::new()
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_goalkeeper_state(state: GoalkeeperState) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Goalkeeper(state)),
             ..Self::new()
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_goalkeeper_state_and_event(state: GoalkeeperState, event: Event) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Goalkeeper(state)),
             events: EventCollection::with_event(event),
@@ -1330,14 +1400,20 @@ impl StateChangeResult {
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_defender_state(state: DefenderState) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Defender(state)),
             ..Self::new()
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_defender_state_and_event(state: DefenderState, event: Event) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Defender(state)),
             events: EventCollection::with_event(event),
@@ -1345,14 +1421,20 @@ impl StateChangeResult {
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_midfielder_state(state: MidfielderState) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Midfielder(state)),
             ..Self::new()
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_midfielder_state_and_event(state: MidfielderState, event: Event) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Midfielder(state)),
             events: EventCollection::with_event(event),
@@ -1360,14 +1442,20 @@ impl StateChangeResult {
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_forward_state(state: ForwardState) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Forward(state)),
             ..Self::new()
         }
     }
 
+    #[cfg_attr(feature = "match-logs", track_caller)]
     pub fn with_forward_state_and_event(state: ForwardState, event: Event) -> Self {
+        #[cfg(feature = "match-logs")]
+        DoorCensus::note(Location::caller());
         StateChangeResult {
             state: Some(Forward(state)),
             events: EventCollection::with_event(event),

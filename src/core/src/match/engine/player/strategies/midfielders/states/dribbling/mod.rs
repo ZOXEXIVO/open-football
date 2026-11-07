@@ -230,7 +230,7 @@ impl MidfielderDribblingState {
     #[allow(dead_code)]
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player is far from their starting position and the team is not in possession
-        let distance_from_start = ctx.player().distance_from_start_position();
+        let distance_from_start = ctx.player().distance_from_position();
         let team_in_possession = ctx.team().is_control_ball();
 
         distance_from_start > 20.0 && !team_in_possession

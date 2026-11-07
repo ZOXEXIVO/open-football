@@ -1,6 +1,6 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition,
+    ActivityIntensity, Interception, MidfielderCondition, PressOwnership,
 };
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
@@ -85,7 +85,11 @@ impl StateProcessingHandler for MidfielderPressingState {
         let intensity = ctx.team().press_intensity();
         let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
         let max_press_time = mid_profile.press_time_ticks(intensity);
-        if ctx.in_state_time > max_press_time {
+        // `Running` sends a nominated presser and the best man to the carrier
+        // straight back here, so for them the clock has nothing to say.
+        let press_stays_his = TackleEngagement::is_nominated_presser(ctx)
+            || ctx.team().is_best_player_to_chase_ball();
+        if ctx.in_state_time > max_press_time && !press_stays_his {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -98,47 +102,11 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        // Hand the press over when somebody else is genuinely taking it.
-        //
-        // ⚠ This used to break off whenever ANY team-mate was 10 units —
-        // **1.25 metres** — closer to the ball. In a defending block that
-        // is true of everybody except the single closest man, on almost
-        // every tick, so the state emptied itself: one player chased and
-        // the other nine dropped straight back into `Running`. It is the
-        // mechanical half of the report "no opposing player is pressing,
-        // or only one player is pressing".
-        //
-        // Two things replace it. The plan already nominates ONE engager
-        // (`DefensiveDuty::Press`) and the whole defensive model treats
-        // that as authoritative, so a nominated presser does not defer to
-        // anybody. Everyone else hands over only when a team-mate is
-        // clearly on it — `HANDOVER_MARGIN` is a hand-over distance, not
-        // a tie-break — and what he does instead is his own duty, which
-        // is now a MARK on one of the carrier's outlets rather than
-        // nothing at all (see `teamplay::defence::BALL_THREAT_RADIUS`).
-        const HANDOVER_MARGIN: f32 = 60.0;
         let ball_distance = ctx.ball().distance();
-        let ball_position = ctx.tick_context.positions.ball.position;
-
-        if !TackleEngagement::is_nominated_presser(ctx)
-            && let Some(closest_teammate) = ctx
-                .players()
-                .teammates()
-                .all()
-                .filter(|t| t.id != ctx.player.id)
-                .min_by(|a, b| {
-                    let dist_a = (a.position - ball_position).magnitude();
-                    let dist_b = (b.position - ball_position).magnitude();
-                    dist_a.total_cmp(&dist_b)
-                })
-        {
-            let teammate_distance = (closest_teammate.position - ball_position).magnitude();
-
-            if teammate_distance < ball_distance - HANDOVER_MARGIN {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Running,
-                ));
-            }
+        if PressOwnership::belongs_to_a_team_mate(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
         }
 
         // CRITICAL: Tackle if an opponent has the ball nearby

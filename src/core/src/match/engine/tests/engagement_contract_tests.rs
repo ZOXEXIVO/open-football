@@ -20,17 +20,19 @@
 
 use super::goal_celebration_tests::squad;
 use crate::r#match::common_states::{
-    ContactFoul, EngagementClock, TackleDecision, TackleEngagement, TackleOutcome,
+    ActivityIntensity, ContactFoul, EngagementClock, FIELD_PLAYER_JADEDNESS_INTERVAL,
+    JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD, TackleDecision, TackleEngagement, TackleOutcome,
 };
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::DefenderCondition;
 use crate::r#match::engine::psychology::PsychState;
 use crate::r#match::engine::result::Score;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::defenders::states::clearing::DefenderClearingState;
 use crate::r#match::{
-    GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PlayerSide,
-    StateProcessingContext, StateProcessingHandler,
+    ConditionContext, GameTickContext, MatchContext, MatchField, MatchPlayer,
+    MatchPlayerCollection, PlayerSide, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 use std::path::{Path, PathBuf};
@@ -181,6 +183,110 @@ fn a_two_second_rate_keeps_its_window() {
     let ticks = (2.0f32 / EngagementClock::TICK_SECONDS).round() as i32;
     let compounded = 1.0 - (1.0f32 - per_tick).powi(ticks);
     assert!((compounded - rate).abs() < 1e-4, "got {compounded}");
+}
+
+/// The same time in contact is the same exposure, however many states it
+/// was spent across. Its old modulo restarted at every state entry, so a
+/// marker who changed state every second was never exposed at all.
+#[test]
+fn a_state_change_leaves_a_markers_foul_exposure_where_it_was() {
+    let (field, context) = pitch();
+    let defender = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+        .expect("a home defender")
+        .clone();
+    let tick_context = GameTickContext::new(&field, &context.players);
+    let hazard_at = |in_state_time: u64| {
+        let ctx = StateProcessingContext {
+            in_state_time,
+            player: &defender,
+            context: &context,
+            tick_context: &tick_context,
+        };
+        ContactFoul::hazard(ContactFoul::probability(&ctx, 6.0, true))
+    };
+    let exposure_over = |spells: &[u64]| {
+        let mut survives = 1.0f32;
+        for spell in spells {
+            for in_state_time in 0..*spell {
+                survives *= 1.0 - hazard_at(in_state_time);
+            }
+        }
+        1.0 - survives
+    };
+    let held = exposure_over(&[300]);
+    let flipping = exposure_over(&[73, 1, 126, 100]);
+    assert!(held > 0.0);
+    assert!((held - flipping).abs() < 1e-5, "{held} against {flipping}");
+}
+
+/// Out of contact there is nothing to foul with, so there is nothing to draw.
+#[test]
+fn a_marker_out_of_contact_range_has_no_foul_exposure() {
+    let (field, context) = pitch();
+    let defender = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+        .expect("a home defender")
+        .clone();
+    let tick_context = GameTickContext::new(&field, &context.players);
+    let ctx = StateProcessingContext {
+        in_state_time: 0,
+        player: &defender,
+        context: &context,
+        tick_context: &tick_context,
+    };
+    assert_eq!(ContactFoul::probability(&ctx, 500.0, true), 0.0);
+}
+
+fn tired_defender(field: &MatchField) -> MatchPlayer {
+    let mut defender = field
+        .players
+        .iter()
+        .find(|p| p.team_id == 1 && p.tactical_position.current_position.is_defender())
+        .expect("a home defender")
+        .clone();
+    defender.player_attributes.condition = LOW_CONDITION_THRESHOLD - 500;
+    defender.player_attributes.jadedness = 0;
+    defender
+}
+
+/// Jadedness used to rise on every state entry below the line, because the
+/// modulo it read is also true at zero.
+#[test]
+fn a_state_change_below_the_line_adds_no_jadedness() {
+    let (field, context) = pitch();
+    let mut defender = tired_defender(&field);
+    for _ in 0..5 {
+        DefenderCondition::new(ActivityIntensity::Recovery).process(ConditionContext {
+            in_state_time: 0,
+            player: &mut defender,
+            conditions: &context.conditions,
+            match_progress: 0.5,
+        });
+    }
+    assert_eq!(defender.player_attributes.jadedness, 0);
+}
+
+#[test]
+fn a_man_held_below_the_line_accrues_jadedness_at_the_interval() {
+    let (field, context) = pitch();
+    let mut defender = tired_defender(&field);
+    for in_state_time in 1..=FIELD_PLAYER_JADEDNESS_INTERVAL * 2 {
+        DefenderCondition::new(ActivityIntensity::Recovery).process(ConditionContext {
+            in_state_time,
+            player: &mut defender,
+            conditions: &context.conditions,
+            match_progress: 0.5,
+        });
+    }
+    assert_eq!(
+        defender.player_attributes.jadedness,
+        JADEDNESS_INCREMENT * 2
+    );
 }
 
 // ── The outcome ───────────────────────────────────────────────────────

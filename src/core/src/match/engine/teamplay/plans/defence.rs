@@ -212,11 +212,10 @@ impl DefensivePlan {
             (&mut *home, inputs.home_team_id, inputs.home_keeper_voice),
             (&mut *away, inputs.away_team_id, inputs.away_keeper_voice),
         ] {
-            // We are defending when somebody else has the ball, or when
-            // it is loose — a loose ball in our half still has to be
-            // picked up by somebody, and the shape that decides who is
-            // the defensive one.
-            let defending = owner_team.is_some_and(|t| t != team_id) || owner_team.is_none();
+            // The side holding the ball has no duties, and that includes
+            // while its own pass travels. A loose ball still gets contested:
+            // the chase election runs for both sides regardless.
+            let defending = inputs.possession_holder != Some(team_id);
             if !defending {
                 *plan = DefensivePlan::idle();
                 #[cfg(feature = "match-logs")]
@@ -238,6 +237,9 @@ impl DefensivePlan {
 /// Inputs to [`DefensivePlan::refresh`].
 pub struct DefenceRefreshInputs<'a> {
     pub field: &'a MatchField,
+    /// [`TeamPossession`](crate::r#match::engine::teamplay::possession::TeamPossession)'s
+    /// answer.
+    pub possession_holder: Option<u32>,
     pub home_team_id: u32,
     pub away_team_id: u32,
     /// `TeamSkillAggregates::keeper_voice` for each side — how far the

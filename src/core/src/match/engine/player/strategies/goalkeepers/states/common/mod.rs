@@ -12,7 +12,9 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext};
+use crate::r#match::{
+    GameTickContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::{KeeperActionDiag, KeeperDiveDiag};
 use nalgebra::Vector3;
@@ -619,7 +621,7 @@ impl KeeperRestPosition {
 /// # Why this exists
 ///
 /// Five states bounded the keeper's excursions, and every one of them did
-/// it the same way: `distance_from_start_position()` against a constant of
+/// it the same way: `distance_from_position()` against a constant of
 /// 40 or 50 units. That distance is measured from his **kickoff dot** —
 /// (20, 275), two and a half metres in front of the middle of the goal —
 /// and 40-50u is **5 to 6 metres**, shallower than the six-yard box. It is
@@ -776,6 +778,21 @@ impl KeeperSweepLimit {
         let along = (at.x - goal.x) / axes.0.max(1.0);
         let across = (at.y - goal.y) / axes.1.max(1.0);
         (along * along + across * across).sqrt()
+    }
+
+    /// Has the ball left the ground he defends? The override that forces him
+    /// onto a loose ball and the give-up that lets him go both ask this. A
+    /// ground ball's landing point is where it is now, so a pass played to
+    /// him reads as outside his ground until it arrives: the man it is meant
+    /// for is meeting it wherever he stands.
+    pub fn ball_has_left(
+        player_id: u32,
+        tick_context: &GameTickContext,
+        goal: Vector3<f32>,
+        axes: (f32, f32),
+    ) -> bool {
+        tick_context.ball.pass_target != Some(player_id)
+            && Self::strain(goal, tick_context.positions.ball.landing_position, axes) > 1.0
     }
 
     /// Is he still inside the space he is prepared to defend?

@@ -87,7 +87,7 @@ pub use player::{
 pub use player::behaviours::SteeringBehavior;
 pub use player::context::GameTickContext;
 pub use player::positions::{
-    GridPlayer, MatchObjectsPositions, PlayerDistanceClosure, PlayerDistanceFromStartPosition,
+    GridPlayer, MatchObjectsPositions, PlayerDistanceClosure, PlayerDistanceFromPosition,
     SpatialGrid, ball as position_ball, closure as position_closure, objects as position_objects,
     players as position_players,
 };

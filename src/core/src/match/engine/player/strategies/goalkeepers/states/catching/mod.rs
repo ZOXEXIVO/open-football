@@ -164,7 +164,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         // If ball is too far, decide based on distance from goal.
         // "Far from goal" is how far off his LINE he is, bounded by how far
         // this keeper sweeps â not five metres from his kickoff dot, which
-        // is what `distance_from_start_position() > 40.0` meant and which
+        // is what `distance_from_position() > 40.0` meant and which
         // made a keeper who had come to meet a through-ball turn round
         // instead of gathering it. See [`KeeperSweepLimit`].
         //

@@ -70,6 +70,10 @@ impl SetPieceHold {
         let Some(station) = player.set_piece_station else {
             return;
         };
+        // He stays down: a restart's shape does not get to move him.
+        if player.state == PlayerState::Injured {
+            return;
+        }
         // Belt and braces. `clear_expired_corner_stations` takes the
         // stations off at first contact, so this rarely decides anything —
         // but it is a one-byte read and it means the hold cannot outlive a

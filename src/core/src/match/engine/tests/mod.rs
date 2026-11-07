@@ -4,6 +4,12 @@
 
 mod corner_setup_tests;
 mod defender_behavior_tests;
+mod decision_resolver_tests;
+mod door_contract_tests;
+mod live_anchor_tests;
+mod recovering_tests;
+mod status_wiring_tests;
+mod team_possession_tests;
 mod effort_appetite_tests;
 mod engagement_contract_tests;
 mod fatigue_calibration_tests;

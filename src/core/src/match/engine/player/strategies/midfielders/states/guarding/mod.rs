@@ -44,11 +44,28 @@ const MAX_GUARD_RANGE: f32 = 100.0; // Give up guarding if attacker moves too fa
 const GUARD_COMMIT_RANGE: f32 = 80.0;
 const STAMINA_THRESHOLD: f32 = 15.0;
 const PREDICTION_TIME: f32 = 0.25;
-const MAX_DISTANCE_FROM_START: f32 = 150.0; // Don't follow opponent too far from tactical zone
+const MAX_DISTANCE_FROM_POSITION: f32 = 150.0; // Don't follow opponent too far from tactical zone
 const BOUNDARY_MARGIN: f32 = 15.0; // Stay away from field edges
 
 #[derive(Default, Clone)]
 pub struct MidfielderGuardingState {}
+
+impl MidfielderGuardingState {
+    /// Would `Guarding` send him straight back? The doors into it ask first.
+    pub(crate) fn refuses_him(ctx: &StateProcessingContext) -> bool {
+        let ball_gone = !ctx.ball().on_own_side() && ctx.ball().distance() > 300.0;
+        let pos = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let at_boundary = pos.x < BOUNDARY_MARGIN
+            || pos.x > field_width - BOUNDARY_MARGIN
+            || pos.y < BOUNDARY_MARGIN
+            || pos.y > field_height - BOUNDARY_MARGIN;
+        ball_gone
+            || at_boundary
+            || ctx.player().distance_from_position() > MAX_DISTANCE_FROM_POSITION
+    }
+}
 
 impl StateProcessingHandler for MidfielderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -57,12 +74,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
         if let Some(man) = self.find_guard_target(ctx) {
             let gap = (man.position - ctx.player.position).magnitude();
             let losing_him = man.velocity(ctx).norm() > ctx.player.velocity.norm() + 0.08;
-            if ContactFoul::is_decision_tick(ctx)
-                && ctx
-                    .context
-                    .rng
-                    .bernoulli(ContactFoul::probability(ctx, gap, losing_him))
-            {
+            if ContactFoul::commits_now(ctx, gap, losing_him) {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Standing,
                     Event::PlayerEvent(PlayerEvent::CommitFoul(
@@ -173,8 +185,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
             }
 
             // Don't follow opponent too far from tactical position
-            let dist_from_start = (ctx.player.position - ctx.player.start_position).magnitude();
-            if dist_from_start > MAX_DISTANCE_FROM_START {
+            if ctx.player().distance_from_position() > MAX_DISTANCE_FROM_POSITION {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Returning,
                 ));
@@ -276,7 +287,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
             // Blend with tactical position to avoid straying too far
             let tether_strength = TETHER_STRENGTH * (1.0 - danger);
             let desired_position = desired_position * (1.0 - tether_strength)
-                + ctx.player.start_position * tether_strength;
+                + ctx.team().my_anchor() * tether_strength;
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();

@@ -79,7 +79,7 @@ A player's effective on-pitch capability (maximum speed and the outcome of skill
 - **THEN** their maximum attainable speed for the remainder of that spell is lower than at full condition
 
 ### Requirement: In-match injury state
-A player SHALL be able to sustain an in-match injury from either a contact impulse (tackle, collision) or accumulated load (fatigue, jadedness, age, natural fitness, environment), with a severity decided in the match — a knock the player shakes off, a hurt that lets them continue diminished, or a serious injury that ends their match. An injured player SHALL go down, recover no condition and be excluded from ball-chase and loose-ball contests; the referee SHALL stop play for a hurt or serious injury when the ball is not already dead, treatment SHALL take a time scaled by severity, and the player SHALL leave the injured state for a football reason (treatment complete, stretchered off, substituted) rather than a fixed timer. A player who continues diminished SHALL carry a reduced effective ability for the rest of the match. The injury and its severity SHALL be handed to the player after the match through the player's own reaction method so the persistent injury the player carries out of the match is the one sustained in it, and the independent post-match roll SHALL run only when no in-match injury occurred.
+A player SHALL be able to sustain an in-match injury from either a contact impulse (tackle, collision) or accumulated load (fatigue, jadedness, age, natural fitness, environment), with a severity decided in the match — a knock the player shakes off, a hurt that lets them continue diminished, or a serious injury that ends their match. An injured player SHALL go down, recover no condition and be excluded from ball-chase and loose-ball contests; the referee SHALL stop play for a hurt or serious injury when the ball is not already dead, treatment SHALL take a time scaled by severity, and the player SHALL leave the injured state for a football reason (treatment complete, stretchered off, substituted) rather than a fixed timer. An injured player SHALL NOT be moved by a set-piece or restart shape and SHALL NOT take a restart; a restart he was due to take SHALL pass to a team-mate, and a ball he was carrying SHALL be released. A player who continues diminished SHALL carry a reduced effective ability for the rest of the match. The injury and its severity SHALL be handed to the player after the match through the player's own reaction method so the persistent injury the player carries out of the match is the one sustained in it, and the independent post-match roll SHALL run only when no in-match injury occurred.
 
 #### Scenario: Injured player is excluded from active play
 - **WHEN** a player is marked injured during the match
@@ -96,6 +96,14 @@ A player SHALL be able to sustain an in-match injury from either a contact impul
 #### Scenario: In-match injury persists after the match
 - **WHEN** a player sustains a serious in-match injury
 - **THEN** the player leaves the match carrying an injury whose type and length derive from that in-match severity, and no second independent injury roll is made for them
+
+#### Scenario: An injured player stays down through a set piece
+- **WHEN** a corner, a free kick or another shaped restart is set up while a player is injured
+- **THEN** he does not move to a set-piece station
+
+#### Scenario: An injured player does not take a restart
+- **WHEN** a player is injured while he is the man due to take a restart
+- **THEN** a team-mate takes the restart and the injured player does not play the ball
 
 ### Requirement: Per-player match statistics recording
 For every player who featured in the match, the system SHALL record a stat line — attempted and completed actions (shots, passes, tackles, interceptions, dribbles, crosses, etc.), disciplinary events, goal involvement, and a computed match rating.
@@ -430,3 +438,115 @@ A goalkeeper taking a goal kick SHALL NOT handle the ball, whether it is waiting
 #### Scenario: A wasted goal kick is delayed once
 - **WHEN** a side leading late in the match takes a goal kick under a time-wasting instruction
 - **THEN** the restart is held for the goal kick's time-wasting delay only, and no keeper-hold delay follows it
+
+### Requirement: A decision resolves within its tick
+A player's decision to change state SHALL be resolved, within the AI tick it is taken, to a state he can stay in. A state that would hand him on without doing anything SHALL NOT be occupied. When a chain of such hand-offs leads back to a state already visited in that tick, the player SHALL stay in the state he was in, and his time in that state SHALL keep running. A hand-off that carries an action (a pass, a shot, a tackle, a foul), a move into an action that cannot be abandoned, and the engine's out-of-band redirects SHALL take effect as they do today.
+
+#### Scenario: A state that would refuse him is not entered
+- **WHEN** a defender holding the line chooses to intercept a pass, and intercepting would hand him on to pressing and pressing would hand him back to the line
+- **THEN** he stays holding the line, no transition is recorded and his time in that state keeps running
+
+#### Scenario: A hop state is skipped
+- **WHEN** a player chooses a state that hands him on, on the same evidence, to a second state that holds
+- **THEN** he ends the tick in the second state, and the first is not recorded as visited
+
+#### Scenario: An action is never swallowed
+- **WHEN** a state reached during the resolution carries a pass, a shot, a tackle or a foul
+- **THEN** that action is performed and the player ends the tick in the state it hands him to
+- **AND** the state that performed the action is recorded as visited
+
+#### Scenario: The population stops flapping
+- **WHEN** 30 equal-strength level-14 matches are played
+- **THEN** outfield players change state at most 45 times a minute on average, against 107.7 before this change
+- **AND** at most 25% of state exits happen within one AI tick of entry, against 38.7% before this change
+- **AND** no pair of off-ball states exchanges more than 3,000 round trips a match, against 17,000 for the largest pair before this change
+
+### Requirement: A player's distance from his position is read from the team's current shape
+A player deciding whether he has strayed too far from his position — to give up a man he is guarding, to abandon a press, or to walk back — SHALL measure that distance from the position his team's current shape gives him, and SHALL NOT measure it from where he stood at kickoff. His kickoff position MAY still decide which flank or slot in the formation is his.
+
+#### Scenario: A midfielder who has moved with the block keeps his man
+- **WHEN** a midfielder guarding an attacker has moved with his team's block more than 19 m from where he stood at kickoff, and is within his guarding range of where the shape now wants him
+- **THEN** he keeps guarding the attacker and is not sent back to his position
+
+#### Scenario: A forward presses high with his team pushed up
+- **WHEN** a forward presses in the opposition half while his team's shape is pushed up behind him
+- **THEN** the press is not abandoned because of how far he is from where he stood at kickoff
+
+#### Scenario: A man genuinely out of position still goes back
+- **WHEN** a midfielder following a man has gone beyond his guarding range from where the shape now wants him
+- **THEN** he gives the man up and returns to his position
+
+### Requirement: A player commits to an interception only for a ball he can contest
+A player SHALL enter an interception only for a ball that nobody is carrying and that he can reach no later than the opposition. A player who cannot contest the ball SHALL keep doing what he was doing, and SHALL NOT be sent to press when no opponent has the ball, unless his team's plan has named him as its presser.
+
+#### Scenario: A pass he cannot reach first
+- **WHEN** an opposition pass travels near a defender who would lose the race to it
+- **THEN** he does not enter an interception and keeps his position in the line
+
+#### Scenario: A carried ball is not an interception
+- **WHEN** an opponent carries the ball near a defender holding the line
+- **THEN** he responds to the carrier, by pressing, covering or holding, and does not enter an interception
+
+#### Scenario: A pass he can reach first
+- **WHEN** an opposition pass travels toward a defender who would win the race to it
+- **THEN** he goes to intercept it
+
+### Requirement: An off-ball player does not pass through an on-ball state
+A state whose purpose is deciding what to do with the ball SHALL NOT be entered by a player who does not have it, and a player SHALL decide whether to continue an off-ball run in the state that run belongs to.
+
+#### Scenario: A forward who has created space
+- **WHEN** a forward without the ball has created space while his team has possession
+- **THEN** he carries on with his off-ball movement without entering the state that decides how to assist with the ball
+
+#### Scenario: A forward receives the ball after creating space
+- **WHEN** a forward who has been creating space receives the ball
+- **THEN** he makes his on-ball decision as any other carrier does
+
+### Requirement: A player recovers after a committed challenge
+A player who commits to a challenge and does not win the ball SHALL spend time recovering before he can run at full speed or challenge again. Recovery SHALL be brief after a block tackle and longer after a stretch or a slide, and SHALL be shortened by agility and balance. While recovering, he SHALL decelerate rather than run on, and he SHALL be excluded from ball-chase and loose-ball contests. A player who wins the ball SHALL NOT pay this cost. A recovering player SHALL return to his role's normal play when recovery ends.
+
+#### Scenario: A missed slide
+- **WHEN** a defender slides at a carrier and misses
+- **THEN** he cannot run at full speed or challenge again for the slide's recovery time, and the carrier gets away from him
+
+#### Scenario: A missed block tackle
+- **WHEN** a defender on his feet misses a block tackle
+- **THEN** he loses a shorter recovery time than he would after a slide, and is then free to turn and chase
+
+#### Scenario: A won tackle
+- **WHEN** a player wins the ball with his challenge
+- **THEN** he plays on with the ball without any recovery time
+
+#### Scenario: An agile player gets up sooner
+- **WHEN** two players with different agility and balance miss the same kind of challenge
+- **THEN** the more agile and balanced player recovers sooner
+
+#### Scenario: The population after a missed challenge
+- **WHEN** 100 equal-strength level-14 matches are played
+- **THEN** mean speed in the first 0.5 s after a missed challenge is below the outfield mean speed, against 4.63 m/s after an attempt and 3.73 m/s on average before this change
+
+### Requirement: Engagement cadence does not depend on state changes
+How often a marking player's restraint foul is decided, and how jadedness accumulates, SHALL depend on the time he actually spends in contact with his man or on the pitch, and SHALL NOT depend on how many times his state changes. A state change SHALL NOT reset or delay either cadence.
+
+#### Scenario: The same contact with and without a state change
+- **WHEN** two markers spend the same time in contact range of their men, one in a single state and one passing through another state
+- **THEN** both have the same exposure to a restraint foul
+
+#### Scenario: Reduced state churn leaves the foul rate in band
+- **WHEN** a 300-match batch is played after state churn has been reduced
+- **THEN** fouls, yellow cards, penalties and penalty goals per match are within their realism bands
+
+### Requirement: Every player state occurs in real matches or is retired
+Every state a player can occupy SHALL be entered in a batch of 400 matches covering the formations the state belongs to, or SHALL be retired. A state SHALL NOT remain whose entry condition cannot be met within the condition range players actually reach in a match. Midfielders SHALL be able to walk through the same kind of football situation in which forwards and defenders walk.
+
+#### Scenario: A midfielder with nothing to run for walks
+- **WHEN** a fresh midfielder is in position, the ball is far away, no opponent threatens him and his team has it
+- **THEN** he walks, whichever off-ball state he was deciding from
+
+#### Scenario: A tired defender eases off when he can
+- **WHEN** a defender is tired, has been running for a sustained period and the ball is far enough away for him to stand down
+- **THEN** he eases off on the same terms a midfielder or a forward does, and returns to play as soon as the ball or a threat demands it
+
+#### Scenario: The census names any state still missing
+- **WHEN** the 400-match batch is played
+- **THEN** the census names every state never entered, and each named state is one documented as specific to a formation that batch did not use

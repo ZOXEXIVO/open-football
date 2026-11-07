@@ -3,7 +3,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine,
+    ActivityIntensity, BoxEmergency, DefenderCondition, DefensiveLine, Interception,
 };
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
@@ -21,7 +21,7 @@ const STALL_GUARD_TICKS: u64 = 300;
 /// happening here" to mean he can walk.
 ///
 /// Measured against the live anchor, not the kickoff dot: the block
-/// slides all match, so `distance_from_start_position` asks whether he is
+/// slides all match, so `distance_from_position` asks whether he is
 /// standing where he was drawn before the whistle — which he is not, and
 /// which is why this half of the gate never contributed either. Same
 /// correction `DefenderWalkingState` already made for its recovery run.
@@ -210,6 +210,8 @@ impl StateProcessingHandler for DefenderStandingState {
         if ctx.ball().on_own_side()
             && ball_ops.is_towards_player_with_angle(0.8)
             && ball_ops.distance() < INTERCEPTION_DISTANCE
+            && Interception::is_available(ctx)
+            && ball_ops.distance() < Interception::GIVE_UP
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
@@ -418,8 +420,7 @@ impl DefenderStandingState {
         ball_in_attacking_third
             && team_in_possession
             && defender_not_last_man
-            && player_ops.distance_from_start_position()
-                < ctx.context.field_size.width as f32 * 0.25
+            && player_ops.distance_from_position() < ctx.context.field_size.width as f32 * 0.25
     }
 
     fn should_hold_defensive_line(&self, ctx: &StateProcessingContext) -> bool {
@@ -445,8 +446,7 @@ impl DefenderStandingState {
 
         let no_dangerous_runs = self.scan_for_dangerous_runs(ctx).is_none();
 
-        let not_in_optimal_position =
-            player_ops.distance_from_start_position() > WALK_DISTANCE_THRESHOLD;
+        let not_in_optimal_position = player_ops.distance_from_position() > WALK_DISTANCE_THRESHOLD;
 
         ball_in_middle_third && no_immediate_threat && no_dangerous_runs && not_in_optimal_position
     }

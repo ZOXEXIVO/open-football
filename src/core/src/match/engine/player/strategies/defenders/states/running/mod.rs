@@ -2,7 +2,7 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::MatchContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine,
+    ActivityIntensity, DefenderCondition, DefensiveLine, DefensiveRest,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
@@ -17,7 +17,7 @@ use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition,
+    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PlayerDistanceFromPosition,
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
@@ -294,7 +294,7 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+            if ctx.player().position_to_distance() == PlayerDistanceFromPosition::Big {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Returning,
                 ));
@@ -427,7 +427,7 @@ impl StateProcessingHandler for DefenderRunningState {
             // branch just re-opens the HoldingLine <-> Running loop from
             // the other end 20 ticks later.
             if ctx.in_state_time > 20
-                && ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big
+                && ctx.player().position_to_distance() != PlayerDistanceFromPosition::Big
                 && DefensiveLine::is_in_line(ctx)
             {
                 return Some(StateChangeResult::with_defender_state(
@@ -745,9 +745,13 @@ impl DefenderRunningState {
         if has_ball {
             return None; // Ball-carrying defenders use build-up logic.
         }
+        if DefensiveRest::may_stand_down(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Resting,
+            ));
+        }
         let ball_dist = ctx.ball().distance();
-        let near_start =
-            ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big;
+        let near_start = ctx.player().position_to_distance() != PlayerDistanceFromPosition::Big;
 
         // DUTY BEFORE SHAPE.
         //

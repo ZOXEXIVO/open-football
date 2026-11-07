@@ -1,10 +1,9 @@
 use crate::r#match::forwarders::states::{
-    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState,
-    ForwardCrossingState, ForwardDribblingState, ForwardFinishingState, ForwardHeadingState,
-    ForwardHoldingWidthState, ForwardInterceptingState, ForwardPassingState, ForwardPressingState,
-    ForwardRestingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState,
-    ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
-    ForwardWalkingState,
+    ForwardCreatingSpaceState, ForwardCrossReceivingState, ForwardCrossingState,
+    ForwardDribblingState, ForwardFinishingState, ForwardHeadingState, ForwardHoldingWidthState,
+    ForwardInterceptingState, ForwardPassingState, ForwardPressingState, ForwardRestingState,
+    ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState, ForwardShootingState,
+    ForwardStandingState, ForwardTacklingState, ForwardTakeBallState, ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
@@ -32,7 +31,6 @@ pub enum ForwardState {
     CrossReceiving = 11, // Positioning to receive a cross
     Crossing = 12,       // Delivering a cross from a wide position
     Tackling = 13,       // Tackling the ball
-    Assisting = 14,      // Providing an assist by passing or crossing to a teammate
     TakeBall = 15,       // Take the ball,
     Intercepting = 16,   // Intercepting the ball,
     Returning = 17,      // Returning the ball
@@ -43,7 +41,7 @@ pub enum ForwardState {
 impl ForwardState {
     /// Every variant in declared order — the single source of truth for
     /// the state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [ForwardState; 20] = [
+    pub const ALL: [ForwardState; 19] = [
         ForwardState::Standing,
         ForwardState::Walking,
         ForwardState::Passing,
@@ -58,7 +56,6 @@ impl ForwardState {
         ForwardState::CrossReceiving,
         ForwardState::Crossing,
         ForwardState::Tackling,
-        ForwardState::Assisting,
         ForwardState::TakeBall,
         ForwardState::Intercepting,
         ForwardState::Returning,
@@ -91,7 +88,6 @@ impl ForwardStrategies {
             }
             ForwardState::Crossing => state_processor.process(ForwardCrossingState::default()),
             ForwardState::Tackling => state_processor.process(ForwardTacklingState::default()),
-            ForwardState::Assisting => state_processor.process(ForwardAssistingState::default()),
             ForwardState::Running => state_processor.process(ForwardRunningState::default()),
             ForwardState::TakeBall => state_processor.process(ForwardTakeBallState::default()),
             ForwardState::Intercepting => {
@@ -120,7 +116,6 @@ impl Display for ForwardState {
             ForwardState::CreatingSpace => write!(f, "Creating Space"),
             ForwardState::CrossReceiving => write!(f, "Cross Receiving"),
             ForwardState::Crossing => write!(f, "Crossing"),
-            ForwardState::Assisting => write!(f, "Assisting"),
             ForwardState::Passing => write!(f, "Passing"),
             ForwardState::Tackling => write!(f, "Tackling"),
             ForwardState::Running => write!(f, "Running"),

@@ -1,6 +1,6 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition,
+    ActivityIntensity, Interception, MidfieldSupport, MidfielderCondition,
 };
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -91,7 +91,7 @@ impl StateProcessingHandler for MidfielderStandingState {
                 // was unreachable by construction (the state stayed at
                 // 0 observed entries across 200 matches).
                 return Some(StateChangeResult::with_midfielder_state(
-                    if self.should_walk(ctx) {
+                    if MidfieldSupport::walks(ctx) {
                         MidfielderState::Walking
                     } else {
                         MidfielderState::Running
@@ -205,42 +205,6 @@ impl MidfielderStandingState {
     /// Real midfielders spend a large share of a match walking — this is
     /// where that comes from, and it feeds the fatigue model's `Low`
     /// intensity band, which midfielders previously never touched.
-    fn should_walk(&self, ctx: &StateProcessingContext) -> bool {
-        const WALK_BALL_DISTANCE: f32 = 250.0;
-        const IN_POSITION_DISTANCE: f32 = 40.0;
-        const THREAT_RADIUS: f32 = 100.0;
-
-        let no_immediate_threat = ctx
-            .players()
-            .opponents()
-            .nearby(THREAT_RADIUS)
-            .next()
-            .is_none();
-        if !no_immediate_threat {
-            return false;
-        }
-
-        let ball_far = ctx.ball().distance() > WALK_BALL_DISTANCE;
-        // Against the live anchor, not the kickoff dot. The block slides
-        // all match, so `distance_from_start_position` was asking whether
-        // he is standing where he was DRAWN before the whistle — which a
-        // midfielder almost never is, so the fresh-player branch below
-        // (`ball_far && in_position`) essentially never fired and
-        // `Midfielder: Walking` measured **zero velocity evaluations
-        // across three matches** (`dev_match waypoints`). Same correction
-        // the walking state itself already made when it stopped steering
-        // at `start_position`.
-        let in_position = ctx.team().distance_from_anchor() < IN_POSITION_DISTANCE;
-
-        // Tired players take any excuse to walk; fresh ones only walk when
-        // there is genuinely nothing to run toward.
-        if ctx.player().is_tired() {
-            ball_far || in_position
-        } else {
-            ball_far && in_position
-        }
-    }
-
     /// Is this a "keep the ball moving" moment rather than a "play
     /// forward" one?
     ///

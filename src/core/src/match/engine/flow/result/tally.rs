@@ -103,6 +103,21 @@ pub struct MatchTally {
     /// beaten]` — left offside, or played on by a man who was late.
     #[serde(default)]
     pub offside_traps: [u16; 2],
+    /// Summed over the outfield players of the match.
+    #[cfg(feature = "match-logs")]
+    #[serde(default)]
+    pub outfield_motion: OutfieldMotionTally,
+}
+
+/// How much the outfielders of a match moved and changed their minds, in
+/// the whole-number units the tally's `Eq` needs. Only the dev harness reads
+/// it, and only its build has the per-player trace it comes from.
+#[cfg(feature = "match-logs")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutfieldMotionTally {
+    pub state_changes: u64,
+    pub path_mm: u64,
+    pub ticks: u64,
 }
 
 impl MatchTally {
@@ -206,6 +221,12 @@ impl MatchTally {
             .zip(other.offside_traps.iter())
         {
             *mine += theirs;
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            self.outfield_motion.state_changes += other.outfield_motion.state_changes;
+            self.outfield_motion.path_mm += other.outfield_motion.path_mm;
+            self.outfield_motion.ticks += other.outfield_motion.ticks;
         }
     }
 }

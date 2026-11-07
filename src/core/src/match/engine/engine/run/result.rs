@@ -114,6 +114,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let away_goals = score_ref.away_team.get();
         let home_team_id = score_ref.home_team.team_id;
 
+        // A man who left the pitch folded his own in at the minute he went.
+        #[cfg(feature = "match-logs")]
+        for player in field.players.iter().filter(|p| {
+            !context
+                .substituted_out_stats
+                .iter()
+                .any(|(id, _)| *id == p.id)
+        }) {
+            player.tally_motion(&mut result.tally);
+        }
+
         // ── Pass 1: materialise stat lines + physical snapshots ──────────
         for player in &field.players {
             let minutes = player.minutes_played_at(context.total_match_time);

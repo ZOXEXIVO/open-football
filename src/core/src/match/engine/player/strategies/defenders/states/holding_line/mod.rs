@@ -252,19 +252,26 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             }
         }
 
-        if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+        if ctx.ball().distance() < Interception::GIVE_UP
+            && ctx.ball().is_towards_player_with_angle(0.8)
+            && Interception::is_available(ctx)
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));
         }
 
         if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD {
-            let opponent_nearby = self.is_opponent_nearby(ctx);
-            return Some(StateChangeResult::with_defender_state(if opponent_nearby {
-                DefenderState::Marking
-            } else {
-                DefenderState::Intercepting
-            }));
+            if self.is_opponent_nearby(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
+            if Interception::is_available(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
+            }
         }
 
         None

@@ -1,19 +1,22 @@
 use crate::r#match::common_states::LooseBallChase;
-use crate::r#match::events::Event;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::psychology::lapse::lapse_diag;
 use crate::r#match::engine::psychology::{ActionLapse, LapseFamily};
+use crate::r#match::events::Event;
+use crate::r#match::forwarders::states::ForwardCreatingSpaceState;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::states::{
-    TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
+    ChallengeKind, TackleDecision, TackleEngagement, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::tackle_stats::FWD_TICKS_IN_STATE;
 use nalgebra::Vector3;
 
 // `CLOSE_TACKLE_DISTANCE` is gone with the per-tick immediate-attempt
@@ -31,7 +34,7 @@ pub struct ForwardTacklingState {}
 impl StateProcessingHandler for ForwardTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::FWD_ENTRIES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        FWD_TICKS_IN_STATE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         // If player has gained possession, transition to running
         if ctx.player.has_ball(ctx) {
@@ -111,7 +114,11 @@ impl StateProcessingHandler for ForwardTacklingState {
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::FWD_ATTEMPTS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let mut result = self.settle(ctx, self.attempt_tackle(ctx, &opponent));
+                let mut result = self.settle(
+                    ctx,
+                    self.attempt_tackle(ctx, &opponent),
+                    ChallengeKind::Block,
+                );
                 result.start_tackle_cooldown = true;
                 return Some(result);
             }
@@ -138,7 +145,11 @@ impl StateProcessingHandler for ForwardTacklingState {
             }
 
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Assisting,
+                if ctx.player.has_ball(ctx) {
+                    ForwardState::Running
+                } else {
+                    ForwardCreatingSpaceState::off_ball_support(ctx)
+                },
             ));
         } else if ball_distance <= PRESSURE_DISTANCE {
             return Some(StateChangeResult::with_forward_state(
@@ -209,7 +220,12 @@ impl StateProcessingHandler for ForwardTacklingState {
 
 impl ForwardTacklingState {
     /// One resolved challenge, turned into the state change it implies.
-    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+    fn settle(
+        &self,
+        ctx: &StateProcessingContext,
+        outcome: TackleOutcome,
+        kind: ChallengeKind,
+    ) -> StateChangeResult {
         match outcome {
             TackleOutcome::Won => {
                 #[cfg(feature = "match-logs")]
@@ -224,7 +240,7 @@ impl ForwardTacklingState {
                 ForwardState::Standing,
                 Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
-            TackleOutcome::Missed => StateChangeResult::with_forward_state(ForwardState::Pressing),
+            TackleOutcome::Missed => StateChangeResult::with_missed_challenge(kind),
         }
     }
 

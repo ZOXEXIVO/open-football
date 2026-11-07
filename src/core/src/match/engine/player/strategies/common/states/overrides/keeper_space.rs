@@ -87,12 +87,14 @@ impl KeeperReleaseSpace {
     /// The outlet/retreat velocity and the effort floor to serve it at,
     /// or `None` when the player's normal movement should apply.
     pub fn retreat(ctx: &StateProcessingContext) -> Option<(Vector3<f32>, f32)> {
-        if matches!(ctx.player.state, PlayerState::Injured)
-            || ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_goalkeeper()
+        if matches!(
+            ctx.player.state,
+            PlayerState::Injured | PlayerState::Recovering
+        ) || ctx
+            .player
+            .tactical_position
+            .current_position
+            .is_goalkeeper()
         {
             return None;
         }

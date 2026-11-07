@@ -287,9 +287,11 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         }
 
         // If condition drops very low, slightly increase jadedness (long-term tiredness)
-        if ctx.player.player_attributes.condition < T::low_condition_threshold()
-            && ctx.in_state_time.is_multiple_of(T::jadedness_interval())
-        {
+        let spent_interval = ctx.player.player_attributes.condition < T::low_condition_threshold()
+            && ctx
+                .player
+                .spent_low_condition_interval(T::jadedness_interval());
+        if spent_interval {
             // Increase jadedness slightly when very tired
             ctx.player.player_attributes.jadedness = (ctx.player.player_attributes.jadedness
                 + T::jadedness_increment())

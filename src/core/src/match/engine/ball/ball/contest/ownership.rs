@@ -1435,6 +1435,7 @@ impl Ball {
 
                     // Simple distance check - if close enough and ball is slow, claim it
                     if distance_3d < CLAIM_DISTANCE
+                        && player.can_play_ball()
                         && self.current_owner.is_none()
                         && can_claim_by_speed
                         && (!self.is_aerial() || self.position.z < 2.5)
@@ -1547,7 +1548,7 @@ impl Ball {
                 let blocked_recollect = self.blocked_recollect_player();
                 if let Some(nearest_player) = players
                     .iter()
-                    .filter(|p| blocked_recollect != Some(p.id))
+                    .filter(|p| blocked_recollect != Some(p.id) && p.can_play_ball())
                     .filter_map(|p| {
                         let dx = p.position.x - self.position.x;
                         let dy = p.position.y - self.position.y;
@@ -1970,7 +1971,7 @@ impl Ball {
         let blocked_recollect = self.blocked_recollect_player();
 
         for player in players.iter() {
-            if blocked_recollect == Some(player.id) {
+            if blocked_recollect == Some(player.id) || !player.can_play_ball() {
                 continue;
             }
 

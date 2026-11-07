@@ -54,8 +54,11 @@ fn a_fixture_plays_the_same_whichever_order_its_batch_is_in() {
     let _seed = RandomEngine::hold_seed_for_test(0x5EED_F1C7);
     let pool = MatchPlayEnginePool::new(2);
 
-    let forward = pool.play_squads_local(vec![first(0), second(1)]);
-    let backward = pool.play_squads_local(vec![second(1), first(0)]);
+    // Built once: `PlayerBuilder` draws each man's traits, so two calls to
+    // `squad` are two different teams.
+    let (one, two) = (first(0), second(1));
+    let forward = pool.play_squads_local(vec![one.clone(), two.clone()]);
+    let backward = pool.play_squads_local(vec![two, one]);
 
     assert_eq!(played(&forward, 0), played(&backward, 0));
     assert_eq!(played(&forward, 1), played(&backward, 1));

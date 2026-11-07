@@ -53,8 +53,17 @@ const T442: [PlayerPositionType; 11] = [
 /// Shared with `goal_clip_recording_tests`, which needs the same two sides to
 /// play a whole match rather than a single goal.
 pub(super) fn squad(team_id: u32, base_id: u32) -> MatchSquad {
+    squad_in(team_id, base_id, MatchTacticType::T442, &T442)
+}
+
+pub(super) fn squad_in(
+    team_id: u32,
+    base_id: u32,
+    tactic: MatchTacticType,
+    positions: &[PlayerPositionType],
+) -> MatchSquad {
     let birth = NaiveDate::from_ymd_opt(1998, 5, 1).unwrap();
-    let main_squad = T442
+    let main_squad = positions
         .iter()
         .enumerate()
         .map(|(index, position)| {
@@ -104,7 +113,7 @@ pub(super) fn squad(team_id: u32, base_id: u32) -> MatchSquad {
     MatchSquad {
         team_id,
         team_name: format!("Team{team_id}"),
-        tactics: Tactics::new(MatchTacticType::T442),
+        tactics: Tactics::new(tactic),
         main_squad,
         substitutes: vec![],
         captain_id: None,

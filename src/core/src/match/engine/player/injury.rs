@@ -223,6 +223,7 @@ impl MatchInjury {
             return;
         };
         player.on_injury(severity, context.total_match_time);
+        field.on_player_down(player_id);
         context.tally.note_injury(cause, severity);
         InjuryStoppage::call(field, context, severity);
     }

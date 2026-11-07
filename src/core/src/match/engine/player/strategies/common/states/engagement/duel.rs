@@ -990,45 +990,26 @@ impl RecoveryChallenge {
 /// him; one marking at a set piece holds. None of those are challenges
 /// for the ball, and none of them existed here.
 ///
-/// Rolled on a fixed cadence, like [`TackleDecision`] and for the same
-/// reason: an unpriced per-tick roll makes the rate a function of how
-/// long two players happen to stand near each other rather than of the
-/// defending.
+/// Priced per two seconds in contact and drawn through [`EngagementClock`],
+/// so the rate is a property of the defending and does not move when the
+/// marker's state does.
 pub struct ContactFoul;
 
 impl ContactFoul {
-    /// How often the decision is taken while engaged, in AI ticks — so
-    /// **two real seconds**, not one. One AI tick is 20 ms.
-    ///
-    /// ⚠ STILL A MODULO, DELIBERATELY, AND IT IS THE ONE CLOCK IN THE
-    /// ENGAGEMENT MODELS THAT IS NOT DWELL.
-    ///
-    /// [`TackleDecision`] and [`RecoveryChallenge`] key off
-    /// `contact_ticks` / `stretch_ticks`, which count time in RANGE and
-    /// survive a hand-off between states; this keys off `in_state_time`,
-    /// which every transition resets. Converting it to an
-    /// [`EngagementClock`] hazard therefore does not preserve its rate —
-    /// it hands back all the dwell the resets were destroying, and
-    /// measured that is a multiple: fouls 12.7 → 18.2 per team, yellows
-    /// 3.50 → 5.53, direct free kicks 10.4 → 17.6. `BASE` below is
-    /// fitted against the cadence AS IT RUNS, resets included. The fix is
-    /// a dwell clock for the marking engagement, not a conversion on top
-    /// of the wrong one.
-    const DECISION_INTERVAL_TICKS: u64 = 100;
+    /// Seconds the per-engagement probability is quoted over.
+    pub(crate) const RATE_WINDOW: f32 = 2.0;
     /// Close enough for contact (~2.5 m).
     const CONTACT_RANGE: f32 = 20.0;
-    /// Per-decision chance for an ordinary engagement.
+    /// Chance over [`Self::RATE_WINDOW`] for an ordinary engagement.
     ///
-    /// Re-fitted (0.034 → 0.017) after the box restraint landed on
-    /// [`TackleDecision`]. The two foul models are coupled through DWELL:
-    /// a defender who declines the challenge stays engaged, and this model
-    /// rolls once a second *for as long as he is engaged*. Restraining
-    /// tackles in and around the box therefore lengthened engagements and
-    /// **tripled** defender contact fouls (435 → 1062 emitted per 20
-    /// matches), taking the whistled rate from 14.3 to 23.6 per team
-    /// against a real ~12. The base was fitted when engagements were
-    /// shorter; this is the same rate expressed over the new dwell.
-    const BASE: f32 = 0.021;
+    /// Fitted on the engagement clock against realism 300, once churn had
+    /// fallen and marking spells had grown: 0.013 read 28.4 fouls a match and
+    /// this reads 23.7, against 22.5 before the clock.
+    ///
+    /// The two foul models are coupled through dwell: a defender who
+    /// declines the challenge stays engaged, and this rate runs for as long
+    /// as he is. Anything that lengthens engagements raises the fouls here.
+    const BASE: f32 = 0.0104;
 
     /// Restraint when a foul here would be a PENALTY (the ball is in our
     /// own area).
@@ -1058,18 +1039,29 @@ impl ContactFoul {
     /// Fitted in two steps because the first (0.17) recovered only a
     /// third of it — 0.55 → 0.45 — which is the measurement that says the
     /// box contacts really had roughly tripled rather than risen 60%.
-    const BOX_PENALTY_RESTRAINT: f32 = 0.11;
+    ///
+    /// The engagement clock raised it again, because the resets it replaced
+    /// fell hardest on marking spells near the box, and marking spells grew
+    /// again when churn fell: 0.38-0.43 penalties a match with 0.06 here, and
+    /// 0.30 at this value (n=300).
+    const BOX_PENALTY_RESTRAINT: f32 = 0.0375;
     /// Restraint when the player is in his own area but the ball is not
     /// yet — marking a runner at the back post, tracking into the box.
-    /// Careful, but not the catastrophic case.
-    const BOX_POSITION_RESTRAINT: f32 = 0.10;
+    /// Careful, but not the catastrophic case. Re-fitted with the one above.
+    const BOX_POSITION_RESTRAINT: f32 = 0.034;
 
-    /// Is this tick one on which a contact foul is considered?
-    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
-        ctx.in_state_time > 0
-            && ctx
-                .in_state_time
-                .is_multiple_of(Self::DECISION_INTERVAL_TICKS)
+    /// Whether this engagement becomes a foul on this AI tick. A hazard on
+    /// the time spent in contact, so nothing about the marker's state can
+    /// reset, delay or repeat it.
+    pub fn commits_now(ctx: &StateProcessingContext, gap: f32, losing_him: bool) -> bool {
+        let p = Self::probability(ctx, gap, losing_him);
+        p > 0.0 && ctx.context.rng.bernoulli(Self::hazard(p))
+    }
+
+    /// One AI tick's share of a probability quoted over the rate window.
+    #[inline]
+    pub(crate) fn hazard(p: f32) -> f32 {
+        EngagementClock::per_tick(p, Self::RATE_WINDOW)
     }
 
     /// Probability this engagement becomes a foul now.

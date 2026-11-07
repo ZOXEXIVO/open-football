@@ -9,13 +9,15 @@ use crate::r#match::player::events::{FoulSeverity, FoulSource, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::states::{
-    ClosingPoint, RecoveryChallenge, TackleDecision, TackleOutcome, TacticalFoul,
+    ChallengeKind, ClosingPoint, RecoveryChallenge, TackleDecision, TackleOutcome, TacticalFoul,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::tackle_stats::DEF_TICKS_IN_STATE;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -32,7 +34,7 @@ pub struct DefenderTacklingState {}
 impl StateProcessingHandler for DefenderTacklingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         #[cfg(feature = "match-logs")]
-        crate::tackle_stats::DEF_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        DEF_TICKS_IN_STATE.fetch_add(1, Ordering::Relaxed);
 
         // If we have the ball or our team controls it, transition to running
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
@@ -103,7 +105,7 @@ impl StateProcessingHandler for DefenderTacklingState {
                     distance_to_opponent,
                     lead,
                 );
-                let mut result = self.settle(ctx, outcome);
+                let mut result = self.settle(ctx, outcome, ChallengeKind::Slide);
                 result.start_tackle_cooldown = true;
                 return Some(result);
             }
@@ -177,7 +179,11 @@ impl StateProcessingHandler for DefenderTacklingState {
             // enforced by the cooldown.
             #[cfg(feature = "match-logs")]
             crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-            let mut result = self.settle(ctx, self.attempt_sliding_tackle(ctx, &opponent));
+            let mut result = self.settle(
+                ctx,
+                self.attempt_sliding_tackle(ctx, &opponent),
+                ChallengeKind::Block,
+            );
             result.start_tackle_cooldown = true;
             return Some(result);
         } else {
@@ -308,7 +314,12 @@ impl DefenderTacklingState {
     /// One resolved challenge, turned into the state change it implies.
     /// Both challenge paths end here so a win, a foul and a miss cannot
     /// mean different things depending on which one was made.
-    fn settle(&self, ctx: &StateProcessingContext, outcome: TackleOutcome) -> StateChangeResult {
+    fn settle(
+        &self,
+        ctx: &StateProcessingContext,
+        outcome: TackleOutcome,
+        kind: ChallengeKind,
+    ) -> StateChangeResult {
         match outcome {
             TackleOutcome::Won => {
                 #[cfg(feature = "match-logs")]
@@ -322,11 +333,7 @@ impl DefenderTacklingState {
                 DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity, FoulSource::Tackle)),
             ),
-            // He missed and the man is gone. Pressing is where a beaten
-            // defender goes to get back into the picture.
-            TackleOutcome::Missed => {
-                StateChangeResult::with_defender_state(DefenderState::Pressing)
-            }
+            TackleOutcome::Missed => StateChangeResult::with_missed_challenge(kind),
         }
     }
 
