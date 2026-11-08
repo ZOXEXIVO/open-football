@@ -207,6 +207,12 @@ impl Club {
                     continue;
                 }
 
+                // The board kept him off a listing nobody answered because
+                // it plays him, and it still does.
+                if self.transfer_plan.keeps_in_the_side(player, date) {
+                    continue;
+                }
+
                 // Missing minutes that aren't a squad-management signal: a
                 // player out injured, recovering, suspended, or short of
                 // match fitness hasn't been benched by choice, so his idle
@@ -432,6 +438,7 @@ impl Club {
                     if already.contains(&player.id)
                         || player.is_on_loan()
                         || player.is_force_match_selection
+                        || self.transfer_plan.keeps_in_the_side(player, date)
                         || player.statuses.has(PlayerStatusType::Lst)
                         || player
                             .contract
@@ -562,6 +569,7 @@ impl Club {
                 if already.contains(&player.id)
                     || player.is_on_loan()
                     || player.is_force_match_selection
+                    || self.transfer_plan.keeps_in_the_side(player, date)
                     || player.statuses.has(PlayerStatusType::Lst)
                     || player
                         .contract
@@ -962,6 +970,35 @@ mod tests {
             !Fx::listed(&club, 301),
             "a signing still inside its plan is never the excess"
         );
+    }
+
+    /// Over the ceiling, the trim takes the surplus the club is free to
+    /// sell, not the man the board kept off a listing because it plays him.
+    #[test]
+    fn size_trim_leaves_a_man_the_board_keeps_alone() {
+        let mut kept = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        kept.happiness.starter_ratio = 0.9;
+        kept.happiness.appearances_tracked = 30;
+        let deadwood = Fx::player(301, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![kept, deadwood]);
+        club.transfer_plan.kept_in_the_side.insert(300);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        assert!(
+            Fx::has(&club, 301, PlayerStatusType::Lst),
+            "precondition: the trim runs"
+        );
+        assert!(!Fx::listed(&club, 300));
     }
 
     /// The badge is the visible half of a board listing; the contract flag

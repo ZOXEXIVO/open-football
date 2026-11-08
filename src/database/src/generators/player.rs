@@ -14,8 +14,8 @@ use core::{
     ContractType, Goalkeeping, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerFieldPositionGroup, PlayerFoots, PlayerPosition,
     PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
-    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical,
-    WageCalculator,
+    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PositionWeights, ReputationStanding,
+    TeamType, Technical, WageCalculator,
 };
 use log::warn;
 use std::cmp::Reverse;
@@ -1566,8 +1566,7 @@ impl PlayerGenerator {
         // statistically identical fame — which left every procedurally
         // generated region permanently below the thresholds the transfer,
         // ambition and squad-hierarchy systems check.
-        let (ability_current, ability_home, ability_world) =
-            derive_reputation_from_ability(current_ability);
+        let standing = ReputationStanding::for_ability(current_ability);
         // Context still modulates *exposure* around that baseline — the same
         // player is better known at a televised giant than at a minnow — but
         // ability leads. World fame is the most stage-dependent axis, home
@@ -1575,7 +1574,7 @@ impl PlayerGenerator {
         let rep_factor = rep_factor.clamp(0.0, 1.0);
         let exposure = |lo: f32, hi: f32| lo + (hi - lo) * rep_factor;
         let jitter = rng.float_range(0.92, 1.08);
-        let scaled = |base: i16, lo: f32, hi: f32| -> i16 {
+        let scaled = |base: i16, (lo, hi): (f32, f32)| -> i16 {
             (base as f32 * exposure(lo, hi) * jitter).clamp(0.0, 10_000.0) as i16
         };
         let physical = PhysicalProfile::for_position(primary_position, country_id, rng);
@@ -1590,9 +1589,9 @@ impl PlayerGenerator {
             weight: physical.weight_kg,
             height: physical.height_cm,
             value: 0,
-            current_reputation: scaled(ability_current, 0.80, 1.15),
-            home_reputation: scaled(ability_home, 0.85, 1.10),
-            world_reputation: scaled(ability_world, 0.55, 1.25),
+            current_reputation: scaled(standing.current, ReputationStanding::CURRENT_EXPOSURE),
+            home_reputation: scaled(standing.home, ReputationStanding::HOME_EXPOSURE),
+            world_reputation: scaled(standing.world, ReputationStanding::WORLD_EXPOSURE),
             current_ability,
             ability_marker: 0,
             ability_marked_on_day: 0,
@@ -2422,40 +2421,6 @@ fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<Play
     })
 }
 
-/// Derive (current, home, world) reputation from current ability alone.
-///
-/// Ability is normalised to a 0..1 coefficient and shaped by a different
-/// curve for each reputation dimension, mirroring how fame actually
-/// distributes in football:
-///
-/// - **home** — mildly concave (`coef^0.9`). Known domestically scales
-///   almost linearly with ability, but bends upward a touch at the top
-///   so superstars cross the World Class label cleanly. The earlier
-///   `coef^0.6` pushed a CA-100 second-division keeper over the
-///   Continental threshold, which is not how anyone at that level would
-///   describe himself.
-/// - **current** — near-linear (`coef^1.0`). Match-to-match standing
-///   tracks raw playing ability closely.
-/// - **world** — steeply convex (`coef^2.5`). International recognition
-///   is reserved for the very top of the ability distribution — a
-///   lower-division pro (CA ~60) barely registers at all, while a
-///   Ballon d'Or candidate dominates. A mid-tier CA-100 regular sits
-///   around 1700, not the 2700 the softer curve produced.
-///
-/// The old flat `CA * 45 * fixed_mult` formula over-rewarded mid-tier
-/// players on world fame and under-rewarded elite players — you ended up
-/// with mathematically-similar numbers for a Ballon d'Or candidate and a
-/// solid top-flight regular, which doesn't match how transfer markets
-/// or contract talks should read those players.
-fn derive_reputation_from_ability(ca: u8) -> (i16, i16, i16) {
-    const REP_CEILING: f32 = 9500.0;
-    let coef = (ca as f32 / 200.0).clamp(0.05, 1.0);
-    let current = (REP_CEILING * coef.powf(1.0) * 0.95) as i16;
-    let home = (REP_CEILING * coef.powf(0.9)) as i16;
-    let world = (REP_CEILING * coef.powf(2.5)) as i16;
-    (current, home, world)
-}
-
 fn build_player_attributes(
     record: &OdbPlayer,
     record_ca: u8,
@@ -2475,8 +2440,9 @@ fn build_player_attributes(
     } else {
         record_ca
     };
+    let derived = ReputationStanding::for_ability(reputation_ca);
     let (derived_current, derived_home, derived_world) =
-        derive_reputation_from_ability(reputation_ca);
+        (derived.current, derived.home, derived.world);
     let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
         Some(r) => (
             r.current.unwrap_or(derived_current),

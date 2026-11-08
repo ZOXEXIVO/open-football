@@ -179,6 +179,9 @@ pub enum TransferListingType {
 pub enum TransferListingOrigin {
     /// Selling club listed the player for permanent transfer.
     SellerListed,
+    /// He asked to go, by a formal request or a long unhappiness. A sale as
+    /// genuine as any while he keeps asking, and it ends when he stops.
+    PlayerAsked,
     /// Selling club listed the player for loan-out.
     LoanOutListed,
     /// Contract ran out — listing exists so the player surfaces in the
@@ -188,6 +191,16 @@ pub enum TransferListingOrigin {
     /// approach has something to negotiate against. Does not represent
     /// a genuine willingness to sell — must not earn the listed bonus.
     SyntheticUnsolicited,
+}
+
+impl TransferListingOrigin {
+    /// A permanent sale really on offer, whoever's idea it was.
+    pub fn is_genuine_sale(self) -> bool {
+        matches!(
+            self,
+            TransferListingOrigin::SellerListed | TransferListingOrigin::PlayerAsked
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -262,10 +275,10 @@ impl TransferListing {
         !matches!(self.origin, TransferListingOrigin::SyntheticUnsolicited)
     }
 
-    /// A permanent sale the club itself advertised, still on the market.
+    /// A permanent sale really on offer, still on the market.
     pub fn is_live_sale(&self) -> bool {
         self.listing_type == TransferListingType::Transfer
-            && self.origin == TransferListingOrigin::SellerListed
+            && self.origin.is_genuine_sale()
             && matches!(
                 self.status,
                 TransferListingStatus::Available | TransferListingStatus::InNegotiation

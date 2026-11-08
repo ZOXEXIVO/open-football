@@ -11,6 +11,7 @@ use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::player::ability::ReputationStanding;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::mind::{CompetitiveMatchRead, CompetitiveMind};
 use crate::club::player::player::Player;
@@ -27,6 +28,16 @@ use crate::{
 use chrono::NaiveDate;
 
 impl Player {
+    /// The rating an ordinary match earns, the rating model's own anchor:
+    /// an ordinary match makes nobody more famous.
+    const ORDINARY_RATING: f32 = 6.5;
+    /// Share of the way back to his standing one competitive match moves
+    /// his name: league and cups together close a little over half the gap
+    /// in a season.
+    const REPUTATION_MEMORY: f32 = 0.02;
+    /// How far a friendly carries, against a competitive match.
+    const FRIENDLY_REACH: f32 = 0.4;
+
     /// React to finishing a match: stats bookkeeping, morale events,
     /// reputation update. All cross-cutting effects of "a match happened"
     /// live here instead of leaking into the league-result pipeline.
@@ -1070,14 +1081,14 @@ impl Player {
     }
 
     fn record_match_reputation(&mut self, o: &MatchOutcome<'_>) {
-        let rating_delta = (o.effective_rating - 6.0) * 20.0;
+        let rating_delta = (o.effective_rating - Self::ORDINARY_RATING) * 20.0;
         let goal_bonus = o.stats.goals.min(3) as f32 * 15.0;
         let assist_bonus = o.stats.assists.min(3) as f32 * 8.0;
         let motm_bonus = if o.is_motm { 25.0 } else { 0.0 };
         let raw_delta = rating_delta + goal_bonus + assist_bonus + motm_bonus;
 
         if o.is_friendly {
-            let home_delta = (raw_delta * 0.4 * o.league_weight) as i16;
+            let home_delta = (raw_delta * Self::FRIENDLY_REACH * o.league_weight) as i16;
             self.player_attributes.update_reputation(0, home_delta, 0);
         } else {
             let current_delta = (raw_delta * o.league_weight) as i16;
@@ -1085,6 +1096,24 @@ impl Player {
             let world_delta = (raw_delta * o.world_weight * o.league_weight) as i16;
             self.player_attributes
                 .update_reputation(current_delta, home_delta, world_delta);
+        }
+        // Every match is a look at him again, on the stage he plays on, so
+        // his name drifts back to what his football is there: up for a man
+        // on a bigger stage, down for one past it. A friendly is seen at
+        // home and nowhere else, so that is the only name it moves.
+        if let Some(team) = o.played_for.as_ref() {
+            let stage = team.reputation as f32 / 10_000.0;
+            let standing =
+                ReputationStanding::on_stage(self.player_attributes.current_ability, stage);
+            if o.is_friendly {
+                self.player_attributes.settle_home_reputation(
+                    standing,
+                    Self::REPUTATION_MEMORY * Self::FRIENDLY_REACH,
+                );
+            } else {
+                self.player_attributes
+                    .settle_reputation(standing, Self::REPUTATION_MEMORY);
+            }
         }
     }
 }

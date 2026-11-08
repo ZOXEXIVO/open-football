@@ -16,7 +16,7 @@ use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::transfer::SettlementOutlook;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
-use crate::{Club, Person};
+use crate::{Club, PathwayStage, Person};
 
 /// One of the club's listings, as the market saw it through the window.
 #[derive(Debug, Clone, Copy)]
@@ -44,7 +44,8 @@ pub enum StrandedEffect {
         anchor: f64,
         board_floor: f64,
     },
-    /// He has gone: every row and every club's interest in him goes too.
+    /// The listing is over: every row and every club's interest in him goes
+    /// too.
     Retire { player_id: u32 },
 }
 
@@ -64,6 +65,11 @@ impl Club {
             league_reputation: market.league_reputation,
             club_reputation: market.club_reputation,
         };
+
+        let teams = &self.teams;
+        self.transfer_plan
+            .kept_in_the_side
+            .retain(|id| teams.teams.iter().any(|t| t.players.find(*id).is_some()));
 
         let mut effects = Vec::with_capacity(listings.len());
         let mut released: Vec<(u32, SigningMandate, f32)> = Vec::new();
@@ -98,6 +104,9 @@ impl Club {
                 annual_wage_bill,
                 contract_days_left,
                 current_ask: listing.current_ask,
+                market_value: player.value(date, market.league_reputation, market.club_reputation),
+                still_asking: player.is_asking_to_leave(date),
+                start_share: player.start_share_at(&team.slug, date),
                 best_rejected_bid: listing.best_rejected_bid,
                 book_value: player.book_value(date),
                 has_loan_runway: ClubBoard::has_loan_runway(
@@ -108,6 +117,15 @@ impl Club {
                 settlement: player.settlement_ask(date, &outlook),
             };
             let verdict = self.board.review_stranded(&case, &pressure);
+            if verdict.route == StrandedRoute::KeepHim {
+                self.transfer_plan
+                    .kept_in_the_side
+                    .insert(listing.player_id);
+            } else {
+                self.transfer_plan
+                    .kept_in_the_side
+                    .remove(&listing.player_id);
+            }
 
             match verdict.route {
                 StrandedRoute::Settle { amount } => {
@@ -129,6 +147,17 @@ impl Club {
                     self.finance
                         .balance
                         .push_expense_player_wages(amount.round() as i64);
+                    effects.push(StrandedEffect::Retire {
+                        player_id: listing.player_id,
+                    });
+                    continue;
+                }
+                StrandedRoute::KeepHim => {
+                    player.on_kept_by_club(date);
+                    team.transfer_list.remove(listing.player_id);
+                    self.transfer_plan
+                        .transfer_broadcasts
+                        .remove(&listing.player_id);
                     effects.push(StrandedEffect::Retire {
                         player_id: listing.player_id,
                     });
@@ -162,6 +191,7 @@ impl Club {
             .iter_mut()
             .find_map(|t| t.players.find_mut(player_id))
             .and_then(|p| p.plan.as_mut())
+            .filter(|plan| plan.stage == PathwayStage::LoanOut)
         {
             plan.loan_subsidy = Some(subsidy);
         }
@@ -171,6 +201,7 @@ impl Club {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerStatusType;
     use crate::academy::ClubAcademy;
     use crate::club::board::mandate::{MandateAuthor, MandatePurpose};
     use crate::club::player::core::builder::PlayerBuilder;
@@ -182,7 +213,6 @@ mod tests {
         PlayerPlan, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
         StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
-    use crate::{PathwayStage, PlayerStatusType};
     use chrono::{Datelike, Duration, NaiveTime};
 
     struct Fx;
@@ -353,10 +383,47 @@ mod tests {
     }
 
     #[test]
-    fn a_loan_carries_the_boards_subsidy() {
+    fn a_man_the_board_goes_on_picking_comes_off_the_list() {
         let mut player = Fx::frozen_out();
         player.statuses.remove(PlayerStatusType::Req);
-        player.happiness.starter_ratio = 1.0;
+        player.happiness.starter_ratio = 0.9;
+        player.on_listed_by_club("dec_reason_surplus_squad", Fx::date());
+        let mut club = Fx::club(player);
+
+        let effects = club.on_listings_stranded(&[Fx::listing(110)], &Fx::MARKET, Fx::date());
+
+        assert_eq!(
+            effects,
+            vec![StrandedEffect::Retire {
+                player_id: Fx::PLAYER
+            }]
+        );
+        let player = club.teams.teams[0].players.find(Fx::PLAYER).unwrap();
+        assert!(player.contract.is_some());
+        assert!(!player.contract.as_ref().unwrap().is_transfer_listed);
+        assert!(!player.statuses.has(PlayerStatusType::Lst));
+        assert!(
+            club.transfer_plan.kept_in_the_side.contains(&Fx::PLAYER),
+            "the board remembers it kept him"
+        );
+
+        club.teams.teams[0]
+            .players
+            .find_mut(Fx::PLAYER)
+            .unwrap()
+            .happiness
+            .starter_ratio = 0.2;
+        club.on_listings_stranded(&[Fx::listing(80)], &Fx::MARKET, Fx::date());
+        assert!(
+            !club.transfer_plan.kept_in_the_side.contains(&Fx::PLAYER),
+            "a later review that does not keep him forgets it"
+        );
+    }
+
+    #[test]
+    fn a_loan_carries_the_boards_subsidy() {
+        let mut player = Fx::frozen_out();
+        player.happiness.starter_ratio = 0.2;
         player.contract.as_mut().unwrap().salary = 3_000_000;
         let mut club = Fx::club(player);
 

@@ -92,7 +92,39 @@ impl MatchdayForm {
     /// day-to-day variation he carries. Never negative; zero only for a
     /// hypothetically perfect professional.
     pub fn volatility(player: &Player, now: Option<NaiveDate>) -> f32 {
-        MAX_VOLATILITY * Self::mental_steadiness(player) * Self::age_factor(player, now)
+        Self::spread(
+            now.map(|date| DateUtils::age(player.birth_date, date) as f32),
+            player.attributes.consistency,
+            player.attributes.professionalism,
+            player.skills.mental.concentration,
+            player.skills.mental.composure,
+        )
+    }
+
+    /// The same spread from the plain inputs, for a reader that holds no
+    /// `Player`. A missing age means no calendar (synthetic squads, unit
+    /// fixtures), which reads as settled rather than inventing one.
+    pub fn spread(
+        age: Option<f32>,
+        consistency: f32,
+        professionalism: f32,
+        concentration: f32,
+        composure: f32,
+    ) -> f32 {
+        MAX_VOLATILITY
+            * Self::mental_steadiness(consistency, professionalism, concentration, composure)
+            * age.map_or(1.0, Self::age_factor)
+    }
+
+    /// A zero-mean unit draw for a whole season, in the same shape as a
+    /// day's. Days are small ordinals, so an offset year can never replay
+    /// a match day's form.
+    pub fn season_draw(player_id: u64, season_start_year: i32) -> f32 {
+        const SEASONS_APART_FROM_DAYS: u64 = 1 << 40;
+        Self::draw(
+            player_id,
+            SEASONS_APART_FROM_DAYS + season_start_year as u64,
+        )
     }
 
     /// `1.0` for a player with no mental steadiness at all, `0.25` for a
@@ -100,25 +132,24 @@ impl MatchdayForm {
     /// it is the attribute that exists for this — with concentration,
     /// professionalism and composure filling in the rest of what
     /// "turns up the same every week" means.
-    fn mental_steadiness(player: &Player) -> f32 {
+    fn mental_steadiness(
+        consistency: f32,
+        professionalism: f32,
+        concentration: f32,
+        composure: f32,
+    ) -> f32 {
         let norm = |v: f32| (v / 20.0).clamp(0.0, 1.0);
-        let steadiness = 0.55 * norm(player.attributes.consistency)
-            + 0.20 * norm(player.skills.mental.concentration)
-            + 0.15 * norm(player.attributes.professionalism)
-            + 0.10 * norm(player.skills.mental.composure);
+        let steadiness = 0.55 * norm(consistency)
+            + 0.20 * norm(concentration)
+            + 0.15 * norm(professionalism)
+            + 0.10 * norm(composure);
         1.0 - 0.75 * steadiness
     }
 
     /// Age multiplier on the spread: erratic in the teens, settled from
     /// the mid-twenties, loosening again in the mid-thirties. Continuous
     /// — a player does not become reliable on a birthday.
-    fn age_factor(player: &Player, now: Option<NaiveDate>) -> f32 {
-        let Some(date) = now else {
-            // No calendar (synthetic squads, unit fixtures): treat the
-            // player as settled rather than inventing an age.
-            return 1.0;
-        };
-        let age = DateUtils::age(player.birth_date, date) as f32;
+    fn age_factor(age: f32) -> f32 {
         let young = ((STEADY_FROM - age) / 10.0).clamp(0.0, 1.0);
         let old = ((age - DECLINE_FROM) / 9.0).clamp(0.0, 1.0);
         1.0 + 0.60 * young.powf(1.4) + 0.25 * old

@@ -56,19 +56,6 @@ impl PlayerCollection {
             })
             .collect();
 
-        // Mark transfer-requested players as transfer-listed instead of removing them.
-        // The transfer market will handle the actual move later.
-        for transfer_request_player_id in player_results.iter().flat_map(|p| &p.transfer_requests) {
-            if let Some(player) = self
-                .players
-                .iter_mut()
-                .find(|p| p.id == *transfer_request_player_id)
-                && let Some(ref mut contract) = player.contract
-            {
-                contract.is_transfer_listed = true;
-            }
-        }
-
         PlayerCollectionResult::new(player_results)
     }
 

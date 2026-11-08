@@ -9,6 +9,7 @@
 pub mod availability;
 pub mod free;
 pub mod processing;
+pub mod request;
 pub mod settlement;
 pub mod stage;
 
@@ -21,6 +22,7 @@ pub use processing::{
     ContinentalAccessContext, ContinentalCompetitionTier, ContinentalPathHeuristic,
     EuropeanAmbitionConfig, TransferDesireContext,
 };
+pub use request::TransferRequestStanding;
 pub use settlement::{SettlementAppetite, SettlementAsk, SettlementOutlook};
 pub use stage::{
     BigStagePull, BigStagePullConfig, BigStagePullContext, LevelFloor, StandingReading,

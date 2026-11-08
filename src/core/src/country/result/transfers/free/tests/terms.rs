@@ -145,6 +145,8 @@ impl TermsFixtures {
             is_global_pool: true,
             nationality_country_id: 0,
             last_country_id: 0,
+            level_floor: LevelFloor::none(),
+            let_go_by: 0,
         }
     }
 

@@ -268,8 +268,9 @@ impl TeamBehaviour {
 
         let success = RandomEngine::gen_f32() < success_chance;
 
-        // For transfer discussion, the talk succeeding doesn't guarantee the player
-        // withdraws the request — there's only a 30% chance of that happening.
+        // For transfer discussion, the talk going well doesn't guarantee the coach
+        // agrees to consider a sale — there's only a 30% chance of that. Either way
+        // the request stands: what ends it is a move, or his reasons going away.
         let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
             RandomEngine::gen_f32() < 0.3
         } else {
@@ -426,8 +427,12 @@ impl TeamBehaviour {
             // `pursue_loan_home` writes his wants and stamps no `Req` at
             // all (`processing.rs`, fix (a)), so he arrives at this loop
             // clean and reaches the home route below.
+            //
+            // A man who has had his answer and is waiting for the window
+            // to act on it does not go back to be told again.
             if player.statuses.has(PlayerStatusType::Req)
                 || player.statuses.has(PlayerStatusType::Loa)
+                || player.waits_on_the_window()
             {
                 continue;
             }
@@ -536,6 +541,14 @@ impl TeamBehaviour {
                 } else {
                     ManagerTalkType::PlayingTimeRequest
                 };
+                // The queue is sorted by time served, so the same two men
+                // would head it every week until one was refused.
+                if player
+                    .interactions
+                    .topic_on_cooldown(topic_for_talk(talk_type.clone()), current_date)
+                {
+                    continue;
+                }
 
                 let priority = opp.eligible_official_matches_since_join as u32 + 50;
                 candidates.push((player.id, talk_type, priority));
@@ -1767,6 +1780,7 @@ mod plan_escalation_tests {
     use crate::PlayerSquadStatus;
     use crate::club::StaffStub;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::interaction::{InteractionOutcome, ManagerInteraction};
     use crate::club::player::mind::{CareerPlan, GoalOrigin, PlanStage};
     use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
     use crate::context::{GlobalContext, SimulationContext};
@@ -1932,6 +1946,48 @@ mod plan_escalation_tests {
             result.manager_talks.is_empty(),
             "the rung IS the escalation — an unspoken arc reaches nobody"
         );
+    }
+
+    #[test]
+    fn a_benched_man_does_not_ask_again_while_his_last_talk_is_on_cooldown() {
+        let mut benched = Fx::player(25, None);
+        benched.happiness.eligible_official_matches_since_join = 20;
+        let asked = Fx::run(
+            &PlayerCollection::new(vec![benched.clone()]),
+            TeamType::Main,
+        );
+        assert_eq!(asked.manager_talks.len(), 1);
+        assert_eq!(
+            asked.manager_talks[0].talk_type,
+            ManagerTalkType::PlayingTimeRequest
+        );
+
+        benched.interactions.push(ManagerInteraction {
+            date: Fx::date() - Duration::days(7),
+            staff_id: 1,
+            topic: InteractionTopic::PlayingTime,
+            tone: InteractionTone::Calm,
+            player_mood_before: 50.0,
+            outcome: InteractionOutcome::PromiseMade,
+            promise_created: true,
+            relationship_delta: 0.0,
+            morale_delta: 0.0,
+            cooldown_until: Fx::date() + Duration::days(14),
+        });
+        let again = Fx::run(&PlayerCollection::new(vec![benched]), TeamType::Main);
+        assert!(
+            again.manager_talks.is_empty(),
+            "a week after his last talk he is still waiting on its answer"
+        );
+    }
+
+    #[test]
+    fn a_refused_man_waits_for_the_window_without_asking_again() {
+        let mut refused = Fx::player(25, None);
+        refused.happiness.eligible_official_matches_since_join = 20;
+        refused.on_playing_time_talk_refused(1);
+        let result = Fx::run(&PlayerCollection::new(vec![refused]), TeamType::Main);
+        assert!(result.manager_talks.is_empty());
     }
 
     #[test]

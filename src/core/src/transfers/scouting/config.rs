@@ -862,7 +862,7 @@ mod tests {
     use crate::PlayerFieldPositionGroup;
     use crate::PlayerSquadStatus;
     use crate::club::player::language::LanguageProfile;
-    use crate::club::player::mind::CareerPlanView;
+    use crate::club::player::mind::{AnchorView, CareerPlanView};
     use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
@@ -930,6 +930,8 @@ mod tests {
                 stay_pressure: 0.0,
                 parent_loan: None,
                 career_plan: CareerPlanView::none(),
+                anchors: AnchorView::default(),
+                asks_for_a_bigger_stage: false,
                 parent_subsidy: 0.0,
                 player_name: "Test".to_string(),
                 club_name: "Test Club".to_string(),

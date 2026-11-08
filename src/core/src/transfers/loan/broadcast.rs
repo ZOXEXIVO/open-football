@@ -34,7 +34,7 @@ use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause, Transfer
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::loan::interest::{DestinationAppeal, InterestDraw, LoanApproachMemory};
-use crate::transfers::market::{TransferListingOrigin, TransferListingStatus, TransferListingType};
+use crate::transfers::market::{TransferListingStatus, TransferListingType};
 use crate::transfers::pipeline::{
     AvailabilityBroadcast, LoanDestinationPreference, TransferRequestStatus,
 };
@@ -962,7 +962,7 @@ impl ListingBroadcast {
         let mut keep_ids: Vec<u32> = Vec::new();
         for listing in &country.transfer_market.listings {
             if listing.listing_type != TransferListingType::Transfer
-                || listing.origin != TransferListingOrigin::SellerListed
+                || !listing.origin.is_genuine_sale()
                 || !matches!(
                     listing.status,
                     TransferListingStatus::Available | TransferListingStatus::InNegotiation

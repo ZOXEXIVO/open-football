@@ -432,12 +432,23 @@ impl Player {
         if !listed && !requested && drought <= 0.0 && plan_resignation <= 0.0 {
             return 0.0;
         }
+        // A man who asked for nothing but a bigger stage learns nothing about
+        // his level from smaller clubs failing to take him, and a request now
+        // stands for months: he is waiting for that stage, not lowering his
+        // sights while he waits. What his football and his plan say still count.
+        let waiting_for_a_bigger_stage = self.asks_only_for_a_bigger_stage();
         let failed_scans = self
             .availability_market_state()
             .map(|s| s.failed_scans)
+            .filter(|_| !waiting_for_a_bigger_stage)
             .unwrap_or(0);
+        let days_on_the_market = if waiting_for_a_bigger_stage {
+            0
+        } else {
+            self.days_available(today)
+        };
         MarketResignation::compute(
-            self.days_available(today),
+            days_on_the_market,
             self.contract.as_ref().map(|c| &c.squad_status),
             failed_scans,
             drought.max(plan_resignation),
@@ -466,6 +477,7 @@ impl Player {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::player::TransferRequestReason;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -623,6 +635,22 @@ mod tests {
         assert_eq!(state.failed_scans, 0);
         assert!(state.last_block.is_none());
         assert_eq!(state.recent_interest(today), 1);
+    }
+
+    #[test]
+    fn waiting_for_a_bigger_stage_does_not_lower_his_sights() {
+        let asked = AvailabilityFixtures::d(2026, 1, 1);
+        let today = AvailabilityFixtures::d(2026, 12, 1);
+        let mut p = AvailabilityFixtures::player(asked);
+        p.statuses.add(asked, PlayerStatusType::Req);
+        p.transfer_request_reasons = vec![TransferRequestReason::OutgrownClub];
+        assert_eq!(p.market_resignation(today), 0.0, "he is still waiting");
+
+        p.transfer_request_reasons = vec![TransferRequestReason::LongUnhappiness];
+        assert!(
+            p.market_resignation(today) > 0.0,
+            "this man would take anything"
+        );
     }
 
     #[test]

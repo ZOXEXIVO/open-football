@@ -28,9 +28,9 @@ use crate::transfers::scouting::recruitment::{
 };
 use crate::transfers::squad::ledger::SellListEntry;
 use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
-use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
+use crate::{Player, PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub use self::advice::StaffRecommendations;
 pub use self::circulation::MarketCirculation;
@@ -61,6 +61,8 @@ impl PlayerSummary {
             age: self.age,
             resignation: self.seller_ctx.market_resignation,
             plan_widening: self.career_plan.renown_widening(),
+            held_summit: self.anchors.held_summit,
+            recency: self.anchors.recency,
         })
     }
 }
@@ -70,7 +72,7 @@ use std::cmp::Ordering;
 pub(in crate::transfers) mod processor {
     use crate::PathwayStage;
     use crate::club::player::language::LanguageProfile;
-    use crate::club::player::mind::CareerPlanView;
+    use crate::club::player::mind::{AnchorView, CareerPlanView};
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::loan::guard::ParentLoanView;
@@ -323,6 +325,11 @@ pub(in crate::transfers) mod processor {
         /// borrowing country cannot reach into his club to read it.
         pub pathway_stage: PathwayStage,
         pub career_plan: CareerPlanView,
+        /// What his career has left him with. Travels because a borrowing
+        /// country cannot reach his mind any more than his club's depth chart.
+        pub anchors: AnchorView,
+        /// All his standing request asks for is a bigger stage.
+        pub asks_for_a_bigger_stage: bool,
         pub parent_subsidy: f32,
         /// His parent has posted him to the world as a man who would go
         /// home. Set only for LOAN candidates (see
@@ -1478,6 +1485,11 @@ pub struct ClubTransferPlan {
     /// listing is a wage problem for any club.
     pub transfer_broadcasts: FxHashMap<u32, AvailabilityBroadcast>,
 
+    /// Players the board took off a listing nobody answered because it
+    /// plays them. Club-driven listings leave them alone while it still
+    /// does; each stranded review forgets the men who have gone.
+    pub kept_in_the_side: FxHashSet<u32>,
+
     /// End of the squad-review window a just-appointed head coach gets
     /// before the club honours the old regime's exit decisions. While
     /// today is inside the window, the country listing pass creates no
@@ -1688,6 +1700,7 @@ impl ClubTransferPlan {
             loan_withdrawals: Vec::new(),
             loan_broadcasts: FxHashMap::default(),
             transfer_broadcasts: FxHashMap::default(),
+            kept_in_the_side: FxHashSet::default(),
             manager_review_until: None,
             prospect_buys_this_window: 0,
             compatriot_sweeps_this_window: 0,
@@ -1743,6 +1756,13 @@ impl ClubTransferPlan {
         self.sell_list
             .iter()
             .any(|e| e.player_id == player_id && e.is_marketed())
+    }
+
+    /// Is he a man the board took off a listing nobody answered because it
+    /// plays him, and does it still? One reading for every club decision
+    /// that would list him.
+    pub fn keeps_in_the_side(&self, player: &Player, date: NaiveDate) -> bool {
+        self.kept_in_the_side.contains(&player.id) && player.is_picked(date)
     }
 
     /// What the club would want for a player it has priced. `None` for

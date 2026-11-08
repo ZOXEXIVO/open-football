@@ -28,6 +28,36 @@ use chrono::NaiveTime;
 /// Test fixtures grouped on a unit struct so the test module
 /// stays free of loose helper fns (project convention — see
 /// `feedback_use_directives`).
+#[test]
+fn a_club_does_not_sign_back_the_man_it_let_go() {
+    let mut free =
+        EmergencyFillFixtures::candidate(1, 80, 27, PlayerFieldPositionGroup::Midfielder, true);
+    assert!(!free.was_let_go_by(100));
+    free.let_go_by = 100;
+    assert!(free.was_let_go_by(100));
+    assert!(!free.was_let_go_by(200), "anybody else can have him");
+}
+
+#[test]
+fn his_floor_leaves_him_willing_only_for_a_division_he_will_play_in() {
+    let mut man =
+        EmergencyFillFixtures::candidate(1, 80, 29, PlayerFieldPositionGroup::Midfielder, true);
+    assert_eq!(
+        man.floor_allows(1_000),
+        1.0,
+        "no view of him objects to nothing"
+    );
+
+    man.level_floor = LevelFloor {
+        standing: 8_800.0,
+        tolerance: 1_000.0,
+        plays_in: 0.0,
+    };
+    assert_eq!(man.floor_allows(5_000), 0.0, "a division well under it");
+    assert_eq!(man.floor_allows(7_300), 0.5, "half a refusal span under it");
+    assert_eq!(man.floor_allows(8_000), 1.0, "at or above it");
+}
+
 struct EmergencyFillFixtures;
 
 impl EmergencyFillFixtures {
@@ -162,6 +192,8 @@ impl EmergencyFillFixtures {
             is_global_pool: true,
             nationality_country_id: 0,
             last_country_id: 0,
+            level_floor: LevelFloor::none(),
+            let_go_by: 0,
         }
     }
 
@@ -1224,6 +1256,8 @@ impl CrossRegionFixtures {
             is_global_pool: true,
             nationality_country_id: 0,
             last_country_id: 0,
+            level_floor: LevelFloor::none(),
+            let_go_by: 0,
         }
     }
 }
@@ -1983,6 +2017,8 @@ impl DepthPipelineFixtures {
             professionalism_norm: 0.5,
             failed_approach_streak: 0,
             last_country_id: if same_country { 1 } else { 2 },
+            level_floor: LevelFloor::none(),
+            let_go_by: 0,
         }
     }
 

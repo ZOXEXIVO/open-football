@@ -16,6 +16,7 @@
 //! everything outside the mind reads when it wants to know where he
 //! thinks he is going.
 
+use super::anchors::{AnchorView, DreamKind};
 use super::organs::goals::GoalOrigin;
 use super::organs::memory::EpochDay;
 use super::situation::MindSituation;
@@ -165,6 +166,9 @@ pub struct CareerPlan {
     /// How firmly he holds it. A rival arc has to beat this by
     /// [`CareerPlan::SWITCH_MARGIN`] to displace it.
     pub strength: f32,
+    /// The arc a review made this plan out of. `None` when he formed it
+    /// fresh.
+    pub follows: Option<CareerArc>,
 }
 
 impl CareerPlan {
@@ -180,8 +184,8 @@ impl CareerPlan {
     /// Days a plan with no deadline of its own runs before he looks at
     /// it again. A season.
     pub const DEFAULT_REVIEW_DAYS: u16 = 365;
-    /// Days after a window opens by which a man who meant to go
-    /// somewhere expects to have gone.
+    /// Days he gives a plan before looking again when nothing could judge
+    /// it yet, or when a failed spell sends him straight back out.
     pub const WINDOW_REVIEW_DAYS: u16 = 45;
     /// How close the deadline has to be before it starts pushing him
     /// toward accepting what is on the table.
@@ -208,6 +212,7 @@ impl CareerPlan {
             loan_band: LevelBand::MIN,
             origin,
             strength: strength.clamp(0.0, 1.0),
+            follows: None,
         }
     }
 
@@ -253,6 +258,7 @@ impl CareerPlan {
             loan_band: self.loan_band,
             origin: self.origin,
             strength: self.strength,
+            follows: Some(self.arc),
         }
     }
 
@@ -331,6 +337,8 @@ pub struct CareerPlanView {
     pub attempts: u8,
     /// How hard he holds it, 0..1 — what he pushes with when he asks.
     pub strength: f32,
+    /// The arc a review made it out of, if any.
+    pub follows: Option<CareerArc>,
 }
 
 impl CareerPlanView {
@@ -345,6 +353,7 @@ impl CareerPlanView {
             deadline_pressure: 0.0,
             attempts: 0,
             strength: 0.0,
+            follows: None,
         }
     }
 
@@ -358,6 +367,7 @@ impl CareerPlanView {
             deadline_pressure: plan.deadline_pressure(today),
             attempts: plan.attempts,
             strength: plan.strength,
+            follows: plan.follows,
         }
     }
 
@@ -464,15 +474,15 @@ impl CareerPlanner {
     const HOMEWARD_SPENT: f32 = 0.75;
 
     /// The deadline a man who means to be somewhere else gives it: the
-    /// next registration window, plus the grace he allows for the move
-    /// to happen inside one. A season when no calendar is in view.
+    /// morning after the main window shuts. A move worth planning a season
+    /// around is made in that market, and judged by the whole of it, not by
+    /// a short mid-season window or the first weeks of a long one. A season
+    /// when no calendar is in view.
     fn move_deadline(situation: &MindSituation) -> u16 {
-        if situation.days_to_next_window == u16::MAX {
+        if situation.days_to_main_window_close == u16::MAX {
             return CareerPlan::DEFAULT_REVIEW_DAYS;
         }
-        situation
-            .days_to_next_window
-            .saturating_add(CareerPlan::WINDOW_REVIEW_DAYS)
+        situation.days_to_main_window_close.saturating_add(1)
     }
 
     /// How long an arc runs before he looks at it again. The two that
@@ -493,7 +503,9 @@ impl CareerPlanner {
     /// which is most players most of the time, and correct.
     pub fn arc_for(
         situation: &MindSituation,
+        club_id: u32,
         home_desire: f32,
+        anchors: &AnchorView,
     ) -> Option<(CareerArc, GoalOrigin, f32)> {
         let band_here = situation.band_here();
         let runway = situation.career_runway();
@@ -501,26 +513,34 @@ impl CareerPlanner {
 
         // The club servant, first, because it is the one arc that
         // suppresses every other reading of the same facts.
-        if situation.loyalty_drive() >= Self::SERVANT_LOYALTY
-            && situation.days_at_club >= MindSituation::CLUB_SERVANT_DAYS
+        let long_server = situation.loyalty_drive() >= Self::SERVANT_LOYALTY
+            && situation.days_at_club >= MindSituation::CLUB_SERVANT_DAYS;
+        if (long_server || anchors.belongs_at(club_id))
             && band_here.map(|b| b >= 0.8).unwrap_or(false)
         {
             return Some((
                 CareerArc::StayAndLead,
                 GoalOrigin::Attachment,
-                0.4 + 0.5 * situation.loyalty_drive(),
+                0.4 + 0.5 * situation.loyalty_drive().max(anchors.conviction),
             ));
         }
 
         // The last spell, at home.
-        if spent >= Self::HOMEWARD_SPENT
-            && situation.is_abroad
-            && (home_desire >= 0.3 || situation.familiar_teammates == 0)
+        let dreams_of_home = anchors.dream == Some(DreamKind::FinishAtHome);
+        if situation.is_abroad
+            && (dreams_of_home
+                || (spent >= Self::HOMEWARD_SPENT
+                    && (home_desire >= 0.3 || situation.familiar_teammates == 0)))
         {
+            let pull = if dreams_of_home {
+                anchors.conviction
+            } else {
+                home_desire.max(spent - Self::HOMEWARD_SPENT)
+            };
             return Some((
                 CareerArc::FinishAtHome,
                 GoalOrigin::Attachment,
-                0.3 + 0.5 * home_desire.max(spent - Self::HOMEWARD_SPENT),
+                0.3 + 0.5 * pull,
             ));
         }
 
@@ -563,6 +583,12 @@ impl CareerPlanner {
             ));
         }
 
+        // What he is reaching for, once he has settled. It is the dream that
+        // says so and not how long he has been here.
+        if anchors.dream.is_some() {
+            return Self::arc_from_his_dream(situation, anchors);
+        }
+
         // Long enough here to have a view of the place, and plainly
         // bigger than it.
         if situation.days_at_club >= Self::TENURE_FOR_A_CHOICE {
@@ -597,6 +623,33 @@ impl CareerPlanner {
         None
     }
 
+    /// A man reaching above where he plays plans to step up, as hard as he
+    /// believes it. Settling is for a man who has arrived or asks no more.
+    fn arc_from_his_dream(
+        situation: &MindSituation,
+        anchors: &AnchorView,
+    ) -> Option<(CareerArc, GoalOrigin, f32)> {
+        if !situation.is_settled() {
+            return None;
+        }
+        if anchors.reaches_above(situation.club_reputation) {
+            let holds = 0.3 + 0.6 * anchors.conviction;
+            return Some((
+                CareerArc::StepUp,
+                GoalOrigin::SelfDrive,
+                holds * (1.0 - Self::LOYALTY_BRAKE * situation.loyalty_drive()),
+            ));
+        }
+        if anchors.arrived || anchors.dream == Some(DreamKind::MakeACareer) {
+            return Some((
+                CareerArc::SettleAtMyLevel,
+                GoalOrigin::Attachment,
+                0.35 + 0.3 * anchors.conviction,
+            ));
+        }
+        None
+    }
+
     /// Start share at which a returnee's claim on a shirt counts as
     /// answered, whatever his paperwork calls him.
     const MIN_CLAIM_SHARE: f32 = 0.35;
@@ -623,9 +676,19 @@ impl CareerPlanner {
     /// loan because he was not playing, and who is now playing, has got
     /// what he wanted without anybody arranging anything. Resolving it
     /// here is what stops a held intention outliving its own reason.
-    pub fn is_answered(plan: &CareerPlan, situation: &MindSituation) -> bool {
+    pub fn is_answered(plan: &CareerPlan, situation: &MindSituation, anchors: &AnchorView) -> bool {
         let playing = Self::playing(situation) == Some(true);
         match plan.arc {
+            // He got there, or a review has decided there is no there. Only
+            // a dream can end the ambition: a closed window does not. The one
+            // man it leaves still wanting to move is the returnee the claim
+            // review sent here: until he plays he wants a club that plays
+            // him, unless he has arrived and there is nowhere above to go.
+            CareerArc::StepUp if anchors.dream.is_some() => {
+                let a_returnee_still_benched =
+                    plan.follows == Some(CareerArc::ClaimMyPlace) && !playing && !anchors.arrived;
+                !anchors.reaches_above(situation.club_reputation) && !a_returnee_still_benched
+            }
             // Playing AT HIS OWN CLUB. A man out on loan and playing is
             // the plan working, not the plan finished — the spell's
             // verdict is what ends it.
@@ -648,6 +711,7 @@ impl CareerPlanner {
     pub fn review(
         plan: &CareerPlan,
         situation: &MindSituation,
+        anchors: &AnchorView,
         today: EpochDay,
     ) -> Option<CareerPlan> {
         let runway = situation.career_runway();
@@ -727,8 +791,12 @@ impl CareerPlanner {
                 }
                 Some(next)
             }
-            // Nobody came. The move he wanted is not available at the
-            // level he wanted it, so the question becomes his level.
+            // Nobody came. That is an attempt, for the dream's next review
+            // to weigh, and he goes again at the next window.
+            CareerArc::StepUp if anchors.dream.is_some() => {
+                Some(plan.retry(today, Self::review_days_for(CareerArc::StepUp, situation)))
+            }
+            // With no dream behind it the question becomes his level.
             CareerArc::StepUp => Some(plan.succeed_with(
                 CareerArc::SettleAtMyLevel,
                 today,
@@ -855,12 +923,23 @@ mod tests {
             plan.attempts = attempts;
             plan
         }
+
+        /// The step up the claim review makes of a returnee nobody picked.
+        fn step_up_after_a_claim() -> CareerPlan {
+            Self::plan(CareerArc::ClaimMyPlace, 0).succeed_with(
+                CareerArc::StepUp,
+                Self::TODAY,
+                CareerPlan::DEFAULT_REVIEW_DAYS,
+                0.7,
+            )
+        }
     }
 
     #[test]
     fn a_blocked_youngster_decides_to_go_and_play() {
-        let (arc, _, strength) = CareerPlanner::arc_for(&Fx::blocked_youngster(), 0.0)
-            .expect("he has decided something");
+        let (arc, _, strength) =
+            CareerPlanner::arc_for(&Fx::blocked_youngster(), 7, 0.0, &AnchorView::default())
+                .expect("he has decided something");
         assert_eq!(arc, CareerArc::ProveOnLoan);
         assert!(strength > 0.0);
     }
@@ -873,7 +952,7 @@ mod tests {
             age: 21,
             ..Fx::blocked_youngster()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&waiting, 0.0).unwrap();
+        let (arc, _, _) = CareerPlanner::arc_for(&waiting, 7, 0.0, &AnchorView::default()).unwrap();
         assert_eq!(
             arc,
             CareerArc::BreakThroughHere,
@@ -895,7 +974,7 @@ mod tests {
             starter_ratio: 0.05,
             ..Fx::settled()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&blocked, 0.0)
+        let (arc, _, _) = CareerPlanner::arc_for(&blocked, 7, 0.0, &AnchorView::default())
             .expect("the shirt is not coming and he is young enough to go and play");
         assert_eq!(arc, CareerArc::ProveOnLoan);
     }
@@ -909,7 +988,7 @@ mod tests {
             starter_ratio: 0.05,
             ..Fx::settled()
         };
-        assert!(CareerPlanner::arc_for(&unranked, 0.0).is_none());
+        assert!(CareerPlanner::arc_for(&unranked, 7, 0.0, &AnchorView::default()).is_none());
     }
 
     /// `at_home` describes the destination, not where he is standing
@@ -948,6 +1027,7 @@ mod tests {
         let next = CareerPlanner::review(
             &Fx::plan(CareerArc::ClaimMyPlace, 0),
             &ignored,
+            &AnchorView::default(),
             Fx::TODAY + CareerPlan::CLAIM_REVIEW_DAYS,
         )
         .expect("an unanswered claim does not simply evaporate");
@@ -971,7 +1051,7 @@ mod tests {
     #[test]
     fn a_man_playing_regularly_decides_nothing() {
         assert!(
-            CareerPlanner::arc_for(&Fx::settled(), 0.0).is_none(),
+            CareerPlanner::arc_for(&Fx::settled(), 7, 0.0, &AnchorView::default()).is_none(),
             "most footballers most weeks are simply getting on with it"
         );
     }
@@ -984,7 +1064,8 @@ mod tests {
             football_drought: 0.8,
             ..Fx::settled()
         };
-        let (arc, _, strength) = CareerPlanner::arc_for(&stuck, 0.0).unwrap();
+        let (arc, _, strength) =
+            CareerPlanner::arc_for(&stuck, 7, 0.0, &AnchorView::default()).unwrap();
         assert_eq!(arc, CareerArc::StepDownToPlay);
         assert!(strength > 0.5, "years of it is not a mild preference");
     }
@@ -999,7 +1080,8 @@ mod tests {
             starter_ratio: 0.8,
             ..Fx::settled()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&outgrown, 0.0).unwrap();
+        let (arc, _, _) =
+            CareerPlanner::arc_for(&outgrown, 7, 0.0, &AnchorView::default()).unwrap();
         assert_eq!(arc, CareerArc::StepUp);
     }
 
@@ -1016,7 +1098,7 @@ mod tests {
             ..Fx::settled()
         };
         assert!(!matches!(
-            CareerPlanner::arc_for(&done, 0.0),
+            CareerPlanner::arc_for(&done, 7, 0.0, &AnchorView::default()),
             Some((CareerArc::StepUp, _, _))
         ));
     }
@@ -1029,7 +1111,7 @@ mod tests {
             starter_ratio: 0.7,
             ..Fx::settled()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&content, 0.0).unwrap();
+        let (arc, _, _) = CareerPlanner::arc_for(&content, 7, 0.0, &AnchorView::default()).unwrap();
         assert_eq!(arc, CareerArc::SettleAtMyLevel);
     }
 
@@ -1041,7 +1123,8 @@ mod tests {
             familiar_teammates: 0,
             ..Fx::settled()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&homesick, 0.6).unwrap();
+        let (arc, _, _) =
+            CareerPlanner::arc_for(&homesick, 7, 0.6, &AnchorView::default()).unwrap();
         assert_eq!(arc, CareerArc::FinishAtHome);
     }
 
@@ -1055,7 +1138,7 @@ mod tests {
             starter_ratio: 0.8,
             ..Fx::settled()
         };
-        let (arc, _, _) = CareerPlanner::arc_for(&servant, 0.0).unwrap();
+        let (arc, _, _) = CareerPlanner::arc_for(&servant, 7, 0.0, &AnchorView::default()).unwrap();
         assert_eq!(arc, CareerArc::StayAndLead);
     }
 
@@ -1129,6 +1212,7 @@ mod tests {
         let next = CareerPlanner::review(
             &Fx::plan(CareerArc::ClaimMyPlace, 0),
             &ignored,
+            &AnchorView::default(),
             Fx::TODAY + CareerPlan::CLAIM_REVIEW_DAYS,
         )
         .expect("an unanswered claim does not simply evaporate");
@@ -1137,6 +1221,78 @@ mod tests {
             CareerArc::StepUp,
             "he has outgrown the place, so the move is upward"
         );
+        assert_eq!(
+            next.follows,
+            Some(CareerArc::ClaimMyPlace),
+            "the step up remembers the claim it came from"
+        );
+    }
+
+    /// The claim review sent a man with no level in his dream upward. His
+    /// dream does not end that while he is still not playing.
+    #[test]
+    fn a_dream_that_names_no_level_leaves_a_benched_man_wanting_to_move() {
+        let ignored = MindSituation {
+            starter_ratio: 0.05,
+            own_level: 150,
+            club_reputation: 0.3,
+            ..Fx::settled()
+        };
+        let a_career = AnchorView {
+            dream: Some(DreamKind::MakeACareer),
+            ..AnchorView::default()
+        };
+        let step_up = Fx::step_up_after_a_claim();
+        assert!(!CareerPlanner::is_answered(&step_up, &ignored, &a_career));
+
+        let playing = MindSituation {
+            starter_ratio: 0.8,
+            ..ignored
+        };
+        assert!(CareerPlanner::is_answered(&step_up, &playing, &a_career));
+    }
+
+    /// Only the claim review's step up waits for minutes. Any other plan to
+    /// step up that his dream no longer reaches for is over, bench or not.
+    #[test]
+    fn a_step_up_his_dream_no_longer_reaches_for_ends_on_the_bench() {
+        let ignored = MindSituation {
+            starter_ratio: 0.05,
+            own_level: 150,
+            club_reputation: 0.3,
+            ..Fx::settled()
+        };
+        let a_career = AnchorView {
+            dream: Some(DreamKind::MakeACareer),
+            ..AnchorView::default()
+        };
+        assert!(CareerPlanner::is_answered(
+            &Fx::plan(CareerArc::StepUp, 0),
+            &ignored,
+            &a_career
+        ));
+    }
+
+    /// The claim review can send a benched man who has arrived upward too.
+    /// There is nowhere above him, so the plan ends whatever his minutes.
+    #[test]
+    fn a_man_who_has_arrived_holds_no_plan_to_step_up_on_the_bench() {
+        let benched = MindSituation {
+            starter_ratio: 0.05,
+            own_level: 150,
+            club_reputation: 0.9,
+            ..Fx::settled()
+        };
+        let arrived = AnchorView {
+            dream: Some(DreamKind::ReachTheTop),
+            arrived: true,
+            ..AnchorView::default()
+        };
+        assert!(CareerPlanner::is_answered(
+            &Fx::step_up_after_a_claim(),
+            &benched,
+            &arrived
+        ));
     }
 
     #[test]
@@ -1147,7 +1303,8 @@ mod tests {
         };
         assert!(CareerPlanner::is_answered(
             &Fx::plan(CareerArc::ClaimMyPlace, 0),
-            &playing
+            &playing,
+            &AnchorView::default()
         ));
     }
 
@@ -1162,7 +1319,8 @@ mod tests {
         };
         assert!(!CareerPlanner::is_answered(
             &Fx::plan(CareerArc::ProveOnLoan, 0),
-            &away
+            &away,
+            &AnchorView::default()
         ));
     }
 
@@ -1180,6 +1338,34 @@ mod tests {
         let late = plan.deadline_pressure(plan.review_on - 10);
         assert!(early < late);
         assert_eq!(plan.deadline_pressure(plan.review_on), 1.0);
+    }
+
+    /// Formed on 1 October on the European calendar, with the summer
+    /// window 334 days from shutting: January comes and goes inside it.
+    #[test]
+    fn a_short_window_is_not_the_attempt() {
+        let autumn = MindSituation {
+            days_to_main_window_close: 334,
+            ..Fx::blocked_youngster()
+        };
+        let days = CareerPlanner::review_days_for(CareerArc::ProveOnLoan, &autumn);
+        let plan = CareerPlan::new(
+            CareerArc::ProveOnLoan,
+            GoalOrigin::Survival,
+            0.6,
+            Fx::TODAY,
+            days,
+            0.7,
+        );
+        assert!(
+            !plan.review_due(Fx::TODAY + 140),
+            "February is not his answer"
+        );
+        assert!(
+            !plan.review_due(Fx::TODAY + 334),
+            "nor the last day of the summer window"
+        );
+        assert!(plan.review_due(Fx::TODAY + 335));
     }
 
     #[test]

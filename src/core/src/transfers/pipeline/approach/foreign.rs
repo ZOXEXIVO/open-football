@@ -13,6 +13,7 @@
 //! seller-side facts staged here because the buying country's resolver cannot
 //! reach back over the border to recompute them.
 
+use crate::transfers::loan::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::value::asking::AskingPrice;
 use crate::transfers::view::club::ClubView;
@@ -364,6 +365,16 @@ impl ForeignApproachPass {
                 selling_club_name,
                 assessment.diagnostics.explain()
             );
+            return Resolution::Refused(PlausibilityReject {
+                club_id: cand.buying_club_id,
+                player_id: cand.player_id,
+                shortlist_request_id: cand.shortlist_request_id,
+            });
+        }
+
+        // A parent that will not lend him gives the same answer abroad as at
+        // home, and a buyer abroad cannot be told it at the table.
+        if is_loan && !LoanAssetGuard::willingness_for(sell_club, player, tick.date).entertains() {
             return Resolution::Refused(PlausibilityReject {
                 club_id: cand.buying_club_id,
                 player_id: cand.player_id,

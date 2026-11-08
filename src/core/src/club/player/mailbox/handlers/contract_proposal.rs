@@ -232,11 +232,22 @@ impl ProcessContractHandler {
         // resolved to go — years without a shirt, a club he has decided he
         // is leaving — does not sign more of them however the offer is
         // dressed, and the money argument below never gets heard.
+        //
+        // Being tied down is all a man still climbing has against it, and a
+        // clause or a short deal answers that.
         const MIND_REFUSAL_BAR: f32 = -0.5;
+        const SHORT_DEAL_YEARS: u8 = 2;
         if player.contract.is_some() {
             let verdict = player.mind.deliberate(MindOption::SignContract);
-            if verdict.net() <= MIND_REFUSAL_BAR {
-                let reason = Self::refusal_reason(&verdict);
+            let leaves_him_a_way_out = proposal.release_clause.is_some()
+                || proposal.years <= min_acceptable_years.max(SHORT_DEAL_YEARS);
+            let answered = if leaves_him_a_way_out {
+                verdict.without(GoalKind::StepUpToABiggerClub)
+            } else {
+                verdict
+            };
+            if answered.net() <= MIND_REFUSAL_BAR {
+                let reason = Self::refusal_reason(&answered);
                 result.contract.contract_rejected = true;
                 record_counter_offer(player, &proposal, now, min_acceptable_years, reason);
                 Self::emit_rejected_contract_offer(player, &proposal, reason);
@@ -853,6 +864,7 @@ impl ProcessContractHandler {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerDream, DreamKind, GoalEvidence, GoalOrigin, MindClock};
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
@@ -957,6 +969,81 @@ mod tests {
 
     fn make_proposal(salary: u32, years: u8) -> PlayerContractProposal {
         PlayerContractProposal::basic(salary, years, 10, 0, 0, None)
+    }
+
+    const WAGE: u32 = 1_000_000;
+
+    /// On a deal with a year to run, of this standing with his dream.
+    fn on_a_deal(dream: CareerDream) -> Player {
+        let mut p = build(19.0, 10.0, 5_000);
+        p.contract = Some(PlayerClubContract::new(WAGE, d(2027, 6, 30)));
+        p.mind.career.anchors.dream = Some(dream);
+        p
+    }
+
+    fn dream(kind: DreamKind, arrived: bool) -> CareerDream {
+        let today = MindClock::day(d(2026, 5, 30));
+        CareerDream {
+            kind,
+            target_standing: 0.9,
+            conviction: 0.9,
+            arrived,
+            ..CareerDream::default_on(today)
+        }
+    }
+
+    /// Pays what he is worth, and more, so only the mind can say no.
+    fn sign(p: &mut Player, mut proposal: PlayerContractProposal) -> bool {
+        proposal.valuation_expected_wage = Some(WAGE);
+        proposal.valuation_min_acceptable = Some(WAGE / 2);
+        let mut result = PlayerResult::new(p.id);
+        ProcessContractHandler::process(p, proposal, d(2026, 5, 30), &mut result);
+        !result.contract.contract_rejected
+    }
+
+    #[test]
+    fn a_star_at_his_dream_club_hears_a_fair_offer() {
+        let mut p = on_a_deal(dream(DreamKind::ReachTheTop, true));
+        p.mind.financial.set_fairness_for_test(-0.9);
+        assert!(
+            p.mind.deliberate(MindOption::SignContract).net() > 0.0,
+            "wanting to be paid more is a matter of terms"
+        );
+        assert!(sign(&mut p, make_proposal(WAGE * 2, 4)));
+    }
+
+    #[test]
+    fn the_terms_answer_a_climber() {
+        let mut climber = on_a_deal(dream(DreamKind::ReachTheTop, false));
+        climber.mind.career.anchors.set_runway_for_test(1.0);
+        climber.mind.organs.goals.pursue(
+            GoalKind::StepUpToABiggerClub,
+            GoalOrigin::SelfDrive,
+            GoalEvidence::EMPTY,
+            1.0,
+            MindClock::day(d(2026, 5, 30)),
+        );
+        climber
+            .mind
+            .organs
+            .goals
+            .set_urgency(GoalKind::StepUpToABiggerClub, 1.0);
+        assert!(
+            !sign(&mut climber.clone(), make_proposal(WAGE * 2, 5)),
+            "a long deal with no way out cuts across it"
+        );
+        let mut with_a_clause = make_proposal(WAGE * 2, 5);
+        with_a_clause.release_clause = Some(50_000_000);
+        assert!(
+            sign(&mut climber.clone(), with_a_clause),
+            "a clause answers it"
+        );
+        let shortest = ProcessContractHandler::player_minimum_years(&climber, d(2026, 5, 30));
+        assert!(shortest < 5);
+        assert!(
+            sign(&mut climber.clone(), make_proposal(WAGE * 2, shortest)),
+            "so does the shortest deal he would sign"
+        );
     }
 
     /// A renewal offer still in the mailbox when the board lists the player

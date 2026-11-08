@@ -22,10 +22,11 @@
 use super::pricing::{BuyerRoleFit, FreeAgentMarketCalculator};
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
-use crate::club::player::transfer::{MarketStage, PreContractAgreement};
+use crate::club::player::transfer::{LevelFloor, MarketStage, PreContractAgreement};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::country::result::transfers::config::TransferConfig;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::view::club::ClubView;
 use crate::utils::IntegerUtils;
@@ -63,6 +64,8 @@ struct LeavingPlayer {
     current_reputation: i16,
     age: u8,
     days_to_expiry: i64,
+    /// He is still employed, so this is the floor he has where he plays.
+    level_floor: LevelFloor,
 }
 
 pub(in crate::country::result::transfers) struct PreContractManager;
@@ -207,6 +210,7 @@ impl PreContractManager {
     ) -> Vec<LeavingPlayer> {
         let mut out: Vec<LeavingPlayer> = Vec::new();
         for club in &country.clubs {
+            let league_rep = LoanPipeline::club_league_reputation(country, club);
             for team in &club.teams.teams {
                 for player in &team.players.players {
                     if player.is_on_loan()
@@ -239,6 +243,7 @@ impl PreContractManager {
                         current_reputation: player.player_attributes.current_reputation,
                         age: player.age(date),
                         days_to_expiry,
+                        level_floor: player.level_floor(date, league_rep),
                     });
                 }
             }
@@ -314,6 +319,13 @@ impl PreContractManager {
             let Some(main_team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
                 continue;
             };
+            let league_reputation = LoanPipeline::club_league_reputation(country, club);
+            // The division he will not drop to weighs on a club as it weighs
+            // on every other offer he hears, and a full span under it is out.
+            let floor_allows = 1.0 - player.level_floor.below(league_reputation as f32);
+            if floor_allows <= 0.0 {
+                continue;
+            }
             let fit = SquadFitSnapshot::build(club, player.group, date, registration);
             if !fit.is_emergency()
                 && fit.would_be_surplus(player.ability, player.potential, player.age)
@@ -342,16 +354,12 @@ impl PreContractManager {
 
             // Prefer the strongest fitting club — a leaving player moves
             // up where he can.
+            let preference = club_score * floor_allows;
             if best
                 .as_ref()
-                .map(|(_, score, _, _, _)| club_score > *score)
+                .map(|(_, score, _, _, _)| preference > *score)
                 .unwrap_or(true)
             {
-                let league_reputation = main_team
-                    .league_id
-                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                    .map(|l| l.reputation)
-                    .unwrap_or(0);
                 let negotiator_skill = main_team
                     .staffs
                     .find_negotiator()
@@ -368,7 +376,7 @@ impl PreContractManager {
                 );
                 best = Some((
                     club.id,
-                    club_score,
+                    preference,
                     annual_wage,
                     contract_years,
                     promised_status,
@@ -1015,7 +1023,56 @@ mod tests {
             current_reputation: 2400,
             age: 27,
             days_to_expiry: 60,
+            level_floor: LevelFloor::none(),
         }
+    }
+
+    #[test]
+    fn an_employed_mans_pre_contract_reads_the_floor_he_has_where_he_plays() {
+        let today = PreContractFixtures::d(2026, 3, 1);
+        let config = TransferConfig::default();
+        let country = PreContractFixtures::country(vec![keeper_buyer(200, &[60])]);
+        let division = LoanPipeline::club_league_reputation(&country, &country.clubs[0]) as f32;
+
+        let regular_two_divisions_up = LeavingPlayer {
+            level_floor: LevelFloor {
+                standing: division + 3_000.0,
+                tolerance: 1_000.0,
+                plays_in: division + 3_000.0,
+            },
+            ..leaving_keeper(80)
+        };
+        assert!(
+            PreContractManager::choose_buyer(&country, &regular_two_divisions_up, today, &config)
+                .is_none(),
+            "this club is not an acceptable buyer for him"
+        );
+
+        let a_man_of_that_level = LeavingPlayer {
+            level_floor: LevelFloor {
+                standing: division,
+                tolerance: 1_000.0,
+                plays_in: division,
+            },
+            ..leaving_keeper(80)
+        };
+        assert!(
+            PreContractManager::choose_buyer(&country, &a_man_of_that_level, today, &config)
+                .is_some()
+        );
+
+        let a_point_above_it = LeavingPlayer {
+            level_floor: LevelFloor {
+                standing: division + 1_001.0,
+                tolerance: 1_000.0,
+                plays_in: division + 1_001.0,
+            },
+            ..leaving_keeper(80)
+        };
+        assert!(
+            PreContractManager::choose_buyer(&country, &a_point_above_it, today, &config).is_some(),
+            "a point under his floor weighs on the club, it does not rule it out"
+        );
     }
 
     #[test]

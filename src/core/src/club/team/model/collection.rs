@@ -379,35 +379,7 @@ impl TeamCollection {
             }
             let club_id = team.club_id;
             for player in team.players.players.iter_mut() {
-                let magnitude = match player.relations.get_staff(outgoing_coach_id) {
-                    Some(rel) => {
-                        let bond = rel.personal_bond + rel.trust_in_abilities + rel.loyalty * 0.5;
-                        if bond >= 150.0 {
-                            -8.0
-                        } else if bond >= 100.0 {
-                            -4.0
-                        } else if bond <= -50.0 {
-                            3.0
-                        } else if rel.authority_respect < 30.0 {
-                            2.0
-                        } else {
-                            -1.0
-                        }
-                    }
-                    None => -1.0,
-                };
-                player
-                    .happiness
-                    .add_event(HappinessEventType::ManagerDeparture, magnitude);
-                // And in memory, filed against the man rather than the
-                // badge -- a grudge or a debt follows a coach to his
-                // next job, and the club he leaves behind owns neither.
-                let ctx = player.mind_context(date, Some(club_id));
-                player.mind.remember(
-                    EpisodeKind::ManagerLeftClub,
-                    ActorRef::staff(outgoing_coach_id),
-                    &ctx,
-                );
+                player.on_manager_left(outgoing_coach_id, club_id, date);
             }
         }
     }

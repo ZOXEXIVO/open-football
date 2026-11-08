@@ -341,7 +341,6 @@ impl TeamBehaviourResult {
                             }
                         }
                         ManagerTalkType::TransferDiscussion => {
-                            player.statuses.remove(PlayerStatusType::Req);
                             // Coach agreed to consider sale next window.
                             // Record TransferPermission so the player
                             // remembers — broken later if no offer is
@@ -397,7 +396,7 @@ impl TeamBehaviourResult {
                     // Handle failure for player-initiated requests
                     match talk.talk_type {
                         ManagerTalkType::PlayingTimeRequest => {
-                            player.statuses.add(sim_date, PlayerStatusType::Req);
+                            player.on_playing_time_talk_refused(talk.staff_id);
                         }
                         ManagerTalkType::LoanRequest => {
                             // Denied loan — unsettled about future. Honest

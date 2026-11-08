@@ -3,6 +3,52 @@ use serde::{Deserialize, Serialize};
 
 pub const CONDITION_MAX_VALUE: i16 = 10000;
 
+/// What a player's ability is known for, on the 0..10000 reputation scale:
+/// the curve a world's starting reputations are drawn from, and the one
+/// they come back to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReputationStanding {
+    pub current: i16,
+    pub home: i16,
+    pub world: i16,
+}
+
+impl ReputationStanding {
+    const CEILING: f32 = 9500.0;
+    /// How much of each kind of fame the stage adds, from the smallest
+    /// stage to the biggest. World fame depends on the stage the most, home
+    /// fame the least: you are known at home for being good.
+    pub const CURRENT_EXPOSURE: (f32, f32) = (0.80, 1.15);
+    pub const HOME_EXPOSURE: (f32, f32) = (0.85, 1.10);
+    pub const WORLD_EXPOSURE: (f32, f32) = (0.55, 1.25);
+
+    /// Ability alone. World fame is reserved for the very top of the
+    /// ability range: a lower-division pro barely registers, a Ballon
+    /// d'Or candidate dominates.
+    pub fn for_ability(ability: u8) -> Self {
+        let coef = (ability as f32 / 200.0).clamp(0.05, 1.0);
+        ReputationStanding {
+            current: (Self::CEILING * coef * 0.95) as i16,
+            home: (Self::CEILING * coef.powf(0.9)) as i16,
+            world: (Self::CEILING * coef.powf(2.5)) as i16,
+        }
+    }
+
+    /// The same ability, seen on a stage of `stage`, 0..1.
+    pub fn on_stage(ability: u8, stage: f32) -> Self {
+        let base = Self::for_ability(ability);
+        let stage = stage.clamp(0.0, 1.0);
+        let exposed = |value: i16, (lo, hi): (f32, f32)| {
+            (value as f32 * (lo + (hi - lo) * stage)).clamp(0.0, 10_000.0) as i16
+        };
+        ReputationStanding {
+            current: exposed(base.current, Self::CURRENT_EXPOSURE),
+            home: exposed(base.home, Self::HOME_EXPOSURE),
+            world: exposed(base.world, Self::WORLD_EXPOSURE),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct PlayerAttributes {
     pub is_banned: bool,
@@ -177,6 +223,24 @@ impl PlayerAttributes {
         self.current_reputation = (self.current_reputation + current_delta).clamp(0, 10000);
         self.home_reputation = (self.home_reputation + home_delta).clamp(0, 10000);
         self.world_reputation = (self.world_reputation + world_delta).clamp(0, 10000);
+    }
+
+    /// Move each reputation `share` of the way to where his football,
+    /// seen on this stage, puts him. What he has done lifts him above it
+    /// for a while; it does not keep him there for ever.
+    pub fn settle_reputation(&mut self, standing: ReputationStanding, share: f32) {
+        self.current_reputation = Self::toward(self.current_reputation, standing.current, share);
+        self.settle_home_reputation(standing, share);
+        self.world_reputation = Self::toward(self.world_reputation, standing.world, share);
+    }
+
+    /// [`Self::settle_reputation`] for a look only his own country got.
+    pub fn settle_home_reputation(&mut self, standing: ReputationStanding, share: f32) {
+        self.home_reputation = Self::toward(self.home_reputation, standing.home, share);
+    }
+
+    fn toward(now: i16, target: i16, share: f32) -> i16 {
+        now + ((target - now) as f32 * share).round() as i16
     }
 
     /// Blended standing on the 0..10000 scale — the figure to compare
@@ -415,6 +479,36 @@ mod tests {
         attrs.is_injured = false;
         attrs.injury_days_remaining = 50;
         assert!(!attrs.is_injury_serious());
+    }
+
+    #[test]
+    fn a_reputation_comes_back_to_what_his_football_is() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 10_000;
+        attrs.home_reputation = 10_000;
+        attrs.world_reputation = 10_000;
+        let standing = ReputationStanding::on_stage(94, 0.3);
+        for _ in 0..80 {
+            attrs.settle_reputation(standing, 0.02);
+        }
+        assert!(
+            attrs.current_reputation < 6_500,
+            "{}",
+            attrs.current_reputation
+        );
+        assert!(attrs.world_reputation < 5_000, "{}", attrs.world_reputation);
+        assert!(attrs.current_reputation >= standing.current);
+    }
+
+    #[test]
+    fn a_bigger_stage_and_a_better_player_are_better_known() {
+        let star = ReputationStanding::on_stage(190, 0.9);
+        let regular = ReputationStanding::on_stage(130, 0.9);
+        let same_regular_smaller_club = ReputationStanding::on_stage(130, 0.2);
+        assert!(star.world > regular.world);
+        assert!(regular.world > same_regular_smaller_club.world);
+        assert!(regular.current > same_regular_smaller_club.current);
+        assert!(star.current <= 10_000 && star.world <= 10_000);
     }
 
     #[test]

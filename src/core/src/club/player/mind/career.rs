@@ -13,6 +13,10 @@
 
 use crate::transfers::pipeline::trace::MarketSwitches;
 
+use super::anchors::{
+    AnchorView, CareerAnchors, CareerChapter, CareerDreamReview, CareerSummit, ChapterKind,
+    DreamKind,
+};
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin, GoalStatus};
 use super::organs::memory::{ActorRef, EpisodeKind, EpochDay, FactClaim, MindEpisode};
@@ -91,6 +95,8 @@ pub struct CareerMind {
     /// he never got is not forgotten because he broke through in the
     /// meantime, and a man on his third go is not starting fresh.
     attempts: u8,
+    /// What a career leaves behind. No club change touches these.
+    pub anchors: CareerAnchors,
 }
 
 impl CareerMind {
@@ -109,6 +115,13 @@ impl CareerMind {
     /// longer than a season, so a good autumn is not mistaken for
     /// getting better.
     const SLOW_ALPHA: f32 = 0.02;
+
+    /// What living his dream says for signing on, whatever else he wants.
+    const ARRIVED_SIGNS: f32 = 0.6;
+    /// How much of his belief in a climb argues against a long deal. A man
+    /// certain of it, with his prime ahead, says no to the first offer and
+    /// asks for a way out; anybody less sure signs and carries on wanting.
+    const TIED_DOWN: f32 = 0.6;
 
     /// Weeks of standing still before a player concludes anything from
     /// it. A season's worth: nobody decides he has plateaued in March
@@ -193,6 +206,14 @@ impl SubMind for CareerMind {
             | EpisodeKind::WonContinentalTrophy
             | EpisodeKind::WonDomesticCup
             | EpisodeKind::NationalTeamGlory => {
+                if self.honours == 0 && !MarketSwitches::career_anchors_off() {
+                    self.anchors.tell(CareerChapter {
+                        kind: ChapterKind::FirstMajorHonour,
+                        on: episode.when,
+                        club_id: episode.where_club,
+                        ..Default::default()
+                    });
+                }
                 self.honours = self.honours.saturating_add(1);
             }
             EpisodeKind::Relegated | EpisodeKind::ReleasedByClub | EpisodeKind::SoldAgainstWill => {
@@ -213,6 +234,8 @@ impl SubMind for CareerMind {
         if by_age > self.stage {
             self.stage = by_age;
         }
+
+        self.keep_his_anchors(view, organs);
 
         // The arc, before the wants. Everything below forms goals; the
         // plan is what orders them, and it pushes its own goal on the
@@ -313,6 +336,99 @@ impl SubMind for CareerMind {
 }
 
 impl CareerMind {
+    /// What he comes into the world with: the record he has, and the dream
+    /// who he is and what he has done argue for, dated today. A man with a
+    /// senior career behind him has no first club left to tell.
+    pub fn seed_anchors(
+        &mut self,
+        s: &MindSituation,
+        club_id: u32,
+        summit: Option<CareerSummit>,
+        has_senior_record: bool,
+        today: EpochDay,
+    ) {
+        self.anchors.summit = summit;
+        self.anchors.runway = s.career_runway();
+        self.anchors.told_first_club = has_senior_record;
+        self.anchors.form_dream(s, club_id, today);
+    }
+
+    /// What this week adds to the career he carries: a move read for what
+    /// it did, a new record, a dream formed or reviewed, and whether he is
+    /// living it.
+    fn keep_his_anchors(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        if MarketSwitches::career_anchors_off() {
+            return;
+        }
+        let s = view.situation;
+        let today = view.today();
+        let club_id = view.tick.club_id;
+        self.anchors.runway = s.career_runway();
+
+        let moved = self.anchors.read_the_move(s, club_id, organs, today);
+        if moved.stepped_up {
+            self.step_ups = self.step_ups.saturating_add(1);
+        }
+        if moved.fell {
+            self.setbacks = self.setbacks.saturating_add(1);
+        }
+        self.anchors.record_summit(s, club_id, today);
+        if self.anchors.dream.is_some() {
+            self.anchors
+                .review_dream(s, club_id, self.improvement(), today);
+        } else if s.age >= CareerDreamReview::MIN_AGE && s.own_level > 0 {
+            self.anchors.form_dream(s, club_id, today);
+        }
+        self.anchors.read_arrival(s, club_id, today);
+        self.pursue_his_dream(view, organs);
+    }
+
+    /// What a dream asks of him now, through the wants that already reach
+    /// decisions: so a man who means to belong somewhere holds the wish to
+    /// stay long before he has the service, and nothing reads the dream twice.
+    fn pursue_his_dream(&self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        let Some(dream) = self.anchors.dream else {
+            return;
+        };
+        let s = view.situation;
+        let today = view.today();
+        match dream.kind {
+            DreamKind::ReachTheTop if dream.arrived => {
+                // Met through progress, not resolved outright: the review has
+                // to see the turn for the diary to say so.
+                organs.goals.advance(GoalKind::StepUpToABiggerClub, 1.0);
+            }
+            DreamKind::BelongHere if dream.target_club == view.tick.club_id => {
+                organs.goals.pursue(
+                    GoalKind::StayAtThisClub,
+                    GoalOrigin::Attachment,
+                    GoalEvidence::of(&[GoalEvidence::HERITAGE_PULL]),
+                    0.3 + 0.5 * dream.conviction,
+                    today,
+                );
+                if dream.arrived {
+                    organs.goals.pursue(
+                        GoalKind::BecomeAClubLegend,
+                        GoalOrigin::Attachment,
+                        GoalEvidence::of(&[GoalEvidence::HERITAGE_PULL]),
+                        0.6 * dream.conviction,
+                        today,
+                    );
+                }
+            }
+            DreamKind::FinishAtHome if s.is_abroad => {
+                organs.goals.pursue(
+                    GoalKind::GoHome,
+                    GoalOrigin::Attachment,
+                    GoalEvidence::of(&[GoalEvidence::LATE_CAREER]),
+                    dream.conviction * (0.3 + 0.7 * s.career_spent()),
+                    today,
+                );
+            }
+            _ => {}
+        }
+    }
+
     /// The three rungs of wanting to get better.
     ///
     /// Wanting to develop is not wanting a bigger club, and collapsing
@@ -484,7 +600,7 @@ impl CareerMind {
         //
         // What is left here is the want the arc has no rung for: a man
         // who has NOT outgrown the place and simply wants a new test.
-        if outgrown <= 0.2 {
+        if outgrown <= 0.2 && !self.anchors.dream.is_some_and(|dream| dream.arrived) {
             let restlessness = drive * 0.5 * (1.0 - s.loyalty_drive() * 0.6);
             organs.goals.pursue(
                 GoalKind::FindANewChallenge,
@@ -642,16 +758,22 @@ impl CareerMind {
         let runway = s.career_runway();
         let home_desire = organs.goals.pressure_of(GoalKind::GoHome);
 
+        let anchors = AnchorView::of(&self.anchors, today, s.age, s.own_level);
         if let Some(plan) = self.plan {
-            if CareerPlanner::is_answered(&plan, s) {
+            if CareerPlanner::is_answered(&plan, s, &anchors) {
                 self.remember_attempts(&plan);
                 self.plan = None;
             } else if plan.review_due(today) {
-                self.plan = CareerPlanner::review(&plan, s, today);
+                self.plan = CareerPlanner::review(&plan, s, &anchors, today);
+                if plan.arc == CareerArc::StepUp
+                    && self.plan.is_some_and(|next| next.arc == CareerArc::StepUp)
+                {
+                    self.anchors.on_window_missed();
+                }
             }
         }
 
-        let candidate = CareerPlanner::arc_for(s, home_desire);
+        let candidate = CareerPlanner::arc_for(s, view.tick.club_id, home_desire, &anchors);
         match (self.plan, candidate) {
             (Some(current), Some((arc, _, strength))) if current.arc == arc => {
                 // The same circumstances, still there. They harden it.
@@ -806,6 +928,33 @@ impl CareerMind {
             .map(|plan| CareerPlanView::of(plan, today))
             .unwrap_or_default()
     }
+
+    /// Is he living what he dreamed of?
+    pub fn has_arrived(&self) -> bool {
+        self.anchors.dream.is_some_and(|dream| dream.arrived)
+    }
+
+    /// How hard a long deal cuts across what he is reaching for, 0..1: he
+    /// believes it, and has the years left to go and get it.
+    fn dream_against_signing(&self) -> f32 {
+        self.anchors
+            .dream
+            .filter(|dream| {
+                !dream.arrived
+                    && matches!(
+                        dream.kind,
+                        DreamKind::ReachTheTop | DreamKind::PlayForHisClub
+                    )
+            })
+            .map_or(0.0, |dream| {
+                dream.conviction * self.anchors.runway * Self::TIED_DOWN
+            })
+    }
+
+    /// What a career has left him with, flat, for anybody weighing him.
+    pub fn anchor_view(&self, today: EpochDay, age: u8, own_level: u8) -> AnchorView {
+        AnchorView::of(&self.anchors, today, age, own_level)
+    }
 }
 
 impl CareerMind {
@@ -894,7 +1043,6 @@ impl CareerMind {
                 let wants_out = [
                     GoalKind::LeaveThisClub,
                     GoalKind::BeAllowedToLeave,
-                    GoalKind::StepUpToABiggerClub,
                     GoalKind::FindANewChallenge,
                 ]
                 .into_iter()
@@ -902,6 +1050,18 @@ impl CareerMind {
                 .fold(0.0f32, f32::max);
                 if wants_out > 0.1 {
                     reasons.push(GoalKind::LeaveThisClub, -wants_out);
+                }
+                // Reaching higher is a reason not to be tied down, which the
+                // terms can answer: its own line, so the handler can read it.
+                let climbing = organs
+                    .goals
+                    .pressure_of(GoalKind::StepUpToABiggerClub)
+                    .max(self.dream_against_signing());
+                if climbing > 0.1 {
+                    reasons.push(GoalKind::StepUpToABiggerClub, -climbing);
+                }
+                if self.has_arrived() {
+                    reasons.push(GoalKind::StayAtThisClub, Self::ARRIVED_SIGNS);
                 }
             }
 
@@ -925,9 +1085,12 @@ impl CareerMind {
 
 #[cfg(test)]
 mod tests {
-    use super::super::MindTickContext;
+    use super::super::anchors::CareerDream;
+    use super::super::organs::goals::GoalBlocker;
     use super::super::organs::memory::{EpochDay, MindClock};
+    use super::super::organs::{MindNoteKind, SpellChange};
     use super::super::situation::MindSituation;
+    use super::super::{MindTickContext, PlayerMind};
     use super::*;
     use crate::club::person::PersonAttributes;
     use chrono::NaiveDate;
@@ -968,6 +1131,399 @@ mod tests {
 
     fn episode(kind: EpisodeKind) -> MindEpisode {
         MindEpisode::new(kind, ActorRef::NONE, 7, 100, kind.spec().valence, 0.8)
+    }
+
+    /// A regular at a club of this standing, reaching for the very top.
+    fn star_at(club_reputation: f32) -> MindSituation {
+        MindSituation {
+            age: 25,
+            ambition: 19.0,
+            loyalty: 8.0,
+            own_level: 170,
+            ceiling: 180,
+            club_reputation,
+            division_reputation: 9000,
+            starter_ratio: 0.95,
+            appearances_tracked: 30,
+            days_at_club: 3000,
+            ..MindSituation::neutral()
+        }
+    }
+
+    fn today() -> EpochDay {
+        MindClock::day(NaiveDate::from_ymd_opt(2030, 6, 1).unwrap())
+    }
+
+    #[test]
+    fn nobody_at_the_top_wants_a_bigger_club() {
+        let s = star_at(0.95);
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        for _ in 0..3 {
+            reflect(&mut mind, &s, &mut organs);
+        }
+        assert!(mind.anchors.dream.unwrap().arrived);
+        assert_ne!(
+            mind.plan.map(|plan| plan.arc),
+            Some(CareerArc::StepUp),
+            "he has been here eight years and he has nothing to outgrow"
+        );
+        assert_eq!(organs.goals.pressure_of(GoalKind::StepUpToABiggerClub), 0.0);
+        assert_eq!(organs.goals.pressure_of(GoalKind::FindANewChallenge), 0.0);
+    }
+
+    #[test]
+    fn a_man_reaching_higher_plans_to_step_up_once_he_has_settled() {
+        let s = MindSituation {
+            days_at_club: 120,
+            ..star_at(0.6)
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        reflect(&mut mind, &s, &mut organs);
+        assert_eq!(
+            mind.plan.map(|plan| plan.arc),
+            Some(CareerArc::StepUp),
+            "and he does not wait two seasons to do it"
+        );
+
+        let just_arrived = MindSituation {
+            days_at_club: 10,
+            ..s
+        };
+        let mut new_man = CareerMind::default();
+        new_man.seed_anchors(&just_arrived, 7, None, true, today());
+        reflect(&mut new_man, &just_arrived, &mut MindOrgans::new());
+        assert_eq!(
+            new_man.plan, None,
+            "he gives the new club a fair look first"
+        );
+    }
+
+    #[test]
+    fn not_playing_does_not_end_a_dream() {
+        let s = MindSituation {
+            age: 20,
+            ambition: 18.0,
+            own_level: 90,
+            ceiling: 150,
+            club_reputation: 0.9,
+            division_reputation: 9000,
+            starter_ratio: 0.02,
+            appearances_tracked: 30,
+            days_at_club: 400,
+            pecking_rank: 4,
+            rivals_at_position: 4,
+            top_rival_age: 24,
+            rival_gap: -40,
+            ..MindSituation::neutral()
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        let dream = mind.anchors.dream;
+        reflect(&mut mind, &s, &mut organs);
+        assert_eq!(mind.plan.map(|plan| plan.arc), Some(CareerArc::ProveOnLoan));
+        assert_eq!(
+            mind.anchors.dream, dream,
+            "his plan is the loan, his dream is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_window_closes_on_a_plan_to_step_up() {
+        let s = MindSituation {
+            days_to_main_window_close: 30,
+            ..star_at(0.6)
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        reflect(&mut mind, &s, &mut organs);
+        let formed = mind.plan.unwrap();
+        assert_eq!(formed.arc, CareerArc::StepUp);
+
+        let mut plan = formed;
+        plan.review_on = today();
+        mind.plan = Some(plan);
+        reflect(&mut mind, &s, &mut organs);
+
+        let after = mind.plan.unwrap();
+        assert_eq!(after.arc, CareerArc::StepUp, "he still plans to step up");
+        assert_eq!(
+            after.attempts,
+            formed.attempts + 1,
+            "one more attempt counted"
+        );
+        assert_eq!(
+            mind.anchors.dream.unwrap().windows_missed,
+            1,
+            "and the dream's next review weighs it"
+        );
+    }
+
+    #[test]
+    fn arriving_answers_a_plan_to_step_up() {
+        let climbing = star_at(0.6);
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&climbing, 7, None, true, today());
+        reflect(&mut mind, &climbing, &mut organs);
+        assert_eq!(mind.plan.map(|plan| plan.arc), Some(CareerArc::StepUp));
+
+        reflect(&mut mind, &star_at(0.95), &mut organs);
+        assert!(mind.anchors.dream.unwrap().arrived);
+        assert_ne!(mind.plan.map(|plan| plan.arc), Some(CareerArc::StepUp));
+    }
+
+    #[test]
+    fn a_man_dreaming_of_belonging_holds_the_stay_want_without_long_service() {
+        let s = MindSituation {
+            age: 24,
+            loyalty: 18.0,
+            own_level: 110,
+            ceiling: 115,
+            club_reputation: 0.6,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            days_at_club: 200,
+            ..MindSituation::neutral()
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.anchors.dream = Some(CareerDream {
+            kind: DreamKind::BelongHere,
+            target_club: 7,
+            conviction: 0.8,
+            ..CareerDreamReview::form(&s, 7, today())
+        });
+        reflect(&mut mind, &s, &mut organs);
+        assert!(organs.goals.pressure_of(GoalKind::StayAtThisClub) > 0.0);
+    }
+
+    #[test]
+    fn a_man_dreaming_of_home_wants_to_go_home() {
+        let s = MindSituation {
+            age: 31,
+            is_abroad: true,
+            adaptability: 4.0,
+            own_level: 110,
+            ceiling: 110,
+            club_reputation: 0.6,
+            days_at_club: 400,
+            ..MindSituation::neutral()
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        assert_eq!(mind.anchors.dream.unwrap().kind, DreamKind::FinishAtHome);
+        reflect(&mut mind, &s, &mut organs);
+        assert!(organs.goals.pressure_of(GoalKind::GoHome) > 0.0);
+        assert_eq!(
+            mind.plan.map(|plan| plan.arc),
+            Some(CareerArc::FinishAtHome)
+        );
+    }
+
+    #[test]
+    fn a_real_step_up_lifts_his_read_of_his_career() {
+        let s = MindSituation {
+            own_level: 120,
+            days_at_club: 400,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            ..MindSituation::neutral()
+        };
+        let in_a_small_league = MindSituation {
+            division_reputation: 6000,
+            club_reputation: 0.4,
+            ..s
+        };
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        reflect(&mut mind, &in_a_small_league, &mut organs);
+        let before = mind.trajectory();
+
+        let a_bigger_one = MindSituation {
+            division_reputation: 8000,
+            club_reputation: 0.7,
+            ..s
+        };
+        let tick = MindTickContext::new(
+            NaiveDate::from_ymd_opt(2030, 6, 1).unwrap(),
+            9,
+            &attrs(),
+            50.0,
+        );
+        mind.reflect(
+            &MindView {
+                tick: &tick,
+                situation: &a_bigger_one,
+            },
+            &mut organs,
+        );
+        assert_eq!(mind.step_ups, 1);
+        assert!(mind.trajectory() > before, "his read of his career rises");
+    }
+
+    #[test]
+    fn with_no_dream_the_plan_reads_as_it_always_did() {
+        let outgrown = MindSituation {
+            age: 24,
+            ambition: 18.0,
+            own_level: 170,
+            club_reputation: 0.3,
+            days_at_club: 800,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            ..MindSituation::neutral()
+        };
+        let (arc, _, _) =
+            CareerPlanner::arc_for(&outgrown, 7, 0.0, &AnchorView::default()).unwrap();
+        assert_eq!(arc, CareerArc::StepUp);
+    }
+
+    #[test]
+    fn a_climber_is_slow_to_commit() {
+        let at = |ambition: f32, loyalty: f32| MindSituation {
+            age: 23,
+            ambition,
+            loyalty,
+            own_level: 150,
+            ceiling: 175,
+            club_reputation: 0.55,
+            division_reputation: 8000,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            days_at_club: 700,
+            ..MindSituation::neutral()
+        };
+        let verdict = |s: &MindSituation| {
+            let mut mind = CareerMind::default();
+            mind.seed_anchors(s, 7, None, true, today());
+            mind.weigh_option(MindOption::SignContract, &MindOrgans::new())
+                .net()
+        };
+        let climber = verdict(&at(19.0, 6.0));
+        let team_mate = verdict(&MindSituation {
+            ceiling: 150,
+            club_reputation: 0.85,
+            ..at(9.0, 12.0)
+        });
+        assert!(climber < team_mate, "{climber} vs {team_mate}");
+        assert!(climber < 0.0, "{climber}");
+    }
+
+    #[test]
+    fn a_man_with_no_dream_left_to_chase_has_no_reason_to_refuse() {
+        let s = MindSituation {
+            age: 31,
+            ambition: 5.0,
+            own_level: 100,
+            ceiling: 100,
+            club_reputation: 0.3,
+            ..MindSituation::neutral()
+        };
+        let mut mind = CareerMind::default();
+        mind.anchors.dream = Some(CareerDream {
+            kind: DreamKind::MakeACareer,
+            target_standing: 0.3,
+            ..CareerDream::default_on(today())
+        });
+        mind.anchors.runway = s.career_runway();
+        let verdict = mind.weigh_option(MindOption::SignContract, &MindOrgans::new());
+        assert_eq!(verdict.net(), 0.0);
+    }
+
+    #[test]
+    fn a_man_who_has_arrived_has_a_reason_to_sign() {
+        let s = star_at(0.95);
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&s, 7, None, true, today());
+        reflect(&mut mind, &s, &mut organs);
+        assert!(mind.has_arrived());
+        assert!(mind.weigh_option(MindOption::SignContract, &organs).net() > 0.0);
+    }
+
+    fn sold_with_a_want_to_step_up() -> PlayerMind {
+        let ctx = MindTickContext::new(
+            NaiveDate::from_ymd_opt(2030, 6, 1).unwrap(),
+            7,
+            &attrs(),
+            50.0,
+        );
+        let mut mind = PlayerMind::new();
+        mind.pursue(
+            GoalKind::StepUpToABiggerClub,
+            GoalOrigin::SelfDrive,
+            GoalEvidence::EMPTY,
+            0.7,
+            &ctx,
+        );
+        mind.pursue(
+            GoalKind::LeaveThisClub,
+            GoalOrigin::Grievance,
+            GoalEvidence::EMPTY,
+            0.7,
+            &ctx,
+        );
+        mind.on_spell_change(SpellChange::transfer(7, false));
+        mind
+    }
+
+    #[test]
+    fn sold_to_a_smaller_club() {
+        let mind = sold_with_a_want_to_step_up();
+        let want = mind.goals().get(GoalKind::StepUpToABiggerClub).unwrap();
+        assert!(
+            want.is_live(),
+            "he still wants a bigger club at the new one"
+        );
+        assert_eq!(
+            want.blocked_by,
+            GoalBlocker::JustArrived,
+            "held back until he has settled"
+        );
+    }
+
+    #[test]
+    fn leaving_is_all_he_asked() {
+        let mind = sold_with_a_want_to_step_up();
+        assert!(
+            mind.goals().get(GoalKind::LeaveThisClub).is_none(),
+            "the want to leave is met by leaving"
+        );
+    }
+
+    #[test]
+    fn sold_to_the_level_he_wanted() {
+        let s = star_at(0.95);
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        mind.seed_anchors(&star_at(0.6), 7, None, true, today());
+        organs.goals.pursue(
+            GoalKind::StepUpToABiggerClub,
+            GoalOrigin::SelfDrive,
+            GoalEvidence::EMPTY,
+            0.7,
+            today(),
+        );
+        reflect(&mut mind, &s, &mut organs);
+        assert!(mind.anchors.dream.unwrap().arrived);
+
+        let later = today() + 7;
+        let report = organs.goals.review(later).expect("a week on");
+        organs.journal_tick(Some(&report), None, later);
+        assert!(
+            organs.journal.iter().any(|note| {
+                note.kind == MindNoteKind::WantSatisfied
+                    && note.goal == GoalKind::StepUpToABiggerClub
+            }),
+            "the want to move up is met, and the note says so"
+        );
     }
 
     #[test]

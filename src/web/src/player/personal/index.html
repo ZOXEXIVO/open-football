@@ -198,8 +198,30 @@
                 {% endif %}
             </div>
             <div class="fm-mh-cell">
+                {% if let Some(anchors) = career_anchors %}
+                <h4 class="fm-section-subtitle">{{ i18n.t("career_anchors_title") }}</h4>
+                <div class="fm-mh-plan fm-mh-dream{% if anchors.living %} is-living{% endif %}">
+                    {% if let Some(dream) = anchors.dream %}
+                    <div class="fm-mh-plan-head">
+                        <span class="fm-mh-plan-arc">{{ dream.sentence }}</span>
+                        <span class="fm-mh-plan-stage">{{ dream.state }}</span>
+                    </div>
+                    <div class="fm-mh-plan-note">{{ dream.conviction }}</div>
+                    <div class="fm-mh-plan-note">{{ dream.turned }}</div>
+                    {% endif %}
+                    {% if let Some(ending) = anchors.ending %}
+                    <div class="fm-mh-plan-arc">{{ ending }}</div>
+                    {% endif %}
+                    {% if let Some(given_up) = anchors.given_up %}
+                    <div class="fm-mh-plan-note">{{ given_up }}</div>
+                    {% endif %}
+                    {% if let Some(summit) = anchors.summit %}
+                    <div class="fm-mh-plan-note">{{ summit }}</div>
+                    {% endif %}
+                </div>
+                {% endif %}
                 {% if let Some(plan) = career_plan %}
-                <h4 class="fm-section-subtitle">{{ i18n.t("career_plan_title") }}</h4>
+                <h4 class="fm-section-subtitle{% if career_anchors.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("career_plan_title") }}</h4>
                 <div class="fm-mh-plan{% if plan.unspoken %} is-unspoken{% endif %}">
                     <div class="fm-mh-plan-head">
                         <span class="fm-mh-plan-arc">{{ plan.arc }}</span>
@@ -218,7 +240,7 @@
                     {% endif %}
                 </div>
                 {% endif %}
-                <h4 class="fm-section-subtitle{% if career_plan.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("mind_what_he_wants") }}</h4>
+                <h4 class="fm-section-subtitle{% if career_plan.is_some() || career_anchors.is_some() %} fm-mh-eyebrow-gap{% endif %}">{{ i18n.t("mind_what_he_wants") }}</h4>
                 {% if wants.is_empty() %}
                 <p class="fm-mh-empty">{{ i18n.t("mind_no_wants") }}</p>
                 {% else %}

@@ -46,6 +46,7 @@ impl Epilogue {
         let phase = PerformanceProfiler::phase_scope("E4_seed_histories", 0);
         data.seed_missing_player_histories();
         data.seed_missing_player_assurance();
+        data.seed_missing_player_anchors();
         drop(phase);
 
         // Cadence lives on the config (default: first of every month).

@@ -3060,6 +3060,7 @@ impl CensusFacts {
             TermsRefusalCause::Role => "role",
             TermsRefusalCause::Place => "place",
             TermsRefusalCause::Attachment => "attachment",
+            TermsRefusalCause::Career => "his career",
         }
     }
 

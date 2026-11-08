@@ -16,6 +16,7 @@ members = [
 # server by path — one crate, two targets, so a player's complexion is decided
 # by the same code whether it ends up in an SVG or on the pitch.
 exclude = [
+    ".dev/careers",
     ".dev/match",
     ".dev/mind",
     ".dev/simulate",
@@ -25,7 +26,7 @@ exclude = [
 ]
 
 [workspace.package]
-version = "1.8.200"
+version = "1.8.300"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"

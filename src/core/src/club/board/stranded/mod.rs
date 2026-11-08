@@ -1,15 +1,16 @@
 //! What a board does with a man it listed and could not sell.
 //!
 //! A window shuts with him still on the list. Nothing forces him out: the
-//! board looks at what the market has told it, what he costs to keep, and
-//! what he would take to go, and picks whichever exit costs the club
-//! least — keep selling at a lower price, lend him out while paying part
-//! of his wage, or pay him to leave. The longer the market has refused
-//! him and the heavier his wage, the further down that list it is willing
-//! to go. His age, his contract type and why he was listed never enter.
+//! board looks at what the market has told it, what he costs to keep, what
+//! he does for the side and what he would take to go, and picks whichever
+//! costs the club least — keep selling at a lower price, lend him out while
+//! paying part of his wage, pay him to leave, or think again and keep a man
+//! it has gone on picking. The longer the market has refused him and the
+//! heavier his wage, the further down that list it is willing to go. His
+//! age, his contract type and why he was listed never enter.
 
 use crate::club::board::ClubBoard;
-use crate::club::player::transfer::SettlementAsk;
+use crate::club::player::transfer::{LevelFloor, SettlementAsk};
 use crate::transfers::market::TransferListing;
 use crate::transfers::squad::ledger::LedgerPressure;
 use log::debug;
@@ -27,6 +28,13 @@ pub struct StrandedCase {
     pub annual_wage_bill: u32,
     pub contract_days_left: i64,
     pub current_ask: f64,
+    /// What he would fetch today: what a man to do his job costs.
+    pub market_value: f64,
+    /// He is asking to go himself, so the listing is not the board's to end.
+    pub still_asking: bool,
+    /// How much of the club's football he has been starting, 0..1: lately,
+    /// or across last season, whichever says more.
+    pub start_share: f32,
     pub best_rejected_bid: Option<f64>,
     /// What is left of his fee on the club's books.
     pub book_value: f64,
@@ -39,6 +47,24 @@ impl StrandedCase {
     /// The wages he is owed until his deal runs out.
     fn carry(&self) -> f64 {
         self.annual_wage * self.contract_days_left.max(0) as f64 / 365.0
+    }
+
+    /// How much of a place in the side he holds, 0..1.
+    fn place(&self) -> f64 {
+        (self.start_share / LevelFloor::REGULAR_SHARE).clamp(0.0, 1.0) as f64
+    }
+
+    /// The team sheet says the club needs him, whatever the list says.
+    fn still_picked(&self) -> bool {
+        self.start_share >= LevelFloor::REGULAR_SHARE
+    }
+
+    /// What the club would lose on the pitch: the place he holds in its
+    /// side, in proportion to how much of its football he plays, at what it
+    /// would pay to fill it, a fee and a wage. Resolve never shrinks this: a
+    /// board tired of a wage still has to field somebody.
+    fn football_value(&self) -> f64 {
+        self.place() * (self.market_value + self.carry())
     }
 
     /// How hard he is pushing to go, 0..1: the share of what he is owed he
@@ -103,6 +129,8 @@ pub enum StrandedRoute {
     LoanOut { subsidy: f32 },
     /// Tear the contract up for `amount`.
     Settle { amount: f64 },
+    /// Off the list: he is doing a job the sale would not pay to replace.
+    KeepHim,
 }
 
 /// The board's answer at one review.
@@ -144,8 +172,11 @@ impl ClubBoard {
         // The price the market has named: the best bid refused, or — after a
         // window in which nobody bid at all — nothing at the price asked.
         let target = case.best_rejected_bid.unwrap_or(0.0);
+        // The refusal never prices him below the place he holds: a club
+        // that picks him is not giving him away because nobody came.
         let anchor = (case.current_ask - (case.current_ask - target).max(0.0) * r)
             .max(unwritten_book)
+            .max(case.place() * case.market_value)
             .min(case.current_ask);
         let board_floor = (anchor * TransferListing::DECAY_FLOOR)
             .max(unwritten_book)
@@ -157,7 +188,8 @@ impl ClubBoard {
         // books, so a pay-off only wins once that belief has worn down.
         let hold_value =
             (1.0 - r) * (case.best_rejected_bid.unwrap_or(0.0).max(case.current_ask) + carry);
-        let worth_paying = carry - unwritten_book - hold_value;
+        let football_value = case.football_value();
+        let worth_paying = carry - unwritten_book - hold_value - football_value;
         let lump_cap = Self::lump_sum_cap(case.annual_wage_bill) as f64;
         let board_max = worth_paying.min(lump_cap);
         let player_min = case.settlement.ask;
@@ -171,10 +203,18 @@ impl ClubBoard {
         // They meet in the middle of the gap, when there is one.
         let settlement = (board_max >= player_min)
             .then(|| player_min + (board_max - player_min) / 2.0)
-            .filter(|amount| carry - amount - unwritten_book - hold_value > loan_value);
+            .filter(|amount| worth_paying - amount > loan_value);
+        // A board short of money keeps trying for longer, and stops when
+        // the market has refused him for long enough that the list is not
+        // going to bring the money anyway.
+        let need = pressure.wage_pressure.max(pressure.cash_need);
+        let keep_him = case.still_picked()
+            && !case.still_asking
+            && football_value * (1.0 - need * (1.0 - r)) > hold_value;
         let route = match settlement {
             Some(amount) => StrandedRoute::Settle { amount },
-            None if case.has_loan_runway => StrandedRoute::LoanOut {
+            None if keep_him => StrandedRoute::KeepHim,
+            None if case.has_loan_runway && !case.still_picked() => StrandedRoute::LoanOut {
                 subsidy: resolve.value(),
             },
             None => StrandedRoute::KeepSelling,
@@ -223,6 +263,9 @@ mod tests {
                 annual_wage_bill: 30_000_000,
                 contract_days_left,
                 current_ask: 5_000_000.0,
+                market_value: 5_000_000.0,
+                still_asking: false,
+                start_share: 0.0,
                 best_rejected_bid: None,
                 book_value: 0.0,
                 has_loan_runway: true,
@@ -242,6 +285,92 @@ mod tests {
         fn review(case: &StrandedCase) -> StrandedVerdict {
             ClubBoard::new().review_stranded(case, &Self::calm())
         }
+    }
+
+    #[test]
+    fn a_man_the_club_still_picks_comes_off_the_list() {
+        let picked = StrandedCase {
+            start_share: 0.8,
+            ..Fx::case(110, 4_000_000.0, 3 * Fx::YEAR)
+        };
+        assert_eq!(Fx::review(&picked).route, StrandedRoute::KeepHim);
+
+        let frozen_out = Fx::case(110, 4_000_000.0, 3 * Fx::YEAR);
+        assert_ne!(Fx::review(&frozen_out).route, StrandedRoute::KeepHim);
+    }
+
+    #[test]
+    fn a_man_asking_to_go_stays_on_the_list_he_asked_for() {
+        let asking = StrandedCase {
+            start_share: 0.8,
+            still_asking: true,
+            ..Fx::case(110, 4_000_000.0, 3 * Fx::YEAR)
+        };
+        assert_eq!(Fx::review(&asking).route, StrandedRoute::KeepSelling);
+    }
+
+    #[test]
+    fn a_board_short_of_money_keeps_trying_for_longer_and_not_for_ever() {
+        let picked = |exposure_days| StrandedCase {
+            start_share: 0.8,
+            ..Fx::case(exposure_days, 4_000_000.0, 3 * Fx::YEAR)
+        };
+        let broke = LedgerPressure {
+            cash_need: 1.0,
+            wage_pressure: 1.0,
+        };
+        let board = ClubBoard::new();
+        assert_eq!(
+            board.review_stranded(&picked(20), &broke).route,
+            StrandedRoute::KeepSelling,
+            "the money comes first while the market has barely looked"
+        );
+        assert_eq!(
+            board.review_stranded(&picked(440), &broke).route,
+            StrandedRoute::KeepHim,
+            "two years of nobody paying is not going to fix the books"
+        );
+    }
+
+    #[test]
+    fn a_man_in_the_side_is_neither_lent_nor_given_away() {
+        let picked = StrandedCase {
+            start_share: 0.8,
+            still_asking: true,
+            ..Fx::case(2000, 4_000_000.0, 3 * Fx::YEAR)
+        };
+        let verdict = Fx::review(&picked);
+        assert!(!matches!(verdict.route, StrandedRoute::LoanOut { .. }));
+        assert_eq!(
+            verdict.anchor, picked.market_value,
+            "nobody coming is no reason to give away a man it plays"
+        );
+
+        let frozen_out = StrandedCase {
+            start_share: 0.0,
+            ..picked
+        };
+        assert!(Fx::review(&frozen_out).anchor < frozen_out.market_value);
+    }
+
+    #[test]
+    fn a_man_the_club_still_picks_is_not_paid_to_leave() {
+        for days in [80u16, 220, 440, 2000] {
+            let frozen_out = Fx::asking(Fx::case(days, 4_000_000.0, 3 * Fx::YEAR), 0.2);
+            let picked = StrandedCase {
+                start_share: 0.8,
+                ..frozen_out
+            };
+            assert!(
+                !matches!(Fx::review(&picked).route, StrandedRoute::Settle { .. }),
+                "{days}d exposure"
+            );
+        }
+        let worn_down = Fx::asking(Fx::case(2000, 4_000_000.0, 3 * Fx::YEAR), 0.2);
+        assert!(
+            matches!(Fx::review(&worn_down).route, StrandedRoute::Settle { .. }),
+            "the same man frozen out is priced as before"
+        );
     }
 
     #[test]

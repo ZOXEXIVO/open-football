@@ -55,7 +55,7 @@ pub use stance::*;
 
 use crate::PathwayStage;
 use crate::club::player::calculators::WageCalculator;
-use crate::club::player::mind::CareerPlanView;
+use crate::club::player::mind::{AnchorView, CareerPlanView};
 use crate::club::player::transfer::{LevelFloor, StandingReading};
 use crate::club::staff::DossierTuning;
 use crate::transfers::loan::agreement::LoanMoney;
@@ -416,6 +416,9 @@ pub struct TransferPlausibilityInputs {
     /// a level drop has already made his peace with what that says
     /// about his name, and with being lent out at all.
     pub player_plan: CareerPlanView,
+    /// What his career has left him with — his held summit is half of
+    /// the floor this move is read against.
+    pub anchors: AnchorView,
 
     pub same_country: bool,
     pub same_league_or_division: bool,
@@ -515,6 +518,8 @@ impl TransferPlausibilityInputs {
             age: self.player_age,
             resignation: self.listing_resignation,
             plan_widening: self.player_plan.renown_widening(),
+            held_summit: self.anchors.held_summit,
+            recency: self.anchors.recency,
         })
     }
 
@@ -1757,6 +1762,7 @@ mod tests {
             release_clause_triggered: false,
             listing_resignation: 0.0,
             player_plan: CareerPlanView::none(),
+            anchors: AnchorView::default(),
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 10_000_000.0,
@@ -1815,6 +1821,7 @@ mod tests {
             release_clause_triggered: false,
             listing_resignation: 0.0,
             player_plan: CareerPlanView::none(),
+            anchors: AnchorView::default(),
             same_country: true,
             same_league_or_division: true,
             buyer_transfer_budget: 15_000_000.0,
@@ -2295,7 +2302,7 @@ mod tests {
         /// A buyer whose division sits `bands` of the tolerance a player
         /// of `age` has under the standing the fixture gives him.
         fn reach_below(inputs: &TransferPlausibilityInputs, age: u8, bands: f32) -> i16 {
-            let tolerance = LevelFloor::tolerance(age, 0.0, 0.0);
+            let tolerance = LevelFloor::tolerance(age, 0.0, 0.0, 0.0);
             (inputs.level_floor().standing - bands * tolerance).max(100.0) as i16
         }
     }
@@ -2405,8 +2412,8 @@ mod tests {
     /// which is the shape this whole campaign exists to close.
     #[test]
     fn the_renown_loan_band_widens_with_youth_but_never_vanishes() {
-        let at_21 = LevelFloor::tolerance(21, 0.0, 0.0);
-        let at_33 = LevelFloor::tolerance(33, 0.0, 0.0);
+        let at_21 = LevelFloor::tolerance(21, 0.0, 0.0, 0.0);
+        let at_33 = LevelFloor::tolerance(33, 0.0, 0.0, 0.0);
         assert!(at_21 > at_33, "{at_21} vs {at_33}");
         assert!(at_33 > 0.0, "the band never closes to nothing");
 
@@ -3040,6 +3047,7 @@ mod tests {
             release_clause_triggered: false,
             listing_resignation: 0.0,
             player_plan: CareerPlanView::none(),
+            anchors: AnchorView::default(),
             same_country: false,
             same_league_or_division: false,
             buyer_transfer_budget: 2_000_000.0,
@@ -3341,6 +3349,7 @@ mod agent_channel_tests {
                 release_clause_triggered: false,
                 listing_resignation: 0.0,
                 player_plan: CareerPlanView::none(),
+                anchors: AnchorView::default(),
                 same_country: false,
                 same_league_or_division: false,
                 country_pair_blocked: false,

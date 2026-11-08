@@ -71,6 +71,30 @@ impl ClubLevelAnchor {
         self.key_floor(group) - Self::ROTATION_BAND
     }
 
+    /// The strongest club standing whose regular floor this ability clears:
+    /// [`Self::regular_floor`] read the other way, so where a man reads as
+    /// starting is where a club reads him as starting.
+    pub fn highest_standing_for(ability: u8, group: PlayerFieldPositionGroup) -> f32 {
+        let clears =
+            |score: f32| Self::for_reputation(score).regular_floor(group) <= ability as i16;
+        if clears(1.0) {
+            return 1.0;
+        }
+        if !clears(0.0) {
+            return 0.0;
+        }
+        let (mut low, mut high) = (0.0_f32, 1.0_f32);
+        for _ in 0..12 {
+            let middle = (low + high) * 0.5;
+            if clears(middle) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        low
+    }
+
     /// Whether an ability clears the club's key-player floor in this group.
     pub fn meets_key_level(&self, ability: u8, group: PlayerFieldPositionGroup) -> bool {
         ability as i16 >= self.key_floor(group)
@@ -1301,6 +1325,60 @@ mod squad_status_calc_tests {
             PlayerSquadStatus::MainBackupPlayer,
             "below every first-team band he is a backup wherever he ranks"
         );
+    }
+
+    const GROUPS: [PlayerFieldPositionGroup; 4] = [
+        PlayerFieldPositionGroup::Goalkeeper,
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ];
+
+    #[test]
+    fn the_standing_a_man_starts_at_rises_with_his_level_at_every_position() {
+        for group in GROUPS {
+            let mut last = 0.0;
+            for level in (30..=170u8).step_by(5) {
+                let standing = ClubLevelAnchor::highest_standing_for(level, group);
+                assert!(
+                    standing >= last,
+                    "{group:?}: level {level} reads {standing}, below {last}"
+                );
+                last = standing;
+            }
+            assert_eq!(
+                ClubLevelAnchor::highest_standing_for(200, group),
+                1.0,
+                "{group:?}: there is nothing above the top"
+            );
+            assert_eq!(
+                ClubLevelAnchor::highest_standing_for(1, group),
+                0.0,
+                "{group:?}: nor anybody he clears at the bottom"
+            );
+        }
+    }
+
+    #[test]
+    fn the_standing_round_trips_against_the_regular_floor() {
+        for group in GROUPS {
+            for step in 1..=99 {
+                let score = step as f32 / 100.0;
+                let floor = ClubLevelAnchor::for_reputation(score).regular_floor(group);
+                if floor < 1 {
+                    continue;
+                }
+                let standing = ClubLevelAnchor::highest_standing_for(floor as u8, group);
+                assert!(
+                    standing >= score - 0.002,
+                    "{group:?}: the floor of {score} is {floor}, which reads only {standing}"
+                );
+                assert!(
+                    ClubLevelAnchor::for_reputation(standing).regular_floor(group) <= floor,
+                    "{group:?}: {standing} asks more than {floor}"
+                );
+            }
+        }
     }
 
     #[test]

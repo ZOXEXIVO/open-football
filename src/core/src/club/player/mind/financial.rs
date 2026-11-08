@@ -38,6 +38,11 @@ impl FinancialMind {
     /// the number. Roughly the last eighteen months.
     pub const INSECURE: f32 = 0.25;
 
+    #[cfg(test)]
+    pub(crate) fn set_fairness_for_test(&mut self, fairness: f32) {
+        self.fairness_pct = (fairness * 100.0) as i8;
+    }
+
     #[inline]
     pub fn fairness(&self) -> f32 {
         self.fairness_pct as f32 / 100.0

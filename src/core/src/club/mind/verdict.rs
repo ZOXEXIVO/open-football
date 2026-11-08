@@ -107,10 +107,11 @@ pub struct WeightedReason {
 }
 
 /// A faculty's answer to a `weigh` call. Bounded so the whole verdict
-/// stays `Copy`; six reasons is more than any renderer will print.
+/// stays `Copy`; sixteen holds what every faculty can say about one option,
+/// so a deliberation that folds them all together still nets every one.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ReasonSet {
-    reasons: [WeightedReason; 6],
+    reasons: [WeightedReason; 16],
     len: u8,
 }
 
@@ -149,14 +150,20 @@ impl ReasonSet {
             .clamp(-1.0, 1.0)
     }
 
-    /// Fold another faculty's reasons in, keeping as many as fit. The
-    /// fan-out order decides who gets heard when a decision draws more
-    /// than six arguments; every faculty still contributes to
-    /// [`Self::net`] through its own set before the merge.
+    /// Fold another faculty's reasons in.
     pub fn absorb(&mut self, other: &ReasonSet) {
         for reason in other.as_slice() {
             self.push(reason.goal, reason.weight);
         }
+    }
+
+    /// The same reasons with one argument taken out of them.
+    pub fn without(&self, goal: GoalKind) -> ReasonSet {
+        let mut rest = ReasonSet::new();
+        for reason in self.as_slice().iter().filter(|r| r.goal != goal) {
+            rest.push(reason.goal, reason.weight);
+        }
+        rest
     }
 
     /// The single loudest argument, either way.
@@ -212,7 +219,7 @@ mod tests {
         for _ in 0..20 {
             reasons.push(GoalKind::GoHome, 1.0);
         }
-        assert_eq!(reasons.as_slice().len(), 6, "the set is bounded");
+        assert_eq!(reasons.as_slice().len(), 16, "the set is bounded");
         assert!(reasons.net() <= 1.0);
     }
 
@@ -225,6 +232,34 @@ mod tests {
 
         let loudest = reasons.strongest().expect("three reasons were pushed");
         assert_eq!(loudest.goal, GoalKind::ProveThemWrong);
+    }
+
+    #[test]
+    fn the_last_faculty_folded_in_is_still_heard() {
+        let mut said = ReasonSet::new();
+        said.push(GoalKind::PlayFirstTeamFootball, 0.3);
+        for (goal, weight) in [
+            (GoalKind::SecureMyFuture, 0.2),
+            (GoalKind::WinTheManagersTrust, 0.3),
+            (GoalKind::LeaveThisClub, -0.2),
+            (GoalKind::StepUpToABiggerClub, -0.1),
+            (GoalKind::StayAtThisClub, 0.3),
+        ] {
+            let mut faculty = ReasonSet::new();
+            faculty.push(goal, weight);
+            said.absorb(&faculty);
+        }
+        let mut financial = ReasonSet::new();
+        financial.push(GoalKind::RunDownMyContract, -0.9);
+        financial.push(GoalKind::SecureMyFuture, 0.1);
+        said.absorb(&financial);
+
+        assert!(
+            said.as_slice()
+                .iter()
+                .any(|r| r.goal == GoalKind::RunDownMyContract)
+        );
+        assert!((said.net() - 0.0).abs() < 1e-5);
     }
 
     #[test]

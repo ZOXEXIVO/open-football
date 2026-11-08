@@ -32,6 +32,7 @@ use crate::transfers::deal::negotiation::{
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::region::ScoutingRegion;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{TransferNeedReason, TransferRequest, TransferRequestStatus};
@@ -369,6 +370,7 @@ impl FreeAgentMarketPass {
         let mut expired_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
+            let division = LoanPipeline::club_league_reputation(country, club);
             for team in &club.teams.teams {
                 for player in &team.players.players {
                     // Loaned-in players belong to their parent club regardless
@@ -471,8 +473,12 @@ impl FreeAgentMarketPass {
                             failed_approach_streak: 0,
                             is_global_pool: false,
                             // An expiring domestic contract is, by
-                            // construction, a man playing right here.
+                            // construction, a man playing right here,
+                            // and the division he plays in is one he does
+                            // not refuse.
                             last_country_id: country.id,
+                            level_floor: player.level_floor(date, division),
+                            let_go_by: 0,
                         });
                     }
                 }
@@ -540,6 +546,8 @@ impl FreeAgentMarketPass {
                 failed_approach_streak: fa.failed_approach_streak,
                 is_global_pool: true,
                 last_country_id: fa.last_country_id,
+                level_floor: fa.level_floor,
+                let_go_by: fa.let_go_by,
             });
         }
 
@@ -760,7 +768,7 @@ impl FreeAgentMarketPass {
         // diagnosis layer can explain long sits.
         let mut ranked: Vec<(&FreeAgentCandidate, f32, BuyerRoleFit)> = Vec::new();
         for &c in &market.by_group[group.index()] {
-            if c.club_id == club.id {
+            if c.was_let_go_by(club.id) {
                 continue;
             }
             if state.signings.iter().any(|s| s.player_id == c.player_id)
@@ -986,6 +994,7 @@ impl FreeAgentMarketPass {
                 player_age: best.age,
                 player_ambition,
                 is_global_pool: best.is_global_pool,
+                level_floor: best.level_floor,
                 reason: TransferReason::key(request.reason.as_signing_reason_key()),
             });
             // One staged pursuit per request — the resolver
@@ -1003,6 +1012,14 @@ impl FreeAgentMarketPass {
             && let Some(outcome) = Self::global_pool_answer(buyer, brief, best, role, market, state)
         {
             return outcome;
+        }
+        // The roll above keeps the balance for a contract just run out, but
+        // the division he will not drop to is still his own answer.
+        if !best.is_global_pool
+            && IntegerUtils::random(1, 1000) as f32 / 1000.0
+                > best.floor_allows(buyer_league_reputation)
+        {
+            return CandidateOutcome::Next;
         }
 
         let reason = TransferReason::key(request.reason.as_signing_reason_key());
@@ -1099,7 +1116,8 @@ impl FreeAgentMarketPass {
             best.career_pressure,
         );
         let threshold = FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
-        let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
+        let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold)
+            * best.floor_allows(buyer_league_reputation);
         let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
         // Every roll is an "offer received" — the player
         // got a concrete approach today. Track separately

@@ -480,15 +480,15 @@ impl GoalKind {
             GoalKind::None => S::ordinary(D::Career, Dir::Neutral),
 
             // Where he plays
-            GoalKind::StepUpToABiggerClub => {
-                S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
+            GoalKind::StepUpToABiggerClub => S::ordinary(D::Career, Dir::Leave)
+                .competing(WANTS_TO_STAY)
+                .about(GoalSubject::Himself),
             GoalKind::PlayInAStrongerLeague => S::ordinary(D::Career, Dir::Leave)
                 .competing(WANTS_TO_STAY)
                 .about(GoalSubject::ThisLeague),
-            GoalKind::PlayContinentalFootball => {
-                S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
-            }
+            GoalKind::PlayContinentalFootball => S::ordinary(D::Career, Dir::Leave)
+                .competing(WANTS_TO_STAY)
+                .about(GoalSubject::Himself),
             GoalKind::PlayInLibertadores => {
                 S::ordinary(D::Career, Dir::Leave).competing(WANTS_TO_STAY)
             }
@@ -915,6 +915,8 @@ mod tests {
             GoalKind::GoHome,
             GoalKind::PlayForMyBoyhoodClub,
             GoalKind::PlayFirstTeamFootball,
+            GoalKind::StepUpToABiggerClub,
+            GoalKind::PlayContinentalFootball,
             GoalKind::BePaidWhatImWorth,
             GoalKind::SecureMyFuture,
             GoalKind::SettleMyFamily,

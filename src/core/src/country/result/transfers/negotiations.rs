@@ -38,8 +38,7 @@ use crate::transfers::gate::{
 };
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::loan::agreement::LoanTerms;
-use crate::transfers::loan::guard::{LoanBorrowerProfile, LoanGuardVerdict};
-use crate::transfers::market::TransferListingOrigin;
+use crate::transfers::loan::guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGuardVerdict};
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::trace::TransferTrace;
@@ -835,6 +834,9 @@ impl NegotiationPass {
         outcomes: &mut NegotiationOutcomes,
     ) {
         if Self::protects_fresh_signing(country, neg_id, neg_data, date) {
+            return;
+        }
+        if Self::will_not_lend(country, neg_id, neg_data, date) {
             return;
         }
 
@@ -1730,7 +1732,7 @@ impl NegotiationPass {
                 l.player_id == neg_data.player_id
                     && l.club_id == neg_data.selling_club_id
                     && l.listing_type == TransferListingType::Transfer
-                    && l.origin == TransferListingOrigin::SellerListed
+                    && l.origin.is_genuine_sale()
                     && matches!(
                         l.status,
                         TransferListingStatus::Available | TransferListingStatus::InNegotiation
@@ -2797,6 +2799,42 @@ impl NegotiationPass {
         }
     }
 
+    /// A club does not talk about lending a man it would not lend, whatever
+    /// the money or the buyer: what a windfall or a bigger stage buys is a
+    /// sale. A parent abroad answered at the scan that staged the approach.
+    fn will_not_lend(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> bool {
+        if !neg_data.is_loan || neg_data.selling_country_id.is_some() {
+            return false;
+        }
+        let refused = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+            .zip(CountryRoster::find(country, neg_data.player_id))
+            .is_some_and(|(club, player)| {
+                !LoanAssetGuard::willingness_for(club, player, date).entertains()
+            });
+        if !refused {
+            return false;
+        }
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
+        }
+        NegotiationPass::reopen_listing_for_player(country, neg_data.player_id);
+        ApproachPass::on_negotiation_resolved(
+            country,
+            neg_data.buying_club_id,
+            neg_data.player_id,
+            false,
+        );
+        true
+    }
+
     /// A club that bought this player with a plan will not sell him back out
     /// of the same window — unless it opened the development-loan pathway
     /// itself, in which case loan approaches (only) are welcome.
@@ -3497,7 +3535,7 @@ impl SellerFeeFloor {
         fraction - (fraction - SellerFeeFloor::DISTRESSED_RESIDUAL) * t
     }
 
-    /// Only a genuine `SellerListed` listing ages the floor down — synthetic
+    /// Only a genuine sale ages the floor down — synthetic
     /// (unsolicited-approach), loan-out and end-of-contract origins hold
     /// firm, so a throwaway listing behind an unsolicited bid can't game the
     /// floor.
@@ -3505,7 +3543,7 @@ impl SellerFeeFloor {
         let days_listed = country
             .transfer_market
             .get_listing_by_player(player_id)
-            .filter(|l| l.origin == TransferListingOrigin::SellerListed)
+            .filter(|l| l.origin.is_genuine_sale())
             .map(|l| (date - l.listed_date).num_days().max(0))
             .unwrap_or(0);
         if days_listed <= 0 {
@@ -3870,9 +3908,9 @@ mod development_pathway_protection_tests {
     use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutStatus};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
-        PlayerAttributes, PlayerCollection, PlayerPlan, PlayerPosition, PlayerPositionType,
-        PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation,
-        TeamType, TrainingSchedule,
+        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPlan, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection,
+        TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -4113,6 +4151,47 @@ mod development_pathway_protection_tests {
             neg.rejection_reason,
             Some(NegotiationRejectionReason::PlayerTooImportant),
             "same-window/plan protection must reject loans for non-listed signings"
+        );
+    }
+
+    /// Past the protection, and the man is his club's starter: the loan is
+    /// refused however much the borrower offers.
+    #[test]
+    fn a_lender_does_not_talk_about_a_man_it_holds_back() {
+        let mut country = ProtectionFixtures::world(true);
+        if let Some(player) = country.clubs[0].teams.teams[0]
+            .players
+            .find_mut(ProtectionFixtures::PLAYER_ID)
+        {
+            player.plan = None;
+            player.skills = PlayerSkills::flat_for_ability(170);
+            player.contract = Some(PlayerClubContract::new(
+                500_000,
+                ProtectionFixtures::d(2030, 6, 30),
+            ));
+            player.happiness.starter_ratio = 0.95;
+            player.happiness.appearances_tracked = 30;
+        }
+        let neg_data = ProtectionFixtures::neg_data(&country);
+
+        let mut outcomes = NegotiationOutcomes {
+            deferred: Vec::new(),
+            free_agent_signings: Vec::new(),
+            free_agent_rejected_ids: Vec::new(),
+            player_signals: Vec::new(),
+        };
+        NegotiationPass::resolve_initial_approach(
+            &mut country,
+            ProtectionFixtures::NEG_ID,
+            &neg_data,
+            ProtectionFixtures::date(),
+            &mut outcomes,
+        );
+
+        let neg = &country.transfer_market.negotiations[&ProtectionFixtures::NEG_ID];
+        assert_eq!(
+            neg.rejection_reason,
+            Some(NegotiationRejectionReason::PlayerTooImportant)
         );
     }
 
@@ -5415,15 +5494,16 @@ mod tests {
     impl Fx {
         const BACK: PlayerFieldPositionGroup = PlayerFieldPositionGroup::Defender;
 
-        /// A first-choice full-back at a big club who has decided he is
-        /// going out to play — the archetype the old `Untouchable` verdict
-        /// made unloanable however loudly he asked.
+        /// A first-choice full-back at a big club, out of the side, who has
+        /// decided he is going out to play — the archetype the old
+        /// `Untouchable` verdict made unloanable however loudly he asked.
         fn asking_first_choice() -> ParentWillingness {
             ParentWillingness::of(&ParentReading {
-                first_choice: true,
-                starter_share: 0.9,
+                key_man: true,
+                starter_share: 0.1,
                 runway: 0.8,
                 loans_used: 0,
+                development: false,
                 group_count: 8,
                 group_min_needed: 4,
                 rank: 0,
@@ -5431,7 +5511,6 @@ mod tests {
                 philosophy: ClubPhilosophy::Balanced,
                 plan_push: Self::asking_plan().loan_push(),
                 requested: false,
-                advertised: false,
             })
         }
 
@@ -5445,6 +5524,7 @@ mod tests {
                 deadline_pressure: 0.3,
                 attempts: 0,
                 strength: 0.8,
+                follows: None,
             }
         }
 
@@ -5487,6 +5567,8 @@ mod tests {
                     age: 22,
                     resignation: 0.0,
                     plan_widening: 0.0,
+                    held_summit: 0,
+                    recency: 0.0,
                 }),
             )
         }

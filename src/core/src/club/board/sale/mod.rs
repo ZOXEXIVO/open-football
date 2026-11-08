@@ -129,6 +129,10 @@ impl ForcedSale {
                 if matches!(contract.squad_status, PlayerSquadStatus::KeyPlayer) {
                     return false;
                 }
+                // The board has already decided to keep him while it plays him.
+                if club.transfer_plan.keeps_in_the_side(player, date) {
+                    return false;
+                }
                 // Either he is at the age the club was going to replace
                 // anyway, or he is already outside the first-choice group.
                 DateUtils::age(player.birth_date, date) >= Self::MIN_AGE
@@ -143,5 +147,106 @@ impl ForcedSale {
                 })
             })
             .map(|player| player.id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
+        }
+
+        /// A thirty-year-old rotation man on `salary`, starting most weeks.
+        fn starter(id: u32, salary: u32) -> Player {
+            let mut contract =
+                PlayerClubContract::new(salary, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
+            contract.squad_status = PlayerSquadStatus::FirstTeamSquadRotation;
+            let mut player = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("P".into(), format!("{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(1996, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(100))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes {
+                    current_ability: 100,
+                    potential_ability: 100,
+                    condition: 10_000,
+                    ..Default::default()
+                })
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+            player.happiness.starter_ratio = 0.9;
+            player.happiness.appearances_tracked = 30;
+            player
+        }
+
+        fn club(players: Vec<Player>) -> Club {
+            let team = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("t".into())
+                .slug("t".into())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            )
+        }
+    }
+
+    /// The board names the highest earner it can stand to lose, and a man
+    /// it has already decided to keep while he plays is not one.
+    #[test]
+    fn the_board_does_not_demand_the_sale_of_a_man_it_keeps() {
+        let mut club = Fx::club(vec![Fx::starter(1, 900_000), Fx::starter(2, 500_000)]);
+        assert_eq!(
+            ForcedSale::choose(&club, Fx::date()),
+            Some(1),
+            "precondition: the highest earner goes"
+        );
+
+        club.transfer_plan.kept_in_the_side.insert(1);
+        assert_eq!(ForcedSale::choose(&club, Fx::date()), Some(2));
     }
 }

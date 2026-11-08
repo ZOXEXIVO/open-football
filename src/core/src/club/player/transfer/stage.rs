@@ -34,9 +34,9 @@
 //! league suddenly starts or stops exporting players — a stronger league
 //! simply sheds fewer of them.
 
-use crate::club::player::mind::{MindClock, MindSituation};
+use crate::club::player::mind::{AnchorView, MindClock, MindSituation};
 use crate::club::player::player::Player;
-use crate::club::player::statistics::StuckCareerScan;
+use crate::club::player::statistics::{MatchExperienceBackground, StuckCareerScan};
 use crate::club::staff::perception::AbilityEstimator;
 use crate::transfers::squad::bands::TierBands;
 use crate::utils::DateUtils;
@@ -399,6 +399,10 @@ pub struct StandingReading {
     pub resignation: f32,
     /// How firmly his own plan is a step down, 0..1.
     pub plan_widening: f32,
+    /// The division he can still claim from having been a regular there,
+    /// 0 when he holds none, and how firmly he holds it, 0..1.
+    pub held_summit: u16,
+    pub recency: f32,
 }
 
 /// The lowest level of football a player will play at, on the league
@@ -412,6 +416,8 @@ pub struct StandingReading {
 pub struct LevelFloor {
     pub standing: f32,
     pub tolerance: f32,
+    /// The division he plays in now, 0 when he plays nowhere.
+    pub plays_in: f32,
 }
 
 impl LevelFloor {
@@ -437,41 +443,85 @@ impl LevelFloor {
     /// … and how much further it carries than his club form alone.
     const CAPS_RENOWN: f32 = 0.25;
     /// Start share at which he is a regular where he plays.
-    const REGULAR_SHARE: f32 = 0.45;
+    pub(crate) const REGULAR_SHARE: f32 = 0.45;
+    /// How much of the step down a recent regular at his standing gives up.
+    const ESTABLISHED_NARROWING: f32 = 0.5;
+    /// That narrowing holds to this age, and is gone this many years later.
+    const PRIME_ENDS: f32 = 30.0;
+    const PRIME_TAPER: f32 = 4.0;
 
     /// No view: nothing to object to.
     pub fn none() -> Self {
         LevelFloor {
             standing: 0.0,
             tolerance: 0.0,
+            plays_in: 0.0,
         }
     }
 
     /// The strongest of three claims: the level his ability starts at,
-    /// the name he has made, and the division he is a regular in — and
-    /// never above the division he already plays in, which is a level he
-    /// has accepted whatever the other two say.
+    /// the name he has made, and the division he is or has lately been a
+    /// regular in — and never above that division or the one he plays in
+    /// now, which is a level he has accepted whatever the others say.
     pub fn of(reading: &StandingReading) -> Self {
         let ability = TierBands::level_score(reading.level, reading.group) * 10_000.0;
         let capped = (reading.caps as f32 / Self::CAPS_ESTABLISHED).clamp(0.0, 1.0);
         let renown = reading.effective_rep.max(0) as f32 * (1.0 + Self::CAPS_RENOWN * capped);
         let regular = (reading.starter_share / Self::REGULAR_SHARE).clamp(0.0, 1.0);
-        let established = reading.league_rep as f32 * regular;
+        let established = (reading.league_rep as f32 * regular).max(reading.held_summit as f32);
         let claim = ability.max(renown).max(established);
+        let ceiling = reading.league_rep.max(reading.held_summit);
+        let standing = if ceiling > 0 {
+            claim.min(ceiling as f32)
+        } else {
+            claim
+        };
+        let carried = Self::carried_by_ability(reading, ability);
         LevelFloor {
-            standing: if reading.league_rep > 0 {
-                claim.min(reading.league_rep as f32)
-            } else {
-                claim
-            },
-            tolerance: Self::tolerance(reading.age, reading.resignation, reading.plan_widening),
+            standing,
+            tolerance: Self::tolerance(
+                reading.age,
+                reading.resignation * (1.0 - carried),
+                reading.plan_widening * (1.0 - carried),
+                Self::established_at(reading, standing).max(carried),
+            ),
+            plays_in: reading.league_rep as f32,
         }
     }
 
+    /// How much of a recent regular at this standing he is, 0..1. A summit
+    /// a full step under it says nothing about the level he is claiming.
+    fn established_at(reading: &StandingReading, standing: f32) -> f32 {
+        let reach = (reading.held_summit as f32 - standing + Self::STEP_DOWN) / Self::STEP_DOWN;
+        reading.recency.clamp(0.0, 1.0) * reach.clamp(0.0, 1.0) * Self::prime(reading.age)
+    }
+
+    /// How much of the division he plays in his ability starts in on its
+    /// own, 0..1. A man good enough to start there needs no division under
+    /// it to play: the step down a bench, the market or his plan asks of
+    /// him is a smaller club. It grows in as the youth band closes, so a
+    /// boy still goes where the football is.
+    fn carried_by_ability(reading: &StandingReading, ability: f32) -> f32 {
+        if reading.league_rep == 0 {
+            return 0.0;
+        }
+        let reach = (ability - reading.league_rep as f32 + Self::STEP_DOWN) / Self::STEP_DOWN;
+        reach.clamp(0.0, 1.0) * Self::prime(reading.age) * (1.0 - Self::youth(reading.age))
+    }
+
+    fn prime(age: u8) -> f32 {
+        ((Self::PRIME_ENDS + Self::PRIME_TAPER - age as f32) / Self::PRIME_TAPER).clamp(0.0, 1.0)
+    }
+
+    fn youth(age: u8) -> f32 {
+        (Self::YOUTH_AGE.saturating_sub(age) as f32 / Self::YOUTH_SPAN).clamp(0.0, 1.0)
+    }
+
     /// How far under his standing he will still go.
-    pub fn tolerance(age: u8, resignation: f32, plan_widening: f32) -> f32 {
-        let youth = (Self::YOUTH_AGE.saturating_sub(age) as f32 / Self::YOUTH_SPAN).clamp(0.0, 1.0);
-        Self::STEP_DOWN * (1.0 + Self::YOUTH_WIDENING * youth)
+    pub fn tolerance(age: u8, resignation: f32, plan_widening: f32, established: f32) -> f32 {
+        Self::STEP_DOWN
+            * (1.0 - Self::ESTABLISHED_NARROWING * established.clamp(0.0, 1.0)
+                + Self::YOUTH_WIDENING * Self::youth(age))
             + resignation.clamp(0.0, 1.0) * Self::RESIGNATION_SPAN
             + plan_widening.clamp(0.0, 1.0) * Self::PLAN_SPAN
     }
@@ -482,9 +532,13 @@ impl LevelFloor {
 
     /// How far a division at `league_rep` sits under his floor, 0..1 —
     /// nothing at the floor, everything a full refusal span under it.
-    /// No view of either side reads as nothing to object to.
+    /// No view of either side reads as nothing to object to, and he does
+    /// not refuse the level he is at.
     pub fn below(&self, league_rep: f32) -> f32 {
         if self.standing <= 0.0 || league_rep <= 0.0 {
+            return 0.0;
+        }
+        if self.plays_in > 0.0 && league_rep >= self.plays_in {
             return 0.0;
         }
         ((self.floor() - league_rep) / Self::REFUSAL_SPAN).clamp(0.0, 1.0)
@@ -492,29 +546,81 @@ impl LevelFloor {
 }
 
 impl Player {
+    /// What a career has left him with, as anybody weighing him reads it.
+    pub fn anchor_view(&self, date: NaiveDate) -> AnchorView {
+        self.mind.career.anchor_view(
+            MindClock::day(date),
+            self.age(date),
+            AbilityEstimator::observable_level(self),
+        )
+    }
+
+    /// Rolling share of recent matches he started, once enough of them
+    /// have been seen to say.
+    pub fn seen_start_share(&self) -> f32 {
+        if self.happiness.appearances_tracked >= MindSituation::TRACKED_APPS {
+            self.happiness.starter_ratio
+        } else {
+            0.0
+        }
+    }
+
+    /// What he has started for `team_slug`: the rolling share, or last
+    /// season's when that says more. The rolling share remembers about
+    /// five matches, and a regular who misses three is still a regular.
+    pub fn start_share_at(&self, team_slug: &str, date: NaiveDate) -> f32 {
+        self.seen_start_share()
+            .max(MatchExperienceBackground::last_season_start_share_at(
+                self, team_slug, date,
+            ))
+    }
+
+    /// Is the club picking him? One reading, so no two decisions about
+    /// him can disagree on it.
+    pub fn is_picked(&self, date: NaiveDate) -> bool {
+        let share = match self.statistics_history.active_team_slug() {
+            Some(slug) => self.start_share_at(slug, date),
+            None => self.seen_start_share(),
+        };
+        share >= LevelFloor::REGULAR_SHARE
+    }
+
     /// The floor under the football he will play, read as he stands
     /// today in the division at `league_rep`.
     pub fn level_floor(&self, date: NaiveDate, league_rep: u16) -> LevelFloor {
-        let seen = self.happiness.appearances_tracked >= MindSituation::TRACKED_APPS;
-        LevelFloor::of(&StandingReading {
+        LevelFloor::of(&self.standing_reading(date, league_rep, self.market_resignation(date)))
+    }
+
+    /// The floor under a man with no club: no division to cap it, and his
+    /// time unsigned wearing it down.
+    pub fn free_agent_floor(&self, date: NaiveDate, career_pressure: f32) -> LevelFloor {
+        LevelFloor::of(&self.standing_reading(date, 0, career_pressure))
+    }
+
+    fn standing_reading(
+        &self,
+        date: NaiveDate,
+        league_rep: u16,
+        resignation: f32,
+    ) -> StandingReading {
+        let anchors = self.anchor_view(date);
+        StandingReading {
             level: AbilityEstimator::observable_level(self),
             group: self.position().position_group(),
             effective_rep: self.player_attributes.effective_reputation(true),
             league_rep,
-            starter_share: if seen {
-                self.happiness.starter_ratio
-            } else {
-                0.0
-            },
+            starter_share: self.seen_start_share(),
             caps: self.player_attributes.international_apps,
             age: self.age(date),
-            resignation: self.market_resignation(date),
+            resignation,
             plan_widening: self
                 .mind
                 .career
                 .plan_view(MindClock::day(date))
                 .renown_widening(),
-        })
+            held_summit: anchors.held_summit,
+            recency: anchors.recency,
+        }
     }
 }
 
@@ -522,10 +628,12 @@ impl Player {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::CareerSummit;
+    use crate::club::player::transfer::ReleaseContext;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills,
+        PlayerSkills, PlayerSquadStatus,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -743,6 +851,8 @@ mod tests {
             age,
             resignation,
             plan_widening: 0.0,
+            held_summit: 0,
+            recency: 0.0,
         })
     }
 
@@ -789,6 +899,8 @@ mod tests {
             age,
             resignation: 0.0,
             plan_widening: 0.0,
+            held_summit: 0,
+            recency: 0.0,
         }
     }
 
@@ -813,14 +925,17 @@ mod tests {
     /// a plan to step down widen it further.
     #[test]
     fn the_tolerance_widens_with_youth_resignation_and_a_plan() {
-        let at_16 = LevelFloor::tolerance(16, 0.0, 0.0);
-        let at_19 = LevelFloor::tolerance(19, 0.0, 0.0);
-        let at_23 = LevelFloor::tolerance(23, 0.0, 0.0);
+        let at_16 = LevelFloor::tolerance(16, 0.0, 0.0, 0.0);
+        let at_19 = LevelFloor::tolerance(19, 0.0, 0.0, 0.0);
+        let at_23 = LevelFloor::tolerance(23, 0.0, 0.0, 0.0);
         assert!(at_16 > at_19 && at_19 > at_23, "{at_16} {at_19} {at_23}");
         assert_eq!(at_23, LevelFloor::STEP_DOWN);
-        assert_eq!(LevelFloor::tolerance(33, 0.0, 0.0), LevelFloor::STEP_DOWN);
-        assert!(LevelFloor::tolerance(27, 1.0, 0.0) > at_23);
-        assert!(LevelFloor::tolerance(27, 0.0, 1.0) > at_23);
+        assert_eq!(
+            LevelFloor::tolerance(33, 0.0, 0.0, 0.0),
+            LevelFloor::STEP_DOWN
+        );
+        assert!(LevelFloor::tolerance(27, 1.0, 0.0, 0.0) > at_23);
+        assert!(LevelFloor::tolerance(27, 0.0, 1.0, 0.0) > at_23);
         assert!(
             international(27, 1.0).below(SERIE_C) < 1.0,
             "a season unsold re-reads what level wants him"
@@ -831,5 +946,230 @@ mod tests {
     fn no_view_objects_to_nothing() {
         assert_eq!(LevelFloor::none().below(SERIE_C), 0.0);
         assert_eq!(international(27, 0.0).below(0.0), 0.0);
+    }
+
+    /// A La Liga or Premier League man of this age, who started most of
+    /// last season.
+    fn prime_regular(age: u8) -> StandingReading {
+        StandingReading {
+            level: 135,
+            group: PlayerFieldPositionGroup::Midfielder,
+            effective_rep: 6_500,
+            league_rep: TOP_LEAGUE as u16,
+            starter_share: 0.8,
+            caps: 10,
+            age,
+            resignation: 0.0,
+            plan_widening: 0.0,
+            held_summit: TOP_LEAGUE as u16,
+            recency: 1.0,
+        }
+    }
+
+    const TOP_LEAGUE: f32 = 9_500.0;
+    const ITS_SECOND_TIER: f32 = 7_000.0;
+    const ANOTHER_TOP_FLIGHT: f32 = 8_750.0;
+
+    #[test]
+    fn a_prime_regular_does_not_drop_a_division() {
+        let floor = LevelFloor::of(&prime_regular(28));
+        assert_eq!(floor.below(ITS_SECOND_TIER), 1.0, "{}", floor.floor());
+        assert_eq!(floor.below(ANOTHER_TOP_FLIGHT), 0.0, "{}", floor.floor());
+    }
+
+    #[test]
+    fn a_frozen_out_regular_keeps_his_floor_for_a_year() {
+        let playing = LevelFloor::of(&prime_regular(28));
+        let dropped = LevelFloor::of(&StandingReading {
+            starter_share: 0.0,
+            ..prime_regular(28)
+        });
+        assert_eq!(
+            dropped, playing,
+            "his hold on the summit is whole for a year"
+        );
+    }
+
+    #[test]
+    fn a_man_good_enough_for_his_division_does_not_drop_one_to_play() {
+        let backup = StandingReading {
+            level: 165,
+            effective_rep: 5_000,
+            starter_share: 0.2,
+            held_summit: 0,
+            recency: 0.0,
+            ..prime_regular(25)
+        };
+        let floor = LevelFloor::of(&backup);
+        assert_eq!(floor.below(ITS_SECOND_TIER), 1.0, "{}", floor.floor());
+        assert_eq!(floor.below(ANOTHER_TOP_FLIGHT), 0.0, "{}", floor.floor());
+
+        let proving_himself = LevelFloor::of(&StandingReading {
+            plan_widening: 1.0,
+            ..backup
+        });
+        assert_eq!(
+            proving_himself, floor,
+            "a smaller club is the step his plan takes"
+        );
+        let benched_a_season = LevelFloor::of(&StandingReading {
+            resignation: 1.0,
+            ..backup
+        });
+        assert_eq!(benched_a_season, floor, "and the step a bench asks of him");
+
+        let past_his_prime = LevelFloor::of(&StandingReading {
+            age: 34,
+            plan_widening: 1.0,
+            ..backup
+        });
+        assert_eq!(
+            past_his_prime.below(ITS_SECOND_TIER),
+            0.0,
+            "{}",
+            past_his_prime.floor()
+        );
+    }
+
+    #[test]
+    fn a_backup_can_go_down_to_play() {
+        let floor = LevelFloor::of(&StandingReading {
+            level: 110,
+            effective_rep: 5_000,
+            starter_share: 0.2,
+            held_summit: 0,
+            recency: 0.0,
+            ..prime_regular(24)
+        });
+        assert_eq!(floor.below(ITS_SECOND_TIER), 0.0, "{}", floor.floor());
+    }
+
+    #[test]
+    fn a_fall_is_not_measured_from_the_last_fall() {
+        let floor = LevelFloor::of(&StandingReading {
+            league_rep: 6_000,
+            held_summit: 9_000,
+            ..prime_regular(27)
+        });
+        assert_eq!(floor.below(4_000.0), 1.0, "{}", floor.floor());
+        assert_eq!(floor.below(6_000.0), 0.0, "the level he plays at");
+        assert_eq!(floor.below(7_000.0), 0.0, "anything above it");
+    }
+
+    #[test]
+    fn the_floor_never_sits_above_the_division_he_already_plays_in() {
+        let floor = LevelFloor::of(&StandingReading {
+            effective_rep: 8_500,
+            league_rep: 5_500,
+            held_summit: 0,
+            recency: 0.0,
+            ..prime_regular(27)
+        });
+        assert_eq!(floor.standing, 5_500.0);
+    }
+
+    #[test]
+    fn his_summit_lifts_the_cap_on_his_name() {
+        let floor = LevelFloor::of(&StandingReading {
+            effective_rep: 8_500,
+            league_rep: 5_500,
+            held_summit: 8_000,
+            ..prime_regular(27)
+        });
+        assert_eq!(floor.standing, 8_000.0);
+    }
+
+    /// Read with an ability a division short of where he plays, so only
+    /// his record can narrow it.
+    #[test]
+    fn the_narrowing_is_for_a_recent_regular_in_his_prime() {
+        let at = |age: u8, recency: f32| {
+            LevelFloor::of(&StandingReading {
+                level: 110,
+                recency,
+                ..prime_regular(age)
+            })
+            .tolerance
+        };
+        assert_eq!(
+            at(27, 1.0),
+            LevelFloor::STEP_DOWN / 2.0,
+            "halved in his prime"
+        );
+        assert!(at(27, 0.5) > at(27, 1.0), "it comes back as his hold fades");
+        assert_eq!(at(27, 0.0), LevelFloor::STEP_DOWN);
+        assert_eq!(at(30, 1.0), LevelFloor::STEP_DOWN / 2.0);
+        assert!(at(32, 1.0) > at(30, 1.0), "and as he passes thirty");
+        assert_eq!(at(34, 1.0), LevelFloor::STEP_DOWN);
+    }
+
+    /// A 29-year-old, last a regular in an 8800 division on `last_regular`.
+    fn free_agent_from_the_top_flight(released: NaiveDate) -> Player {
+        let mut man = player(140, 12.0, 10.0, 29, 10);
+        man.mind.career.anchors.summit = Some(CareerSummit {
+            league_reputation: 8_800,
+            club_id: 7,
+            club_standing: 0.7,
+            reached_on: MindClock::day(released),
+            last_regular_on: MindClock::day(released),
+            level_then: AbilityEstimator::observable_level(&man),
+        });
+        man.enter_free_agent_market(ReleaseContext {
+            date: released,
+            last_club_id: Some(10),
+            last_country_id: Some(1),
+            last_country_reputation: 8_000,
+            last_league_reputation: 8_800,
+            last_club_reputation_score: 0.7,
+            last_salary: 2_000_000,
+            last_squad_status: PlayerSquadStatus::FirstTeamRegular,
+        });
+        man
+    }
+
+    fn free_agents_floor_on(man: &Player, today: NaiveDate) -> LevelFloor {
+        man.free_agent_floor(today, man.career_pressure(today))
+    }
+
+    #[test]
+    fn days_out_of_a_top_flight_club_he_will_not_drop_three_divisions() {
+        let released = d(2026, 8, 1);
+        let man = free_agent_from_the_top_flight(released);
+        let floor = free_agents_floor_on(&man, released + chrono::Duration::days(5));
+        assert_eq!(floor.below(5_000.0), 1.0, "{}", floor.floor());
+    }
+
+    #[test]
+    fn a_year_unsigned_his_floor_has_fallen_far_enough() {
+        let released = d(2026, 8, 1);
+        let man = free_agent_from_the_top_flight(released);
+        let floor = free_agents_floor_on(&man, released + chrono::Duration::days(420));
+        assert_eq!(floor.below(5_000.0), 0.0, "{}", floor.floor());
+    }
+
+    #[test]
+    fn a_journeyman_has_no_such_objection() {
+        let released = d(2026, 8, 1);
+        let mut man = player(70, 8.0, 10.0, 29, 0);
+        man.mind.career.anchors.summit = Some(CareerSummit {
+            league_reputation: 3_000,
+            club_id: 7,
+            club_standing: 0.2,
+            reached_on: MindClock::day(released),
+            last_regular_on: MindClock::day(released),
+            level_then: AbilityEstimator::observable_level(&man),
+        });
+        let floor = man.free_agent_floor(released, 0.0);
+        assert_eq!(floor.below(3_000.0), 0.0, "{}", floor.floor());
+    }
+
+    #[test]
+    fn a_summit_well_under_his_standing_narrows_nothing() {
+        let floor = LevelFloor::of(&StandingReading {
+            level: 110,
+            held_summit: 6_000,
+            ..prime_regular(26)
+        });
+        assert_eq!(floor.tolerance, LevelFloor::STEP_DOWN);
     }
 }

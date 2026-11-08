@@ -84,8 +84,6 @@ impl TeamBehaviour {
         let mediation = CaptainMediation::for_squad(players);
         let coach_id = manager.id;
 
-        let _ = coach_id;
-
         // Collect (player_id, effective_risk) so we can mutate each
         // player without an outstanding borrow on `players`. The bond
         // read is read-only so it's safe to interleave with the borrow.
@@ -104,8 +102,12 @@ impl TeamBehaviour {
         for (player_id, effective_risk) in candidates {
             if let Some(player) = players.iter_mut().find(|p| p.id == player_id) {
                 player.on_weekly_conflict_risk(effective_risk);
-                let escalated =
-                    player.roll_conflict_escalation(effective_risk, today, RandomEngine::gen_f32);
+                let escalated = player.roll_conflict_escalation(
+                    effective_risk,
+                    coach_id,
+                    today,
+                    RandomEngine::gen_f32,
+                );
                 if escalated != ConflictEscalation::None {
                     escalations.push((player_id, escalated));
                 }
@@ -185,10 +187,12 @@ impl Player {
     /// production callers pass `RandomEngine::gen_f32` and tests can pin every
     /// roll deterministically. Streak is read but never mutated here
     /// unless an escalation actually fires (in which case it resets
-    /// so we don't re-escalate next week on the same evidence).
+    /// so we don't re-escalate next week on the same evidence). `coach_id`
+    /// is the man the risk is with.
     pub fn roll_conflict_escalation(
         &mut self,
         effective_risk: f32,
+        coach_id: u32,
         today: NaiveDate,
         mut dice: impl FnMut() -> f32,
     ) -> ConflictEscalation {
@@ -198,7 +202,8 @@ impl Player {
         }
 
         let already_unhappy = self.statuses.has(PlayerStatusType::Unh);
-        let already_requested = self.statuses.has(PlayerStatusType::Req);
+        let already_requested =
+            self.statuses.has(PlayerStatusType::Req) || self.waits_on_the_window();
 
         // ── Private complaint roll — single-tick, lightest escalation.
         if effective_risk > ConflictEscalationThresholds::PRIVATE_TALK_CANDIDATE
@@ -241,7 +246,7 @@ impl Player {
                     if !already_unhappy {
                         self.statuses.add(today, PlayerStatusType::Unh);
                     }
-                    self.statuses.add(today, PlayerStatusType::Req);
+                    self.on_fell_out_with_manager(coach_id);
                     self.happiness.adjust_morale(-8.0);
                     self.happiness.conflict_risk_streak = 0;
                     return ConflictEscalation::TransferRequest;
@@ -353,7 +358,7 @@ mod tests {
         p.on_weekly_conflict_risk(0.85);
         p.on_weekly_conflict_risk(0.85);
         assert_eq!(p.happiness.conflict_risk_streak, 2);
-        p.roll_conflict_escalation(0.85, today(), || 0.0);
+        p.roll_conflict_escalation(0.85, 1, today(), || 0.0);
         assert!(p.statuses.has(PlayerStatusType::Unh));
         assert_eq!(p.happiness.conflict_risk_streak, 0);
     }
@@ -363,7 +368,7 @@ mod tests {
         // Below the suppression band the rolls don't fire even with
         // dice pinned to 0.0.
         let mut p = build_player(1, 10.0);
-        p.roll_conflict_escalation(0.20, today(), || 0.0);
+        p.roll_conflict_escalation(0.20, 1, today(), || 0.0);
         assert!(!p.statuses.has(PlayerStatusType::Unh));
         assert!(!p.statuses.has(PlayerStatusType::Req));
     }

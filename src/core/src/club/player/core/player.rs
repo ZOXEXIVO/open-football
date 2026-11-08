@@ -24,7 +24,9 @@ use crate::club::player::traits::PlayerTrait;
 use crate::club::player::transfer::availability::AvailabilityMarketState;
 use crate::club::player::transfer::free::{FreeAgentMarketState, PreContractAgreement};
 use crate::club::player::transfer::processing::TransferDesireContext;
+use crate::club::player::transfer::request::TransferRequestStanding;
 use crate::club::player::utils::PlayerUtils;
+use crate::club::staff::perception::PotentialEstimator;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerResult,
     PlayerSkills, PlayerTraining,
@@ -389,10 +391,12 @@ pub struct Player {
     /// `squad_social_view`, read by the mind. Cleared on transfer.
     pub squad_standing_view: Option<SquadStandingView>,
 
-    /// Active reasons sustaining a transfer request (`Req` status). Used
-    /// by `process_transfer_desire` to avoid clearing `Req` while at
-    /// least one reason is still unresolved. Cleared on transfer.
+    /// The reasons behind a transfer request (`Req` status), or the last
+    /// ones he gave while a request outlives them. Cleared on transfer.
     pub transfer_request_reasons: Vec<TransferRequestReason>,
+    /// How long those reasons have held, which is what makes and ends the
+    /// request. Cleared on transfer.
+    pub transfer_request: TransferRequestStanding,
 
     /// How strongly this player is currently drawn toward a bigger
     /// competition, 0..1 — the score from
@@ -482,6 +486,26 @@ pub enum TransferRequestReason {
     /// availability strength, the plausibility gates — is all reachable
     /// only from a real request, so this variant is what opens it.
     WantsFirstTeamFootball,
+    /// His manager turned down his playing-time talk.
+    RefusedPlayingTime,
+    /// Friction with his manager came to a head.
+    FellOutWithManager,
+}
+
+impl TransferRequestReason {
+    /// Does it ask for somewhere bigger than here? A man who has arrived
+    /// raises none of these.
+    pub fn asks_for_a_bigger_stage(self) -> bool {
+        matches!(
+            self,
+            TransferRequestReason::AmbitionMismatch
+                | TransferRequestReason::OutgrownClub
+                | TransferRequestReason::NewChallenge
+                | TransferRequestReason::EuropeanAmbition
+                | TransferRequestReason::CopaLibertadoresAmbition
+                | TransferRequestReason::WantsStrongerLeague
+        )
+    }
 }
 
 /// What the manager committed to. Each variant carries everything the
@@ -1397,7 +1421,11 @@ impl Player {
             national_standing: self.national_standing(),
             // Same shape as the tournament clock above: filled by the
             // caller that holds the country context.
-            days_to_next_window: u16::MAX,
+            days_to_main_window_close: u16::MAX,
+            division_reputation: 0,
+            ceiling: 0,
+            heart_club: self.favorite_clubs.first().copied().unwrap_or(0),
+            player_id: self.id,
         }
     }
 
@@ -1502,7 +1530,23 @@ impl Player {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let club_country_id = ctx.country.as_ref().map(|c| c.id).unwrap_or(0);
             let mut situation = self.mind_situation(now.date(), club_country_id, country_code);
-            situation.club_reputation = (team_reputation / 10_000.0).clamp(0.0, 1.0);
+            // The club he is at, not the squad that holds his registration:
+            // a reserve at a giant is at a giant.
+            situation.club_reputation = ctx
+                .club
+                .as_ref()
+                .map(|c| c.main_team_reputation as f32 / 10_000.0)
+                .filter(|standing| *standing > 0.0)
+                .unwrap_or(team_reputation)
+                .clamp(0.0, 1.0);
+            situation.division_reputation = ctx
+                .club
+                .as_ref()
+                .map(|c| c.league_reputation)
+                .filter(|division| *division > 0)
+                .or_else(|| ctx.team.as_ref().and_then(|t| t.league_reputation))
+                .unwrap_or(0);
+            situation.ceiling = PotentialEstimator::observable_ceiling(self, now.date());
             // His OWN federation's calendar. A tournament clock belongs to
             // a passport: a Brazilian at Arsenal is counting down to the
             // Copa, not the Euros, and the country he plays in was the
@@ -1522,10 +1566,10 @@ impl Player {
             // reflect on it — so a fallout with the manager on Thursday
             // is already something he remembers when he thinks about his
             // future on Monday, rather than a week later.
-            situation.days_to_next_window = ctx
+            situation.days_to_main_window_close = ctx
                 .country
                 .as_ref()
-                .map(|c| c.days_to_next_window)
+                .map(|c| c.days_to_main_window_close)
                 .unwrap_or(u16::MAX);
             self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
             self.mind.tick_with(&mind_ctx, &situation);
@@ -1653,7 +1697,7 @@ impl Player {
         // path doesn't have to walk the simulator world.
         if self.may_seek_transfer(now.date()) {
             let desire_ctx = TransferDesireContext::from_global(self, ctx);
-            self.process_transfer_desire(&mut result, now.date(), &desire_ctx);
+            self.process_transfer_desire(now.date(), &desire_ctx);
         }
 
         result

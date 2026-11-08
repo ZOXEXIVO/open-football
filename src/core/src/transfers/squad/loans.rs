@@ -192,10 +192,9 @@ impl LoanOutScan {
         // And the one reading that is about the club's position rather
         // than the player's paperwork: below this it is not refusing a
         // destination, it is refusing the conversation. His own side of
-        // it — a request, a listing, a plan pushing for a season away —
-        // lifts the hold his standing would otherwise put on him.
+        // it — a request, a plan pushing for a season away — lifts the
+        // hold his standing would otherwise put on him.
         let opened = player.statuses.has(PlayerStatusType::Req)
-            || player.statuses.has(PlayerStatusType::Loa)
             || player
                 .mind
                 .career

@@ -3,8 +3,10 @@
 //!
 //! Phase 3 runs both systems side by side: `process_transfer_desire`
 //! keeps computing `TransferRequestReason` exactly as it does today, and
-//! every reason it finds also feeds the matching goal. Nothing downstream
-//! changes yet — the old path is still the one that sets `Req`.
+//! every reason it finds also feeds the matching goal. The old path is still
+//! the one that sets `Req`. The one thing it reads back is that a plan to step
+//! up raises `OutgrownClub` only once its want is pressing, because such a
+//! plan now lasts for years and would otherwise put every climber on the market.
 //!
 //! What that buys is a real equivalence check before anything is
 //! deleted. The transfer suites in this repo are calibrated; swapping
@@ -123,6 +125,18 @@ impl GoalBridge {
                 &[E::NO_FIRST_TEAM_FOOTBALL, E::PRIME_YEARS_PASSING],
                 0.80,
             ),
+            R::RefusedPlayingTime => map(
+                GoalKind::PlayFirstTeamFootball,
+                GoalOrigin::Grievance,
+                &[E::NO_FIRST_TEAM_FOOTBALL, E::MANAGER_DOES_NOT_RATE_HIM],
+                0.80,
+            ),
+            R::FellOutWithManager => map(
+                GoalKind::LeaveThisClub,
+                GoalOrigin::Grievance,
+                &[E::MANAGER_DOES_NOT_RATE_HIM],
+                0.85,
+            ),
         }
     }
 
@@ -165,6 +179,8 @@ impl GoalBridge {
         TransferRequestReason::RelegationEscape,
         TransferRequestReason::WantsStrongerLeague,
         TransferRequestReason::WantsFirstTeamFootball,
+        TransferRequestReason::RefusedPlayingTime,
+        TransferRequestReason::FellOutWithManager,
     ];
 }
 
@@ -193,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn the_twelve_reasons_collapse_to_fewer_wants() {
+    fn the_reasons_collapse_to_fewer_wants() {
         // The point of the model: several legacy reasons are different
         // evidence for the same underlying want.
         let mut goals: Vec<GoalKind> = GoalBridge::ALL_REASONS
@@ -205,7 +221,7 @@ mod tests {
         goals.dedup();
         assert!(
             goals.len() < before,
-            "twelve reasons should not need twelve separate wants"
+            "every reason should not need a separate want"
         );
     }
 

@@ -226,6 +226,41 @@ impl Player {
         );
     }
 
+    /// His manager has left the club. How it lands depends on what the two
+    /// of them were to each other, and whatever he meant to leave over goes
+    /// with the man.
+    pub fn on_manager_left(&mut self, coach_id: u32, club_id: u32, date: NaiveDate) {
+        let magnitude = match self.relations.get_staff(coach_id) {
+            Some(rel) => {
+                let bond = rel.personal_bond + rel.trust_in_abilities + rel.loyalty * 0.5;
+                if bond >= 150.0 {
+                    -8.0
+                } else if bond >= 100.0 {
+                    -4.0
+                } else if bond <= -50.0 {
+                    3.0
+                } else if rel.authority_respect < 30.0 {
+                    2.0
+                } else {
+                    -1.0
+                }
+            }
+            None => -1.0,
+        };
+        self.happiness
+            .add_event(HappinessEventType::ManagerDeparture, magnitude);
+        // Filed against the man rather than the badge: a grudge or a debt
+        // follows a coach to his next job, and the club he leaves behind
+        // owns neither.
+        let ctx = self.mind_context(date, Some(club_id));
+        self.mind.remember(
+            EpisodeKind::ManagerLeftClub,
+            ActorRef::staff(coach_id),
+            &ctx,
+        );
+        self.transfer_request.on_manager_left(coach_id);
+    }
+
     // ───────────────────────────────────────────────────────────
     // AskedForPrivateTalk
     // ───────────────────────────────────────────────────────────

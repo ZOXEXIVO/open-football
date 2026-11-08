@@ -437,7 +437,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "core"
-version = "1.8.200"
+version = "1.8.300"
 dependencies = [
  "chrono",
  "deunicode",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "database"
-version = "1.8.200"
+version = "1.8.300"
 dependencies = [
  "chrono",
  "core",
@@ -730,9 +730,9 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -1307,13 +1307,13 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.34"
+version = "0.4.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "match_viewer_build"
-version = "1.8.200"
+version = "1.8.300"
 dependencies = [
  "flate2",
  "wasm-bindgen-cli-support",
@@ -1561,7 +1561,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "open_football"
-version = "1.8.200"
+version = "1.8.300"
 dependencies = [
  "color-eyre",
  "core",
@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.8.200"
+version = "1.8.300"
 
 [[package]]
 name = "shlex"
@@ -2142,9 +2142,9 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.40.0"
+version = "0.40.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "110e37d98880fd804cd47509b90a8444f7aaaab655ae625e83cd442a8bc2ebf2"
+checksum = "0e8a3edbe0394ce115f3917a00349dd242be09eb5a091ed509eaf67b55cfb8a8"
 dependencies = [
  "libc",
  "memchr",
@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "1.8.200"
+version = "1.8.300"
 dependencies = [
  "askama",
  "askama_web",

@@ -127,6 +127,9 @@ pub enum AutomaticReleaseBlock {
     NoContract,
     /// KeyPlayer / FirstTeamRegular: the squad plan says the club needs him.
     ProtectedRole,
+    /// He is starting most of the matches he could. Whatever the plan calls
+    /// him, a club does not tear up the deal of a man it still picks.
+    StillPicked,
     /// The central squad-asset policy classifies him as something other
     /// than genuine surplus (core, first-team-useful, rotation depth, a
     /// development prospect, or simply not-yet-evaluated). Free transfer is
@@ -217,6 +220,9 @@ impl AutomaticReleaseEligibility {
             PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular
         ) {
             return Some(AutomaticReleaseBlock::ProtectedRole);
+        }
+        if player.is_picked(ctx.date) {
+            return Some(AutomaticReleaseBlock::StillPicked);
         }
 
         // Central asset protection: anything the squad policy doesn't

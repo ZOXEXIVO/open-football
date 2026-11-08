@@ -119,8 +119,9 @@ mod tests {
     use crate::shared::fullname::FullName;
     use crate::{
         Club, ClubColors, ClubFinances, ClubStatus, Country, CountryRegulations, PersonAttributes,
-        PlayerAttributes, PlayerCollection, PlayerPositions, PlayerSkills, StaffCollection,
-        TeamBuilder, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -139,7 +140,12 @@ mod tests {
             .country_id(country_id)
             .attributes(PersonAttributes::default())
             .skills(PlayerSkills::default())
-            .positions(PlayerPositions { positions: vec![] })
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 15,
+                }],
+            })
             .player_attributes(attrs)
             .build()
             .unwrap()

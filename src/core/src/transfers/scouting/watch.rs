@@ -1042,7 +1042,7 @@ mod breakout_watch_tests {
     use crate::club::academy::ClubAcademy;
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::club::player::mind::CareerPlanView;
+    use crate::club::player::mind::{AnchorView, CareerPlanView};
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
@@ -1213,6 +1213,8 @@ mod breakout_watch_tests {
                 stay_pressure: 0.0,
                 parent_loan: None,
                 career_plan: CareerPlanView::none(),
+                anchors: AnchorView::default(),
+                asks_for_a_bigger_stage: false,
                 parent_subsidy: 0.0,
                 player_name: "Foreign Star".into(),
                 club_name: "Big Foreign Club".into(),

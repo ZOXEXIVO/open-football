@@ -542,11 +542,13 @@ mod context;
 mod defending;
 mod expectation;
 mod keeper;
+mod match_pass;
 mod outfield;
 mod scoring;
 mod volume;
 
 pub use expectation::{RatingExpectationContext, TeamRatingSummary};
+pub use match_pass::{MatchRatingPass, RatingVolumes};
 pub use volume::EngineVolumeCalibration;
 
 #[cfg(test)]

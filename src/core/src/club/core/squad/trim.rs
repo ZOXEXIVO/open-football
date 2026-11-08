@@ -11,7 +11,7 @@ use crate::club::player::calculators::{
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::SquadAssetContext;
 use crate::transfers::pipeline::TransferTrace;
-use crate::{Club, PlayerFieldPositionGroup, PlayerStatusType};
+use crate::{Club, PlayerFieldPositionGroup, PlayerStatusType, TeamType};
 
 use super::depth::SquadSize;
 
@@ -142,6 +142,13 @@ impl Club {
                     // free-release players bought weeks earlier in the same
                     // summer window.
                     if player.signing_protection_active(date) {
+                        continue;
+                    }
+                    // Nor is a first-team man the club is picking. The walk
+                    // ranks by level and skips the protected without
+                    // counting them, so a deep group's walk can climb all
+                    // the way to its best player.
+                    if squad_tier == TeamType::Main && player.is_picked(date) {
                         continue;
                     }
                     let market_value = player.value(date, league_reputation_proxy, club_reputation);
@@ -465,6 +472,48 @@ mod tests {
             assert!(keeper.contract.is_some());
             assert!(!keeper.contract.as_ref().unwrap().is_transfer_listed);
         }
+    }
+
+    #[test]
+    fn a_man_the_club_is_picking_is_not_its_surplus() {
+        let mut starter = Fixture::goalkeeper(5, 95, 28, 50_000, 40);
+        starter.happiness.starter_ratio = 0.9;
+        starter.happiness.appearances_tracked = 30;
+        let mut club = Fixture::club(vec![
+            Fixture::goalkeeper(1, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(2, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(3, 100, 28, 50_000, 12),
+            Fixture::goalkeeper(4, 100, 28, 50_000, 12),
+            starter,
+        ]);
+
+        club.trim_positional_surplus(Fixture::date());
+
+        let kept = Fixture::find_player(&club, 5);
+        assert!(!kept.contract.as_ref().unwrap().is_transfer_listed);
+        assert!(!kept.statuses.has(PlayerStatusType::Lst));
+    }
+
+    #[test]
+    fn a_reserve_is_surplus_whatever_he_starts_for_the_reserves() {
+        let main: Vec<Player> = (1..=4)
+            .map(|id| Fixture::goalkeeper(id, 100, 28, 50_000, 12))
+            .collect();
+        let mut reserve: Vec<Player> = (5..=8)
+            .map(|id| Fixture::goalkeeper(id, 100, 28, 50_000, 12))
+            .collect();
+        let mut reserve_starter = Fixture::goalkeeper(9, 95, 28, 50_000, 40);
+        reserve_starter.happiness.starter_ratio = 0.9;
+        reserve_starter.happiness.appearances_tracked = 30;
+        reserve.push(reserve_starter);
+        let mut club = Fixture::club_with_reserve(main, reserve);
+
+        club.trim_positional_surplus(Fixture::date());
+
+        let surplus = club.teams.teams[1].players.find(9).unwrap();
+        assert!(
+            surplus.contract.is_none() || surplus.contract.as_ref().unwrap().is_transfer_listed
+        );
     }
 
     #[test]

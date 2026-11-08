@@ -3,7 +3,7 @@ use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadC
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::core::player::TransferRequestReason;
 use crate::club::player::mind::{
-    CareerArc, GoalBridge, GoalEvidence, GoalKind, GoalOrigin, MindClock,
+    CareerArc, GoalBridge, GoalEvidence, GoalKind, GoalOrigin, GoalStatus, MindClock,
 };
 use crate::club::player::player::Player;
 use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
@@ -111,6 +111,9 @@ pub struct TransferDesireContext<'a> {
     /// player parked in a B/reserve squad reads as further from the stage
     /// he is chasing, not closer to it.
     pub squad_team_type: Option<TeamType>,
+    /// Days until the next registration window opens, 0 while one is
+    /// open. `None` when no calendar is in view.
+    pub days_to_next_window: Option<u16>,
 }
 
 impl<'a> TransferDesireContext<'a> {
@@ -245,6 +248,11 @@ impl<'a> TransferDesireContext<'a> {
             club_in_home_country,
             country_uefa_suspended,
             squad_team_type: gc.team.as_ref().and_then(|t| t.team_type),
+            days_to_next_window: gc
+                .country
+                .as_ref()
+                .map(|c| c.days_to_next_window)
+                .filter(|days| *days != u16::MAX),
         }
     }
 }
@@ -580,12 +588,7 @@ impl Player {
         !self.is_on_loan() && DateUtils::age(self.birth_date, now) >= 16
     }
 
-    pub(crate) fn process_transfer_desire(
-        &mut self,
-        result: &mut PlayerResult,
-        now: NaiveDate,
-        ctx: &TransferDesireContext,
-    ) {
+    pub(crate) fn process_transfer_desire(&mut self, now: NaiveDate, ctx: &TransferDesireContext) {
         if !self.may_seek_transfer(now) {
             return;
         }
@@ -606,10 +609,9 @@ impl Player {
         } else {
             self.first_team_football_ask(now)
         };
-        let active_reasons =
+        let mut active_reasons =
             self.active_transfer_reasons(now, ctx, age, recently_transferred, football_ask);
-
-        let wants_transfer = !active_reasons.is_empty();
+        active_reasons.extend(self.answer_manager_grievances(now, ctx.days_to_next_window));
 
         // ── Parallel run: feed the goal stack ───────────────────
         //
@@ -625,27 +627,9 @@ impl Player {
         // first — after which `TransferRequestReason` becomes a *view*
         // over the stack rather than a separately-computed set.
         //
-        // Note what the two models already disagree about, by design: a
-        // reason that stops firing clears `Req` the same day, while the
-        // matching goal *fades*. That difference is the whole reason for
-        // the migration, and it is why the switch-over needs its own
-        // phase rather than being folded in here.
         self.feed_goals_from_reasons(&active_reasons, now);
 
-        // Reasons drive the persisted state — used by Item 4's
-        // "don't clear Req while any unresolved reason remains".
-        self.transfer_request_reasons = active_reasons;
-
-        if wants_transfer {
-            if !self.statuses.has(PlayerStatusType::Req) {
-                self.statuses.add(now, PlayerStatusType::Req);
-            }
-            result.wants_to_leave = true;
-            result.request_transfer(self.id);
-        } else if self.statuses.has(PlayerStatusType::Req) {
-            // No active reason left — Req can finally clear.
-            self.statuses.remove(PlayerStatusType::Req);
-        }
+        self.answer_transfer_reasons(active_reasons, now);
     }
 
     /// Runway above which a homesick player asks for a loan rather than a
@@ -1239,12 +1223,17 @@ impl Player {
             }
             // He has accepted that the football is somewhere smaller.
             CareerArc::StepDownToPlay if stage.is_asking() => Some(FirstTeamFootballAsk::Transfer),
-            // He came home with a record, gave the club a deadline, and
-            // it passed.
-            // The claim ran out. The weekly review turns it into the
-            // successor arc, already at `Asking` — so the ask reads that
-            // rather than a deadline the same tick is about to replace.
-            CareerArc::StepUp if stage.is_asking() => Some(FirstTeamFootballAsk::Transfer),
+            // Home from a loan, his claim on the shirt failed, and he has
+            // outgrown the place: while he is still out of the side, what he
+            // lacks is football. Any other man who means to step up asks for
+            // a bigger club, not for this.
+            CareerArc::StepUp
+                if stage.is_asking()
+                    && plan.follows == Some(CareerArc::ClaimMyPlace)
+                    && !self.is_picked(now) =>
+            {
+                Some(FirstTeamFootballAsk::Transfer)
+            }
             _ => None,
         }
     }
@@ -1435,6 +1424,7 @@ impl Player {
         // *now* is unresolved; a reason that's silent has gone away.
         // Req only clears when no reasons remain.
         let mut active_reasons: Vec<TransferRequestReason> = Vec::new();
+        let arrived = self.mind.career.has_arrived();
 
         if self.behaviour.is_poor() {
             active_reasons.push(TransferRequestReason::PoorBehaviour);
@@ -1476,14 +1466,26 @@ impl Player {
         // the missing "good player at a small club finally moves up"
         // signal; without it the market only ever recirculated unhappy or
         // surplus players, so established players never moved.
+        //
+        // A plan to step up reaches the same reason, but only once the want
+        // behind it has become a demand. Plans last for years and are said
+        // out loud early, and a man who has only said so is open to offers
+        // without having asked anybody for anything.
+        let demands_a_step_up = self
+            .mind
+            .career
+            .plan
+            .is_some_and(|plan| plan.arc == CareerArc::StepUp)
+            && self.mind.goals().status_of(GoalKind::StepUpToABiggerClub) == GoalStatus::Pressing;
         if !recently_transferred
-            && self.happiness.factors.ambition_fit <= -10.0
-            && self.attributes.ambition >= 15.0
-            && age <= 28
-            && self
-                .days_since_transfer(now)
-                .map(|d| d >= 365)
-                .unwrap_or(true)
+            && (demands_a_step_up
+                || (self.happiness.factors.ambition_fit <= -10.0
+                    && self.attributes.ambition >= 15.0
+                    && age <= 28
+                    && self
+                        .days_since_transfer(now)
+                        .map(|d| d >= 365)
+                        .unwrap_or(true)))
         {
             active_reasons.push(TransferRequestReason::OutgrownClub);
         }
@@ -1499,7 +1501,7 @@ impl Player {
         // truth: the players who most want a bigger league are usually the
         // ones doing best where they are, and a star at a locally-big club
         // reads as perfectly content to the ambition-fit model.
-        let stage_pull = if recently_transferred {
+        let stage_pull = if recently_transferred || arrived {
             None
         } else {
             let pull = BigStagePull::assess(
@@ -1596,6 +1598,11 @@ impl Player {
         // first 21 days unless their character has actually broken.
         if recently_transferred {
             active_reasons.retain(|r| matches!(r, TransferRequestReason::PoorBehaviour));
+        }
+
+        // A man living what he dreamed of has no bigger stage to want.
+        if arrived {
+            active_reasons.retain(|r| !r.asks_for_a_bigger_stage());
         }
 
         active_reasons
@@ -1888,7 +1895,8 @@ mod career_desire_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::core::player::SquadStandingView;
     use crate::club::player::language::{Language, PlayerLanguage};
-    use crate::club::player::mind::{CareerPlan, PlanStage};
+    use crate::club::player::mind::{CareerDreamReview, CareerPlan, MindSituation, PlanStage};
+    use crate::club::player::transfer::request::TransferRequestStanding;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
@@ -2050,6 +2058,26 @@ mod career_desire_tests {
         player.mind.career.plan = Some(plan);
     }
 
+    /// Seed what the claim review hands a returnee the club did not pick:
+    /// his claim on the shirt, turned into a step up he has already said
+    /// out loud.
+    fn claim_failed(player: &mut Player, today: NaiveDate) {
+        let day = MindClock::day(today);
+        let claim = CareerPlan::new(
+            CareerArc::ClaimMyPlace,
+            GoalOrigin::SelfDrive,
+            0.7,
+            day,
+            CareerPlan::CLAIM_REVIEW_DAYS,
+            0.5,
+        );
+        player.mind.career.plan = Some(
+            claim
+                .succeed_with(CareerArc::StepUp, day, CareerPlan::DEFAULT_REVIEW_DAYS, 0.5)
+                .already_asked(),
+        );
+    }
+
     /// Where the squad pass has him, so the mind reads a real place in
     /// a real queue rather than the empty default every lone-player test
     /// otherwise gets.
@@ -2083,6 +2111,21 @@ mod career_desire_tests {
         player.mind.tick_with(&ctx, &situation);
     }
 
+    /// What it takes to make a request: the same reasons, a fortnight
+    /// running. Returns the day after.
+    fn for_a_fortnight(
+        player: &mut Player,
+        from: NaiveDate,
+        ctx: &TransferDesireContext,
+    ) -> NaiveDate {
+        let mut day = from;
+        for _ in 0..=TransferRequestStanding::DAYS_TO_MAKE {
+            player.process_transfer_desire(day, ctx);
+            day += chrono::Duration::days(1);
+        }
+        day
+    }
+
     /// An elite club: reputation 8000 on the 0..10000 scale.
     fn elite_ctx() -> TransferDesireContext<'static> {
         TransferDesireContext {
@@ -2097,8 +2140,7 @@ mod career_desire_tests {
         let today = d(2026, 6, 1);
         let mut p = parked_backup(27, 16.0, 8.0, today);
         asking(&mut p, CareerArc::StepDownToPlay, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        for_a_fortnight(&mut p, today, &elite_ctx());
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2110,25 +2152,235 @@ mod career_desire_tests {
         );
     }
 
-    /// The whole point of the reason: it survives the next daily tick.
-    /// Without one in the set that is about minutes, a benched player's
-    /// request is stripped the following morning and he can never
-    /// actually become available.
+    /// Back from a loan to a shirt that never came, and too good for the
+    /// place: what he asks for is football.
+    #[test]
+    fn a_returnee_passed_over_at_a_club_he_has_outgrown_asks_out() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(24, 16.0, 8.0, today);
+        claim_failed(&mut p, today);
+        for_a_fortnight(&mut p, today, &elite_ctx());
+        assert!(p.statuses.has(PlayerStatusType::Req));
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball)
+        );
+    }
+
+    /// A backup who means to step up, and never went out on loan, asks for
+    /// a bigger club when the want presses, not for first-team football.
+    #[test]
+    fn a_backup_who_means_to_step_up_does_not_ask_for_football() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(24, 16.0, 8.0, today);
+        asking(&mut p, CareerArc::StepUp, today);
+        assert!(!p.is_picked(today), "precondition: out of the side");
+
+        for_a_fortnight(&mut p, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "{:?}",
+            p.transfer_request_reasons
+        );
+        assert!(!p.statuses.has(PlayerStatusType::Req));
+    }
+
+    /// A returnee the club now starts most weeks is back in the side, even
+    /// starting less often than he hoped: football is not what he lacks.
+    #[test]
+    fn a_returnee_starting_less_than_he_hoped_does_not_ask_for_football() {
+        let today = d(2026, 6, 1);
+        let mut p = with_status(
+            parked_backup(24, 16.0, 8.0, today),
+            PlayerSquadStatus::KeyPlayer,
+        );
+        season_so_far(&mut p, 0.6);
+        claim_failed(&mut p, today);
+        assert!(
+            p.is_picked(today) && p.is_short_of_football(today),
+            "precondition: in the side, and short of his own hopes"
+        );
+
+        for_a_fortnight(&mut p, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "{:?}",
+            p.transfer_request_reasons
+        );
+        assert!(!p.statuses.has(PlayerStatusType::Req));
+    }
+
+    /// His request must not silence its own reason: nothing about his
+    /// situation has changed, so it stands and goes on saying why.
     #[test]
     fn the_request_survives_the_next_tick() {
         let today = d(2026, 6, 1);
         let mut p = parked_backup(27, 16.0, 8.0, today);
         asking(&mut p, CareerArc::StepDownToPlay, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        let mut day = for_a_fortnight(&mut p, today, &elite_ctx());
         assert!(p.statuses.has(PlayerStatusType::Req));
-
-        let tomorrow = d(2026, 6, 2);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, tomorrow, &elite_ctx());
         assert!(
-            p.statuses.has(PlayerStatusType::Req),
-            "nothing about his situation changed overnight, so the request must stand"
+            !p.contract.as_ref().unwrap().is_transfer_listed,
+            "his asking is not the club's decision to sell him"
+        );
+
+        for _ in 0..90 {
+            p.process_transfer_desire(day, &elite_ctx());
+            day += chrono::Duration::days(1);
+            assert!(
+                p.statuses.has(PlayerStatusType::Req),
+                "nothing about his situation changed, so the request must stand"
+            );
+            assert!(
+                p.transfer_request_reasons
+                    .contains(&TransferRequestReason::WantsFirstTeamFootball)
+            );
+        }
+    }
+
+    /// A plan to step up, said out loud, leaves him open to offers. It asks
+    /// nobody for anything until the want behind it has become a demand,
+    /// and what he then asks for is a bigger club, not first-team football.
+    #[test]
+    fn a_plan_to_step_up_is_no_request_until_the_want_is_pressing() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(24, 16.0, 8.0, today);
+        p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::KeyPlayer;
+        p.happiness.appearances_tracked = 40;
+        p.happiness.starter_ratio = 0.95;
+        asking(&mut p, CareerArc::StepUp, today);
+
+        let day = for_a_fortnight(&mut p, today, &elite_ctx());
+        assert!(
+            !p.statuses.has(PlayerStatusType::Req),
+            "saying it out loud is not asking to go"
+        );
+        assert!(p.transfer_request_reasons.is_empty());
+
+        let mapping = GoalBridge::from_transfer_request_reason(TransferRequestReason::OutgrownClub);
+        let mut week = MindClock::day(today);
+        for _ in 0..30 {
+            week += 7;
+            p.mind
+                .organs
+                .goals
+                .pursue(mapping.goal, mapping.origin, mapping.evidence, 1.0, week);
+            p.mind.organs.goals.set_urgency(mapping.goal, 1.0);
+            p.mind.organs.goals.review(week);
+        }
+        assert_eq!(
+            p.mind.goals().status_of(GoalKind::StepUpToABiggerClub),
+            GoalStatus::Pressing,
+            "precondition"
+        );
+
+        for_a_fortnight(&mut p, day, &elite_ctx());
+        assert!(p.statuses.has(PlayerStatusType::Req));
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::OutgrownClub)
+        );
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "a man starting every week does not ask for first-team football"
+        );
+    }
+
+    #[test]
+    fn nobody_at_the_top_asks_for_a_bigger_stage() {
+        let today = d(2026, 5, 1);
+        // Everything that would ask for more: outgrown, nine years at the
+        // club, no continental football, a league below him.
+        let mut p = build(26, 18.0, 12.0, 8.0, 12.0, 1, 150, 4000, 9 * 365, today);
+        p.happiness.factors.ambition_fit = -12.0;
+        p.happiness
+            .add_event(HappinessEventType::MoveVetoedByClub, -6.0);
+        let ctx = TransferDesireContext {
+            country_code: "nl",
+            player_nationality_continent_id: Some(1),
+            league_reputation: 6000,
+            ..Default::default()
+        };
+        p.process_transfer_desire(today, &ctx);
+        assert!(
+            p.transfer_request_reasons
+                .iter()
+                .any(|r| r.asks_for_a_bigger_stage()),
+            "precondition: anybody else in his place would be asking"
+        );
+
+        let mut at_the_top = p.clone();
+        at_the_top.transfer_request_reasons.clear();
+        at_the_top.transfer_request = Default::default();
+        let situation = MindSituation {
+            ambition: 18.0,
+            own_level: 150,
+            ceiling: 150,
+            club_reputation: 0.95,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            ..MindSituation::neutral()
+        };
+        let mut dream = CareerDreamReview::form(&situation, 1, MindClock::day(today));
+        dream.arrived = true;
+        at_the_top.mind.career.anchors.dream = Some(dream);
+
+        for_a_fortnight(&mut at_the_top, today, &ctx);
+        assert!(
+            !at_the_top
+                .transfer_request_reasons
+                .iter()
+                .any(|r| r.asks_for_a_bigger_stage()),
+            "{:?}",
+            at_the_top.transfer_request_reasons
+        );
+        assert_eq!(at_the_top.big_stage_inclination, 0.0);
+    }
+
+    /// The whole way through the real tick: refused in February, he asks a
+    /// fortnight before the summer window opens, stands through it, and
+    /// lets the request go thirty days after it shuts.
+    #[test]
+    fn a_refused_talk_asks_when_the_window_nears() {
+        let refused = d(2027, 2, 15);
+        let (opens, shuts, next) = (d(2027, 6, 1), d(2027, 9, 1), d(2028, 1, 1));
+        let mut p = parked_backup(27, 6.0, 17.0, refused);
+        p.on_playing_time_talk_refused(1);
+        let mut asked_on = None;
+        let mut day = refused;
+        while day < shuts + chrono::Duration::days(31) {
+            day += chrono::Duration::days(1);
+            let to_window = if day < opens {
+                (opens - day).num_days()
+            } else if day < shuts {
+                0
+            } else {
+                (next - day).num_days()
+            };
+            let ctx = TransferDesireContext {
+                days_to_next_window: Some(to_window as u16),
+                ..elite_ctx()
+            };
+            p.process_transfer_desire(day, &ctx);
+            if asked_on.is_none() && p.statuses.has(PlayerStatusType::Req) {
+                asked_on = Some(day);
+            }
+            if day == shuts - chrono::Duration::days(1) {
+                assert!(
+                    p.transfer_request_reasons
+                        .contains(&TransferRequestReason::RefusedPlayingTime),
+                    "it stands through the window, and says why"
+                );
+            }
+        }
+        assert_eq!(asked_on, Some(opens - chrono::Duration::days(14)));
+        assert!(!p.statuses.has(PlayerStatusType::Req));
+        assert_eq!(
+            p.decision_history.items.last().unwrap().movement,
+            "dec_transfer_request_withdrawn"
         );
     }
 
@@ -2139,8 +2391,7 @@ mod career_desire_tests {
     fn content_loyal_backup_stays() {
         let today = d(2026, 6, 1);
         let mut p = parked_backup(27, 6.0, 17.0, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2153,8 +2404,7 @@ mod career_desire_tests {
         let today = d(2026, 6, 1);
         let mut p = parked_backup(21, 18.0, 6.0, today);
         asking(&mut p, CareerArc::ProveOnLoan, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2178,8 +2428,7 @@ mod career_desire_tests {
         let mut p = parked_backup(21, 18.0, 6.0, today);
         p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::HotProspectForTheFuture;
         asking(&mut p, CareerArc::ProveOnLoan, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(matches!(
             p.first_team_football_ask(today),
             Some(FirstTeamFootballAsk::Loan(_))
@@ -2197,8 +2446,7 @@ mod career_desire_tests {
         let mut p = parked_backup(27, 16.0, 8.0, today);
         p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
         asking(&mut p, CareerArc::StepDownToPlay, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        for_a_fortnight(&mut p, today, &elite_ctx());
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2221,8 +2469,7 @@ mod career_desire_tests {
             contract.is_transfer_listed = true;
         }
         asking(&mut p, CareerArc::StepDownToPlay, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2254,11 +2501,10 @@ mod career_desire_tests {
             .as_mut()
             .unwrap()
             .escalate(PlanStage::Asking);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        for_a_fortnight(&mut p, today, &elite_ctx());
         assert!(
             p.statuses.has(PlayerStatusType::Req),
-            "and once he has said it out loud the club hears it"
+            "and once he has been saying it for a fortnight the club hears it"
         );
     }
 
@@ -2273,8 +2519,7 @@ mod career_desire_tests {
         season_so_far(&mut p, 0.85);
 
         a_week_of_thinking(&mut p, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
@@ -2292,8 +2537,7 @@ mod career_desire_tests {
         standing(&mut p, 3, 3, 26, -4);
         season_so_far(&mut p, 0.05);
         asking(&mut p, CareerArc::StepDownToPlay, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        for_a_fortnight(&mut p, today, &elite_ctx());
         assert!(p.statuses.has(PlayerStatusType::Req), "precondition");
 
         // He is in the side now, over a sample he believes.
@@ -2301,13 +2545,18 @@ mod career_desire_tests {
         standing(&mut p, 1, 3, 26, 6);
         season_so_far(&mut p, 0.8);
         a_week_of_thinking(&mut p, autumn);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, autumn, &elite_ctx());
+        p.process_transfer_desire(autumn, &elite_ctx());
 
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
             "the football answered him; nothing had to withdraw the request"
+        );
+        assert!(!p.statuses.has(PlayerStatusType::Req));
+        assert_eq!(
+            p.decision_history.items.last().unwrap().date,
+            autumn,
+            "and his record says when he stopped asking"
         );
     }
 
@@ -2328,8 +2577,7 @@ mod career_desire_tests {
         );
 
         a_week_of_thinking(&mut p, today);
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        p.process_transfer_desire(today, &elite_ctx());
         assert!(
             !p.statuses.has(PlayerStatusType::Req),
             "he is waiting his turn, and his turn is actually coming"
@@ -2680,7 +2928,6 @@ mod career_desire_tests {
         // doesn't get desire moods staged.
         p.happiness.morale = 30.0;
         p.happiness.factors.club_fit = -5.0;
-        let mut result = PlayerResult::new(p.id);
         let ctx = TransferDesireContext {
             country_code: "jp",
             club_continent_id: 4,
@@ -2689,7 +2936,7 @@ mod career_desire_tests {
             main_league_tier: 1,
             ..Default::default()
         };
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert_eq!(count_event(&p, HappinessEventType::WantsReturnHome), 0);
         assert_eq!(
             count_event(&p, HappinessEventType::WantsCopaLibertadores),
@@ -2724,8 +2971,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        let next_day = for_a_fortnight(&mut p, today, &ctx);
         assert!(p.statuses.has(PlayerStatusType::Req));
         assert!(
             p.transfer_request_reasons
@@ -2739,7 +2985,7 @@ mod career_desire_tests {
         // Salary issue resolves — but ambition mismatch remains.
         p.happiness.factors.salary_satisfaction = 0.0;
         p.happiness.last_salary_negotiation = None;
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(next_day, &ctx);
         assert!(
             p.statuses.has(PlayerStatusType::Req),
             "Req must persist while ambition still red"
@@ -2768,8 +3014,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        for_a_fortnight(&mut p, today, &ctx);
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub),
@@ -2799,8 +3044,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub)
@@ -2821,8 +3065,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::OutgrownClub),
@@ -2850,8 +3093,7 @@ mod career_desire_tests {
             league_reputation: 6000,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert_eq!(
             count_event(&p, HappinessEventType::WantsStrongerLeague),
             1,
@@ -2884,8 +3126,7 @@ mod career_desire_tests {
             league_reputation: 6000,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        for_a_fortnight(&mut p, today, &ctx);
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsStrongerLeague),
@@ -2906,8 +3147,7 @@ mod career_desire_tests {
             league_reputation: 9200,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsStrongerLeague)
@@ -2931,8 +3171,7 @@ mod career_desire_tests {
             country_uefa_suspended: true,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsStrongerLeague),
@@ -2955,8 +3194,7 @@ mod career_desire_tests {
             destination_is_favourite: true,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsStrongerLeague),
@@ -2990,10 +3228,8 @@ mod career_desire_tests {
 
         let mut isolated = player.clone();
         let mut open = player;
-        let mut r1 = PlayerResult::new(isolated.id);
-        let mut r2 = PlayerResult::new(open.id);
-        isolated.process_transfer_desire(&mut r1, today, &isolated_ctx);
-        open.process_transfer_desire(&mut r2, today, &open_ctx);
+        isolated.process_transfer_desire(today, &isolated_ctx);
+        open.process_transfer_desire(today, &open_ctx);
 
         assert!(
             isolated.big_stage_inclination > open.big_stage_inclination,
@@ -3016,8 +3252,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        for_a_fortnight(&mut p, today, &ctx);
         assert!(
             p.transfer_request_reasons
                 .contains(&TransferRequestReason::NewChallenge),
@@ -3043,8 +3278,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::NewChallenge),
@@ -3064,8 +3298,7 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::NewChallenge),
@@ -3074,7 +3307,7 @@ mod career_desire_tests {
     }
 
     #[test]
-    fn req_clears_when_all_reasons_resolved() {
+    fn req_clears_a_month_after_all_reasons_resolved() {
         let today = d(2026, 5, 1);
         let mut p = build(28, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 200, today);
         // Unhappy well past the six-month listing gate so LongUnhappiness is
@@ -3090,13 +3323,22 @@ mod career_desire_tests {
             player_nationality_continent_id: Some(1),
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        let next_day = for_a_fortnight(&mut p, today, &ctx);
         assert!(p.statuses.has(PlayerStatusType::Req));
 
         // Unh status removed — no other reason active.
         p.statuses.remove(PlayerStatusType::Unh);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(next_day, &ctx);
+        assert!(
+            p.statuses.has(PlayerStatusType::Req),
+            "a bad morning does not take a request back, nor does a good one"
+        );
+        assert!(
+            !p.transfer_request_reasons.is_empty(),
+            "it keeps saying why"
+        );
+
+        p.process_transfer_desire(next_day + chrono::Duration::days(30), &ctx);
         assert!(!p.statuses.has(PlayerStatusType::Req));
         assert!(p.transfer_request_reasons.is_empty());
     }
@@ -3436,8 +3678,7 @@ mod career_desire_tests {
             club_continent_id: 4,
             ..Default::default()
         };
-        let mut result = PlayerResult::new(p.id);
-        p.process_transfer_desire(&mut result, today, &ctx);
+        p.process_transfer_desire(today, &ctx);
         assert!(
             count_event(&p, HappinessEventType::LifeSimulationDesire) >= 1,
             "expected at least one LifeSimulationDesire event"

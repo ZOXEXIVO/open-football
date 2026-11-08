@@ -1061,6 +1061,7 @@ impl PlayerGenerator {
             squad_social_view: None,
             squad_standing_view: None,
             transfer_request_reasons: Vec::new(),
+            transfer_request: Default::default(),
             big_stage_inclination: 0.0,
             // Academy youth (~age 14) have not made a senior appearance yet —
             // their genuine debut fires later when they break into the seniors.

@@ -100,16 +100,22 @@ impl AvailabilityView {
             || matches!(
                 listing_origin,
                 Some(TransferListingOrigin::SellerListed)
+                    | Some(TransferListingOrigin::PlayerAsked)
                     | Some(TransferListingOrigin::EndOfContract)
             );
         let advertised_loan = player.statuses.has(PlayerStatusType::Loa)
             || matches!(listing_origin, Some(TransferListingOrigin::LoanOutListed));
+        let requested = player.statuses.has(PlayerStatusType::Req);
+        // The row he asked for is not the club selling him. His request
+        // already says he wants to go; counting it again as the club's wish
+        // pushed a man twice toward any offer at all.
+        let asked_for_it = matches!(listing_origin, Some(TransferListingOrigin::PlayerAsked))
+            || (listing_origin.is_none() && requested);
         let listed_by_club = if is_loan {
             advertised_loan
         } else {
-            advertised_permanent
+            advertised_permanent && !asked_for_it
         };
-        let requested = player.statuses.has(PlayerStatusType::Req);
         let unhappy = player.statuses.has(PlayerStatusType::Unh);
         let not_needed = player
             .contract
@@ -204,6 +210,7 @@ impl PlayerStanceBuilder {
             available_soft: inputs.available,
             unhappy: player.statuses.has(PlayerStatusType::Unh),
             requested: player.statuses.has(PlayerStatusType::Req),
+            asks_for_a_bigger_stage: player.asks_only_for_a_bigger_stage(),
             listed_by_club: inputs.listed_by_club,
             at_favourite_club: player.favorite_clubs.contains(&inputs.seller_club.id),
             buyer_sentiment: player
@@ -216,6 +223,7 @@ impl PlayerStanceBuilder {
             seller_country_id: country.id,
             seller_region: ScoutingRegion::from_country(country.continent_id, &country.code),
             level_floor: player.level_floor(date, seller_league_rep),
+            club_standing: seller_rep_score,
             ..PlayerStance::neutral()
         };
 
@@ -319,6 +327,7 @@ impl PlayerStanceBuilder {
             available_soft: summary.is_listed || summary.is_loan_listed,
             unhappy: summary.seller_ctx.is_unhappy,
             requested: summary.seller_ctx.is_transfer_requested,
+            asks_for_a_bigger_stage: summary.asks_for_a_bigger_stage,
             listed_by_club: summary.is_loan_listed,
             // The mind's own restlessness, carried on the summary — the
             // posting is the club's decision and is already read through
@@ -341,6 +350,8 @@ impl PlayerStanceBuilder {
             seller_country_id: summary.country_id,
             seller_region,
             level_floor: summary.level_floor(),
+            anchors: summary.anchors,
+            club_standing: summary.seller_ctx.club_reputation_score,
             ..PlayerStance::neutral()
         }
     }
@@ -451,6 +462,7 @@ impl OfferViewBuilder {
             release_clause_triggered: false,
             returning_to_seller: 0.0,
             band_offered: stance.band_at(buyer_reputation),
+            buyer_standing: buyer_reputation,
         }
     }
 }
@@ -461,7 +473,9 @@ mod tests {
     use crate::PathwayStage;
     use crate::club::player::ability::position::PositionCoverage;
     use crate::club::player::language::LanguageProfile;
-    use crate::club::player::mind::CareerPlanView;
+    use crate::club::player::mind::{
+        AnchorView, CareerPlanView, CareerSummit, MindClock, MindSituation, PlayerMind,
+    };
     use crate::transfers::gate::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
@@ -470,6 +484,59 @@ mod tests {
     /// A market summary of a homesick loyal Brazilian at an English club:
     /// three starts in a season, a formed want, and the personality the
     /// live builder would read straight off the player.
+    #[test]
+    fn a_domestic_and_a_staged_stance_read_the_same_anchors() {
+        let today = MindClock::day(chrono::NaiveDate::from_ymd_opt(2030, 6, 1).unwrap());
+        let situation = MindSituation {
+            age: 25,
+            ambition: 18.0,
+            own_level: 150,
+            ceiling: 170,
+            club_reputation: 0.6,
+            ..MindSituation::neutral()
+        };
+        let mut mind = PlayerMind::new();
+        mind.career.seed_anchors(
+            &situation,
+            7,
+            Some(CareerSummit {
+                league_reputation: 9_000,
+                club_id: 7,
+                club_standing: 0.6,
+                reached_on: today,
+                last_regular_on: today,
+                level_then: 150,
+            }),
+            true,
+            today,
+        );
+
+        let domestic = PlayerStance {
+            age: 25,
+            own_level: 150,
+            ..PlayerStance::neutral()
+        }
+        .with_mind(&mind, 0.0, today);
+        let summary = PlayerSummary {
+            anchors: mind.career.anchor_view(today, 25, 150),
+            ..brazilian_at_arsenal()
+        };
+        let staged =
+            PlayerStanceBuilder::from_summary(&summary, 0.35, ScoutingRegion::WesternEurope);
+
+        assert!(domestic.anchors.dream.is_some());
+        assert_eq!(domestic.anchors.held_summit, 9_000);
+        assert_eq!(domestic.anchors, staged.anchors);
+        assert_eq!(
+            staged.club_standing,
+            summary.seller_ctx.club_reputation_score
+        );
+        assert_eq!(
+            summary.level_floor().standing.min(9_000.0),
+            staged.level_floor.standing.min(9_000.0)
+        );
+    }
+
     fn brazilian_at_arsenal() -> PlayerSummary {
         PlayerSummary {
             player_id: 1,
@@ -492,6 +559,8 @@ mod tests {
             stay_pressure: 0.1,
             parent_loan: None,
             career_plan: CareerPlanView::none(),
+            anchors: AnchorView::default(),
+            asks_for_a_bigger_stage: false,
             parent_subsidy: 0.0,
             player_name: "Test".to_string(),
             club_name: "Test Club".to_string(),

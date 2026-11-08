@@ -26,10 +26,12 @@
 use super::EmergencySignedTerms;
 use crate::Country;
 use crate::PlayerFieldPositionGroup;
+use crate::club::player::transfer::LevelFloor;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::deal::negotiation::FreeAgentArrival;
 use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
+use crate::transfers::gate::appraisal::PlayerStance;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
     ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferNeedReason,
@@ -146,6 +148,9 @@ pub(super) struct DepthNegotiationAction {
     pub player_age: u8,
     pub player_ambition: f32,
     pub is_global_pool: bool,
+    /// The lowest division he will play in, for a man the country's
+    /// borrow cannot reach to read it from.
+    pub level_floor: LevelFloor,
     pub reason: TransferReason,
 }
 
@@ -215,6 +220,18 @@ impl FreeAgentNegotiationStager {
                 // so the resolution-side wage check scores it at par
                 // instead of skipping the money question entirely.
                 negotiation.staged_reservation_wage = Some(action.terms.annual_wage);
+                if action.is_global_pool {
+                    let wage = action.terms.annual_wage as f64;
+                    negotiation.staged_stance = Some(PlayerStance {
+                        level_floor: action.level_floor,
+                        ..PlayerStance::from_terms(
+                            action.player_age,
+                            action.player_ambition,
+                            wage,
+                            wage,
+                        )
+                    });
+                }
                 negotiation.negotiator_staff_id = action.negotiator_staff_id;
                 negotiation.reason = action.reason.clone();
                 negotiation.player_name = action.player_name.clone();

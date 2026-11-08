@@ -16,6 +16,7 @@
 //! a gate.
 
 use chrono::NaiveDate;
+use rustc_hash::FxHashSet;
 
 use crate::club::CareerRunway;
 use crate::club::board::mandate::{
@@ -25,6 +26,7 @@ use crate::club::news::affairs::ClubAffair;
 use crate::club::player::mind::{MindClock, MindSituation};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::transfers::deal::offer::PromisedSquadStatus;
+use crate::transfers::loan::LoanAssetGuard;
 use crate::transfers::loan::agreement::ParentWillingness;
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
@@ -479,6 +481,15 @@ impl Club {
         let pressure = LedgerPressure::of(&LedgerContext::of(self));
         let (league_rep, club_rep) = PlayerValuationCalculator::seller_context_from_club(self);
         let mut staged_loans: Vec<(u32, LoanOutReason)> = Vec::new();
+        // Read before the walk takes the squad mutably.
+        let not_lent: FxHashSet<u32> = self
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .filter(|p| p.plan.as_ref().is_some_and(|plan| plan.review_due(date)))
+            .filter(|p| !LoanAssetGuard::willingness_for(self, p, date).entertains())
+            .map(|p| p.id)
+            .collect();
 
         for team_idx in 0..self.teams.teams.len() {
             let is_youth_squad = self.teams.teams[team_idx].team_type.is_youth();
@@ -527,6 +538,15 @@ impl Club {
                     date,
                 );
                 let from = plan.stage;
+                // The board kept him off a listing nobody answered because it
+                // plays him; while it does, his pathway here is not over.
+                let next = if next == PathwayStage::MoveOn
+                    && self.transfer_plan.keeps_in_the_side(player, date)
+                {
+                    from
+                } else {
+                    next
+                };
                 // Finishing with a man is a decision about money as much as
                 // about football, and the money is the board's. A player
                 // the market will not pay his own book for is lent out
@@ -549,6 +569,11 @@ impl Club {
                         ReservationVerdict::Loan => PathwayStage::LoanOut,
                         ReservationVerdict::Hold => from,
                     }
+                } else {
+                    next
+                };
+                let next = if next == PathwayStage::LoanOut && not_lent.contains(&player.id) {
+                    PathwayReview::standing_stage(&signals)
                 } else {
                     next
                 };
@@ -756,6 +781,16 @@ impl Club {
         else {
             return;
         };
+        // Every route to a loan comes through here, and not all of them
+        // asked: a depth cap and an unsold listing know nothing of who he is,
+        // or of how often the club has sent him out already.
+        if self.teams.teams[team_idx]
+            .players
+            .find(player_id)
+            .is_some_and(|p| !LoanAssetGuard::willingness_for(self, p, date).entertains())
+        {
+            return;
+        }
         if let Some(player) = self.teams.teams[team_idx].players.find_mut(player_id) {
             let from = player.plan.as_ref().map(|p| p.stage);
             let mut fresh =
@@ -999,14 +1034,16 @@ mod tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::league::Season;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::transfers::loan::agreement::LoanMoney;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, PlayerSquadStatus, PlayerStatusType, StaffCollection, TeamBuilder,
-        TeamCollection, TeamReputation, TrainingSchedule,
+        PlayerSkills, PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatLedgerEntry,
+        PlayerStatistics, PlayerStatusType, StaffCollection, TeamBuilder, TeamCollection,
+        TeamReputation, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -1314,7 +1351,7 @@ mod tests {
 
     #[test]
     fn the_purpose_the_club_had_in_mind_reaches_the_candidate() {
-        let mut club = Fx::club(vec![Fx::player(1, 110, 20)]);
+        let mut club = Fx::club((1..=6).map(|id| Fx::player(id, 30, 20)).collect());
         club.on_pathway_loan_staged(1, LoanOutReason::UnsettledAbroad, Fx::date());
 
         let candidate = club
@@ -1360,7 +1397,16 @@ mod tests {
     fn a_purchase_behind_its_promise_is_lent_out_not_listed() {
         use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
 
-        let mut club = Fx::club(vec![Fx::player(1, 120, 26), Fx::player(2, 150, 28)]);
+        // Well behind the men in his group, so nobody reads him as a star
+        // the club would not lend.
+        let mut club = Fx::club(vec![
+            Fx::player(1, 120, 26),
+            Fx::player(2, 150, 28),
+            Fx::player(3, 150, 28),
+            Fx::player(4, 150, 28),
+            Fx::player(5, 150, 28),
+            Fx::player(6, 150, 28),
+        ]);
         let signed = Fx::date() - chrono::Duration::days(730);
         if let Some(player) = club.teams.teams[0].players.find_mut(1) {
             player.plan = Some(PlayerPlan::from_mandate(
@@ -1430,7 +1476,7 @@ mod tests {
     /// full parent subsidy for the rest of his career.
     #[test]
     fn a_staged_loan_nobody_took_lapses_when_the_window_shuts() {
-        let mut club = Fx::club(vec![Fx::player(1, 110, 20)]);
+        let mut club = Fx::club((1..=6).map(|id| Fx::player(id, 30, 20)).collect());
         club.on_pathway_loan_staged(1, LoanOutReason::NeedsGameTime, Fx::date());
         club.teams.teams[0]
             .players
@@ -1470,7 +1516,7 @@ mod tests {
     /// reset must not drop it while the stage survives.
     #[test]
     fn a_window_reset_keeps_the_rows_the_pathway_staged() {
-        let mut club = Fx::club(vec![Fx::player(1, 110, 20)]);
+        let mut club = Fx::club((1..=6).map(|id| Fx::player(id, 30, 20)).collect());
         club.on_pathway_loan_staged(1, LoanOutReason::NeedsGameTime, Fx::date());
         club.transfer_plan
             .loan_out_candidates
@@ -1496,10 +1542,206 @@ mod tests {
     }
 
     #[test]
+    fn a_route_that_never_asked_does_not_stage_a_man_the_club_holds() {
+        let mut club = Fx::club(vec![Fx::player(1, 140, 27), Fx::player(2, 138, 27)]);
+        if let Some(player) = club.teams.teams[0].players.find_mut(1) {
+            player.happiness.starter_ratio = 0.95;
+            player.happiness.appearances_tracked = 40;
+        }
+
+        club.on_pathway_loan_staged(1, LoanOutReason::Surplus, Fx::date());
+
+        let player = club.teams.teams[0].players.find(1).unwrap();
+        assert_ne!(player.pathway_stage(), PathwayStage::LoanOut);
+        assert!(club.transfer_plan.loan_out_candidates.is_empty());
+    }
+
+    #[test]
+    fn the_team_sheet_holds_a_man_the_depth_chart_would_let_go() {
+        let mut club = Fx::club(vec![
+            Fx::player(1, 110, 27),
+            Fx::player(2, 170, 28),
+            Fx::player(3, 170, 28),
+            Fx::player(4, 170, 28),
+            Fx::player(5, 170, 28),
+            Fx::player(6, 170, 28),
+        ]);
+        club.on_pathway_loan_staged(1, LoanOutReason::Surplus, Fx::date());
+        assert_eq!(
+            club.teams.teams[0].players.find(1).unwrap().pathway_stage(),
+            PathwayStage::LoanOut,
+            "precondition: well behind the best and out of the side, he can go"
+        );
+
+        let mut club = Fx::club(vec![
+            Fx::player(1, 110, 27),
+            Fx::player(2, 170, 28),
+            Fx::player(3, 170, 28),
+            Fx::player(4, 170, 28),
+            Fx::player(5, 170, 28),
+            Fx::player(6, 170, 28),
+        ]);
+        if let Some(player) = club.teams.teams[0].players.find_mut(1) {
+            player.happiness.starter_ratio = 0.9;
+            player.happiness.appearances_tracked = 40;
+        }
+        club.on_pathway_loan_staged(1, LoanOutReason::Surplus, Fx::date());
+        assert_ne!(
+            club.teams.teams[0].players.find(1).unwrap().pathway_stage(),
+            PathwayStage::LoanOut
+        );
+    }
+
+    #[test]
+    fn a_club_that_has_lent_him_three_times_stages_no_fourth_loan() {
+        for (loans_used, staged) in [(0, true), (3, false)] {
+            let mut club = Fx::club((1..=6).map(|id| Fx::player(id, 30, 20)).collect());
+            if let Some(player) = club.teams.teams[0].players.find_mut(1) {
+                player.plan = Some(Fx::plan(loans_used));
+            }
+
+            club.on_pathway_loan_staged(1, LoanOutReason::NeedsFirstTeamMinutes, Fx::date());
+
+            assert_eq!(
+                club.transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .any(|c| c.player_id == 1),
+                staged,
+                "after {loans_used} spells"
+            );
+        }
+    }
+
+    #[test]
+    fn a_man_back_from_a_loan_he_started_on_is_read_on_his_own_side() {
+        let mut club = Fx::club(vec![
+            Fx::player(1, 110, 27),
+            Fx::player(2, 170, 28),
+            Fx::player(3, 170, 28),
+            Fx::player(4, 170, 28),
+            Fx::player(5, 170, 28),
+            Fx::player(6, 170, 28),
+        ]);
+        if let Some(player) = club.teams.teams[0].players.find_mut(1) {
+            player
+                .statistics_history
+                .season_ledger
+                .push(PlayerStatLedgerEntry {
+                    seq_id: 0,
+                    season_start_year: Season::from_date(Fx::date()).start_year - 1,
+                    team_slug: "borrower".into(),
+                    team_name: "Borrower".into(),
+                    team_reputation: 3_000,
+                    league_slug: "l".into(),
+                    league_name: "L".into(),
+                    competition_kind: PlayerStatCompetitionKind::League,
+                    competition_slug: String::new(),
+                    is_loan: true,
+                    transfer_fee: None,
+                    coverage_days: None,
+                    spell_end: None,
+                    statistics: PlayerStatistics {
+                        played: 34,
+                        ..Default::default()
+                    },
+                });
+        }
+
+        club.on_pathway_loan_staged(1, LoanOutReason::NeedsFirstTeamMinutes, Fx::date());
+
+        assert_eq!(
+            club.teams.teams[0].players.find(1).unwrap().pathway_stage(),
+            PathwayStage::LoanOut,
+            "a season starting for the borrower is not a place in this side"
+        );
+    }
+
+    #[test]
+    fn a_rotated_star_behind_his_promise_stays_rather_than_going_out() {
+        use crate::club::board::mandate::{MandateAuthor, MandatePurpose, SigningMandate};
+
+        let mut club = Fx::club(vec![Fx::player(1, 145, 26), Fx::player(2, 150, 28)]);
+        let signed = Fx::date() - chrono::Duration::days(730);
+        if let Some(player) = club.teams.teams[0].players.find_mut(1) {
+            player.plan = Some(PlayerPlan::from_mandate(
+                SigningMandate::new(
+                    MandatePurpose::Rotation,
+                    PlayerFieldPositionGroup::Midfielder,
+                    24,
+                    signed,
+                    MandateAuthor::Manager,
+                )
+                .with_money(40_000_000.0, 4_000_000.0),
+                signed,
+            ));
+            player.happiness.starter_ratio = 0.02;
+            player.happiness.appearances_tracked = 40;
+        }
+
+        club.review_pathways(Fx::date());
+
+        let player = club.teams.teams[0].players.find(1).unwrap();
+        assert_ne!(player.pathway_stage(), PathwayStage::LoanOut);
+        assert!(club.transfer_plan.loan_out_candidates.is_empty());
+    }
+
+    #[test]
     fn a_sale_with_nobody_behind_him_promotes_nobody() {
         let mut club = Fx::club(vec![Fx::player(1, 140, 28)]);
         club.review_pathways(Fx::date());
         club.on_asset_sold(1, Fx::date());
         assert!(club.teams.teams[0].players.find(1).is_some());
+    }
+
+    /// The board kept him off a listing nobody answered because it plays
+    /// him. The monthly pass reads his level, not his minutes, and would
+    /// list him again with nothing to put on the market.
+    #[test]
+    fn a_man_the_board_keeps_in_the_side_is_not_moved_on() {
+        let starting_veteran = |id: u32| {
+            let mut player = Fx::player(id, 30, 35);
+            player.happiness.starter_ratio = 0.9;
+            player.happiness.appearances_tracked = 30;
+            player.plan = Some(PlayerPlan::from_existing(
+                PlayerPlanRole::DepthRotation,
+                PathwayStage::Rotation,
+                PlayerFieldPositionGroup::Midfielder,
+                35,
+                Fx::date(),
+            ));
+            player
+        };
+        let mut club = Fx::club(vec![starting_veteran(1), starting_veteran(2)]);
+        club.teams.teams[0].reputation = TeamReputation::new(9_000, 9_000, 9_000);
+        club.transfer_plan.kept_in_the_side.insert(1);
+
+        club.review_pathways(Fx::date() + chrono::Duration::days(PlayerPlan::REVIEW_DAYS));
+
+        let listed = |id: u32| {
+            club.teams.teams[0]
+                .players
+                .find(id)
+                .unwrap()
+                .contract
+                .as_ref()
+                .unwrap()
+                .is_transfer_listed
+        };
+        let stage = |id: u32| {
+            club.teams.teams[0]
+                .players
+                .find(id)
+                .unwrap()
+                .pathway_stage()
+        };
+        assert_eq!(
+            stage(2),
+            PathwayStage::MoveOn,
+            "precondition: anyone else in his place is moved on"
+        );
+        assert!(listed(2));
+        assert_eq!(stage(1), PathwayStage::Rotation);
+        assert!(!listed(1));
     }
 }

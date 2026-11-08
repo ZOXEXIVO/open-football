@@ -27,7 +27,7 @@ use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::market::knowledge::ClubMarketKnowledge;
 use crate::transfers::pipeline::LoanOutReason;
 use crate::transfers::pipeline::trace::MarketSwitches;
-use crate::transfers::squad::LevelBand;
+use crate::transfers::squad::{AssetRow, LevelBand};
 use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup, ReputationLevel};
 
 /// What the parent club can see about lending one of its own out.
@@ -36,10 +36,9 @@ use crate::{ClubPhilosophy, PathwayStage, PlayerFieldPositionGroup, ReputationLe
 /// the world, and nothing here is a verdict.
 #[derive(Debug, Clone, Copy)]
 pub struct ParentReading {
-    /// He is inside the slots the formation starts at his position AND
-    /// at the club's own key-player level —
-    /// [`super::LoanAssetGuard::first_choice`]. A reading, never a veto.
-    pub first_choice: bool,
+    /// The club reads him as a man it does not lend for the minutes —
+    /// [`super::LoanAssetGuard::key_man`]. A reading, never a veto.
+    pub key_man: bool,
     /// Share of the side's matches he has started, 0..1. The neutral 0.5
     /// stands for "not enough football to say".
     pub starter_share: f32,
@@ -47,6 +46,9 @@ pub struct ParentReading {
     pub runway: f32,
     /// Spells he has already been sent on.
     pub loans_used: u8,
+    /// A season away is how this man gets better: young, and below the
+    /// club's level — [`super::LoanAssetGuard::is_development`].
+    pub development: bool,
     /// Bodies the club has in his position group, and the fewest it can
     /// field with.
     pub group_count: usize,
@@ -60,8 +62,6 @@ pub struct ParentReading {
     pub plan_push: f32,
     /// He has formally asked to go.
     pub requested: bool,
-    /// The club has advertised him.
-    pub advertised: bool,
 }
 
 /// The three readings every loan caller needs about one man at one
@@ -142,9 +142,11 @@ impl ParentWillingness {
     }
 
     pub fn of(reading: &ParentReading) -> Self {
-        let starter_hold = if !reading.first_choice {
+        // Only he can open this door. A loan listing is the club's own
+        // earlier answer to the question, so it cannot be a reason for it.
+        let starter_hold = if !reading.key_man {
             1.0
-        } else if reading.requested || reading.advertised {
+        } else if reading.requested {
             Self::STARTER_HOLD_REQUESTED
         } else if reading.plan_push >= Self::PLAN_OPENS_AT {
             Self::STARTER_HOLD_WANTED
@@ -159,7 +161,14 @@ impl ParentWillingness {
             Self::AGE_FIT_FLOOR
                 + (1.0 - Self::AGE_FIT_FLOOR) * (reading.runway / Self::AGE_FIT_RUNWAY)
         };
-        let loan_fatigue = Self::LOAN_FATIGUE[(reading.loans_used as usize).min(3)];
+        // A club develops a boy over as many spells as he needs, more
+        // reluctantly each time. Anybody else it lends twice, and then his
+        // answer is the market.
+        let loan_fatigue = if !reading.development && reading.loans_used >= AssetRow::MAX_LOANS {
+            0.0
+        } else {
+            Self::LOAN_FATIGUE[(reading.loans_used as usize).min(3)]
+        };
         // Zero is the caller saying it cannot see the club's roster at
         // all, which is no view rather than an empty position group.
         let depth_room = if reading.group_count == 0 {
@@ -178,8 +187,13 @@ impl ParentWillingness {
         // The pathway and his own minutes are two answers to the same
         // question, so the louder one speaks: a club that has already
         // decided to send him does not need him to be out of the side
-        // first.
-        let purpose = minutes.max(reading.stage.loan_push());
+        // first. A man it holds is read on the team sheet alone, because
+        // a stage is one more of the club's own stamps.
+        let purpose = if reading.key_man {
+            minutes
+        } else {
+            minutes.max(reading.stage.loan_push())
+        };
 
         let score = (starter_hold * purpose * age_fit * loan_fatigue * depth_room * philosophy)
             .clamp(0.0, 1.0);
@@ -190,6 +204,14 @@ impl ParentWillingness {
             depth_room,
             placement_trust: 1.0,
         }
+    }
+
+    /// Would the club have the conversation at all? Every route to a loan
+    /// asks this one question, whoever thought of the loan: a man it
+    /// holds, a man it cannot spare and a man it has already sent out time
+    /// and again all read below it.
+    pub fn entertains(&self) -> bool {
+        self.score >= Self::ENTERTAINS
     }
 
     /// Willingness at or above which the club will entertain the idea at
@@ -219,9 +241,9 @@ impl ParentWillingness {
     /// bands; the asset class is read off his label, his record and his
     /// standing. They are two views of "is he one of ours", and a caller
     /// holding both takes whichever says he is more clearly first-team.
-    /// `opened` is his own side of it — a request, a listing, or a plan
-    /// pushing for a season away — and it lifts the hold exactly as it
-    /// does inside [`Self::of`].
+    /// `opened` is his own side of it — a request or a plan pushing for a
+    /// season away — and it lifts the hold exactly as it does inside
+    /// [`Self::of`].
     pub fn held_as_first_team(score: f32, first_team: bool, opened: bool) -> f32 {
         if !first_team || opened {
             score
@@ -839,6 +861,9 @@ impl LoanAgreement {
         if Self::disarmed() {
             return Some(1.0);
         }
+        if !inputs.parent.entertains() {
+            return None;
+        }
         let (parent, appetite, consent, money) = Self::terms(inputs);
         let score = Self::score(&parent, &appetite, &consent, &money);
         Some(score).filter(|s| *s >= Self::FLOOR)
@@ -935,10 +960,11 @@ mod tests {
         /// runway, one spell behind him, a group with bodies to spare.
         fn fringe() -> ParentReading {
             ParentReading {
-                first_choice: false,
+                key_man: false,
                 starter_share: 0.1,
                 runway: 0.8,
                 loans_used: 0,
+                development: true,
                 group_count: 7,
                 group_min_needed: 4,
                 rank: 4,
@@ -946,7 +972,6 @@ mod tests {
                 philosophy: ClubPhilosophy::Balanced,
                 plan_push: 0.0,
                 requested: false,
-                advertised: false,
             }
         }
 
@@ -1002,34 +1027,106 @@ mod tests {
                 deadline_pressure: 0.3,
                 attempts: 0,
                 strength: 0.7,
+                follows: None,
             }
         }
     }
 
     #[test]
-    fn a_first_choice_is_held_back_and_never_barred() {
-        let held = ParentWillingness::of(&ParentReading {
-            first_choice: true,
-            starter_share: 0.9,
+    fn a_key_man_in_the_side_is_not_lent_whatever_opens_the_door() {
+        for reading in [
+            ParentReading {
+                key_man: true,
+                starter_share: 0.9,
+                ..Fx::fringe()
+            },
+            ParentReading {
+                key_man: true,
+                starter_share: 0.9,
+                stage: PathwayStage::LoanOut,
+                ..Fx::fringe()
+            },
+            ParentReading {
+                key_man: true,
+                starter_share: 0.9,
+                requested: true,
+                stage: PathwayStage::LoanOut,
+                ..Fx::fringe()
+            },
+            ParentReading {
+                key_man: true,
+                starter_share: 0.9,
+                plan_push: 0.8,
+                stage: PathwayStage::Prospect,
+                ..Fx::fringe()
+            },
+        ] {
+            let held = ParentWillingness::of(&reading);
+            assert!(!held.entertains(), "{:.3}", held.score);
+        }
+    }
+
+    #[test]
+    fn a_loan_listing_does_not_open_the_door_on_a_man_the_club_holds() {
+        let stamped = ParentWillingness::of(&ParentReading {
+            key_man: true,
+            starter_share: 0.05,
+            stage: PathwayStage::LoanOut,
             ..Fx::fringe()
         });
-        assert!(held.score > 0.0, "a veto is not a price");
-        assert!(held.score < ParentWillingness::ENTERTAINS);
+        assert!(!stamped.entertains(), "{:.3}", stamped.score);
     }
 
     #[test]
     fn his_own_plan_opens_the_door_his_clubs_first_choice_would_close() {
         let wanted = ParentWillingness::of(&ParentReading {
-            first_choice: true,
-            starter_share: 0.9,
+            key_man: true,
+            starter_share: 0.1,
             plan_push: 0.8,
             stage: PathwayStage::Prospect,
             ..Fx::fringe()
         });
         assert!(
-            wanted.score >= ParentWillingness::ENTERTAINS,
-            "a first-choice full-back who has asked to go and play is loanable: {:.3}",
+            wanted.entertains(),
+            "a first choice out of the side who has asked to go and play is loanable: {:.3}",
             wanted.score
+        );
+    }
+
+    #[test]
+    fn a_key_man_out_of_the_side_who_asked_to_go_can_be_lent() {
+        let asked = ParentWillingness::of(&ParentReading {
+            key_man: true,
+            starter_share: 0.05,
+            requested: true,
+            ..Fx::fringe()
+        });
+        assert!(asked.entertains(), "{:.3}", asked.score);
+    }
+
+    #[test]
+    fn a_stage_still_lends_a_man_the_club_does_not_hold() {
+        let staged = ParentWillingness::of(&ParentReading {
+            starter_share: 0.9,
+            stage: PathwayStage::LoanOut,
+            ..Fx::fringe()
+        });
+        assert!(staged.score >= ParentWillingness::ENTERTAINS);
+        assert!(staged.entertains());
+    }
+
+    #[test]
+    fn a_star_rotated_at_a_giant_is_not_lent_for_the_minutes() {
+        let rotated = ParentWillingness::of(&ParentReading {
+            key_man: true,
+            starter_share: 0.05,
+            runway: 0.6,
+            ..Fx::fringe()
+        });
+        assert!(
+            rotated.score < ParentWillingness::ENTERTAINS,
+            "third in line at his position, and still not on offer: {:.3}",
+            rotated.score
         );
     }
 
@@ -1047,6 +1144,23 @@ mod tests {
     }
 
     #[test]
+    fn a_club_that_has_sent_him_out_three_times_does_not_send_him_again() {
+        for stage in [PathwayStage::Prospect, PathwayStage::LoanOut] {
+            let fourth = ParentWillingness::of(&ParentReading {
+                loans_used: 3,
+                stage,
+                ..Fx::fringe()
+            });
+            assert!(!fourth.entertains(), "{stage:?}: {:.3}", fourth.score);
+        }
+        let second = ParentWillingness::of(&ParentReading {
+            loans_used: 1,
+            ..Fx::fringe()
+        });
+        assert!(second.entertains(), "{:.3}", second.score);
+    }
+
+    #[test]
     fn a_third_spell_is_priced_rather_than_blocked() {
         let third = ParentWillingness::of(&ParentReading {
             loans_used: 2,
@@ -1055,6 +1169,29 @@ mod tests {
         let first = ParentWillingness::of(&Fx::fringe());
         assert!(third.score > 0.0);
         assert!(third.score < first.score);
+    }
+
+    #[test]
+    fn a_man_the_club_is_not_developing_is_lent_twice_and_no_more() {
+        let established = |loans_used| {
+            ParentWillingness::of(&ParentReading {
+                loans_used,
+                development: false,
+                runway: 0.6,
+                ..Fx::fringe()
+            })
+        };
+        assert!(established(1).entertains(), "{:.3}", established(1).score);
+        assert!(!established(2).entertains(), "{:.3}", established(2).score);
+        let boy = ParentWillingness::of(&ParentReading {
+            loans_used: 2,
+            ..Fx::fringe()
+        });
+        assert!(
+            boy.entertains(),
+            "a third spell for a boy is priced: {:.3}",
+            boy.score
+        );
     }
 
     #[test]

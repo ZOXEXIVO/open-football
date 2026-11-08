@@ -3,9 +3,7 @@
 //! the same squads when the scoreline says something went wrong.
 
 use crate::r#match::engine::engine::*;
-use crate::r#match::engine::rating::{
-    EngineVolumeCalibration, RatingExpectationContext, TeamRatingSummary,
-};
+use crate::r#match::engine::rating::{MatchRatingPass, RatingVolumes};
 use crate::r#match::engine::result::HighlightSelector;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 
@@ -100,19 +98,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         match_position_data.finish_retaining(context.total_match_time, &kept_chances);
         result.position_data = match_position_data;
 
-        // Extract per-player stats and calculate match ratings.
-        //
-        // Two passes are needed because the contextual (public) rating
-        // reads team-behaviour summaries folded from EVERY player's stat
-        // line — who shot, who held the ball, who had to defend. So we
-        // first materialise all the stat lines and physical snapshots
-        // (subs included), then build the per-side summaries, then score
-        // each player against their own / opponent summary plus their
-        // own physical snapshot.
-        let score_ref = result.score.as_ref().unwrap();
-        let home_goals = score_ref.home_team.get();
-        let away_goals = score_ref.away_team.get();
-        let home_team_id = score_ref.home_team.team_id;
+        // Extract per-player stats, then rate them. The rating pass reads
+        // every stat line and physical snapshot, subs included, so all of
+        // them have to exist first.
 
         // A man who left the pitch folded his own in at the minute he went.
         #[cfg(feature = "match-logs")]
@@ -162,75 +150,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .insert(snapshot.player_id, snapshot);
         }
 
-        // ── Pass 2a: per-side behaviour summaries ────────────────────────
-        // Fold each side's stat lines (starters + used subs) into the
-        // team summary the expectation layer reads.
-        let left_summary = {
-            let side = &result.left_team_players;
-            TeamRatingSummary::from_stats(
-                side.main
-                    .iter()
-                    .chain(side.substitutes_used.iter())
-                    .filter_map(|id| result.player_stats.get(id)),
-            )
-        };
-        let right_summary = {
-            let side = &result.right_team_players;
-            TeamRatingSummary::from_stats(
-                side.main
-                    .iter()
-                    .chain(side.substitutes_used.iter())
-                    .filter_map(|id| result.player_stats.get(id)),
-            )
-        };
-        let left_team_id = result.left_team_players.team_id;
-
-        // ── Pass 2b: raw (stat-line) + contextual (public) ratings ───────
-        // `raw_match_rating` stays the pure `calculate()` verdict; the
-        // public `match_rating` seed layers Stage-2 (team expectation)
-        // and Stage-3 (condition) on top. Reputation / personality
-        // shaping is added later by the league pipeline.
-        let rated_ids: Vec<u32> = result.player_stats.keys().copied().collect();
-        for pid in rated_ids {
-            let on_left = result.left_team_players.main.contains(&pid)
-                || result.left_team_players.substitutes_used.contains(&pid);
-            let team_id = if on_left {
-                left_team_id
-            } else {
-                result.right_team_players.team_id
-            };
-            let (team_goals, opponent_goals) = if team_id == home_team_id {
-                (home_goals, away_goals)
-            } else {
-                (away_goals, home_goals)
-            };
-            let (own_summary, opp_summary) = if on_left {
-                (&left_summary, &right_summary)
-            } else {
-                (&right_summary, &left_summary)
-            };
-            let expectation = RatingExpectationContext::from_match(
-                own_summary,
-                opp_summary,
-                team_goals,
-                opponent_goals,
-                result.physical_snapshots.get(&pid),
-            );
-            if let Some(stats) = result.player_stats.get_mut(&pid) {
-                // Convert engine counter volumes to real-equivalent units
-                // before the rating model reads them — the model's
-                // saturation scales and evidence tiers are calibrated for
-                // real per-90 volumes (see rating/volume.rs). Persisted
-                // stats stay raw; only the rating input is converted.
-                let rating_stats = EngineVolumeCalibration::normalize(stats);
-                let (raw, contextual) = {
-                    let ctx = RatingContext::new(&rating_stats, team_goals, opponent_goals);
-                    (ctx.calculate(), ctx.calculate_contextual(&expectation))
-                };
-                stats.raw_match_rating = raw;
-                stats.match_rating = contextual;
-            }
-        }
+        // ── Pass 2: raw (stat-line) + contextual (public) ratings ────────
+        MatchRatingPass::rate(&mut result, RatingVolumes::EngineCounters);
 
         // Blowout diagnostic — off by default (see `match-logs` feature).
         // The aggregation itself is O(players × stats), so we skip the
@@ -238,6 +159,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // in `.dev/match` to analyse shot / goal sources.
         #[cfg(feature = "match-logs")]
         {
+            let score_ref = result.score.as_ref().unwrap();
+            let home_goals = score_ref.home_team.get();
+            let away_goals = score_ref.away_team.get();
+            let home_team_id = score_ref.home_team.team_id;
             let total_goals = home_goals + away_goals;
             if total_goals >= 8 {
                 let away_team_id = if field.home_team_id == home_team_id {

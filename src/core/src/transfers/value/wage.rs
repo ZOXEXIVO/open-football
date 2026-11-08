@@ -16,8 +16,9 @@
 //!
 //! The ceiling is the greater of three honest numbers — a stretch on the
 //! club's own level, the room left under the board's wage mandate with the
-//! owner's cheque taken back out of it, and what is left of the tier
-//! envelope that cheque was split into ([`OwnerEnvelopes`]).
+//! owner's cheque taken back out of it, as far as its wage structure allows,
+//! and what is left of the tier envelope that cheque was split into
+//! ([`OwnerEnvelopes`]).
 //!
 //! No league list and no money-club flag: everything above the club's own
 //! revenue comes from [`ClubBenefactor`], which is one ratio off the
@@ -123,7 +124,8 @@ pub struct WagePower {
     /// Room left under the board's wage mandate, with the owner's cheque
     /// taken back OUT of it: the mandate already contains the subsidy, so
     /// leaving it in would let a benefactor club count the same money
-    /// twice.
+    /// twice. Only as much of it as the club's wage structure lets one
+    /// shirt have.
     pub wage_headroom: f64,
 }
 
@@ -133,6 +135,18 @@ impl WagePower {
     /// how much, and it is what keeps ordinary domestic business moving
     /// when the reservation lands just above the market figure.
     pub const LEVEL_STRETCH: f64 = 1.30;
+
+    /// How far above the man it pays most a board takes its wage structure
+    /// on its own revenue. Room under the mandate is what the squad can
+    /// cost; no board hands it all to one signing, and a refusal's demand
+    /// is exponential in how little he wants the move, so a club with room
+    /// could otherwise buy a division he would never play in.
+    pub const WAGE_STRUCTURE_STRETCH: f64 = 1.50;
+
+    /// The most of its wage room a board will give one shirt.
+    fn room_for_one_shirt(room: f64, top_earner: f64) -> f64 {
+        room.min(top_earner * Self::WAGE_STRUCTURE_STRETCH)
+    }
 
     /// Share of the owner's yearly subsidy one shirt of this tier may
     /// carry. Mirrors [`BriefTier`]'s fee envelope: a club that briefs one
@@ -170,7 +184,17 @@ impl WagePower {
         let subsidy_in_mandate = targets
             .map(|t| t.owner_subsidy.max(0) as f64)
             .unwrap_or(0.0);
-        let wage_headroom = (mandate - subsidy_in_mandate - committed).max(0.0);
+        let top_earner = club
+            .teams
+            .iter()
+            .flat_map(|team| team.players.iter())
+            .filter_map(|player| player.contract.as_ref().map(|contract| contract.salary))
+            .max()
+            .unwrap_or(0) as f64;
+        let wage_headroom = Self::room_for_one_shirt(
+            (mandate - subsidy_in_mandate - committed).max(0.0),
+            top_earner,
+        );
 
         let owner_subsidy = targets
             .map(|t| t.owner_envelopes.remaining(tier, reserved))
@@ -334,6 +358,21 @@ mod tests {
             + WagePower::tier_share(BriefTier::B)
             + WagePower::tier_share(BriefTier::C);
         assert!((total - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn no_board_hands_one_shirt_all_its_wage_room() {
+        let top_earner = 4_000_000.0;
+        assert_eq!(
+            WagePower::room_for_one_shirt(60_000_000.0, top_earner),
+            6_000_000.0,
+            "a club with room does not pay a man fifteen times its best-paid player"
+        );
+        assert_eq!(
+            WagePower::room_for_one_shirt(3_000_000.0, top_earner),
+            3_000_000.0,
+            "and the room is still the limit when there is less of it"
+        );
     }
 
     #[test]

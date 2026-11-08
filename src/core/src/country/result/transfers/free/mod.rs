@@ -14,7 +14,7 @@ use super::types::DeferredTransfer;
 use crate::Club;
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
-use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
+use crate::club::player::transfer::{FreeAgentBlockReason, LevelFloor, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::SquadLadder;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
@@ -82,6 +82,10 @@ static UNKNOWN_NATIONALITY_WARNED: LazyLock<Mutex<FxHashSet<u32>>> =
 /// for Malta" forever, even after a year of unemployment.
 #[derive(Clone)]
 pub struct GlobalFreeAgentSummary {
+    /// The lowest division he will play in. Falls as he stays unsigned.
+    pub level_floor: LevelFloor,
+    /// The club that let him go, while that is still recent. 0 for nobody.
+    pub let_go_by: u32,
     pub player_id: u32,
     pub player_name: String,
     pub ability: u8,
@@ -268,6 +272,28 @@ pub(super) struct FreeAgentCandidate<'a> {
     /// contract. Half his geography: a Brazilian released by Porto is a
     /// Portugal-market free agent, and one released by Flamengo is not.
     pub last_country_id: u32,
+    /// The lowest division he will play in. Falls as he stays unsigned.
+    pub level_floor: LevelFloor,
+    /// The club that let him go, while that is still recent. 0 for nobody.
+    pub let_go_by: u32,
+}
+
+impl FreeAgentCandidate<'_> {
+    /// How long a club's decision to let a man go stands against signing him
+    /// back. A club that wanted him had a renewal to offer him.
+    pub(super) const LET_GO_STANDS_DAYS: i64 = 365;
+
+    /// Is this the club he is leaving, or one that has just let him go?
+    pub(super) fn was_let_go_by(&self, club_id: u32) -> bool {
+        self.club_id == club_id || self.let_go_by == club_id
+    }
+
+    /// How much of his willingness the buyer's division leaves him, 0..1.
+    /// It narrows what he will take today and nothing else: the club still
+    /// asked, and his floor falls for as long as nobody signs him.
+    pub(super) fn floor_allows(&self, league_rep: u16) -> f32 {
+        1.0 - self.level_floor.below(league_rep as f32)
+    }
 }
 
 /// How visible each free agent is to ONE buying market, computed once per
@@ -1255,7 +1281,8 @@ impl FreeAgentPass {
             );
             let threshold =
                 FreeAgentMarketCalculator::acceptance_threshold(candidate.career_pressure);
-            let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
+            let prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold)
+                * candidate.floor_allows(buyer.league_reputation);
             global_offered_ids.push(candidate.player_id);
             let acceptance_roll = IntegerUtils::random(1, 1000) as f32 / 1000.0;
             if acceptance_roll > prob {
@@ -1457,6 +1484,9 @@ impl FreeAgentPass {
         // already stocked with better men at his position.
         let mut stocked_fits = 0usize;
         for buyer in buyers {
+            if candidate.was_let_go_by(buyer.club_id) {
+                continue;
+            }
             let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                 buyer.club_score,
                 candidate.position_group,
@@ -1725,8 +1755,10 @@ impl FreeAgentPass {
         );
         let threshold = FreeAgentMarketCalculator::acceptance_threshold(best.career_pressure);
         let base_prob = FreeAgentMarketCalculator::acceptance_probability(score, threshold);
-        let prob = (base_prob * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER)
-            .clamp(0.0, 1.0);
+        let prob = (base_prob
+            * EmergencySquadFillStrategy::EMERGENCY_ACCEPTANCE_MULTIPLIER
+            * best.floor_allows(buyer_league_reputation))
+        .clamp(0.0, 1.0);
 
         if best.is_global_pool {
             // Global-pool offer: bump the player's `offered`
@@ -2094,7 +2126,7 @@ impl EmergencyCandidatePicker {
     ) -> Option<&'a FreeAgentCandidate<'a>> {
         let mut scored: Vec<(&FreeAgentCandidate, f32)> = candidates
             .iter()
-            .filter(|c| c.club_id != buying_club_id)
+            .filter(|c| !c.was_let_go_by(buying_club_id))
             .filter(|c| c.position_group == slot.group)
             .filter(|c| !signings.iter().any(|s| s.player_id == c.player_id))
             .filter(|c| !rejected_locally.contains(&c.player_id))
@@ -3014,7 +3046,15 @@ impl GlobalFreeAgentPool {
                     .map(|s| s.failed_approach_streak)
                     .unwrap_or(0);
 
+                let let_go_by = player
+                    .free_agent_state()
+                    .and_then(|state| state.last_club_id)
+                    .filter(|_| days_free <= FreeAgentCandidate::LET_GO_STANDS_DAYS)
+                    .unwrap_or(0);
+
                 GlobalFreeAgentSummary {
+                    level_floor: player.free_agent_floor(date, career_pressure),
+                    let_go_by,
                     player_id: player.id,
                     player_name: player.full_name.to_string(),
                     ability: player.player_attributes.current_ability,

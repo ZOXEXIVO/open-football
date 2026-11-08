@@ -489,6 +489,8 @@ mod tests {
                     age: 19,
                     resignation: 0.0,
                     plan_widening: 0.0,
+                    held_summit: 0,
+                    recency: 0.0,
                 }),
             )
         }

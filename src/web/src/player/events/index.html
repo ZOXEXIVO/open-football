@@ -43,7 +43,7 @@
         </div>
         <ol class="fm-evt-list" id="evtList">
             {% for event in events %}
-            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_mind %} fm-evt-mind{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}" data-severity="{{ event.severity_bucket() }}" data-mood="{{ event.mood_bucket() }}">
+            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_mind %} fm-evt-mind{% endif %}{% if event.is_chapter %} fm-evt-chapter{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}" data-severity="{{ event.severity_bucket() }}" data-mood="{{ event.mood_bucket() }}">
                 <span class="fm-evt-rail" aria-hidden="true"></span>
                 <div class="fm-evt-content">
                     <header class="fm-evt-head">
@@ -59,6 +59,9 @@
                             {% endif %}
                             {% if event.is_mind %}
                             <span class="fm-evt-kind fm-evt-kind-mind">{{ i18n.t("mind_note_chip") }}</span>
+                            {% endif %}
+                            {% if event.is_chapter %}
+                            <span class="fm-evt-kind fm-evt-kind-career">{{ i18n.t("career_chapter_chip") }}</span>
                             {% endif %}
                             {% if let Some(severity_label) = event.severity_label %}{% if let Some(severity_tag) = event.severity_tag %}
                             <span class="fm-evt-severity fm-evt-severity-{{ severity_tag }}">{{ severity_label }}</span>

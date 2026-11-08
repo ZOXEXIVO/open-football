@@ -7,7 +7,7 @@ use rustc_hash::FxHashMap;
 /// days after a clear deadline closes; the registration record is filed
 /// only within the formal window. Returned by
 /// [`TransferWindowManager::current_agreement_window_dates`].
-const AGREEMENT_PRE_OPEN_DAYS: i64 = 14;
+pub(crate) const AGREEMENT_PRE_OPEN_DAYS: i64 = 14;
 const AGREEMENT_POST_CLOSE_DAYS: i64 = 3;
 
 #[derive(Debug, Clone)]
@@ -60,19 +60,8 @@ impl TransferWindowManager {
         country_id: u32,
         date: NaiveDate,
     ) -> Option<(NaiveDate, NaiveDate)> {
-        let (summer, winter) = if let Some(window) = self.windows.get(&country_id) {
-            (window.summer_window, window.winter_window)
-        } else {
-            Self::default_european_windows(date)
-        };
-
-        if self.is_date_in_window(date, &summer) {
-            Some(summer)
-        } else if self.is_date_in_window(date, &winter) {
-            Some(winter)
-        } else {
-            None
-        }
+        let (summer, winter) = self.windows_for(country_id, date);
+        YearlyWindow::on(summer, date).or_else(|| YearlyWindow::on(winter, date))
     }
 
     /// True when a club is allowed to *agree* terms with another club
@@ -95,20 +84,9 @@ impl TransferWindowManager {
         country_id: u32,
         date: NaiveDate,
     ) -> Option<(NaiveDate, NaiveDate)> {
-        let (summer, winter) = if let Some(window) = self.windows.get(&country_id) {
-            (window.summer_window, window.winter_window)
-        } else {
-            Self::default_european_windows(date)
-        };
-        let summer_agreement = AgreementBand::expand(summer);
-        let winter_agreement = AgreementBand::expand(winter);
-        if self.is_date_in_window(date, &summer_agreement) {
-            Some(summer_agreement)
-        } else if self.is_date_in_window(date, &winter_agreement) {
-            Some(winter_agreement)
-        } else {
-            None
-        }
+        let (summer, winter) = self.windows_for(country_id, date);
+        YearlyWindow::on(AgreementBand::expand(summer), date)
+            .or_else(|| YearlyWindow::on(AgreementBand::expand(winter), date))
     }
 
     /// Date of the next time a deal *can* be formally registered for the
@@ -124,42 +102,42 @@ impl TransferWindowManager {
         date: NaiveDate,
     ) -> Option<NaiveDate> {
         // If we're inside a window today, registration is open today.
-        if let Some((open, _close)) = self.current_window_dates(country_id, date) {
-            if date >= open {
-                return Some(date);
-            }
-            return Some(open);
+        if self.current_window_dates(country_id, date).is_some() {
+            return Some(date);
         }
-
-        // Otherwise look at next year's windows too — winter may have
-        // closed but next summer is still pending.
-        let mut candidates: Vec<NaiveDate> = Vec::new();
-        for year_offset in 0..=1i32 {
-            let probe = NaiveDate::from_ymd_opt(date.year() + year_offset, 1, 15).unwrap_or(date);
-            let (summer, winter) = if let Some(window) = self.windows.get(&country_id) {
-                // Custom windows are static — they refer to a fixed
-                // year. Rather than guess year arithmetic on custom
-                // calendars, only treat the registered window as a
-                // candidate (no rollover). For most uses the registered
-                // window will be the relevant one anyway.
-                let _ = probe;
-                (window.summer_window, window.winter_window)
-            } else {
-                Self::default_european_windows(probe)
-            };
-            if summer.0 > date {
-                candidates.push(summer.0);
-            }
-            if winter.0 > date {
-                candidates.push(winter.0);
-            }
-        }
-        candidates.sort();
-        candidates.into_iter().next()
+        let (summer, winter) = self.windows_for(country_id, date);
+        [summer, winter]
+            .into_iter()
+            .filter_map(|window| YearlyWindow::next_open(window, date))
+            .min()
     }
 
-    fn is_date_in_window(&self, date: NaiveDate, window: &(NaiveDate, NaiveDate)) -> bool {
-        date >= window.0 && date <= window.1
+    /// The day the country's main window — the longer of its two — next
+    /// shuts: today's if it is open, otherwise the next one's.
+    pub fn next_main_window_close(&self, country_id: u32, date: NaiveDate) -> Option<NaiveDate> {
+        let (summer, winter) = self.windows_for(country_id, date);
+        let main = if summer.1 - summer.0 >= winter.1 - winter.0 {
+            summer
+        } else {
+            winter
+        };
+        YearlyWindow::on(main, date)
+            .map(|(_, close)| close)
+            .or_else(|| {
+                let open = YearlyWindow::next_open(main, date)?;
+                Some(open + (main.1 - main.0))
+            })
+    }
+
+    fn windows_for(
+        &self,
+        country_id: u32,
+        date: NaiveDate,
+    ) -> ((NaiveDate, NaiveDate), (NaiveDate, NaiveDate)) {
+        match self.windows.get(&country_id) {
+            Some(window) => (window.summer_window, window.winter_window),
+            None => Self::default_european_windows(date),
+        }
     }
 
     fn default_european_windows(
@@ -260,6 +238,13 @@ pub struct CountryTransferWindow {
 }
 
 impl CountryTransferWindow {
+    /// The window open on `date`, either of the two, in whichever year's
+    /// showing of it `date` falls.
+    pub fn open_on(&self, date: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+        YearlyWindow::on(self.summer_window, date)
+            .or_else(|| YearlyWindow::on(self.winter_window, date))
+    }
+
     pub fn into_window(self, country_id: u32) -> TransferWindow {
         TransferWindow {
             summer_window: self.summer_window,
@@ -300,8 +285,8 @@ impl MarketCadence {
         let (w_start, w_end) = w.winter_window;
         let summer_len = (s_end - s_start).num_days();
         let winter_len = (w_end - w_start).num_days();
-        let in_summer = date >= s_start && date <= s_end;
-        let in_winter = date >= w_start && date <= w_end;
+        let in_summer = YearlyWindow::on(w.summer_window, date).is_some();
+        let in_winter = YearlyWindow::on(w.winter_window, date).is_some();
         if summer_len >= winter_len {
             in_winter
         } else {
@@ -342,14 +327,11 @@ impl MarketCadence {
     /// calendar: an MLS-style Feb–Apr window got no evaluation ticks
     /// (and no staff recommendations) for its entire duration.
     pub(in crate::transfers) fn should_evaluate_for(code: &str, date: NaiveDate) -> bool {
-        let w = TransferCalendar::for_country(code, date);
-        for (start, end) in [w.summer_window, w.winter_window] {
-            if date >= start && date <= end {
-                let days_in = (date - start).num_days();
-                return days_in < 7 || date.weekday() == Weekday::Mon;
-            }
-        }
-        false
+        TransferCalendar::for_country(code, date)
+            .open_on(date)
+            .is_some_and(|(start, _)| {
+                (date - start).num_days() < 7 || date.weekday() == Weekday::Mon
+            })
     }
 }
 
@@ -412,6 +394,36 @@ impl KnownCalendar {
                 winter_window: (mk(year, 1, 25), mk(year, 2, 23)),
             },
         }
+    }
+}
+
+/// A window as it falls every year. A calendar is built for one year, but
+/// a window, or the band before it, can cross New Year, and once the last
+/// window of a year has shut the next to open is a year on.
+struct YearlyWindow;
+
+impl YearlyWindow {
+    const YEARS: [i32; 3] = [-1, 0, 1];
+
+    /// The year's showing of `window` that `date` falls in.
+    fn on(window: (NaiveDate, NaiveDate), date: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+        Self::YEARS
+            .into_iter()
+            .map(|years| Self::years_on(window, years))
+            .find(|(open, close)| date >= *open && date <= *close)
+    }
+
+    /// The first time `window` opens after `date`.
+    fn next_open(window: (NaiveDate, NaiveDate), date: NaiveDate) -> Option<NaiveDate> {
+        Self::YEARS
+            .into_iter()
+            .map(|years| Self::years_on(window, years).0)
+            .find(|open| *open > date)
+    }
+
+    fn years_on((open, close): (NaiveDate, NaiveDate), years: i32) -> (NaiveDate, NaiveDate) {
+        let shift = |day: NaiveDate| day.with_year(day.year() + years).unwrap_or(day);
+        (shift(open), shift(close))
     }
 }
 
@@ -549,5 +561,62 @@ mod transfer_window_tests {
         let outside = d(2026, 9, 15);
         let next = mgr.next_registration_open_date(0, outside).unwrap();
         assert_eq!(next, d(2027, 1, 1));
+    }
+
+    /// A country registers this year's calendar, so in the autumn both of
+    /// its windows are behind it.
+    #[test]
+    fn a_registered_calendar_repeats_every_year() {
+        let autumn = d(2026, 10, 1);
+        let mgr = TransferWindowManager::for_country(1, "es", autumn);
+        assert_eq!(
+            mgr.next_registration_open_date(1, autumn),
+            Some(d(2027, 1, 1))
+        );
+        assert_eq!(
+            mgr.next_registration_open_date(1, d(2026, 3, 1)),
+            Some(d(2026, 6, 1))
+        );
+    }
+
+    #[test]
+    fn talks_open_in_december_for_the_january_window() {
+        let december = d(2026, 12, 20);
+        let mgr = TransferWindowManager::for_country(1, "es", december);
+        assert!(mgr.is_agreement_window_open(1, december));
+        assert!(!mgr.is_window_open(1, december));
+    }
+
+    #[test]
+    fn a_window_across_new_year_is_open_in_january() {
+        let january = d(2027, 1, 15);
+        let mgr = TransferWindowManager::for_country(1, "ar", january);
+        assert_eq!(
+            mgr.current_window_dates(1, january),
+            Some((d(2026, 12, 1), d(2027, 1, 31)))
+        );
+        // 4 January 2027 is a Monday, deep into a window opened in December.
+        assert!(MarketCadence::should_evaluate_for("ar", d(2027, 1, 4)));
+    }
+
+    #[test]
+    fn the_main_window_is_the_longer_one() {
+        let autumn = d(2026, 10, 1);
+        let europe = TransferWindowManager::for_country(1, "es", autumn);
+        assert_eq!(
+            europe.next_main_window_close(1, autumn),
+            Some(d(2027, 8, 31))
+        );
+        assert_eq!(
+            europe.next_main_window_close(1, d(2027, 1, 10)),
+            Some(d(2027, 8, 31)),
+            "the January window is not the main one"
+        );
+        assert_eq!(
+            europe.next_main_window_close(1, d(2027, 7, 10)),
+            Some(d(2027, 8, 31))
+        );
+        let mls = TransferWindowManager::for_country(2, "us", autumn);
+        assert_eq!(mls.next_main_window_close(2, autumn), Some(d(2027, 4, 23)));
     }
 }

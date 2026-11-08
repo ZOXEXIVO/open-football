@@ -21,6 +21,7 @@
 use super::organs::memory::ActorRef;
 use crate::PlayerFieldPositionGroup;
 use crate::club::CareerRunway;
+use crate::club::player::transfer::stage::LevelFloor;
 use crate::transfers::squad::LevelBand;
 
 /// How close a player is to his country's side.
@@ -192,10 +193,21 @@ pub struct MindSituation {
     /// any real one rather than imminent.
     pub months_to_tournament: u8,
     pub national_standing: NationalStanding,
-    /// Days until the next registration window opens where he plays.
-    /// 0 while one is open, `u16::MAX` when none is in view — the
-    /// deadline a man who means to be somewhere else lives against.
-    pub days_to_next_window: u16,
+    /// Days until the main registration window where he plays, the
+    /// longer of its two, next shuts. `u16::MAX` when none is in view —
+    /// the deadline a man who means to be somewhere else lives against.
+    pub days_to_main_window_close: u16,
+
+    // ── What his career is measured against ─────────────────────
+    /// The reputation of the division his club plays in, 0..10000. 0 = no
+    /// view: filled by the caller that holds the club.
+    pub division_reputation: u16,
+    /// The furthest his level looks like going, 1..200. 0 = no view: filled
+    /// by the caller that takes the weekly think.
+    pub ceiling: u8,
+    /// A club he comes from or has adored. 0 when he has none.
+    pub heart_club: u32,
+    pub player_id: u32,
 }
 
 impl Default for MindSituation {
@@ -247,7 +259,11 @@ impl MindSituation {
             football_drought: 0.0,
             months_to_tournament: u8::MAX,
             national_standing: NationalStanding::Unknown,
-            days_to_next_window: u16::MAX,
+            days_to_main_window_close: u16::MAX,
+            division_reputation: 0,
+            ceiling: 0,
+            heart_club: 0,
+            player_id: 0,
         }
     }
 
@@ -308,6 +324,13 @@ impl MindSituation {
     #[inline]
     pub fn is_playing(&self) -> bool {
         self.starter_ratio >= 0.5
+    }
+
+    /// Is he a regular, on his share of starts over a sample anybody would
+    /// believe? A role on paper does not count, and neither does a cameo.
+    #[inline]
+    pub fn is_regular_here(&self) -> bool {
+        self.has_playing_view() && self.starter_ratio >= LevelFloor::REGULAR_SHARE
     }
 
     /// Contract pressure, 0..1 — nothing with two years left, total at

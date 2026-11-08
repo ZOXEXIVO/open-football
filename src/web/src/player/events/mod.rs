@@ -126,6 +126,8 @@ pub struct PlayerEventDto {
     /// True for a row that came from his own head — the mind's journal of
     /// what turned in him. Drives the "Mind" chip.
     pub is_mind: bool,
+    /// True for a turning point of his career. Drives the "Career" chip.
+    pub is_chapter: bool,
 }
 
 impl PlayerEventDto {
@@ -737,6 +739,7 @@ impl PlayerEventsCounter {
         Self::visible_iter(player).count()
             + player.decision_history.items.len()
             + player.mind.journal().len()
+            + player.mind.career.anchors.chapters.len()
     }
 
     fn visible_iter(player: &core::Player) -> impl Iterator<Item = &HappinessEvent> {
@@ -838,6 +841,7 @@ fn build_events(
                 decided_by: None,
                 is_decision: false,
                 is_mind: false,
+                is_chapter: false,
             }
         })
         .collect();
@@ -863,6 +867,17 @@ fn build_events(
             .journal()
             .iter()
             .map(|note| MindRender::to_event(note, simulator_data, i18n, lang, today)),
+    );
+
+    // And the turns his career took, which are nobody's opinion of him.
+    events.extend(
+        player
+            .mind
+            .career
+            .anchors
+            .chapters
+            .iter()
+            .map(|chapter| ChapterRender::to_event(chapter, simulator_data, i18n, lang, today)),
     );
 
     // Stable sort, so a decision, a happiness event and a note stamped the
@@ -957,6 +972,7 @@ impl MindRender {
             decided_by: None,
             is_decision: false,
             is_mind: true,
+            is_chapter: false,
         }
     }
 
@@ -1000,6 +1016,84 @@ impl MindRender {
             r#"<a class="fm-evt-partner" href="/{}/{}">{}</a>"#,
             lang, path, name
         ))
+    }
+}
+
+/// The names behind a turn in a career, which the mind holds only as ids and
+/// a division's reputation. The club may have changed division since, so the
+/// division is the one of its country nearest the level he played at.
+pub struct CareerPlace;
+
+impl CareerPlace {
+    pub fn club_name(data: &SimulatorData, club_id: u32) -> Option<String> {
+        data.club(club_id).map(|club| club.name.clone())
+    }
+
+    pub fn division_name(
+        data: &SimulatorData,
+        club_id: u32,
+        league_reputation: u16,
+    ) -> Option<String> {
+        data.country_by_club(club_id)?
+            .leagues
+            .leagues
+            .iter()
+            .filter(|league| !league.friendly)
+            .min_by_key(|league| (league.reputation as i32 - league_reputation as i32).abs())
+            .map(|league| league.name.clone())
+    }
+}
+
+/// Renders a turning point of his career as an event card.
+struct ChapterRender;
+
+impl ChapterRender {
+    fn to_event(
+        chapter: &mind::CareerChapter,
+        data: &SimulatorData,
+        i18n: &I18n,
+        lang: &str,
+        today: NaiveDate,
+    ) -> PlayerEventDto {
+        let club = MindRender::about(mind::ActorRef::club(chapter.club_id), data, lang)
+            .unwrap_or_else(|| i18n.t("career_place_his_club").to_string());
+        let division = CareerPlace::division_name(data, chapter.club_id, chapter.league_reputation)
+            .unwrap_or_else(|| i18n.t("career_place_his_division").to_string());
+        Self::card(chapter, &club, &division, i18n, today)
+    }
+
+    fn card(
+        chapter: &mind::CareerChapter,
+        club: &str,
+        division: &str,
+        i18n: &I18n,
+        today: NaiveDate,
+    ) -> PlayerEventDto {
+        let date = mind::MindClock::date(chapter.on);
+        PlayerEventDto {
+            description: i18n
+                .t(chapter.kind.as_i18n_key())
+                .replace("{club}", club)
+                .replace("{division}", division)
+                .replace("{dream}", i18n.t(chapter.dream.short_i18n_key())),
+            is_positive: chapter.kind.valence() > 0,
+            is_negative: chapter.kind.valence() < 0,
+            is_big: chapter.kind.is_major(),
+            days_ago: DecisionRender::days_ago(date, today),
+            time_ago_label: date.format("%d.%m.%Y").to_string(),
+            partner_name: None,
+            partner_slug: None,
+            detail: None,
+            follow_up: None,
+            severity_label: None,
+            severity_tag: None,
+            comparison: None,
+            movement: None,
+            decided_by: None,
+            is_decision: false,
+            is_mind: false,
+            is_chapter: true,
+        }
     }
 }
 
@@ -1080,6 +1174,7 @@ impl DecisionRender {
             decided_by,
             is_decision: true,
             is_mind: false,
+            is_chapter: false,
         }
     }
 
@@ -6247,6 +6342,77 @@ mod tests {
             decided_by: None,
             is_decision: false,
             is_mind: false,
+            is_chapter: false,
+        }
+    }
+
+    fn chapter_i18n(lang: &str) -> I18n {
+        let raw = std::fs::read_to_string(format!("assets/i18n/{lang}.json")).expect("bundle");
+        I18n::for_test(serde_json::from_str(&raw).expect("a flat map"))
+    }
+
+    fn chapter(kind: mind::ChapterKind) -> mind::CareerChapter {
+        mind::CareerChapter {
+            kind,
+            dream: mind::DreamKind::ReachTheTop,
+            on: mind::MindClock::day(NaiveDate::from_ymd_opt(2030, 5, 1).unwrap()),
+            club_id: MindWorld::CLUB,
+            league_reputation: 500,
+        }
+    }
+
+    #[test]
+    fn a_chapter_in_the_feed_names_the_club_and_the_division() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let card = ChapterRender::to_event(
+            &chapter(mind::ChapterKind::Arrived),
+            &MindWorld::sim(),
+            &chapter_i18n("en"),
+            "en",
+            today,
+        );
+        assert!(
+            card.description.contains("Real Test"),
+            "{}",
+            card.description
+        );
+        assert!(card.description.contains(" L"), "{}", card.description);
+        assert!(card.is_big && card.is_positive && card.is_chapter);
+        assert_eq!(card.time_ago_label, "01.05.2030");
+    }
+
+    #[test]
+    fn the_feed_carries_every_chapter_and_the_tab_counts_them() {
+        let data = MindWorld::sim();
+        let mut player = MindWorld::player(77, "Seb", "Nava");
+        let anchors = &mut player.mind.career.anchors;
+        anchors.tell(chapter(mind::ChapterKind::Arrived));
+        anchors.tell(chapter(mind::ChapterKind::DreamFormed));
+        let cards = build_events(
+            &player,
+            &chapter_i18n("en"),
+            &load_en_i18n(),
+            &data,
+            "en",
+            None,
+        );
+        assert_eq!(cards.iter().filter(|card| card.is_chapter).count(), 2);
+        assert_eq!(PlayerEventsCounter::count(&player), cards.len());
+    }
+
+    #[test]
+    fn every_chapter_reads_in_every_language() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        for lang in ["de", "en", "es", "fr", "ja", "pt", "ru", "tr", "zh"] {
+            let i18n = chapter_i18n(lang);
+            for kind in mind::ChapterKind::ALL {
+                let card = ChapterRender::card(&chapter(kind), "Club", "Division", &i18n, today);
+                assert!(
+                    !card.description.contains("career_") && !card.description.contains('{'),
+                    "{lang} {kind:?}: {}",
+                    card.description
+                );
+            }
         }
     }
 

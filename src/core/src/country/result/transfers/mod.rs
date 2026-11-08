@@ -193,6 +193,8 @@ impl TransferTick {
             &mut ops,
         );
 
+        ListingPass::withdraw_what_he_stopped_asking_for(country, current_date);
+
         Self::run_year_round_passes(
             country,
             current_date,

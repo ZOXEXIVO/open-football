@@ -217,6 +217,8 @@ impl PlayerView {
             // read off the world pool alone.
             parent_loan: None,
             career_plan: player.mind.career.plan_view(MindClock::day(date)),
+            anchors: player.anchor_view(date),
+            asks_for_a_bigger_stage: player.asks_only_for_a_bigger_stage(),
             parent_subsidy: player.loan_subsidy(),
             player_name: player.full_name.to_string(),
             club_name: club.name.clone(),

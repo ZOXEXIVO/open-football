@@ -83,6 +83,26 @@ impl MatchExperienceBackground {
     /// Saturation constant for `established`: ~50 apps ≈ 0.63, ~100 ≈ 0.86.
     const ESTABLISHED_SCALE: f32 = 50.0;
 
+    /// His starts for this team last season, as a share of a season's
+    /// matches. What a club has seen of him over a whole year, where the
+    /// rolling share remembers about five matches and a bad August wipes it.
+    pub fn last_season_start_share_at(player: &Player, team_slug: &str, date: NaiveDate) -> f32 {
+        let last_season = Season::from_date(date).start_year.saturating_sub(1);
+        let starts: u32 = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .filter(|row| {
+                row.season_start_year == last_season
+                    && row.team_slug == team_slug
+                    && !row.is_loan
+                    && row.competition_kind.counts_toward_career_history()
+            })
+            .map(|row| row.statistics.played as u32)
+            .sum();
+        (starts as f32 / Self::SEASON_MATCHES).clamp(0.0, 1.0)
+    }
+
     pub fn from_player(player: &Player) -> Self {
         let history = &player.statistics_history;
         let mut slices: Vec<SpellSlice<'_>> =
@@ -333,6 +353,31 @@ mod tests {
     }
 
     #[test]
+    fn last_seasons_share_is_his_own_starts_for_this_team() {
+        let august = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        let mut p = make_player();
+        let slug = ledger_row(2025, 24, false, 6_000).team_slug;
+
+        let mut on_loan_elsewhere = ledger_row(2025, 30, true, 6_000);
+        on_loan_elsewhere.team_slug = "somewhere-else".to_string();
+        p.statistics_history.season_ledger.push(on_loan_elsewhere);
+        assert_eq!(
+            MatchExperienceBackground::last_season_start_share_at(&p, &slug, august),
+            0.0,
+            "a season somewhere else is no place in this side"
+        );
+
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2025, 24, false, 6_000));
+        p.statistics_history
+            .season_ledger
+            .push(ledger_row(2024, 34, false, 6_000));
+        let share = MatchExperienceBackground::last_season_start_share_at(&p, &slug, august);
+        assert!((share - 24.0 / 34.0).abs() < 1e-6, "{share}");
+    }
+
+    #[test]
     fn full_loan_season_raises_the_expectation_bar_at_the_same_level() {
         let mut p = make_player();
         p.statistics_history
@@ -468,5 +513,35 @@ mod tests {
         assert!(rb.established < 0.2);
         assert!(vb.established > 0.9);
         assert!(vb.adaptation_points() > rb.adaptation_points());
+    }
+
+    #[test]
+    fn a_regular_who_misses_three_matches_is_still_picked() {
+        let september = NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        let mut p = make_player();
+        let last_season = ledger_row(2025, 30, false, 6_000);
+        p.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "T".into(),
+            team_slug: last_season.team_slug.clone(),
+            team_reputation: 6_000,
+            league_name: "L".into(),
+            league_slug: "l".into(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics::default(),
+            departed_date: None,
+            joined_date: NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+            seq_id: 0,
+        });
+        p.statistics_history.season_ledger.push(last_season);
+        p.happiness.appearances_tracked = 40;
+        p.happiness.starter_ratio = 0.9 * 0.75_f32.powi(3);
+        assert!(p.is_picked(september));
+
+        p.statistics_history.season_ledger.clear();
+        assert!(
+            !p.is_picked(september),
+            "with no season behind him the rolling share is all there is"
+        );
     }
 }

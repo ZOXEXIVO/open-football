@@ -60,16 +60,19 @@ impl<'gc> GlobalContext<'gc> {
         // A man who means to be somewhere else lives against this date,
         // not against a flat season.
         let date = self.simulation.date.date();
-        let days_to_next_window =
-            TransferWindowManager::for_country(country_id, &country_code, date)
-                .next_registration_open_date(country_id, date)
-                .map(|open| (open - date).num_days().clamp(0, u16::MAX as i64) as u16)
-                .unwrap_or(u16::MAX);
+        let windows = TransferWindowManager::for_country(country_id, &country_code, date);
+        let days_until = |day: Option<NaiveDate>| {
+            day.map(|day| (day - date).num_days().clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(u16::MAX)
+        };
+        let days_to_next_window = days_until(windows.next_registration_open_date(country_id, date));
+        let days_to_main_window_close =
+            days_until(windows.next_main_window_close(country_id, date));
         ctx.country = Some(
             CountryContext::with_people_names(country_id, people_names)
                 .with_code(country_code)
                 .with_season_dates(season_dates)
-                .with_window_clock(days_to_next_window),
+                .with_window_clock(days_to_next_window, days_to_main_window_close),
         );
         ctx
     }

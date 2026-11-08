@@ -2,7 +2,7 @@ pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::common::slug::{PlayerPage, resolve_player_page};
-use crate::player::events::PlayerEventsCounter;
+use crate::player::events::{CareerPlace, PlayerEventsCounter};
 use crate::player::newspaper::PlayerNewsCounter;
 use crate::views::{self, MenuSection, NeighborMenus, SubTitleFlag};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
@@ -74,6 +74,9 @@ pub struct PlayerPersonalTemplate {
     pub favorite_clubs: Vec<FavoriteClubDto>,
     pub player_info: PlayerInfoDto,
     pub reputation: ReputationDto,
+    /// What a career has left him with, in sentences. `None` for a man it
+    /// has left with nothing to say yet.
+    pub career_anchors: Option<CareerAnchorsDto>,
     /// The arc he is living out — the thing that orders the wants
     /// below. `None` for a man who has decided nothing, which is most
     /// footballers most weeks.
@@ -287,6 +290,7 @@ pub async fn player_personal_action(
         &i18n,
     );
     let career_plan = CareerPlanCard::of(player, today, &i18n);
+    let career_anchors = CareerAnchorsCard::of(player, simulator_data, &i18n);
 
     let player_info = get_player_info(player, today, &i18n);
     let reputation = ReputationLadder::rows(player, &i18n);
@@ -363,6 +367,7 @@ pub async fn player_personal_action(
         favorite_clubs,
         player_info,
         reputation,
+        career_anchors,
         career_plan,
         wants,
         mind,
@@ -999,6 +1004,162 @@ pub struct CareerPlanDto {
     pub purpose: Option<String>,
 }
 
+/// What a career has left him with, as the personal page says it.
+pub struct CareerAnchorsDto {
+    pub dream: Option<CareerDreamDto>,
+    /// The last dream he gave up on, and when.
+    pub given_up: Option<String>,
+    pub summit: Option<String>,
+    /// For a retired man, whether he lived it.
+    pub ending: Option<String>,
+    pub living: bool,
+}
+
+pub struct CareerDreamDto {
+    pub sentence: String,
+    pub state: String,
+    pub conviction: String,
+    pub turned: String,
+}
+
+/// The names the card's sentences use, already resolved.
+struct CareerNames {
+    dream_club: String,
+    summit_club: String,
+    summit_division: String,
+    country: String,
+}
+
+struct CareerAnchorsCard;
+
+impl CareerAnchorsCard {
+    const DATE: &'static str = "%d.%m.%Y";
+
+    fn of(player: &Player, data: &SimulatorData, i18n: &I18n) -> Option<CareerAnchorsDto> {
+        let anchors = &player.mind.career.anchors;
+        let club_or_his = |club_id: u32| {
+            CareerPlace::club_name(data, club_id)
+                .unwrap_or_else(|| i18n.t("career_place_his_club").to_string())
+        };
+        let names = CareerNames {
+            dream_club: club_or_his(anchors.dream.map_or(0, |dream| dream.target_club)),
+            summit_club: club_or_his(anchors.summit.map_or(0, |summit| summit.club_id)),
+            summit_division: anchors
+                .summit
+                .and_then(|summit| {
+                    CareerPlace::division_name(data, summit.club_id, summit.league_reputation)
+                })
+                .unwrap_or_else(|| i18n.t("career_place_his_division").to_string()),
+            country: data
+                .country(player.country_id)
+                .map(|country| country.name.clone())
+                .unwrap_or_else(|| i18n.t("career_place_his_country").to_string()),
+        };
+        Self::compose(anchors, player.is_retired(), &names, i18n)
+    }
+
+    fn compose(
+        anchors: &mind::CareerAnchors,
+        retired: bool,
+        names: &CareerNames,
+        i18n: &I18n,
+    ) -> Option<CareerAnchorsDto> {
+        if anchors.dream.is_none() && anchors.summit.is_none() {
+            return None;
+        }
+        let short_dream = |kind: mind::DreamKind| i18n.t(kind.short_i18n_key());
+        let dream = anchors
+            .dream
+            .filter(|_| !retired)
+            .map(|dream| Self::dream(&dream, anchors, names, i18n));
+        let ending = anchors.dream.filter(|_| retired).map(|dream| {
+            let key = if dream.arrived_on > 0 {
+                "career_ending_lived_it"
+            } else {
+                "career_ending_never"
+            };
+            i18n.t(key).replace("{dream}", short_dream(dream.kind))
+        });
+        let given_up = anchors.last_given_up().map(|chapter| {
+            i18n.t("career_dream_given_up")
+                .replace("{dream}", short_dream(chapter.dream))
+                .replace(
+                    "{date}",
+                    &mind::MindClock::date(chapter.on)
+                        .format(Self::DATE)
+                        .to_string(),
+                )
+        });
+        let summit = anchors.summit.map(|summit| {
+            i18n.t("career_summit_line")
+                .replace("{division}", &names.summit_division)
+                .replace("{club}", &names.summit_club)
+                .replace(
+                    "{date}",
+                    &mind::MindClock::date(summit.reached_on)
+                        .format(Self::DATE)
+                        .to_string(),
+                )
+        });
+        Some(CareerAnchorsDto {
+            dream,
+            given_up,
+            summit,
+            ending,
+            living: !retired && anchors.dream.is_some_and(|dream| dream.arrived),
+        })
+    }
+
+    fn dream(
+        dream: &mind::CareerDream,
+        anchors: &mind::CareerAnchors,
+        names: &CareerNames,
+        i18n: &I18n,
+    ) -> CareerDreamDto {
+        let turned = anchors.dream_last_turned().unwrap_or(dream.formed_on);
+        CareerDreamDto {
+            sentence: i18n
+                .t(dream.kind.as_i18n_key())
+                .replace("{level}", i18n.t(Self::level_key(dream.target_standing)))
+                .replace("{club}", &names.dream_club)
+                .replace("{country}", &names.country),
+            state: i18n.t(dream.state().as_i18n_key()).to_string(),
+            conviction: i18n.t(Self::conviction_key(dream.conviction)).to_string(),
+            turned: i18n.t("career_dream_turned").replace(
+                "{date}",
+                &mind::MindClock::date(turned).format(Self::DATE).to_string(),
+            ),
+        }
+    }
+
+    /// The club standing a dream names, said the way a reader thinks of it.
+    fn level_key(standing: f32) -> &'static str {
+        if standing >= 0.86 {
+            "career_level_top_of_the_game"
+        } else if standing >= 0.76 {
+            "career_level_big"
+        } else if standing >= 0.61 {
+            "career_level_strong"
+        } else if standing >= 0.44 {
+            "career_level_solid"
+        } else {
+            "career_level_modest"
+        }
+    }
+
+    fn conviction_key(conviction: f32) -> &'static str {
+        if conviction >= 0.7 {
+            "career_dream_conviction_sure"
+        } else if conviction >= 0.45 {
+            "career_dream_conviction_believes"
+        } else if conviction >= 0.25 {
+            "career_dream_conviction_doubting"
+        } else {
+            "career_dream_conviction_fading"
+        }
+    }
+}
+
 /// Builds it.
 struct CareerPlanCard;
 
@@ -1235,6 +1396,264 @@ mod pathway_view_tests {
 }
 
 #[cfg(test)]
+mod career_anchors_card_tests {
+    use super::*;
+    use core::club::player::mind::{
+        CareerAnchors, CareerChapter, CareerDream, CareerSummit, ChapterKind, DreamKind, MindClock,
+    };
+
+    const REAL: u32 = 7;
+
+    fn i18n(lang: &str) -> I18n {
+        let raw = std::fs::read_to_string(format!("assets/i18n/{lang}.json")).expect("bundle");
+        I18n::for_test(serde_json::from_str(&raw).expect("a flat map"))
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> u16 {
+        MindClock::day(NaiveDate::from_ymd_opt(y, m, d).unwrap())
+    }
+
+    fn names() -> CareerNames {
+        CareerNames {
+            dream_club: "Real Madrid".to_string(),
+            summit_club: "Dortmund".to_string(),
+            summit_division: "Bundesliga".to_string(),
+            country: "Spain".to_string(),
+        }
+    }
+
+    fn dream(kind: DreamKind) -> CareerDream {
+        CareerDream {
+            kind,
+            target_standing: 0.9,
+            target_club: REAL,
+            conviction: 0.8,
+            arrived: false,
+            arrived_on: 0,
+            last_there_on: day(2030, 1, 1),
+            formed_on: day(2030, 1, 1),
+            reviewed_on: day(2030, 1, 1),
+            windows_missed: 0,
+            standing_at_review: 0.6,
+        }
+    }
+
+    fn holding(kind: DreamKind) -> CareerAnchors {
+        let mut anchors = CareerAnchors::default();
+        anchors.dream = Some(dream(kind));
+        anchors
+    }
+
+    fn with_summit(mut anchors: CareerAnchors) -> CareerAnchors {
+        anchors.summit = Some(CareerSummit {
+            league_reputation: 8_750,
+            club_id: 9,
+            club_standing: 0.88,
+            reached_on: day(2031, 3, 2),
+            last_regular_on: day(2032, 3, 2),
+            level_then: 150,
+        });
+        anchors
+    }
+
+    fn card(anchors: &CareerAnchors, retired: bool, lang: &str) -> CareerAnchorsDto {
+        CareerAnchorsCard::compose(anchors, retired, &names(), &i18n(lang)).expect("a card")
+    }
+
+    #[test]
+    fn his_dream_is_shown_in_words() {
+        let shown = card(&holding(DreamKind::PlayForHisClub), false, "en");
+        let dream = shown.dream.expect("a dream");
+        assert_eq!(dream.sentence, "To play for Real Madrid");
+        assert_eq!(dream.state, "Still reaching for it");
+        assert_eq!(dream.conviction, "He is sure of it");
+        assert!(dream.turned.contains("01.01.2030"), "{}", dream.turned);
+
+        let reaching = card(&holding(DreamKind::ReachTheTop), false, "en")
+            .dream
+            .expect("a dream");
+        assert!(
+            reaching.sentence.contains("biggest clubs"),
+            "it names the level: {}",
+            reaching.sentence
+        );
+    }
+
+    #[test]
+    fn its_state_says_alive_lived_or_given_up_with_the_date_it_turned() {
+        let mut anchors = holding(DreamKind::ReachTheTop);
+        anchors.dream.as_mut().unwrap().arrived = true;
+        anchors.dream.as_mut().unwrap().arrived_on = day(2032, 8, 1);
+        anchors.tell(CareerChapter {
+            kind: ChapterKind::Arrived,
+            dream: DreamKind::ReachTheTop,
+            on: day(2032, 8, 1),
+            club_id: REAL,
+            league_reputation: 9_500,
+        });
+        let lived = card(&anchors, false, "en");
+        assert!(lived.living);
+        let dream = lived.dream.expect("a dream");
+        assert_eq!(dream.state, "Living it");
+        assert!(dream.turned.contains("01.08.2032"), "{}", dream.turned);
+
+        anchors.tell(CareerChapter {
+            kind: ChapterKind::DreamLetGo,
+            dream: DreamKind::PlayForHisClub,
+            on: day(2028, 7, 1),
+            club_id: REAL,
+            league_reputation: 9_500,
+        });
+        let given_up = card(&anchors, false, "en").given_up.expect("given up");
+        assert!(given_up.contains("01.07.2028"), "{given_up}");
+    }
+
+    #[test]
+    fn his_summit_is_shown() {
+        let summit = card(&with_summit(holding(DreamKind::MakeACareer)), false, "en")
+            .summit
+            .expect("a summit");
+        assert!(summit.contains("Bundesliga"), "{summit}");
+        assert!(summit.contains("Dortmund"), "{summit}");
+        assert!(summit.contains("02.03.2031"), "{summit}");
+    }
+
+    #[test]
+    fn a_man_never_a_regular_shows_no_summit() {
+        assert!(
+            card(&holding(DreamKind::MakeACareer), false, "en")
+                .summit
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_man_with_nothing_to_say_has_no_card() {
+        assert!(
+            CareerAnchorsCard::compose(&CareerAnchors::default(), false, &names(), &i18n("en"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_retired_players_page_tells_how_it_ended() {
+        let mut anchors = with_summit(holding(DreamKind::ReachTheTop));
+        let never = card(&anchors, true, "en");
+        assert!(never.dream.is_none(), "it is over, so no dream is live");
+        assert!(never.ending.expect("how it ended").starts_with("He never"));
+        assert!(never.summit.is_some());
+
+        anchors.dream.as_mut().unwrap().arrived_on = day(2032, 8, 1);
+        let lived = card(&anchors, true, "en");
+        assert!(lived.ending.expect("how it ended").starts_with("He lived"));
+        assert!(!lived.living, "not any more");
+    }
+
+    /// The card as a reader meets it, one page per kind of man, with names
+    /// long enough to test the layout:
+    ///
+    /// ```text
+    /// PERSONAL_PREVIEW_DIR=<dir> cargo test -p web --lib career_anchors_preview -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn career_anchors_preview() {
+        let Ok(dir) = std::env::var("PERSONAL_PREVIEW_DIR") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).expect("preview dir");
+        let long_names = CareerNames {
+            dream_club: "Borussia Mönchengladbach".to_string(),
+            summit_club: "Olympique Gymnaste Club de Nice Côte d’Azur".to_string(),
+            summit_division: "Campeonato Brasileiro Série A".to_string(),
+            country: "Bosnia and Herzegovina".to_string(),
+        };
+
+        let mut star = with_summit(holding(DreamKind::ReachTheTop));
+        let held = star.dream.as_mut().unwrap();
+        held.arrived = true;
+        held.arrived_on = day(2032, 8, 1);
+        held.conviction = 0.95;
+
+        let mut prospect = holding(DreamKind::ReachTheTop);
+        prospect.dream.as_mut().unwrap().target_standing = 0.7;
+        prospect.tell(CareerChapter {
+            kind: ChapterKind::DreamLetGo,
+            dream: DreamKind::PlayForHisClub,
+            on: day(2031, 7, 1),
+            club_id: REAL,
+            league_reputation: 5_000,
+        });
+
+        let mut journeyman = with_summit(holding(DreamKind::MakeACareer));
+        let held = journeyman.dream.as_mut().unwrap();
+        held.target_standing = 0.3;
+        held.conviction = 0.3;
+
+        let mut retired = with_summit(holding(DreamKind::FinishAtHome));
+        retired.dream.as_mut().unwrap().arrived_on = day(2033, 7, 1);
+
+        for lang in ["en", "ja"] {
+            for (name, anchors, is_retired) in [
+                ("star", &star, false),
+                ("prospect", &prospect, false),
+                ("journeyman", &journeyman, false),
+                ("retired", &retired, true),
+            ] {
+                let mut page = page_tests::Fixture::template();
+                page.career_anchors =
+                    CareerAnchorsCard::compose(anchors, is_retired, &long_names, &i18n(lang));
+                page.i18n = i18n(lang);
+                page_tests::Fixture::write_preview(
+                    page,
+                    &std::path::Path::new(&dir).join(format!("{name}-{lang}.html")),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_line_reads_in_every_language() {
+        for lang in ["de", "en", "es", "fr", "ja", "pt", "ru", "tr", "zh"] {
+            for kind in DreamKind::ALL {
+                for standing in [0.9, 0.8, 0.7, 0.5, 0.2] {
+                    for conviction in [0.9, 0.5, 0.3, 0.1] {
+                        let mut anchors = with_summit(holding(kind));
+                        let held = anchors.dream.as_mut().unwrap();
+                        held.target_standing = standing;
+                        held.conviction = conviction;
+                        anchors.tell(CareerChapter {
+                            kind: ChapterKind::DreamLetGo,
+                            dream: kind,
+                            on: day(2028, 7, 1),
+                            club_id: REAL,
+                            league_reputation: 9_500,
+                        });
+                        let live = card(&anchors, false, lang);
+                        let over = card(&anchors, true, lang);
+                        let dream = live.dream.expect("a dream");
+                        for line in [
+                            dream.sentence,
+                            dream.state,
+                            dream.conviction,
+                            dream.turned,
+                            live.given_up.expect("given up"),
+                            live.summit.expect("a summit"),
+                            over.ending.expect("how it ended"),
+                        ] {
+                            assert!(
+                                !line.contains("career_") && !line.contains('{'),
+                                "{lang}: {line}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod page_tests {
     use super::*;
     use std::collections::HashMap;
@@ -1242,7 +1661,7 @@ mod page_tests {
     /// Matías Daniele's page as it stood in June 2034: every block of
     /// the layout populated, including the branches a settled player
     /// never shows.
-    struct Fixture;
+    pub(super) struct Fixture;
 
     impl Fixture {
         fn i18n() -> I18n {
@@ -1263,7 +1682,7 @@ mod page_tests {
             }
         }
 
-        fn template() -> PlayerPersonalTemplate {
+        pub(super) fn template() -> PlayerPersonalTemplate {
             let i18n = Self::i18n();
             let (weighing, lifting) = HappinessLedger::split(
                 &[
@@ -1330,6 +1749,23 @@ mod page_tests {
                     i18n.t("concern_transfer_request").to_string(),
                 ],
                 behaviour: i18n.t("behaviour_good").to_string(),
+                career_anchors: Some(CareerAnchorsDto {
+                    dream: Some(CareerDreamDto {
+                        sentence: "To play for one of the very biggest clubs in the world"
+                            .to_string(),
+                        state: i18n.t("career_dream_state_alive").to_string(),
+                        conviction: i18n.t("career_dream_conviction_believes").to_string(),
+                        turned: "Last turned on 01.07.2031".to_string(),
+                    }),
+                    given_up: None,
+                    summit: Some(
+                        "His summit: a regular in the Bundesliga with Dortmund, reached on \
+                         02.03.2031"
+                            .to_string(),
+                    ),
+                    ending: None,
+                    living: false,
+                }),
                 career_plan: Some(CareerPlanDto {
                     arc: i18n.t("career_arc_step_down_to_play").to_string(),
                     stage: i18n.t("plan_stage_asking").to_string(),
@@ -1558,6 +1994,7 @@ mod page_tests {
             "fm-mh-row-fill is-neg",
             "fm-mh-row-fill is-pos",
             "fm-mh-row-fill is-level",
+            "fm-mh-dream",
             "fm-mh-want is-unspoken",
             "fm-mh-want-tag",
             "fm-mh-want-note is-blocked",
@@ -1593,38 +2030,42 @@ mod page_tests {
             return;
         };
         std::fs::create_dir_all(&dir).expect("preview dir");
-
-        let page = Fixture::template().render().expect("render");
-
-        // The rendered page links assets by absolute URL, which a
-        // `file://` load cannot resolve — inline the two stylesheets the
-        // layout actually depends on and drop the rest.
-        let bootstrap =
-            std::fs::read_to_string("assets/static/css/bootstrap.min.css").expect("bootstrap");
-        let style = std::fs::read_to_string("assets/static/css/style.css").expect("stylesheet");
-
-        let mut html = page;
-        for link in [
-            "<link href=\"/static/css/bootstrap.min.css\" rel=\"stylesheet\">",
-            "<link href=\"/static/css/flags.css\" rel=\"stylesheet\">",
-            "<link href=\"/static/css/font.min.css\" rel=\"stylesheet\">",
-        ] {
-            html = html.replace(link, "");
-        }
-        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
-            && let Some(end) = html[start..].find('>')
-        {
-            html.replace_range(start..start + end + 1, "");
-        }
-        html = html.replace(
-            "</head>",
-            &format!("<style>{bootstrap}</style><style>{style}</style></head>"),
+        Fixture::write_preview(
+            Fixture::template(),
+            &std::path::Path::new(&dir).join("player-personal.html"),
         );
+    }
 
-        std::fs::write(
-            std::path::Path::new(&dir).join("player-personal.html"),
-            html,
-        )
-        .expect("write preview");
+    impl Fixture {
+        pub(super) fn write_preview(template: PlayerPersonalTemplate, path: &std::path::Path) {
+            let page = template.render().expect("render");
+
+            // The rendered page links assets by absolute URL, which a
+            // `file://` load cannot resolve — inline the two stylesheets the
+            // layout actually depends on and drop the rest.
+            let bootstrap =
+                std::fs::read_to_string("assets/static/css/bootstrap.min.css").expect("bootstrap");
+            let style = std::fs::read_to_string("assets/static/css/style.css").expect("stylesheet");
+
+            let mut html = page;
+            for link in [
+                "<link href=\"/static/css/bootstrap.min.css\" rel=\"stylesheet\">",
+                "<link href=\"/static/css/flags.css\" rel=\"stylesheet\">",
+                "<link href=\"/static/css/font.min.css\" rel=\"stylesheet\">",
+            ] {
+                html = html.replace(link, "");
+            }
+            if let Some(start) = html.find("<link href=\"/static/css/styles.min.css")
+                && let Some(end) = html[start..].find('>')
+            {
+                html.replace_range(start..start + end + 1, "");
+            }
+            html = html.replace(
+                "</head>",
+                &format!("<style>{bootstrap}</style><style>{style}</style></head>"),
+            );
+
+            std::fs::write(path, html).expect("write preview");
+        }
     }
 }

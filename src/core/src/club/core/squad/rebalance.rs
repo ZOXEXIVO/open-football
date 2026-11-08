@@ -309,8 +309,12 @@ impl Club {
                         // their evaluation window are never the surplus
                         // body — the club committed to them, so the excess
                         // has to be somebody else (or the squad simply runs
-                        // deep until the plan is served).
-                        p.is_force_match_selection || p.signing_protection_active(date),
+                        // deep until the plan is served). So is a man it
+                        // is picking: a depth count is no reason to send
+                        // him away.
+                        p.is_force_match_selection
+                            || p.signing_protection_active(date)
+                            || p.is_picked(date),
                     )
                 })
                 .collect();
@@ -977,10 +981,10 @@ mod rebalance_patience_tests {
     use crate::transfers::tests::kit::{TestClub, TestCountry};
     use crate::world::SimulatorData;
     use crate::{
-        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
-        PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPlan, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, TeamBuilder,
-        TeamCollection, TeamReputation, TrainingSchedule,
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PathwayStage, PersonAttributes,
+        Player, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPlan, PlayerPlanRole,
+        PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection,
+        TeamBuilder, TeamCollection, TeamReputation, TrainingSchedule,
     };
     use chrono::{Datelike, Duration, NaiveTime};
 
@@ -1157,6 +1161,53 @@ mod rebalance_patience_tests {
         assert!(
             Fx::on_main(&club, 1).is_none(),
             "the unprotected over-depth midfielder is demoted off the main squad"
+        );
+    }
+
+    #[test]
+    fn an_overdepth_man_lent_three_times_is_not_sent_out_a_fourth() {
+        for (loans_used, staged) in [(0, true), (3, false)] {
+            let mut lent = Fx::player(1, PlayerPositionType::MidfielderCenter, 100, 27);
+            let mut plan = PlayerPlan::from_existing(
+                PlayerPlanRole::CompeteForStarting,
+                PathwayStage::Rotation,
+                PlayerFieldPositionGroup::Midfielder,
+                27,
+                Fx::date(),
+            );
+            plan.loans_used = loans_used;
+            lent.plan = Some(plan);
+            let mut club = Fx::club(lent);
+
+            club.rebalance_squads(Fx::date());
+
+            assert_eq!(
+                club.transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .any(|c| c.player_id == 1),
+                staged,
+                "after {loans_used} spells"
+            );
+        }
+    }
+
+    #[test]
+    fn overdepth_man_the_club_is_picking_stays_on_main() {
+        let mut starter = Fx::player(1, PlayerPositionType::MidfielderCenter, 100, 27);
+        starter.happiness.starter_ratio = 0.9;
+        starter.happiness.appearances_tracked = 30;
+        let mut club = Fx::club(starter);
+
+        club.rebalance_squads(Fx::date());
+
+        let kept = Fx::on_main(&club, 1).expect("a depth count does not take him off the side");
+        assert!(!kept.statuses.has(PlayerStatusType::Loa));
+        assert!(
+            club.transfer_plan
+                .loan_out_candidates
+                .iter()
+                .all(|c| c.player_id != 1)
         );
     }
 

@@ -274,6 +274,11 @@ impl ContractRenewalManager {
         let global_top = snapshot.iter().map(|(_, s)| *s).max().unwrap_or(0);
 
         for player in team.players.players.iter_mut() {
+            // A loanee's contract is with his parent: its clauses are not
+            // about the wages at the club he is lent to.
+            if player.is_on_loan() {
+                continue;
+            }
             // Compute top earner excluding this player — without it the
             // helper would be a fixed-point on the player's own salary
             // and never lift them.
@@ -1714,12 +1719,53 @@ mod loanee_evaluate_tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
+        ContractClause, PlayerCollection, StaffCollection, TeamBuilder, TeamReputation,
+        TrainingSchedule,
+    };
+    use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills,
     };
+    use chrono::NaiveTime;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn a_loanees_clause_does_not_read_the_wages_of_the_club_he_is_lent_to() {
+        let today = d(2030, 1, 1);
+        let mut loanee = make_loanee(d(2033, 6, 30), d(2030, 6, 30));
+        let clause = ContractClause::new(0, ContractClauseType::MatchHighestEarner);
+        loanee.contract.as_mut().unwrap().clauses.push(clause);
+        let mut top_earner = make_loanee(d(2033, 6, 30), d(2030, 6, 30));
+        top_earner.id = 2;
+        top_earner.contract_loan = None;
+        top_earner.contract.as_mut().unwrap().salary = 900_000;
+
+        let mut team = TeamBuilder::new()
+            .id(1)
+            .league_id(None)
+            .club_id(2)
+            .name("Borrower".to_string())
+            .slug("borrower".to_string())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(vec![loanee, top_earner]))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(500, 500, 500))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap();
+        ContractRenewalManager::apply_team_level_clauses(&mut team, today);
+
+        let salary = team.players.players[0].contract.as_ref().unwrap().salary;
+        assert_eq!(
+            salary, 100_000,
+            "his parent still pays what his parent agreed"
+        );
     }
 
     fn make_loanee(parent_expiration: NaiveDate, loan_end: NaiveDate) -> Player {

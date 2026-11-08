@@ -271,6 +271,7 @@ pub use club::{
     RelationshipEvent,
     ReputationLevel,
     ReputationRequirements,
+    ReputationStanding,
     ReputationTrend,
     ResignationReason,
     RetirementReason,

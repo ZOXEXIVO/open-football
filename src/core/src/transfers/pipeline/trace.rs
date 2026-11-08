@@ -337,4 +337,12 @@ impl MarketSwitches {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_CAREER_PLAN_OFF"))
     }
+
+    /// `OF_CAREER_ANCHORS_OFF` — no player forms a summit, a dream or a
+    /// chapter, so every decision reads as it does for a man who holds none.
+    /// The arm the anchors are measured against, on the same code.
+    pub fn career_anchors_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_CAREER_ANCHORS_OFF"))
+    }
 }

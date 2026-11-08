@@ -10,6 +10,7 @@ use chrono::NaiveDate;
 
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::player::Player;
+use crate::club::player::transfer::LevelFloor;
 use crate::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
 use crate::{Person, PlayerStatusType};
 
@@ -61,6 +62,16 @@ impl SettlementAppetite {
     pub fn sights(resignation: f32) -> f32 {
         Self::SIGHTS_FLOOR + (1.0 - Self::SIGHTS_FLOOR) * (1.0 - resignation.clamp(0.0, 1.0))
     }
+
+    /// How much he belongs where he is, 0..1: living what he dreamed of,
+    /// for as long as they are still picking him to do it.
+    pub fn hold(arrived: bool, start_share: f32) -> f32 {
+        if arrived {
+            (start_share / LevelFloor::REGULAR_SHARE).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
 }
 
 impl Player {
@@ -99,9 +110,14 @@ impl Player {
             wants_out,
             age,
         ) as f64;
+        // No settlement pays for what a man would be giving up by leaving
+        // the place he dreamed of, so nothing comes off for what he could
+        // earn or how badly he wants to play.
+        let hold = SettlementAppetite::hold(self.mind.career.has_arrived(), self.seen_start_share())
+            as f64;
 
         SettlementAsk {
-            ask: (carry - earn_out - carry * appetite).max(0.0),
+            ask: (carry - (earn_out + carry * appetite) * (1.0 - hold)).max(0.0),
             carry,
         }
     }
@@ -111,12 +127,37 @@ impl Player {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerDream, MindClock};
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills,
     };
     use chrono::{Datelike, Duration};
+
+    #[test]
+    fn a_man_living_his_dream_is_not_for_sale_at_any_settlement() {
+        let man = Fx::arrived(Fx::player(25, 15.0, 1.0, 3), 0.9);
+        let ask = man.settlement_ask(Fx::today(), &Fx::OUTLOOK);
+        assert_eq!(ask.ask, ask.carry);
+    }
+
+    #[test]
+    fn being_kept_out_of_the_side_wears_the_hold_down() {
+        let frozen_out = Fx::arrived(Fx::player(25, 15.0, 1.0, 3), 0.0);
+        let same_man_no_dream = {
+            let mut man = frozen_out.clone();
+            man.mind.career.anchors.dream = None;
+            man
+        };
+        assert_eq!(
+            frozen_out.settlement_ask(Fx::today(), &Fx::OUTLOOK).ask,
+            same_man_no_dream
+                .settlement_ask(Fx::today(), &Fx::OUTLOOK)
+                .ask,
+            "a frozen-out man prices his exit as before"
+        );
+    }
 
     struct Fx;
 
@@ -180,6 +221,18 @@ mod tests {
                 (market * wage_multiple) as u32,
                 today + Duration::days(365 * years),
             ));
+            player
+        }
+
+        /// Living what he dreamed of, on a wage he could earn anywhere.
+        fn arrived(mut player: Player, start_share: f32) -> Player {
+            let today = MindClock::day(Self::today());
+            player.mind.career.anchors.dream = Some(CareerDream {
+                arrived: true,
+                ..CareerDream::default_on(today)
+            });
+            player.happiness.starter_ratio = start_share;
+            player.happiness.appearances_tracked = 40;
             player
         }
 

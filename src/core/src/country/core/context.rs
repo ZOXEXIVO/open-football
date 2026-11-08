@@ -36,6 +36,9 @@ pub struct CountryContext {
     /// window in view" rather than "one opens today". The deadline a man
     /// who means to go somewhere actually lives against.
     pub days_to_next_window: u16,
+    /// Days until the country's main window, the longer of its two, next
+    /// shuts. `u16::MAX` when no calendar resolves.
+    pub days_to_main_window_close: u16,
 }
 
 impl CountryContext {
@@ -52,6 +55,7 @@ impl CountryContext {
             reputation: 0,
             months_to_tournament: u8::MAX,
             days_to_next_window: u16::MAX,
+            days_to_main_window_close: u16::MAX,
         }
     }
 
@@ -68,13 +72,19 @@ impl CountryContext {
             reputation: 0,
             months_to_tournament: u8::MAX,
             days_to_next_window: u16::MAX,
+            days_to_main_window_close: u16::MAX,
         }
     }
 
-    /// Stamp the days to the next registration window, worked out from
-    /// the country's own calendar.
-    pub fn with_window_clock(mut self, days: u16) -> Self {
-        self.days_to_next_window = days;
+    /// Stamp the days to the next registration window and to the close of
+    /// the main one, worked out from the country's own calendar.
+    pub fn with_window_clock(
+        mut self,
+        days_to_next_window: u16,
+        days_to_main_window_close: u16,
+    ) -> Self {
+        self.days_to_next_window = days_to_next_window;
+        self.days_to_main_window_close = days_to_main_window_close;
         self
     }
 

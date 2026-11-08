@@ -158,6 +158,9 @@ impl LoanAssetGuard {
     /// "below his club's level", not "young" — the age band is only the
     /// outer bound on it.
     pub const DEVELOPMENT_AGE: u8 = 23;
+    /// Observable levels behind the best at his position within which a man
+    /// is sharing the shirt rather than waiting for it.
+    const IN_ROTATION_GAP: i16 = 15;
     /// Assemble the parent side.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -304,21 +307,29 @@ impl LoanAssetGuard {
     /// that owns him.
     fn parent_reading(&self, club: &Club, player: &Player, date: NaiveDate) -> ParentReading {
         let group = self.group;
+        let first_team = club
+            .teams
+            .main()
+            .filter(|team| team.players.iter().any(|p| p.id == player.id));
         // The FIELDING squad, against the formation's own floor. Counting
         // every roster in the building against a flat `typical_starters`
         // made `depth_room` 1.0 for any club with two teams, so the term
         // said nothing at all — and the reserve keeper it counted is not
-        // the man the first team would be short of.
-        // Zero means the caller is holding a squad the club's own
-        // rosters do not contain, which is no view rather than an empty
-        // position group.
-        let group_count = club
-            .teams
-            .main()
-            .into_iter()
-            .flat_map(|team| team.players.iter())
-            .filter(|p| p.position().position_group() == group && !p.is_on_loan())
-            .count();
+        // the man the first team would be short of. Lending a man from
+        // another squad leaves the first team as it was, which reads as
+        // zero: no view, rather than an empty position group.
+        let group_count = first_team.map_or(0, |team| {
+            team.players
+                .iter()
+                .filter(|p| p.position().position_group() == group && !p.is_on_loan())
+                .count()
+        });
+        // His own team sheet: the share since he came home, or what he
+        // started for the first team last season. The season record below
+        // is no reading of it, because for a man back from a loan it is the
+        // borrower's.
+        let first_team_share =
+            first_team.map_or(0.0, |team| player.start_share_at(&team.slug, date));
         // A rolling start share is only worth reading once he has played
         // enough for it to mean anything. Before that the club falls back
         // on the season he did play — the ledger's own record — and only
@@ -336,11 +347,16 @@ impl LoanAssetGuard {
             }
         };
         let plan = player.plan.as_ref();
+        // Whatever the depth chart says, the team sheet says he is one of
+        // the men the club plays.
+        let in_the_side = first_team_share >= LevelFloor::REGULAR_SHARE;
+        let at_key_level = self.level as i16 >= self.parent_anchor.key_floor(group);
         ParentReading {
-            first_choice: self.first_choice(),
+            key_man: self.key_man() || (at_key_level && in_the_side),
             starter_share,
             runway: CareerRunway::at(self.age),
             loans_used: plan.map(|p| p.loans_used).unwrap_or(0),
+            development: self.is_development(),
             group_count,
             group_min_needed: club
                 .teams
@@ -356,7 +372,6 @@ impl LoanAssetGuard {
                 .plan_view(MindClock::day(date))
                 .loan_push(),
             requested: self.player_requested,
-            advertised: self.seller_advertised,
         }
     }
 
@@ -455,6 +470,19 @@ impl LoanAssetGuard {
     pub fn first_choice(&self) -> bool {
         self.level as i16 >= self.parent_anchor.key_floor(self.group)
             && (self.parent_rank as usize) < self.starting_slots
+    }
+
+    /// A man the club will not lend for the minutes: its first choice, or,
+    /// past the age a season away is how a man gets better, anybody at its
+    /// key level and in reach of its best at his position. A giant holds
+    /// several, and whichever is third in line this month is a rotated star,
+    /// not one who needs football.
+    pub fn key_man(&self) -> bool {
+        let level = self.level as i16;
+        self.first_choice()
+            || (self.age > Self::DEVELOPMENT_AGE
+                && level >= self.parent_anchor.key_floor(self.group)
+                && level + Self::IN_ROTATION_GAP >= self.parent_best_in_group as i16)
     }
 
     /// Development means BELOW HIS CLUB'S LEVEL, not "young". The age band
@@ -732,6 +760,8 @@ mod tests {
                 age,
                 resignation: 0.0,
                 plan_widening: 0.0,
+                held_summit: 0,
+                recency: 0.0,
             })
         }
 
@@ -753,6 +783,43 @@ mod tests {
                 Self::floor(176, 19, 8_500),
             )
         }
+    }
+
+    /// Third in line at his position at Barcelona, behind a man of `best`.
+    fn third_in_line(level: u8, age: u8, best: u8) -> LoanAssetGuard {
+        LoanAssetGuard::new(
+            level,
+            age,
+            Fx::FORWARD,
+            Fx::barcelona(),
+            2,
+            1,
+            best,
+            Fx::LA_LIGA,
+            90_000_000.0,
+            10_000_000,
+            false,
+            false,
+            0.0,
+            Fx::floor(level, age, 8_000),
+        )
+    }
+
+    #[test]
+    fn a_rotated_star_is_held_and_a_boy_behind_him_is_not() {
+        assert!(
+            third_in_line(176, 27, 185).key_man(),
+            "a star in the rotation"
+        );
+        assert!(
+            !third_in_line(176, 21, 185).key_man(),
+            "a season away is for this"
+        );
+        assert!(
+            !third_in_line(176, 27, 199).key_man(),
+            "well behind the best at his position, he is waiting for a shirt"
+        );
+        assert!(!third_in_line(176, 27, 185).first_choice());
     }
 
     #[test]
@@ -871,8 +938,9 @@ mod tests {
     }
 
     /// The player's own term rides on the verdict, read against the
-    /// borrower's DIVISION: a boy's band reaches the Segunda, and no
-    /// further, however the third-tier club's own name reads.
+    /// borrower's DIVISION, however the third-tier club's own name reads.
+    /// A boy whose football already starts in La Liga reaches only part
+    /// of the way into the Segunda, and no further.
     #[test]
     fn the_verdict_carries_how_far_the_division_sits_under_his_floor() {
         let guard = Fx::yamal(false, false);
@@ -887,7 +955,7 @@ mod tests {
             0.0,
         );
         assert_eq!(peer.below_floor, 0.0);
-        assert_eq!(segunda.below_floor, 0.0);
+        assert!(segunda.below_floor < 0.5, "{}", segunda.below_floor);
         assert!(third_tier.below_floor > 0.5, "{}", third_tier.below_floor);
     }
 }

@@ -24,7 +24,6 @@ use crate::r#match::engine::goal::{
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
-use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::set_pieces::{
     penalty_conversion_prob, score_keeper_save, score_penalty_taker,
 };

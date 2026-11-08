@@ -3877,6 +3877,16 @@ a.fm-seasonstep-arrow:hover {
     color: #5c6f7c;
 }
 
+/* What he dreams of, above the plan it feeds. Green while he is living it.
+   Its lines are sentences, so the state drops under a long one. */
+.fm-mh-dream .fm-mh-plan-head {
+    flex-wrap: wrap;
+}
+
+.fm-mh-dream.is-living {
+    border-left-color: #4caf50;
+}
+
 /* Where he stands with this club: the manager, then what he
    remembers of the place. */
 .fm-mh-manager {
@@ -4561,6 +4571,12 @@ a.fm-seasonstep-arrow:hover {
     background: rgba(125, 111, 168, 0.16);
     color: #a396cc;
     border-color: rgba(125, 111, 168, 0.34);
+}
+
+.fm-evt-kind-career {
+    background: rgba(74, 124, 158, 0.16);
+    color: #8fb6d0;
+    border-color: rgba(74, 124, 158, 0.34);
 }
 
 /* --- Big events: career-visible moments --- */

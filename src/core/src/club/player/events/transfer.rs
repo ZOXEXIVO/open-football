@@ -45,15 +45,14 @@ impl Player {
     /// still at, and only then does the spell close.
     fn remember_the_move(&mut self, t: &TransferCompletion<'_>) {
         if t.selling_club_id != 0 {
-            // He was not asking to leave. Statuses first — `Req` is the
-            // formal demand and `Lst` means the club put him up for sale
-            // — then what the goal stack says, which catches the wants
-            // he never said out loud.
+            // He was not asking to leave. The formal demand first, then what
+            // the goal stack says, which catches the wants he never said out
+            // loud. Being listed is the club's doing and proves nothing of
+            // what he wanted.
             // A buyout is a deal he signed himself, at the club he had
             // just spent a season at — not a club selling him on.
             let asked_to_go = t.loan_buyout
                 || self.statuses.has(PlayerStatusType::Req)
-                || self.statuses.has(PlayerStatusType::Lst)
                 || self.mind.wants_to_leave() >= Self::MOVE_WAS_HIS_IDEA;
             if !asked_to_go {
                 let leaving = self.mind_context(t.date, Some(t.selling_club_id));
@@ -472,6 +471,7 @@ impl Player {
         // Transfer-request reasons evaporate when the move actually
         // happens — the wish was granted.
         self.transfer_request_reasons.clear();
+        self.transfer_request = Default::default();
         // The big-stage pull was scored against the league he just left.
         // The next weekly tick re-scores it against the one he joined —
         // which, if he has just moved up, is most of the point.
@@ -816,7 +816,9 @@ fn release_clause_value(ability: u8, current_reputation: i16, scale: f32) -> u32
 #[cfg(test)]
 mod free_agent_source_aware_tests {
     use super::*;
+    use crate::RetirementReason;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mind::{CareerAnchors, CareerSummit, MindClock, MindSituation};
     use crate::club::player::statistics::{CurrentSeasonEntry, PlayerStatistics};
     use crate::league::Season;
     use crate::shared::fullname::FullName;
@@ -1223,6 +1225,55 @@ mod free_agent_source_aware_tests {
     }
 
     #[test]
+    fn listed_and_sold_while_wanting_to_stay() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        player.statuses.add(date, PlayerStatusType::Lst);
+
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        let ctx = player.mind_context(date, Some(20));
+        assert!(
+            player.mind.club_sentiment(10, &ctx) < 0.0,
+            "the club put him up for sale; that was never his idea"
+        );
+        assert!(player.mind.census().flashbulbs >= 1);
+    }
+
+    #[test]
+    fn he_asked() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        player.statuses.add(date, PlayerStatusType::Req);
+        player.statuses.add(date, PlayerStatusType::Lst);
+
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        let ctx = player.mind_context(date, Some(20));
+        assert!(
+            player.mind.club_sentiment(10, &ctx) >= 0.0,
+            "listed because he asked, so he holds nothing against the club"
+        );
+        assert_eq!(player.mind.census().flashbulbs, 0);
+    }
+
+    #[test]
     fn a_move_he_engineered_leaves_no_grudge_behind() {
         let from = MoveFixtures::team("Old FC");
         let to = MoveFixtures::team("New FC");
@@ -1248,6 +1299,81 @@ mod free_agent_source_aware_tests {
             0,
             "and nothing about it is a landmark"
         );
+    }
+
+    /// A player who has been somewhere and means to go somewhere.
+    fn with_a_career(player: &mut Player, date: NaiveDate) -> CareerAnchors {
+        let today = MindClock::day(date);
+        let s = MindSituation {
+            ambition: 18.0,
+            own_level: 130,
+            ceiling: 150,
+            club_reputation: 0.6,
+            starter_ratio: 0.9,
+            appearances_tracked: 30,
+            division_reputation: 8000,
+            ..MindSituation::neutral()
+        };
+        player.mind.career.seed_anchors(
+            &s,
+            10,
+            Some(CareerSummit {
+                league_reputation: 9000,
+                club_id: 3,
+                club_standing: 0.8,
+                reached_on: today,
+                last_regular_on: today,
+                level_then: 130,
+            }),
+            true,
+            today,
+        );
+        player.mind.career.anchors
+    }
+
+    fn holds_the_same_career(player: &Player, before: &CareerAnchors) {
+        let now = player.mind.career.anchors;
+        assert_eq!(now.dream, before.dream);
+        assert_eq!(now.summit, before.summit);
+        assert_eq!(now.chapters.as_slice(), before.chapters.as_slice());
+    }
+
+    #[test]
+    fn a_sale_keeps_them() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        let before = with_a_career(&mut player, date);
+
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        holds_the_same_career(&player, &before);
+    }
+
+    #[test]
+    fn a_release_keeps_them() {
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        let before = with_a_career(&mut player, date);
+        player.reset_on_club_change();
+        holds_the_same_career(&player, &before);
+    }
+
+    #[test]
+    fn a_retired_players_career_can_still_be_read() {
+        let from = MoveFixtures::team("Old FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(36, 12.0, 3000);
+        let before = with_a_career(&mut player, date);
+        player.retire_from_squad(&from, date, RetirementReason::Age);
+        holds_the_same_career(&player, &before);
     }
 
     #[test]

@@ -21,7 +21,6 @@ pub struct PlayerResult {
     pub player_id: u32,
     pub contract: PlayerContractResult,
     pub is_transfer_requested: bool,
-    pub transfer_requests: Vec<u32>,
     pub injury_occurred: Option<InjuryType>,
     pub injury_recovered: bool,
     /// Mirrors the formal `PlayerStatusType::Unh` status — true iff the
@@ -34,7 +33,6 @@ pub struct PlayerResult {
     /// Distinct from `unhappy` so consumers can tell "concerned" from
     /// "officially unhappy".
     pub morale_concern: bool,
-    pub wants_to_leave: bool,
 }
 
 pub struct PlayerContractResult {
@@ -55,20 +53,14 @@ impl PlayerResult {
                 want_extend_contract: false,
             },
             is_transfer_requested: false,
-            transfer_requests: Vec::new(),
             injury_occurred: None,
             injury_recovered: false,
             unhappy: false,
             morale_concern: false,
-            wants_to_leave: false,
         }
     }
 
     pub fn process<D: LeagueProcessAccess>(&self, _: &mut D) {}
-
-    pub fn request_transfer(&mut self, player_id: u32) {
-        self.transfer_requests.push(player_id);
-    }
 
     pub fn has_contract_actions(&self) -> bool {
         self.contract.no_contract

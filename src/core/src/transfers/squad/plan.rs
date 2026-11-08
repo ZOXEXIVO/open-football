@@ -965,13 +965,12 @@ impl PlanningCadence {
     /// window's own length. `closed` outside one, which is what makes every
     /// deadline term inert year-round.
     pub fn deadline_window(country: &Country, date: NaiveDate) -> DeadlineWindow {
-        let calendar = TransferCalendar::for_country(&country.code, date);
-        for (start, end) in [calendar.summer_window, calendar.winter_window] {
-            if date >= start && date <= end {
-                return DeadlineWindow::of((end - date).num_days(), (end - start).num_days());
+        match TransferCalendar::for_country(&country.code, date).open_on(date) {
+            Some((start, end)) => {
+                DeadlineWindow::of((end - date).num_days(), (end - start).num_days())
             }
+            None => DeadlineWindow::closed(),
         }
-        DeadlineWindow::closed()
     }
 }
 

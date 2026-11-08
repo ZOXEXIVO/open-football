@@ -7083,3 +7083,68 @@ fn a_synthetic_squad_kicks_off_neutral() {
     assert_eq!(p.kickoff_mind(None), KickoffMind::neutral());
     assert_eq!(p.kickoff_mind(Some(d(2026, 9, 1))).assurance, Some(0.40));
 }
+
+fn ordinary_match_at(is_friendly: bool, stats: &PlayerMatchEndStats) -> MatchOutcome<'_> {
+    MatchOutcome {
+        stats,
+        effective_rating: 6.5,
+        participation: MatchParticipation::Starter,
+        is_friendly,
+        is_cup: false,
+        competition_slug: "premier-league",
+        is_motm: false,
+        team_goals_for: 0,
+        team_goals_against: 0,
+        league_weight: 1.0,
+        world_weight: 1.0,
+        is_derby: false,
+        team_won: false,
+        team_lost: false,
+        is_continental: false,
+        opponent_team_id: Some(999),
+        opponent_club_id: None,
+        played_for: Some(MatchTeamRef {
+            slug: "giant",
+            name: "Giant",
+            reputation: 9500,
+            league_slug: "premier-league",
+            league_name: "Premier League",
+        }),
+        club_id: 7,
+        standard_of_football: MatchStandard::CALIBRATION,
+        penalties_saved: 0,
+        penalties_missed: 0,
+        won_tie: false,
+        match_season_year: 2026,
+        date: d(2026, 9, 1),
+    }
+}
+
+/// A friendly is seen at home and nowhere else, so it is the only name it
+/// settles; a competitive match settles all three.
+#[test]
+fn a_friendly_settles_his_name_at_home_only() {
+    let s = stats(6.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let mut friendly = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let before = friendly.player_attributes.clone();
+    friendly.on_match_played(&ordinary_match_at(true, &s));
+    assert_eq!(
+        friendly.player_attributes.world_reputation,
+        before.world_reputation
+    );
+    assert_eq!(
+        friendly.player_attributes.current_reputation,
+        before.current_reputation
+    );
+    assert_ne!(
+        friendly.player_attributes.home_reputation,
+        before.home_reputation
+    );
+
+    let mut league = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    league.on_match_played(&ordinary_match_at(false, &s));
+    assert_ne!(
+        league.player_attributes.world_reputation,
+        before.world_reputation
+    );
+}

@@ -200,6 +200,7 @@ pub use player::{
     RegulationEventContext,
     RegulationOutcomeKind,
     RegulationSlotKind,
+    ReputationStanding,
     RetirementReason,
     RivalThreatResponse,
     RoleFamiliarity,

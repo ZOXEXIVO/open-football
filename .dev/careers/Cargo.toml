@@ -1,0 +1,27 @@
+[package]
+name = "dev_careers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Career census: follows cohorts of different kinds of player through whole
+# careers, prints what a reader of each man's page would see, and counts the
+# moves that reader would question. Read-only over the world, so a run is a
+# measurement and never a cause.
+#
+# Defaults to `match-stub`: a career is a decade of matches, and the real
+# engine costs hours per season. A real-engine census needs asking first.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = ["match-stub"]
+match-stub = ["core/match-stub"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 16

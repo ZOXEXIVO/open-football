@@ -22,6 +22,7 @@
 //! │   └── goals                     what he wants, and how loudly
 //! └── faculties                     each: observe · reflect · appraise · weigh
 //!     ├── career                    where he is going, and the time left
+//!     │   └── anchors               what a career leaves: summit, dream, chapters
 //!     ├── competitive               belief in himself, and his place in the side
 //!     ├── professional              his read of the man picking the team
 //!     ├── social                    whether he belongs here
@@ -53,10 +54,17 @@
 //! parallel so each swap-over can be proven on a real corpus before it
 //! is made, rather than invalidating a thousand calibrated tests at once.
 //!
+//! The career anchors are the exception. The appraisal, the level floor, a
+//! renewal, a settlement and a stranded review all read them, through
+//! [`AnchorView`], because a man's career has to be one thing to everybody
+//! weighing him. Anchors feed plans and plans feed wants; a want never writes
+//! an anchor.
+//!
 //! [`CoachMemory`]: crate::club::staff::coach::CoachMemory
 //! [`CoachDecisionEngine`]: crate::club::staff::coach::CoachDecisionEngine
 
 pub mod career;
+pub mod anchors;
 pub mod competitive;
 pub mod financial;
 #[cfg(test)]
@@ -71,6 +79,10 @@ pub mod situation;
 pub mod social;
 pub mod submind;
 
+pub use anchors::{
+    AnchorView, CareerAnchors, CareerChapter, CareerDream, CareerDreamReview, CareerSummit, ChapterKind,
+    DreamKind, DreamState,
+};
 pub use career::{CareerMind, CareerStage};
 pub use competitive::{CompetitiveMatchRead, CompetitiveMind, KickoffMind, MindSwitch};
 pub use financial::FinancialMind;
@@ -442,6 +454,11 @@ impl PlayerMind {
         reasons.absorb(&self.career.weigh(option, &self.organs));
         reasons.absorb(&self.social.weigh(option, &self.organs));
         reasons.absorb(&self.financial.weigh(option, &self.organs));
+        // A man living what he dreamed of argues about the number, and the
+        // terms answer that. He does not refuse to sign over it.
+        if option == MindOption::SignContract && self.career.has_arrived() {
+            return reasons.without(GoalKind::BePaidWhatImWorth);
+        }
         reasons
     }
 

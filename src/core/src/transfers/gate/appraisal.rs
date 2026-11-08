@@ -39,7 +39,9 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::language::LanguageProfile;
-use crate::club::player::mind::{CareerPlanView, EpochDay, GoalKind, MindSituation, PlayerMind};
+use crate::club::player::mind::{
+    AnchorView, CareerPlanView, EpochDay, GoalKind, MindSituation, PlayerMind,
+};
 use crate::club::player::transfer::LevelFloor;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::PromisedSquadStatus;
@@ -122,6 +124,10 @@ pub struct OfferView {
     /// cannot read the buyer's own standard — the plan term then pays
     /// nothing rather than guessing at a level.
     pub band_offered: Option<f32>,
+    /// The buying club's standing, 0..1 — how near the move takes him to
+    /// the level his dream names. 0 when the caller cannot read it, which
+    /// stands the career term down.
+    pub buyer_standing: f32,
 }
 
 impl OfferView {
@@ -147,6 +153,7 @@ impl OfferView {
             release_clause_triggered: false,
             returning_to_seller: 0.0,
             band_offered: None,
+            buyer_standing: 0.0,
         }
     }
 }
@@ -228,6 +235,9 @@ pub struct PlayerStance {
     pub available_soft: bool,
     pub unhappy: bool,
     pub requested: bool,
+    /// All he has asked for is a bigger stage, so a smaller one answers
+    /// nothing he asked.
+    pub asks_for_a_bigger_stage: bool,
     pub listed_by_club: bool,
     /// The strongest of `GoOutOnLoan` / `LeaveThisClub` /
     /// `PlayFirstTeamFootball`. The MAX, never the sum — `Unh` already
@@ -271,6 +281,14 @@ pub struct PlayerStance {
     /// The lowest division he will play in — [`LevelFloor`]. No view
     /// stands the term down.
     pub level_floor: LevelFloor,
+
+    // ── What he is reaching for ─────────────────────────────────
+    /// What a career has left him with: the dream a move is measured
+    /// against, on every path.
+    pub anchors: AnchorView,
+    /// The standing of the club he is at, 0..1. 0 when he has none, which
+    /// stands the career term down.
+    pub club_standing: f32,
 }
 
 impl PlayerStance {
@@ -302,6 +320,7 @@ impl PlayerStance {
             available_soft: false,
             unhappy: false,
             requested: false,
+            asks_for_a_bigger_stage: false,
             listed_by_club: false,
             leave_pressure: 0.0,
             plan: CareerPlanView::none(),
@@ -316,6 +335,8 @@ impl PlayerStance {
             seller_country_id: 0,
             seller_region: ScoutingRegion::WesternEurope,
             level_floor: LevelFloor::none(),
+            anchors: AnchorView::default(),
+            club_standing: 0.0,
         }
     }
 
@@ -389,6 +410,7 @@ impl PlayerStance {
     /// formed the want is not read as perfectly settled.
     pub fn with_mind(mut self, mind: &PlayerMind, mood_desire: f32, today: EpochDay) -> Self {
         self.plan = mind.career.plan_view(today);
+        self.anchors = mind.career.anchor_view(today, self.age, self.own_level);
         self.return_home_desire = mind
             .pressure_of(GoalKind::GoHome)
             .max(mood_desire)
@@ -433,6 +455,15 @@ impl PlayerStance {
         (self.own_level > 0).then(|| {
             LevelBand::at_reputation(self.own_level, self.position_group, club_reputation_score)
         })
+    }
+
+    /// How much of his request a move this far down answers, 0..1.
+    fn request_answered_by(&self, drop: f32, cfg: &AppraisalConfig) -> f32 {
+        if self.asks_for_a_bigger_stage {
+            (0.5 * (1.0 - drop / cfg.request_bigger_span)).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
     }
 
     /// Is the destination his own country?
@@ -480,6 +511,8 @@ pub enum TermsRefusalCause {
     Place,
     /// He is tied to where he is.
     Attachment,
+    /// The move takes him away from the career he is reaching for.
+    Career,
 }
 
 impl TermsRefusalCause {
@@ -490,6 +523,7 @@ impl TermsRefusalCause {
             TermsRefusalCause::Role => "terms_refusal_role",
             TermsRefusalCause::Place => "terms_refusal_place",
             TermsRefusalCause::Attachment => "terms_refusal_attachment",
+            TermsRefusalCause::Career => "terms_refusal_career",
         }
     }
 }
@@ -515,6 +549,8 @@ pub struct Appraisal {
     pub plan_fit: f32,
     /// A division under the floor he will play at, ≤ 0.
     pub floor: f32,
+    /// What the move does for the dream he holds.
+    pub career: f32,
     /// The wage at which `U + ε == 0`, given everything else. His demand.
     pub reservation_wage: u32,
     /// `ε` — his private disposition on this negotiation, drawn once.
@@ -558,6 +594,7 @@ impl Appraisal {
                 TermsRefusalCause::Place,
             ),
             (self.attachment.max(0.0), TermsRefusalCause::Attachment),
+            (self.career.min(0.0).abs(), TermsRefusalCause::Career),
         ];
         let mut worst = TermsRefusalCause::WageDemand;
         let mut worst_weight = f32::MIN;
@@ -574,7 +611,7 @@ impl Appraisal {
     pub fn explain(&self) -> String {
         format!(
             "U={:+.3} (M{:+.3} S{:+.3} R{:+.3} P{:+.3} H{:+.3} D{:+.3} A{:+.3} F{:+.3} \
-             N{:+.3} L{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
+             N{:+.3} L{:+.3} C{:+.3}) eps={:+.3} w_m={:.2} reservation={}",
             self.utility,
             self.money,
             self.sport,
@@ -586,6 +623,7 @@ impl Appraisal {
             self.memory,
             self.plan_fit,
             self.floor,
+            self.career,
             self.disposition,
             self.money_weight,
             self.reservation_wage,
@@ -645,10 +683,16 @@ pub struct AppraisalConfig {
     /// seller's fee-floor erosion runs on.
     pub sport_resignation_relief: f32,
     /// What a division a full span under his floor costs, before the
-    /// money weight discounts it. Above the push cap plus a promised
-    /// shirt, so a club listing him cannot buy a division he does not
-    /// play in; a payday late in a career still can.
+    /// money weight discounts it. For a man in his prime (`w_m` ~0.5) the
+    /// discounted cost still clears the push cap plus a promised shirt, so
+    /// a club listing him cannot buy a division he does not play in; a
+    /// payday late in a career still can.
     pub level_floor_cost: f32,
+    /// What a move all the way toward the level his dream names is worth,
+    /// and what a move all the way from it costs before the money weight
+    /// discounts it, for a man who believes in it entirely.
+    pub career_gain: f32,
+    pub career_cost: f32,
     /// A step UP is worth this share to a man with no big-stage pull, and
     /// all of it to one with the full itch.
     pub sport_upside_base: f32,
@@ -688,6 +732,10 @@ pub struct AppraisalConfig {
     pub push_soft: f32,
     pub push_unhappy: f32,
     pub push_requested: f32,
+    /// Sporting drop at which a request for a bigger stage stops pushing
+    /// at all. A level move half answers it, a step up this far answers it
+    /// whole, and a real step down does not.
+    pub request_bigger_span: f32,
     pub push_listed: f32,
     pub push_contract: f32,
     pub push_bench: f32,
@@ -742,7 +790,9 @@ impl Default for AppraisalConfig {
             sport_importance_base: 0.60,
             sport_importance_span: 0.40,
             sport_resignation_relief: 0.55,
-            level_floor_cost: 1.6,
+            level_floor_cost: 2.5,
+            career_gain: 0.5,
+            career_cost: 0.6,
             sport_upside_base: 0.35,
             sport_upside_span: 0.65,
 
@@ -763,6 +813,7 @@ impl Default for AppraisalConfig {
             push_soft: 0.20,
             push_unhappy: 0.35,
             push_requested: 0.55,
+            request_bigger_span: 0.10,
             push_listed: 0.30,
             push_contract: 0.25,
             push_bench: 0.30,
@@ -972,7 +1023,9 @@ impl PlayerOfferAppraisal {
         // ── D · push ────────────────────────────────────────────
         let push = (cfg.push_soft * f32::from(stance.available_soft)
             + cfg.push_unhappy * f32::from(stance.unhappy)
-            + cfg.push_requested * f32::from(stance.requested)
+            + cfg.push_requested
+                * f32::from(stance.requested)
+                * stance.request_answered_by(drop, cfg)
             + cfg.push_listed * f32::from(stance.listed_by_club)
             + cfg.push_contract * stance.contract_pressure
             + cfg.push_bench * (-stance.playing_time_gap).max(0.0)
@@ -1013,8 +1066,31 @@ impl PlayerOfferAppraisal {
             * stance.level_floor.below(offer.league_level as f32)
             * (1.0 - money_weight);
 
-        let utility =
-            money + sport + role + place + home + push - attachment + memory + plan_fit + floor;
+        // ── C · career ──────────────────────────────────────────
+        //
+        // What the move does for the dream he holds. A cost weighs against
+        // the money the way the floor does, and a loan is not a move: it
+        // takes him nowhere he is not coming back from.
+        let pull = if loan {
+            0.0
+        } else {
+            stance.anchors.career_pull(
+                stance.club_standing,
+                offer.buyer_standing,
+                offer.buyer_club_id,
+            )
+        };
+        let career = if pull > 0.0 {
+            cfg.career_gain * pull
+        } else {
+            cfg.career_cost * pull * (1.0 - money_weight)
+        };
+
+        let utility = money + sport + role + place + home + push - attachment
+            + memory
+            + plan_fit
+            + floor
+            + career;
 
         // The wage that makes `U + ε == 0`, given everything else — his
         // demand, and the number the buyer's wage power is compared with.
@@ -1034,6 +1110,7 @@ impl PlayerOfferAppraisal {
             memory,
             plan_fit,
             floor,
+            career,
             reservation_wage: reservation as u32,
             disposition,
             money_weight,
@@ -1085,7 +1162,8 @@ impl PlayerOfferAppraisal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::player::mind::{CareerArc, PlanStage};
+    use crate::club::player::mind::{CareerArc, DreamKind, PlanStage};
+    use crate::club::player::transfer::StandingReading;
 
     /// The Part V money-move profile: a Premier League key player weighing
     /// a Gulf offer. Drop 0.40, prestige drop 0.6, English bridge language,
@@ -1479,6 +1557,7 @@ mod tests {
             deadline_pressure: 0.5,
             attempts: 0,
             strength: 0.6,
+            follows: None,
         };
 
         let without = appraise(&no_plan, &drop);
@@ -1508,6 +1587,7 @@ mod tests {
             deadline_pressure: 0.0,
             attempts: 0,
             strength: 0.6,
+            follows: None,
         };
         assert!(appraise(&planned, &too_low).plan_fit < 0.0);
     }
@@ -1524,9 +1604,263 @@ mod tests {
             level_floor: LevelFloor {
                 standing: 7_100.0,
                 tolerance: 2_000.0,
+                plays_in: 0.0,
             },
             ..PlayerStance::neutral()
         }
+    }
+
+    #[test]
+    fn a_request_for_a_bigger_stage_is_no_push_toward_a_smaller_one() {
+        let asking = |bigger: bool| PlayerStance {
+            requested: true,
+            asks_for_a_bigger_stage: bigger,
+            ..premier_league_star(26)
+        };
+        let down = OfferView {
+            offered_wage: 8_900_000.0,
+            sporting_drop: 0.25,
+            ..OfferView::neutral()
+        };
+        let cfg = AppraisalConfig::default();
+        assert_eq!(
+            appraise(&asking(false), &down).push - appraise(&asking(true), &down).push,
+            cfg.push_requested
+        );
+        let up = OfferView {
+            sporting_drop: -0.1,
+            ..down
+        };
+        assert_eq!(
+            appraise(&asking(true), &up).push,
+            appraise(&asking(false), &up).push,
+            "the move he asked for is the one it pushes him toward"
+        );
+        let level = OfferView {
+            sporting_drop: 0.0,
+            ..down
+        };
+        assert!(
+            (appraise(&asking(false), &level).push
+                - appraise(&asking(true), &level).push
+                - cfg.push_requested * 0.5)
+                .abs()
+                < 1e-5,
+            "a club of his own level half answers a request for a bigger one"
+        );
+    }
+
+    #[test]
+    fn the_floor_outweighs_the_most_a_push_and_a_shirt_can_do_for_a_man_in_his_prime() {
+        let cfg = AppraisalConfig::default();
+        let prime = premier_league_star(27);
+        let offer = OfferView {
+            offered_wage: prime.current_wage,
+            ..OfferView::neutral()
+        };
+        let money_weight = appraise(&prime, &offer).money_weight;
+        let shirt = cfg.role_gain;
+        assert!(
+            cfg.level_floor_cost * (1.0 - money_weight) > cfg.push_cap + shirt,
+            "at w_m {money_weight}"
+        );
+    }
+
+    fn reaching_for_the_top(conviction: f32) -> AnchorView {
+        AnchorView {
+            dream: Some(DreamKind::ReachTheTop),
+            target_standing: 0.88,
+            conviction,
+            ..AnchorView::default()
+        }
+    }
+
+    /// A man at a good club, with nothing else pulling at him.
+    fn at_a_good_club(anchors: AnchorView) -> PlayerStance {
+        PlayerStance {
+            club_standing: 0.6,
+            anchors,
+            ..premier_league_star(24)
+        }
+    }
+
+    fn from_a_club_of(standing: f32, wage: f64) -> OfferView {
+        OfferView {
+            buyer_club_id: 500,
+            buyer_standing: standing,
+            offered_wage: wage,
+            promised_status: Some(PromisedSquadStatus::FirstTeamRegular),
+            ..OfferView::neutral()
+        }
+    }
+
+    #[test]
+    fn a_star_at_a_giant_does_not_sign_for_a_second_tier_club() {
+        let star = PlayerStance {
+            age: 22,
+            career_runway: 1.0,
+            career_spent: 0.0,
+            ambition_drive: 0.8,
+            importance: 0.9,
+            starter_ratio: 0.9,
+            available_soft: true,
+            listed_by_club: true,
+            level_floor: LevelFloor::of(&StandingReading {
+                level: 165,
+                group: PlayerFieldPositionGroup::Forward,
+                effective_rep: 8_000,
+                league_rep: 9_500,
+                starter_share: 0.9,
+                caps: 20,
+                age: 22,
+                resignation: 0.0,
+                plan_widening: 0.0,
+                held_summit: 9_500,
+                recency: 1.0,
+            }),
+            club_standing: 0.96,
+            anchors: AnchorView {
+                arrived: true,
+                ..reaching_for_the_top(0.9)
+            },
+            ..premier_league_star(22)
+        };
+        let offer = OfferView {
+            offered_wage: star.current_wage * 1.8,
+            promised_status: Some(PromisedSquadStatus::KeyPlayer),
+            league_level: SECOND_TIER,
+            sporting_drop: 0.3,
+            ..from_a_club_of(0.45, 0.0)
+        };
+        let answer = appraise(&star, &offer);
+        assert!(!answer.accepts(), "{}", answer.explain());
+        assert!(
+            matches!(
+                answer.refusal_cause(false),
+                TermsRefusalCause::SportingStepDown | TermsRefusalCause::Career
+            ),
+            "{:?}",
+            answer.refusal_cause(false)
+        );
+    }
+
+    #[test]
+    fn a_climber_takes_the_step() {
+        let climber = at_a_good_club(reaching_for_the_top(0.9));
+        let content = at_a_good_club(AnchorView {
+            dream: Some(DreamKind::MakeACareer),
+            target_standing: 0.6,
+            conviction: 0.9,
+            ..AnchorView::default()
+        });
+        let offer = from_a_club_of(0.75, climber.current_wage);
+        let climbing = appraise(&climber, &offer);
+        let settled = appraise(&content, &offer);
+        assert!(climbing.career > 0.0);
+        assert_eq!(settled.career, 0.0);
+        assert!(climbing.utility > settled.utility);
+    }
+
+    #[test]
+    fn going_past_the_level_he_named_pays_nothing_more() {
+        let climber = at_a_good_club(reaching_for_the_top(0.9));
+        let to_the_level = appraise(&climber, &from_a_club_of(0.88, climber.current_wage));
+        let past_it = appraise(&climber, &from_a_club_of(0.97, climber.current_wage));
+        assert_eq!(to_the_level.career, past_it.career);
+    }
+
+    #[test]
+    fn his_club_calls() {
+        const HIS_CLUB: u32 = 77;
+        let man = at_a_good_club(AnchorView {
+            dream: Some(DreamKind::PlayForHisClub),
+            target_club: HIS_CLUB,
+            conviction: 0.5,
+            ..AnchorView::default()
+        });
+        let cut = man.current_wage * 0.8;
+        let cfg = AppraisalConfig::default();
+        let calling = appraise(
+            &man,
+            &OfferView {
+                buyer_club_id: HIS_CLUB,
+                ..from_a_club_of(0.6, cut)
+            },
+        );
+        assert_eq!(calling.career, cfg.career_gain, "it pays in full");
+        assert!(calling.accepts(), "{}", calling.explain());
+
+        let anyone_else = appraise(&man, &from_a_club_of(0.6, cut));
+        assert_eq!(anyone_else.career, 0.0);
+        assert!(!anyone_else.accepts(), "{}", anyone_else.explain());
+    }
+
+    #[test]
+    fn leaving_the_club_he_dreamed_of_costs_him() {
+        const HIS_CLUB: u32 = 77;
+        let man = at_a_good_club(AnchorView {
+            dream: Some(DreamKind::PlayForHisClub),
+            target_club: HIS_CLUB,
+            conviction: 0.8,
+            arrived: true,
+            ..AnchorView::default()
+        });
+        assert!(appraise(&man, &from_a_club_of(0.7, man.current_wage)).career < 0.0);
+    }
+
+    #[test]
+    fn a_loan_leaves_the_dream_alone() {
+        let prospect = PlayerStance {
+            age: 20,
+            anchors: reaching_for_the_top(0.9),
+            ..at_a_good_club(AnchorView::default())
+        };
+        let answer = appraise(
+            &prospect,
+            &OfferView {
+                kind: OfferKind::Loan,
+                ..from_a_club_of(0.3, prospect.current_wage)
+            },
+        );
+        assert_eq!(answer.career, 0.0);
+    }
+
+    #[test]
+    fn a_move_that_serves_nothing_he_wants() {
+        let man = at_a_good_club(reaching_for_the_top(1.0));
+        let answer = appraise(&man, &from_a_club_of(0.25, man.current_wage * 1.05));
+        assert!(!answer.accepts(), "{}", answer.explain());
+        assert_eq!(answer.refusal_cause(false), TermsRefusalCause::Career);
+    }
+
+    #[test]
+    fn a_cost_on_his_career_is_for_sale_late_on() {
+        let dearer = |career_spent: f32| {
+            let man = PlayerStance {
+                career_spent,
+                ..at_a_good_club(reaching_for_the_top(1.0))
+            };
+            appraise(&man, &from_a_club_of(0.25, man.current_wage)).career
+        };
+        assert!(
+            dearer(1.0) > dearer(0.0),
+            "money weighs more as time runs out"
+        );
+    }
+
+    #[test]
+    fn no_dream_or_no_view_of_the_level_is_no_cost() {
+        let nobody = at_a_good_club(AnchorView::default());
+        assert_eq!(
+            appraise(&nobody, &from_a_club_of(0.25, nobody.current_wage)).career,
+            0.0
+        );
+        let climber = at_a_good_club(reaching_for_the_top(1.0));
+        let unread = OfferView {
+            buyer_standing: 0.0,
+            ..from_a_club_of(0.0, climber.current_wage)
+        };
+        assert_eq!(appraise(&climber, &unread).career, 0.0);
     }
 
     /// Serie A, Serie B, Serie C.
