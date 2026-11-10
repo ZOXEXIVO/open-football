@@ -6,6 +6,7 @@ use crate::simulator::{ContinentPanicMetrics, PhaseObserver, WorldMatchdayResult
 use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::scouting::ScoutingPass;
+use crate::transfers::view::world::{WorldPool, WorldPoolIndex};
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
 use rayon::prelude::*;
@@ -63,6 +64,7 @@ impl MatchdayPhase {
                 ScoutingPass::collect_player_pool(country, today, window_open_somewhere)
             })
             .collect();
+        let world_index = WorldPoolIndex::build(&world_pool);
         let free_agents = GlobalFreeAgentPool::snapshot(data, today);
         let placement_reach = if window_open_somewhere {
             data.collect_placement_reach()
@@ -89,7 +91,7 @@ impl MatchdayPhase {
             date: data.date,
             country_info: &data.country_info,
             indexes: data.indexes.as_ref(),
-            world_pool: &world_pool,
+            world_pool: WorldPool::new(&world_pool, &world_index),
             global_free_agents: &free_agents,
             market_map: &data.market_map,
             placement_reach: &placement_reach,

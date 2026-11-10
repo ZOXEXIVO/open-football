@@ -15,7 +15,6 @@
 //! `foreign_seller_importance` and `foreign_seller_finances` already do.
 //! One builder, two call sites, no second model.
 
-use crate::club::CareerRunway;
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::happiness::processing::PlayingTimeFrustrationConfig;
@@ -277,27 +276,7 @@ impl PlayerStanceBuilder {
         importance: f32,
         seller_region: ScoutingRegion,
     ) -> PlayerStance {
-        let runway = CareerRunway::at(summary.age);
-        let wage = (summary.salary as f64).max(1.0);
         PlayerStance {
-            current_wage: wage,
-            // No valuation is knowable from a summary — the borrower has
-            // read about him, not appraised him — so his own wage is the
-            // honest no-view anchor.
-            //
-            // This is NOT what silences the money axis on a loan. That is
-            // done where it belongs, on the offer: a loan pays the deal he
-            // already has, so `offered_wage == anchor` and `M ≡ 0` on the
-            // domestic and the foreign path alike (Part VIII, "the loan
-            // that pays"). Reading the same value here was an accident
-            // that happened to agree.
-            fair_wage_at_current: wage,
-            age: summary.age,
-            career_runway: runway,
-            career_spent: 1.0 - runway,
-            contract_pressure: (1.0_f32
-                - (summary.contract_months_remaining.max(0) as f32 * 30.0) / 730.0)
-                .clamp(0.0, 1.0),
             // His own three drives, not a stand-in. `determination` was
             // standing in for ambition and loyalty/adaptability sat at the
             // neutral 0.5, so the same man read differently across a
@@ -349,10 +328,14 @@ impl PlayerStanceBuilder {
             seller_continent_id: summary.continent_id,
             seller_country_id: summary.country_id,
             seller_region,
-            level_floor: summary.level_floor(),
+            level_floor: summary.level_floor,
             anchors: summary.anchors,
             club_standing: summary.seller_ctx.club_reputation_score,
-            ..PlayerStance::neutral()
+            ..PlayerStance::on_contract(
+                summary.age,
+                summary.contract_months_remaining,
+                summary.salary,
+            )
         }
     }
 
@@ -476,9 +459,11 @@ mod tests {
     use crate::club::player::mind::{
         AnchorView, CareerPlanView, CareerSummit, MindClock, MindSituation, PlayerMind,
     };
+    use crate::club::player::transfer::LevelFloor;
     use crate::transfers::gate::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
     use crate::transfers::pipeline::SellerPlausibilityContext;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
+    use crate::transfers::view::player::PlayerSummaryBuilder;
     use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
     /// A market summary of a homesick loyal Brazilian at an English club:
@@ -532,13 +517,13 @@ mod tests {
             summary.seller_ctx.club_reputation_score
         );
         assert_eq!(
-            summary.level_floor().standing.min(9_000.0),
+            summary.level_floor.standing.min(9_000.0),
             staged.level_floor.standing.min(9_000.0)
         );
     }
 
     fn brazilian_at_arsenal() -> PlayerSummary {
-        PlayerSummary {
+        let mut s = PlayerSummary {
             player_id: 1,
             club_id: 100,
             country_id: 1,
@@ -612,7 +597,12 @@ mod tests {
                 big_stage_inclination: 0.3,
                 is_marketed: false,
             },
-        }
+            level_floor: LevelFloor::none(),
+            asking_wage: 0.0,
+            refusal_price: 0.0,
+        };
+        s.level_floor = PlayerSummaryBuilder::level_floor(&s);
+        s
     }
 
     /// B5 — the same man, read live and read off a summary, has to agree.

@@ -10,8 +10,7 @@
 //! market is blocked" the design calls for:
 //!   * a player some club is monitoring / shortlisting / negotiating, or
 //!     whom the plausibility-checked buyer scan would accept, has his
-//!     interest recorded (which resets the staleness streak and feeds the
-//!     softening curve back toward neutral);
+//!     interest recorded, which resets the staleness streak;
 //!   * a player no plausible buyer wants accumulates a dominant
 //!     [`crate::club::player::transfer::AvailabilityBlockReason`] — asking
 //!     price too high, wage too high, reputation too high, no affordable
@@ -20,24 +19,27 @@
 //!
 //! The pass never signs anyone and never bypasses a gate: it only reads
 //! the same plausibility + listed-target evaluators the live pipeline
-//! uses and writes diagnostics. Behavioural feedback (price / wage
-//! softening, circulation lift) is applied where those evaluators run,
-//! driven by the state this pass maintains.
+//! uses and writes diagnostics. The circulation lift is applied where
+//! those evaluators run, driven by the state this pass maintains.
 
 use crate::transfers::market::window::MarketCadence;
+use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::squad::bands::TierBands;
-use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::player::{PlayerSummaryBuilder, PlayerView};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use chrono::NaiveDate;
 use log::debug;
 
 use crate::club::player::transfer::AvailabilityBlockReason;
+use crate::transfers::MarketMap;
 use crate::transfers::deal::negotiation::NegotiationStatus;
-use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::gate::{TransferPlausibilityEvaluator, TransferPlausibilityVerdict};
+use crate::transfers::gate::{
+    MoveTerms, PursuitAction, TransferMovePlausibility, TransferPlausibilityReason,
+};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::pipeline::advice::{
     BuyerContext, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
@@ -75,12 +77,7 @@ enum CirculationAction {
 /// derive the buyer's [`BuyerContext`] from one place.
 pub(in crate::transfers) struct BuyerScan {
     rep_score: f32,
-    world_rep: i16,
-    league_rep: u16,
-    total_wages: u32,
-    wage_budget: u32,
     plan_total_budget: f64,
-    max_recommend_value: f64,
     best_in_group: FxHashMap<PlayerFieldPositionGroup, u8>,
     open_request_groups: FxHashSet<PlayerFieldPositionGroup>,
     aging_groups: FxHashSet<PlayerFieldPositionGroup>,
@@ -93,24 +90,10 @@ impl BuyerScan {
         club: &Club,
         date: NaiveDate,
     ) -> Option<BuyerScan> {
-        let team = club.teams.teams.first()?;
+        let team = club.teams.main().or_else(|| club.teams.teams.first())?;
         let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         let rep_score = team.reputation.overall_score();
-        let world_rep = team.reputation.world as i16;
-        let league_rep = team
-            .league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
-        let total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
-        let wage_budget: u32 = club
-            .finance
-            .wage_budget
-            .as_ref()
-            .map(|b| b.amount.max(0.0) as u32)
-            .unwrap_or(total_wages.saturating_mul(11) / 10);
         let plan_total_budget = club.transfer_plan.total_budget;
-        let max_recommend_value = plan_total_budget * 2.0;
 
         let mut best_in_group: FxHashMap<PlayerFieldPositionGroup, u8> = FxHashMap::default();
         for p in team.players.players.iter() {
@@ -165,12 +148,7 @@ impl BuyerScan {
 
         Some(BuyerScan {
             rep_score,
-            world_rep,
-            league_rep,
-            total_wages,
-            wage_budget,
             plan_total_budget,
-            max_recommend_value,
             best_in_group,
             open_request_groups,
             aging_groups,
@@ -190,12 +168,7 @@ impl BuyerScan {
     ) -> BuyerContext {
         BuyerContext {
             buyer_rep_score: self.rep_score,
-            buyer_world_rep: self.world_rep,
-            buyer_league_reputation: self.league_rep,
-            buyer_total_wages: self.total_wages,
-            buyer_wage_budget: self.wage_budget,
             plan_total_budget: self.plan_total_budget,
-            max_recommend_value: self.max_recommend_value,
             buyer_best_in_group: self.best_in_group.get(&group).copied().unwrap_or(0),
             has_open_request: self.open_request_groups.contains(&group),
             has_aging_starter: self.aging_groups.contains(&group),
@@ -209,6 +182,13 @@ impl BuyerScan {
     }
 }
 
+/// Every club in the country that could take a listed man, read once.
+struct DomesticBuyers<'s, 'c> {
+    scans: &'s FxHashMap<u32, BuyerScan>,
+    suitors: &'s FxHashMap<u32, Suitor<'c>>,
+    market_map: &'s MarketMap,
+}
+
 /// The weekly circulation / diagnosis pass.
 pub struct MarketCirculation;
 
@@ -216,7 +196,11 @@ impl MarketCirculation {
     /// Weekly market-circulation / diagnosis pass. Runs on the same
     /// cadence as the recommendation sweep and right after it, so the
     /// interest the sweep generated this tick is already visible.
-    pub fn circulate_available_players(country: &mut Country, date: NaiveDate) {
+    pub fn circulate_available_players(
+        country: &mut Country,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
@@ -228,6 +212,12 @@ impl MarketCirculation {
             .clubs
             .iter()
             .filter_map(|c| BuyerScan::build(country, c, date).map(|s| (c.id, s)))
+            .collect();
+        let suitors: FxHashMap<u32, Suitor<'_>> = country
+            .clubs
+            .iter()
+            .filter(|c| buyer_scans.contains_key(&c.id))
+            .map(|c| (c.id, Suitor::of(country, c, date)))
             .collect();
 
         // Scoring-chart + recent-award lookup, built once for the country.
@@ -295,7 +285,11 @@ impl MarketCirculation {
                         seller,
                         player,
                         &view,
-                        &buyer_scans,
+                        &DomesticBuyers {
+                            scans: &buyer_scans,
+                            suitors: &suitors,
+                            market_map,
+                        },
                         date,
                     );
 
@@ -434,7 +428,6 @@ impl MarketCirculation {
             is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
             breakout_score,
             world_reputation: player.player_attributes.world_reputation,
-            current_reputation: player.player_attributes.current_reputation,
             ambition: player.attributes.ambition,
             parent_club_score: seller
                 .teams
@@ -447,25 +440,22 @@ impl MarketCirculation {
             low_usage: player.statistics.total_games() < 8,
             recent_interest_count: interest_30d,
             failed_scans,
-            last_block: player
-                .availability_market_state()
-                .and_then(|s| s.last_block.map(|(_, reason)| reason)),
         }
     }
 
     /// Scan the plausible domestic buyers. One that clears both the cheap
-    /// gates and the realism gates is enough for the player to read as
+    /// gates and the plausibility gate is enough for the player to read as
     /// circulating; everything the others refused on is the diagnosis.
     fn scan_domestic_buyers(
         country: &Country,
         seller: &Club,
         player: &Player,
         view: &ListedTargetView,
-        buyer_scans: &FxHashMap<u32, BuyerScan>,
+        buyers: &DomesticBuyers<'_, '_>,
         date: NaiveDate,
     ) -> (bool, Vec<AvailabilityBlockReason>) {
         let group = view.position_group;
-        let value = view.estimated_value;
+        let mut target: Option<Option<PlayerSummary>> = None;
 
         // ── Scan plausible domestic buyers. ──
         let mut reasons: Vec<AvailabilityBlockReason> = Vec::new();
@@ -474,7 +464,9 @@ impl MarketCirculation {
             if buyer.id == seller.id || seller.is_rival(buyer.id) {
                 continue;
             }
-            let Some(scan) = buyer_scans.get(&buyer.id) else {
+            let (Some(scan), Some(suitor)) =
+                (buyers.scans.get(&buyer.id), buyers.suitors.get(&buyer.id))
+            else {
                 continue;
             };
             let bctx = scan.buyer_context(group, false);
@@ -483,20 +475,29 @@ impl MarketCirculation {
                     reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));
                 }
                 ListedTargetVerdict::Accept(_) => {
-                    // Cheap gates pass — confirm the realism
-                    // (step-down / country-route) gates too.
-                    let inputs = TransferPlausibilityBuilder::from_clubs(
-                        country, buyer, seller, player, value, false, true, date,
+                    let Some(summary) = target
+                        .get_or_insert_with(|| {
+                            PlayerSummaryBuilder::one(country, seller, player, date)
+                        })
+                        .as_ref()
+                    else {
+                        break;
+                    };
+                    let reading = TransferMovePlausibility::read(
+                        suitor,
+                        summary,
+                        MoveTerms::purchase(true),
+                        buyers.market_map,
                     );
-                    match TransferPlausibilityEvaluator::evaluate(&inputs) {
-                        TransferPlausibilityVerdict::HardReject(pr) => {
-                            reasons.push(MarketDiscoveryDiagnosis::from_plausibility(pr));
-                        }
-                        TransferPlausibilityVerdict::Allow(_) => {
-                            plausible = true;
-                            break;
-                        }
+                    if reading.reaches(PursuitAction::FillNow.needs()) {
+                        plausible = true;
+                        break;
                     }
+                    reasons.push(MarketDiscoveryDiagnosis::from_plausibility(
+                        reading
+                            .blocking_reason
+                            .unwrap_or(TransferPlausibilityReason::NoSportingUpside),
+                    ));
                 }
             }
         }

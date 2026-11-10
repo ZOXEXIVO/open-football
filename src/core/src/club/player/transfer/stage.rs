@@ -535,13 +535,17 @@ impl LevelFloor {
     /// No view of either side reads as nothing to object to, and he does
     /// not refuse the level he is at.
     pub fn below(&self, league_rep: f32) -> f32 {
-        if self.standing <= 0.0 || league_rep <= 0.0 {
-            return 0.0;
-        }
-        if self.plays_in > 0.0 && league_rep >= self.plays_in {
+        if self.standing <= 0.0 || !Self::can_object(self.plays_in, league_rep) {
             return 0.0;
         }
         ((self.floor() - league_rep) / Self::REFUSAL_SPAN).clamp(0.0, 1.0)
+    }
+
+    /// Whether a division at `league_rep` could sit under the floor of a
+    /// man who plays in `plays_in` at all — answerable before his floor is
+    /// read, which a caller weighing thousands of men can skip.
+    pub fn can_object(plays_in: f32, league_rep: f32) -> bool {
+        league_rep > 0.0 && !(plays_in > 0.0 && league_rep >= plays_in)
     }
 }
 

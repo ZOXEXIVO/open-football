@@ -84,3 +84,27 @@ remain with the record.
 - **WHEN** a profile is fitted beside a recorded profile whose CA is far from the target
 - **THEN** the generated slots stop at the edge of the flex band, the recorded values are unchanged, and the returned
   CA differs from the target
+
+### Requirement: A player's reputation comes back to what his football is
+
+A player's current, home and world reputation SHALL each have a standing: the reputation his current ability earns on
+the stage he plays on, by the same curve a new world's starting reputations are drawn from. A bigger stage SHALL raise
+world fame the most and home fame the least. A match SHALL move his reputation by how far his rating sits from an
+ordinary match's, plus his goals, assists and man-of-the-match award, weighted by the competition. After every league
+match each reputation SHALL also move a small share of the way to its standing, so that what he has done lifts him
+above it for a while and does not hold him there. Awards and caps SHALL lift him the same way.
+
+#### Scenario: An ordinary season makes nobody famous
+
+- **WHEN** a regular plays a season of ordinary matches at his own level
+- **THEN** his reputation ends the season close to his standing, not higher every season
+
+#### Scenario: A veteran past his best
+
+- **WHEN** a 38-year-old whose ability has fallen to 94 carries a reputation of 10,000 and plays league football
+- **THEN** his reputation falls toward what a player of his ability is known for on that stage
+
+#### Scenario: A move to a bigger stage
+
+- **WHEN** a player of the same ability moves from a small club to a much bigger one
+- **THEN** his standing, and with it his reputation over the season, rises, world fame the most

@@ -76,3 +76,32 @@ role or anything below it SHALL carry no role promise.
 #### Scenario: A pre-contract uses the same projection
 - **WHEN** a club agrees a pre-contract with an out-of-contract player from another domestic club
 - **THEN** the promised role is his projected rank at the buying club, not a role read off the league baseline alone
+
+### Requirement: A free agent's acceptance respects his level floor
+
+A free agent SHALL carry a level floor read from his ability, his name and his held summit, with no current division
+to cap it, and with his career pressure acting as his market resignation so the floor falls the longer he stays
+unsigned. His willingness to sign SHALL drop as the buyer's division sits further under that floor, on every route that
+asks him: request matching, staged depth negotiations, emergency fills and the market-clearing pass. A pre-contract
+SHALL read the floor of the employed player he still is.
+
+This SHALL only narrow what he will accept. It SHALL NOT lower what a club asked for, and it SHALL NOT stop a player's
+floor falling far enough for him to find a club.
+
+#### Scenario: Days out of a top-flight club
+- **WHEN** a 29-year-old who was a regular in an 8800 division last season has been a free agent for a few days, and a
+  club in a 5000 division offers him a key role
+- **THEN** he refuses
+
+#### Scenario: A year unsigned
+- **WHEN** the same player has been unsigned for over a year and the same club offers again
+- **THEN** his floor has fallen far enough that the division no longer stops him signing
+
+#### Scenario: A journeyman has no such objection
+- **WHEN** a free agent who has only ever been a regular in a 3000 division is offered a place in a 3000 division
+- **THEN** the floor does not reduce his willingness at all
+
+#### Scenario: An employed man's pre-contract
+- **WHEN** a regular in a 9000 division, near the end of his deal, is considered for a pre-contract by a club in a 6000
+  division
+- **THEN** the club is not an acceptable buyer for him

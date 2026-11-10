@@ -34,8 +34,8 @@ use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::PlayerStance;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
-    ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferNeedReason,
-    TransferRequest, TransferRequestSource, TransferRequestStatus, TransferShortlist,
+    TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestSource,
+    TransferRequestStatus,
 };
 use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::needs::EmergencyGroupSlot;
@@ -242,34 +242,7 @@ impl FreeAgentNegotiationStager {
 
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.to_club_id) {
                 let plan = &mut club.transfer_plan;
-                let shortlist = match plan
-                    .shortlists
-                    .iter()
-                    .position(|s| s.transfer_request_id == action.request_id)
-                {
-                    Some(idx) => &mut plan.shortlists[idx],
-                    None => {
-                        plan.shortlists
-                            .push(TransferShortlist::new(action.request_id, 0.0));
-                        plan.shortlists.last_mut().unwrap()
-                    }
-                };
-                if let Some(pos) = shortlist
-                    .candidates
-                    .iter()
-                    .position(|c| c.player_id == action.player_id)
-                {
-                    shortlist.candidates[pos].status = ShortlistCandidateStatus::CurrentlyPursuing;
-                    shortlist.current_pursuit_index = pos;
-                } else {
-                    shortlist.candidates.push(ShortlistCandidate {
-                        player_id: action.player_id,
-                        score: 0.5,
-                        estimated_fee: 0.0,
-                        status: ShortlistCandidateStatus::CurrentlyPursuing,
-                    });
-                    shortlist.current_pursuit_index = shortlist.candidates.len() - 1;
-                }
+                plan.pursue_free_agent(action.request_id, action.player_id);
                 if let Some(request) = plan
                     .transfer_requests
                     .iter_mut()

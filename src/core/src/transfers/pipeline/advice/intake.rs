@@ -14,20 +14,24 @@ use crate::transfers::squad::SquadReviewPass;
 use chrono::Duration;
 use chrono::NaiveDate;
 
-use crate::transfers::gate::TransferPlausibilityVerdict;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::MarketMap;
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::pipeline::{
-    ClubTransferPlan, KnownPlayerMemory, ShortlistCandidate, ShortlistCandidateStatus,
+    ClubTransferPlan, FileReading, KnownPlayerMemory, ShortlistCandidate, ShortlistCandidateStatus,
     StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
-    TransferRequestStatus, TransferShortlist,
+    TransferRequestStatus,
 };
 use crate::transfers::view::player::CountryPlayerLookup;
+use crate::transfers::view::world::WorldPool;
 use crate::{Club, Country, PositionCoverage};
 
 use super::BuyerNeedPicture;
 
 struct RecommendationProcessAction {
     club_id: u32,
+    /// The gate's reading the action was decided on.
+    reading: FileReading,
     kind: RecommendationProcessKind,
 }
 
@@ -71,7 +75,9 @@ struct IntakeScan<'a> {
     club: &'a Club,
     plan: &'a ClubTransferPlan,
     lookup: &'a CountryPlayerLookup,
-    buyer_ctx: BuyerPlausibilityContext,
+    suitor: Suitor<'a>,
+    world: WorldPool<'a>,
+    market_map: &'a MarketMap,
     date: NaiveDate,
 }
 
@@ -82,7 +88,6 @@ impl IntakeScan<'_> {
         let plan = self.plan;
         let date = self.date;
         let player_lookup = self.lookup;
-        let buyer_ctx = &self.buyer_ctx;
         let seven_days_ago = date - Duration::days(7);
 
         let recent_recs: Vec<&StaffRecommendation> = plan
@@ -122,16 +127,26 @@ impl IntakeScan<'_> {
             // Re-check plausibility before promoting a stale
             // recommendation. Player status and seller balance may
             // have shifted since the recommendation was filed.
-            let summary = player_lookup.find_summary(country, rec.player_id, date);
-            if let Some(summary) = &summary {
-                let plausibility = TransferPlausibilityBuilder::evaluate_summary(
-                    buyer_ctx, summary, false, true, date, None,
-                );
-                if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
-                    continue;
-                }
+            // Read again before a stale recommendation becomes a request:
+            // his status and his club's position may have shifted since it
+            // was filed, and a man who cannot be read is not pursued.
+            let Some(summary) = player_lookup
+                .find_summary(country, rec.player_id, date)
+                .or_else(|| self.world.find(rec.player_id))
+            else {
+                continue;
+            };
+            let assessment = TransferMovePlausibility::read(
+                &self.suitor,
+                summary,
+                MoveTerms::purchase(true),
+                self.market_map,
+            );
+            if !assessment.reaches(PursuitAction::Shortlist.needs()) {
+                continue;
             }
-            let player_age = summary.as_ref().map(|s| s.age);
+            let reading = FileReading::of(&assessment, date);
+            let player_age = Some(summary.age);
 
             // Check if an existing unfulfilled request covers the same position group.
             // Emergency free-agent depth requests don't count — attaching a paid
@@ -184,9 +199,9 @@ impl IntakeScan<'_> {
                 });
 
             if let Some(req) = matching_request {
-                self.attach_to_request(rec, req, actions);
+                self.attach_to_request(rec, req, reading, actions);
             } else if rec.confidence >= 0.6 && rec.assessed_ability >= 50 {
-                self.open_request(rec, memory, actions);
+                self.open_request(rec, memory, reading, actions);
             }
         }
     }
@@ -202,6 +217,7 @@ impl IntakeScan<'_> {
         &self,
         rec: &StaffRecommendation,
         req: &TransferRequest,
+        reading: FileReading,
         actions: &mut Vec<RecommendationProcessAction>,
     ) {
         let club = self.club;
@@ -223,6 +239,7 @@ impl IntakeScan<'_> {
             if !already_in {
                 actions.push(RecommendationProcessAction {
                     club_id: club.id,
+                    reading,
                     kind: RecommendationProcessKind::AddToShortlist {
                         shortlist_request_id: req.id,
                         candidate: ShortlistCandidate {
@@ -251,6 +268,7 @@ impl IntakeScan<'_> {
             // negotiation path they carry no money for.
             actions.push(RecommendationProcessAction {
                 club_id: club.id,
+                reading,
                 kind: RecommendationProcessKind::SeedShortlist {
                     request_id: req.id,
                     allocation: req.budget_allocation,
@@ -272,6 +290,7 @@ impl IntakeScan<'_> {
         &self,
         rec: &StaffRecommendation,
         memory: Option<&KnownPlayerMemory>,
+        reading: FileReading,
         actions: &mut Vec<RecommendationProcessAction>,
     ) {
         let country = self.country;
@@ -337,6 +356,7 @@ impl IntakeScan<'_> {
 
         actions.push(RecommendationProcessAction {
             club_id: club.id,
+            reading,
             kind: RecommendationProcessKind::CreateRequest {
                 candidate: ShortlistCandidate {
                     player_id: rec.player_id,
@@ -368,44 +388,24 @@ impl IntakeCommit {
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
                 let plan = &mut club.transfer_plan;
+                let reading = action.reading;
 
                 match action.kind {
                     RecommendationProcessKind::AddToShortlist {
                         shortlist_request_id,
                         candidate,
                     } => {
-                        if let Some(shortlist) = plan
-                            .shortlists
-                            .iter_mut()
-                            .find(|s| s.transfer_request_id == shortlist_request_id)
-                        {
-                            shortlist.candidates.push(candidate);
-                        }
+                        plan.shortlist(reading, shortlist_request_id, 0.0, candidate, None);
                     }
                     RecommendationProcessKind::SeedShortlist {
                         request_id,
                         allocation,
                         candidate,
                     } => {
-                        // Guard against two recommendations seeding the same
-                        // request in one pass — the second joins the first's
-                        // list instead of opening a rival one.
-                        if let Some(existing) = plan
-                            .shortlists
-                            .iter_mut()
-                            .find(|s| s.transfer_request_id == request_id)
-                        {
-                            if !existing
-                                .candidates
-                                .iter()
-                                .any(|c| c.player_id == candidate.player_id)
-                            {
-                                existing.candidates.push(candidate);
-                            }
-                        } else {
-                            let mut shortlist = TransferShortlist::new(request_id, allocation);
-                            shortlist.candidates.push(candidate);
-                            plan.shortlists.push(shortlist);
+                        // Two recommendations seeding the same request in one
+                        // pass share one list: the second joins the first's.
+                        if !plan.shortlist(reading, request_id, allocation, candidate, None) {
+                            continue;
                         }
                         // Downstream (the board review, the negotiation
                         // pass) keys on the request being Shortlisted.
@@ -427,27 +427,20 @@ impl IntakeCommit {
                         candidate,
                     } => {
                         let req_id = request.id;
+                        let allocation = candidate.estimated_fee;
+                        if !plan.shortlist(reading, req_id, allocation, candidate, None) {
+                            continue;
+                        }
                         if req_id >= plan.next_request_id {
                             plan.next_request_id = req_id + 1;
                         }
                         // The shortlist is attached here and now, so the
-                        // request is Shortlisted — not Pending.
-                        //
-                        // This is what puts the marquee path in front of
-                        // the board. `review_shortlist_proposals` only
-                        // reviews requests at `Shortlisted`, so a
-                        // recommendation-created request sat at `Pending`
-                        // with `board_approved == None` for its whole life
-                        // and the negotiation pass — which only refuses
-                        // `Some(false)` — pursued it unchallenged. The
-                        // single most expensive purchase a club can make
-                        // was the one purchase its chairman was never
-                        // asked about.
+                        // request is Shortlisted — not Pending. That is what
+                        // puts the marquee path in front of the board:
+                        // `review_shortlist_proposals` only reviews requests
+                        // at `Shortlisted`.
                         request.status = TransferRequestStatus::Shortlisted;
                         plan.transfer_requests.push(request);
-                        let mut shortlist = TransferShortlist::new(req_id, candidate.estimated_fee);
-                        shortlist.candidates.push(candidate);
-                        plan.shortlists.push(shortlist);
                     }
                 }
             }
@@ -459,7 +452,12 @@ impl IntakeCommit {
 pub(in crate::transfers::pipeline) struct RecommendationIntake;
 
 impl RecommendationIntake {
-    pub(in crate::transfers::pipeline) fn run(country: &mut Country, date: NaiveDate) {
+    pub(in crate::transfers::pipeline) fn run(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         let mut actions: Vec<RecommendationProcessAction> = Vec::new();
 
         // Indexed player/summary resolution for the per-recommendation
@@ -477,12 +475,111 @@ impl RecommendationIntake {
                 club,
                 plan,
                 lookup: &player_lookup,
-                buyer_ctx: BuyerPlausibilityContext::build(country, club, date),
+                suitor: Suitor::of(country, club, date),
+                world,
+                market_map,
                 date,
             }
             .stage(&mut actions);
         }
 
         IntakeCommit::apply(country, actions);
+    }
+}
+
+#[cfg(test)]
+mod readable_intake_tests {
+    use super::*;
+    use crate::transfers::pipeline::{
+        KnownPlayerMemory, RecommendationSource, RecommendationType, StaffRecommendation,
+    };
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+    use crate::transfers::view::world::WorldPoolIndex;
+    use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+
+    struct Fx;
+
+    impl Fx {
+        fn recommendation(player_id: u32) -> StaffRecommendation {
+            StaffRecommendation {
+                player_id,
+                recommender_staff_id: 1,
+                source: RecommendationSource::ScoutNetwork,
+                recommendation_type: RecommendationType::ReadyForStepUp,
+                assessed_ability: 110,
+                assessed_potential: 120,
+                confidence: 0.8,
+                estimated_fee: 500_000.0,
+                date_recommended: TestDate::today(),
+            }
+        }
+
+        fn memory(player_id: u32) -> KnownPlayerMemory {
+            KnownPlayerMemory {
+                player_id,
+                last_known_club_id: 70,
+                last_known_country_id: 2,
+                position: PlayerPositionType::MidfielderCenter,
+                position_group: PlayerFieldPositionGroup::Midfielder,
+                age: 25,
+                assessed_ability: 110,
+                assessed_potential: 120,
+                confidence: 0.8,
+                estimated_fee: 500_000.0,
+                last_seen: TestDate::today(),
+                official_appearances_seen: 2,
+                friendly_appearances_seen: 0,
+            }
+        }
+    }
+
+    /// A recommendation the gate reads as "may be shortlisted" opens a
+    /// request; one naming a man who no longer resolves opens nothing.
+    #[test]
+    fn intake_acts_only_on_a_player_the_gate_has_read() {
+        let mut club = TestClub::new(1).reputation(4_000).build();
+        club.transfer_plan.initialized = true;
+        club.transfer_plan.total_budget = 5_000_000.0;
+        for player_id in [81, 82] {
+            club.transfer_plan
+                .remember_known_player(Fx::memory(player_id));
+            club.transfer_plan
+                .staff_recommendations
+                .push(Fx::recommendation(player_id));
+        }
+        let country = TestCountry::new(1).clubs(vec![club]).build();
+        let readable = [TestSummary::new(81)
+            .club_id(70)
+            .country(2, "es")
+            .league(4_000, 0.4)
+            .salary(100_000)
+            .value(500_000.0)
+            .build()];
+        let index = WorldPoolIndex::build(&readable);
+        let lookup = CountryPlayerLookup::build(&country);
+        let club = &country.clubs[0];
+        let mut actions = Vec::new();
+        IntakeScan {
+            country: &country,
+            club,
+            plan: &club.transfer_plan,
+            lookup: &lookup,
+            suitor: Suitor::of(&country, club, TestDate::today()),
+            world: WorldPool::new(&readable, &index),
+            market_map: &MarketMap::default(),
+            date: TestDate::today(),
+        }
+        .stage(&mut actions);
+        let named: Vec<u32> = actions
+            .iter()
+            .filter_map(|a| match &a.kind {
+                RecommendationProcessKind::CreateRequest { candidate, .. }
+                | RecommendationProcessKind::SeedShortlist { candidate, .. }
+                | RecommendationProcessKind::AddToShortlist { candidate, .. } => {
+                    Some(candidate.player_id)
+                }
+            })
+            .collect();
+        assert_eq!(named, vec![81]);
     }
 }

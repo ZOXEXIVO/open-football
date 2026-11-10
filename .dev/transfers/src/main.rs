@@ -13,6 +13,8 @@
 //!   * listing lifecycle, including the `is_transfer_listed`-flag-without
 //!     -a-listing-row limbo that blocks renewal *and* the market
 //!   * free-agent pool health (reuses the in-core auditor)
+//!   * the pursuit census: every file a club holds on another club's
+//!     player, by the route that opened it, against standing fit
 //!
 //! None of this exists in-sim: `TransferActivitySummary` is built and
 //! dropped every country every tick, and the free-agent auditor only
@@ -81,6 +83,10 @@
 //!     names. Moves the PERMANENT market and the free-agent and scouting
 //!     layers, not just loans — read `corridor_overlap`, the foreign-share
 //!     table and free-agent visibility across it.
+//!   * `OF_STANDING_FIT_OFF`     — STANDING FIT: his level, his wage and the
+//!     club's market no longer stop a pursuit before it starts. Every route
+//!     still reads the gate's one entry, so the arm measures the rule alone.
+//!     The baseline arm for the pursuit census.
 //!
 //! `OF_TRACE_PLAYER=<id>` prints one funnel line per stage for that
 //! player, to stderr.
@@ -109,6 +115,7 @@ use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use core::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
 use core::transfers::deal::negotiation::{NegotiationRejectionReason, NegotiationStatus};
+use core::transfers::gate::PursuitAction;
 use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
 use core::transfers::scouting::recruitment::{
@@ -116,6 +123,10 @@ use core::transfers::scouting::recruitment::{
 };
 use core::transfers::squad::plan::BriefTier;
 use core::transfers::value::PlayerValuationCalculator;
+use core::transfers::{
+    AppraisalConfig, BuyerLevelWage, PlayerOfferAppraisal, PlayerStance, ShortlistCandidateStatus,
+    WagePower,
+};
 use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
 use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as GeographyMoveKind};
 use core::transfers::{
@@ -5039,6 +5050,7 @@ impl SimHarness {
                 ReportPrinter::print(&mut report, &self.data, day);
                 CorridorCensus::report(&self.data, day);
                 ScoutingFunnelCensus::report(&self.data, day);
+                PursuitCensus::report(&self.data, day);
                 self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
                 LoanAssetPrinter::print(&self.loan_assets);
@@ -5052,6 +5064,7 @@ impl SimHarness {
         ReportPrinter::print(&mut report, &self.data, days);
         CorridorCensus::report(&self.data, days);
         ScoutingFunnelCensus::report(&self.data, days);
+        PursuitCensus::report(&self.data, days);
         self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
         LoanAssetPrinter::print(&self.loan_assets);
@@ -5770,7 +5783,7 @@ struct HarnessUsage;
 
 impl HarnessUsage {
     /// Env switches, in the order the design's Part III runs them.
-    const ARMS: [(&'static str, &'static str); 8] = [
+    const ARMS: [(&'static str, &'static str); 9] = [
         (
             "OF_HOME_REACH_OFF",
             "a club sees only what its own scouts cover — no compatriot reach",
@@ -5807,6 +5820,11 @@ impl HarnessUsage {
             "OF_CORRIDOR_FLOOR_OFF",
             "a card weight replaces the derived prior instead of raising it, \
              so naming a pair can make it less of a corridor than silence",
+        ),
+        (
+            "OF_STANDING_FIT_OFF",
+            "standing fit passes everyone: a club may pursue a player whatever \
+             his level, his wage or its market",
         ),
     ];
 
@@ -7800,6 +7818,615 @@ impl LoanLadderCensus {
             0.0
         } else {
             part as f64 / whole as f64 * 100.0
+        }
+    }
+}
+
+// ============================================================
+// Pursuit census
+// ============================================================
+
+/// Who keeps attention on whom: every file a club holds on another club's
+/// player, by the route that opened it, against how well the club's
+/// standing fits him.
+///
+/// Attention is what the player page shows and what feeds every later
+/// stage, and it leaks where moves do not: a route with no gate of its
+/// own fills a small club's files with players who would never join it.
+/// The proxy columns read the three standing facts the way the census
+/// could measure them before the gate owned them — his level floor
+/// against the club's division at a contract-wage refusal price, the
+/// club's shirt ceiling against what he earns, and corridor affinity.
+struct PursuitCensus;
+
+/// A club's side of a row: where its first team plays and what it is.
+struct PursuitStage {
+    club_id: u32,
+    name: String,
+    country: String,
+    country_id: u32,
+    world_rep: u16,
+    division: u16,
+    benefactor: f32,
+    rep_score: f32,
+}
+
+/// One club's attention on one player, however it got there.
+struct PursuitRow {
+    route: &'static str,
+    /// Seller division minus buyer division.
+    gap: i32,
+    seller_division: u16,
+    buyer_division: u16,
+    buyer_country: String,
+    below: f32,
+    affinity: f32,
+    picked: bool,
+    first_team: bool,
+    surplus: bool,
+    available: bool,
+    cross_border: bool,
+    /// The most the club could pay him is under what he earns.
+    cannot_match_wage: bool,
+    /// ... and under half of it.
+    cannot_pay_half: bool,
+    /// A division he refuses outright, at a price the club cannot pay.
+    refuses_level: bool,
+    /// A file held without the department's reading of the move.
+    unread: bool,
+    /// A file held although its stored reading stops short of what that
+    /// kind of file needs.
+    unfit: bool,
+    line: String,
+}
+
+#[derive(Default, Clone, Copy)]
+struct PursuitCell {
+    rows: usize,
+    down_one: usize,
+    down_two: usize,
+    under_floor: usize,
+    refused: usize,
+    thin_market: usize,
+    no_market: usize,
+    regular_down_one: usize,
+    cannot_match_wage: usize,
+    cannot_pay_half: usize,
+    refuses_level: usize,
+    structural: usize,
+    unread: usize,
+    unfit: usize,
+}
+
+impl PursuitCell {
+    fn add(&mut self, r: &PursuitRow) {
+        self.rows += 1;
+        if r.gap >= 2000 {
+            self.down_one += 1;
+            if r.picked && r.first_team && !r.available {
+                self.regular_down_one += 1;
+            }
+        }
+        if r.gap >= 4000 {
+            self.down_two += 1;
+        }
+        if r.below > 0.0 {
+            self.under_floor += 1;
+        }
+        if r.below >= 1.0 {
+            self.refused += 1;
+        }
+        if r.cross_border && r.affinity < 0.15 {
+            self.thin_market += 1;
+        }
+        if r.cross_border && r.affinity < 0.05 {
+            self.no_market += 1;
+        }
+        if r.cannot_match_wage {
+            self.cannot_match_wage += 1;
+        }
+        if r.cannot_pay_half {
+            self.cannot_pay_half += 1;
+        }
+        if r.refuses_level {
+            self.refuses_level += 1;
+        }
+        if r.refuses_level || r.cannot_pay_half || (r.cross_border && r.affinity < 0.05) {
+            self.structural += 1;
+        }
+        if r.unread {
+            self.unread += 1;
+        }
+        if r.unfit {
+            self.unfit += 1;
+        }
+    }
+}
+
+impl PursuitCensus {
+    /// Example rows printed per route and per slice; `OF_PURSUIT_EXAMPLES`.
+    fn examples() -> usize {
+        std::env::var("OF_PURSUIT_EXAMPLES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(5)
+    }
+
+    fn report(data: &SimulatorData, day: u32) {
+        let rows = Self::rows(data);
+        let examples = Self::examples();
+        println!(
+            "\n== pursuit census (day {day}, {}) — {} attention rows ==",
+            data.date.date(),
+            rows.len()
+        );
+        println!(
+            "  proxies: <floor / refused = his level floor against the club's division; \
+             lvl-unpaid = refused at a contract-wage price the club's shirt ceiling misses; \
+             wage<his / wage<half = shirt ceiling against his wage; aff<.05 = corridor; \
+             ANY = lvl-unpaid | wage<half | aff<.05. Stored readings: unread = a file with no \
+             reading; unfit = a file whose reading stops short of what it needs (0 the day \
+             after a review, by construction)"
+        );
+
+        let mut by_route: BTreeMap<String, PursuitCell> = BTreeMap::new();
+        for r in &rows {
+            by_route.entry(r.route.to_string()).or_default().add(r);
+        }
+        Self::print_table("every row, by route", &by_route);
+
+        let mut top: BTreeMap<String, PursuitCell> = BTreeMap::new();
+        let mut top_by_buyer: BTreeMap<String, PursuitCell> = BTreeMap::new();
+        for r in rows
+            .iter()
+            .filter(|r| r.seller_division >= 7500 && r.first_team)
+        {
+            top.entry(r.route.to_string()).or_default().add(r);
+            top_by_buyer
+                .entry(Self::band(r.buyer_division).to_string())
+                .or_default()
+                .add(r);
+        }
+        Self::print_table("first-team players in divisions 7500+, by route", &top);
+        Self::print_table(
+            "first-team players in divisions 7500+, by the buyer's division",
+            &top_by_buyer,
+        );
+
+        let mut mid: BTreeMap<String, PursuitCell> = BTreeMap::new();
+        for r in rows
+            .iter()
+            .filter(|r| (6000..7500).contains(&r.seller_division) && r.first_team)
+        {
+            mid.entry(Self::band(r.buyer_division).to_string())
+                .or_default()
+                .add(r);
+        }
+        Self::print_table(
+            "first-team players in divisions 6000-7499, by the buyer's division",
+            &mid,
+        );
+
+        let mut regulars: BTreeMap<String, PursuitCell> = BTreeMap::new();
+        for r in rows
+            .iter()
+            .filter(|r| r.picked && r.first_team && !r.available && !r.surplus && r.gap >= 2000)
+        {
+            regulars.entry(r.route.to_string()).or_default().add(r);
+        }
+        Self::print_table(
+            "picked, unlisted first-team regulars pursued from a division 2000+ below, by route",
+            &regulars,
+        );
+
+        let mut routes: Vec<&str> = by_route.keys().map(|k| k.as_str()).collect();
+        routes.sort();
+        for route in routes {
+            let mut worst: Vec<&PursuitRow> = rows
+                .iter()
+                .filter(|r| r.route == route && r.first_team && r.seller_division >= 7000)
+                .collect();
+            worst.sort_by(|a, b| b.gap.cmp(&a.gap));
+            println!("\n  -- {route}: widest gaps on first-team players in divisions 7000+");
+            for r in worst.iter().take(examples) {
+                println!("     {} | {}", r.gap, r.line);
+            }
+        }
+
+        for route in by_route.keys() {
+            let held: Vec<&PursuitRow> = rows
+                .iter()
+                .filter(|r| r.route == route.as_str() && (r.unfit || r.unread))
+                .collect();
+            if held.is_empty() {
+                continue;
+            }
+            println!(
+                "\n  -- {route}: files held against their reading ({} rows)",
+                held.len()
+            );
+            for r in held.iter().take(examples) {
+                println!("     {}", r.line);
+            }
+        }
+
+        for code in ["ir", "am"] {
+            let mut slice: Vec<&PursuitRow> = rows
+                .iter()
+                .filter(|r| r.buyer_country == code && r.seller_division >= 7000)
+                .collect();
+            slice.sort_by(|a, b| b.gap.cmp(&a.gap));
+            let mut per_route: BTreeMap<&str, usize> = BTreeMap::new();
+            for r in &slice {
+                *per_route.entry(r.route).or_default() += 1;
+            }
+            println!(
+                "\n  -- buyers from '{code}' on players in divisions 7000+: {} rows {:?}",
+                slice.len(),
+                per_route
+            );
+            for r in slice.iter().take(examples) {
+                println!("     {} [{}] {}", r.gap, r.route, r.line);
+            }
+        }
+
+        Self::print_moves(data);
+    }
+
+    fn stage(data: &SimulatorData, club: &Club) -> PursuitStage {
+        let main = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        let country = data.country_by_club(club.id);
+        PursuitStage {
+            club_id: club.id,
+            name: club.name.clone(),
+            country: country.map(|c| c.code.clone()).unwrap_or_default(),
+            country_id: country.map(|c| c.id).unwrap_or(0),
+            world_rep: main.map(|t| t.reputation.world).unwrap_or(0),
+            division: main
+                .and_then(|t| t.league_id)
+                .and_then(|id| data.league(id))
+                .map(|l| l.reputation)
+                .unwrap_or(0),
+            benefactor: club.board.ownership.benefactor,
+            rep_score: main.map(|t| t.reputation.overall_score()).unwrap_or(0.0),
+        }
+    }
+
+    fn row(
+        data: &SimulatorData,
+        buyer_club: &Club,
+        buyer: &PursuitStage,
+        route: &'static str,
+        needs: Option<PursuitAction>,
+        player_id: u32,
+    ) -> Option<PursuitRow> {
+        let now = data.date.date();
+        let reading = buyer_club.transfer_plan.file_reading(player_id);
+        let in_talks = data.country_by_club(buyer.club_id).is_some_and(|c| {
+            c.transfer_market
+                .has_active_negotiation_for(player_id, buyer.club_id)
+        });
+        let (p, team) = data.player_with_team(player_id)?;
+        if team.club_id == buyer.club_id {
+            return None;
+        }
+        let seller_club = data.club(team.club_id)?;
+        let seller = Self::stage(data, seller_club);
+        if seller.division == 0 || buyer.division == 0 {
+            return None;
+        }
+        let team_league = team
+            .league_id
+            .and_then(|id| data.league(id))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        let below = p.level_floor(now, team_league).below(buyer.division as f32);
+        let affinity = MarketAffinity::affinity(
+            &data.market_map,
+            MarketAffinityInputs {
+                buyer_country_id: buyer.country_id,
+                nationality_country_id: p.country_id,
+                current_country_id: seller.country_id,
+                kind: GeographyMoveKind::Talent,
+                benefactor: buyer.benefactor,
+            },
+        );
+        let salary = p.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let available = p.statuses.has(PlayerStatusType::Lst)
+            || p.statuses.has(PlayerStatusType::Loa)
+            || p.statuses.has(PlayerStatusType::Req);
+        let first_team = matches!(team.team_type, TeamType::Main);
+        let age = p.age(now);
+        let level_wage =
+            BuyerLevelWage::evaluate(p, age, buyer.rep_score, buyer.division, None) as f64;
+        let ceiling = WagePower::for_player(buyer_club, level_wage, BriefTier::A, 0.0).ceiling;
+        let months = p
+            .contract
+            .as_ref()
+            .map(|c| ((c.expiration - now).num_days().max(0) / 30) as i16)
+            .unwrap_or(0);
+        let refusal_price = PlayerOfferAppraisal::refusal_price(
+            &PlayerStance::on_contract(age, months, salary),
+            &AppraisalConfig::default(),
+        );
+        let squad_status = p.contract.as_ref().map(|c| c.squad_status.clone());
+        Some(PursuitRow {
+            route,
+            gap: seller.division as i32 - buyer.division as i32,
+            seller_division: seller.division,
+            buyer_division: buyer.division,
+            buyer_country: buyer.country.clone(),
+            below,
+            affinity,
+            picked: p.is_picked(now),
+            first_team,
+            surplus: matches!(
+                squad_status,
+                Some(PlayerSquadStatus::MainBackupPlayer) | Some(PlayerSquadStatus::NotNeeded)
+            ),
+            available,
+            cross_border: seller.country_id != buyer.country_id,
+            cannot_match_wage: ceiling < salary as f64,
+            cannot_pay_half: ceiling < 0.5 * salary as f64,
+            refuses_level: below >= 1.0 && ceiling < refusal_price,
+            unread: needs.is_some() && reading.is_none(),
+            unfit: !in_talks
+                && needs.is_some_and(|action| reading.is_some_and(|r| !r.allows(action))),
+            line: format!(
+                "{} #{} age {} {:?} ({} {} div {}{}) <- {} {} div {} wrep {} | below {:.2} \
+                 affinity {:.2} picked {} avail {} wage {} ceiling {:.0} | read {:?}",
+                p.full_name,
+                p.id,
+                age,
+                squad_status.unwrap_or(PlayerSquadStatus::NotYetSet),
+                seller.name,
+                seller.country,
+                seller.division,
+                if first_team { "" } else { " youth/reserve" },
+                buyer.name,
+                buyer.country,
+                buyer.division,
+                buyer.world_rep,
+                below,
+                affinity,
+                p.is_picked(now),
+                available,
+                salary,
+                ceiling,
+                reading.map(|r| (r.stage, r.stopped_by, r.read_on)),
+            ),
+        })
+    }
+
+    fn rows(data: &SimulatorData) -> Vec<PursuitRow> {
+        let mut rows = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let buyer = Self::stage(data, club);
+                    let plan = &club.transfer_plan;
+                    for m in &plan.scout_monitoring {
+                        if matches!(m.status, ScoutMonitoringStatus::Rejected) {
+                            continue;
+                        }
+                        let route = match m.source {
+                            ScoutMonitoringSource::TransferRequest => "monitor:request-scan",
+                            ScoutMonitoringSource::StaffRecommendation => "monitor:watch+staff",
+                            ScoutMonitoringSource::MatchStandout => "monitor:match",
+                            ScoutMonitoringSource::ShadowReport => "monitor:shadow",
+                            ScoutMonitoringSource::KnownPlayerRefresh => "monitor:known",
+                            _ => "monitor:other",
+                        };
+                        rows.extend(Self::row(
+                            data,
+                            club,
+                            &buyer,
+                            route,
+                            m.is_active_interest().then_some(PursuitAction::KeepFile),
+                            m.player_id,
+                        ));
+                    }
+                    for w in &plan.watchlist {
+                        rows.extend(Self::row(
+                            data,
+                            club,
+                            &buyer,
+                            "watchlist",
+                            Some(PursuitAction::KeepFile),
+                            w.player_id,
+                        ));
+                    }
+                    for s in &plan.shortlists {
+                        for c in &s.candidates {
+                            if matches!(
+                                c.status,
+                                ShortlistCandidateStatus::Available
+                                    | ShortlistCandidateStatus::CurrentlyPursuing
+                            ) {
+                                rows.extend(Self::row(
+                                    data,
+                                    club,
+                                    &buyer,
+                                    "shortlist",
+                                    Some(PursuitAction::Shortlist),
+                                    c.player_id,
+                                ));
+                            }
+                        }
+                    }
+                    for r in &plan.staff_recommendations {
+                        rows.extend(Self::row(
+                            data,
+                            club,
+                            &buyer,
+                            "staff-recommendation",
+                            Some(PursuitAction::KeepFile),
+                            r.player_id,
+                        ));
+                    }
+                    for s in &plan.shadow_reports {
+                        rows.extend(Self::row(
+                            data,
+                            club,
+                            &buyer,
+                            "shadow-report",
+                            None,
+                            s.report.player_id,
+                        ));
+                    }
+                    for n in country.transfer_market.negotiations.values() {
+                        if n.buying_club_id != club.id
+                            || !matches!(
+                                n.status,
+                                NegotiationStatus::Pending | NegotiationStatus::Countered
+                            )
+                        {
+                            continue;
+                        }
+                        let route = if n.is_loan {
+                            "negotiation:loan"
+                        } else {
+                            "negotiation:permanent"
+                        };
+                        rows.extend(Self::row(data, club, &buyer, route, None, n.player_id));
+                    }
+                }
+            }
+        }
+        rows
+    }
+
+    fn pct(n: usize, of: usize) -> String {
+        if of == 0 {
+            "-".into()
+        } else {
+            format!("{:.0}%", 100.0 * n as f64 / of as f64)
+        }
+    }
+
+    fn print_table(title: &str, cells: &BTreeMap<String, PursuitCell>) {
+        println!("\n  == {title}");
+        println!(
+            "  {:<26} {:>7} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "route",
+            "rows",
+            "gap>=2k",
+            "gap>=4k",
+            "<floor",
+            "refused",
+            "aff<.15",
+            "aff<.05",
+            "reg-down",
+            "wage<his",
+            "wage<half",
+            "lvl-unpaid",
+            "ANY",
+            "unread",
+            "unfit"
+        );
+        for (k, c) in cells {
+            let counts = [
+                c.down_one,
+                c.down_two,
+                c.under_floor,
+                c.refused,
+                c.thin_market,
+                c.no_market,
+                c.regular_down_one,
+                c.cannot_match_wage,
+                c.cannot_pay_half,
+                c.refuses_level,
+                c.structural,
+                c.unread,
+                c.unfit,
+            ];
+            let mut line = format!("  {:<26} {:>7}", k, c.rows);
+            for n in counts {
+                let _ = write!(line, " {:>6}{:>4}", n, Self::pct(n, c.rows));
+            }
+            println!("{line}");
+        }
+    }
+
+    fn band(division: u16) -> &'static str {
+        match division {
+            0..=2999 => "a <3000",
+            3000..=4499 => "b 3000-4499",
+            4500..=5999 => "c 4500-5999",
+            6000..=7499 => "d 6000-7499",
+            _ => "e 7500+",
+        }
+    }
+
+    /// Completed moves between two clubs by division gap: the check that
+    /// the leak is attention, and the moves themselves stay sane.
+    fn print_moves(data: &SimulatorData) {
+        let division = |club_id: u32| -> Option<u16> {
+            let club = data.club(club_id)?;
+            let main = club
+                .teams
+                .teams
+                .iter()
+                .find(|t| matches!(t.team_type, TeamType::Main))?;
+            main.league_id
+                .and_then(|l| data.league(l))
+                .map(|l| l.reputation)
+        };
+        let mut cells: BTreeMap<&str, [usize; 5]> = BTreeMap::new();
+        let mut worst: Vec<(i32, String)> = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for t in &country.transfer_market.transfer_history {
+                    let (Some(from), Some(to)) = (division(t.from_club_id), division(t.to_club_id))
+                    else {
+                        continue;
+                    };
+                    let kind = match t.transfer_type {
+                        TransferType::Permanent => "permanent",
+                        TransferType::Loan(_) => "loan",
+                        TransferType::Free => "free",
+                    };
+                    let gap = from as i32 - to as i32;
+                    let slot = match gap {
+                        g if g >= 4000 => 4,
+                        g if g >= 2000 => 3,
+                        g if g > 0 => 2,
+                        0 => 1,
+                        _ => 0,
+                    };
+                    cells.entry(kind).or_default()[slot] += 1;
+                    if gap >= 3000 && from >= 7000 {
+                        worst.push((
+                            gap,
+                            format!(
+                                "{kind} {} {} (div {from}) -> {} (div {to}) fee {:.0} {}",
+                                t.player_name,
+                                t.from_team_name,
+                                t.to_team_name,
+                                t.fee.amount,
+                                t.transfer_date
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        println!("\n  == completed moves between two clubs, by division gap (seller minus buyer)");
+        println!("  kind         up   level  down<2k  down2-4k  down4k+");
+        for (k, c) in &cells {
+            println!(
+                "  {:<10} {:>5} {:>6} {:>8} {:>9} {:>8}",
+                k, c[0], c[1], c[2], c[3], c[4]
+            );
+        }
+        worst.sort_by(|a, b| b.0.cmp(&a.0));
+        println!("  widest drops out of divisions 7000+:");
+        for (_, line) in worst.iter().take(Self::examples()) {
+            println!("    {line}");
         }
     }
 }

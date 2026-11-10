@@ -29,12 +29,19 @@ use crate::club::Club;
 use crate::club::StaffPosition;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::r#match::{FieldSquad, MatchResultRaw};
-use crate::transfers::pipeline::{KnownPlayerMemory, TransferRequestStatus};
+use crate::transfers::MarketMap;
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
+use crate::transfers::pipeline::{
+    FileObservation, FileReading, KnownPlayerMemory, PlayerSummary, TransferRequestStatus,
+};
 use crate::transfers::scouting::config::ScoutingConfig;
 use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
 use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
 use crate::utils::IntegerUtils;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+use rustc_hash::FxHashMap;
 
 // ============================================================
 // Tuning constants
@@ -411,6 +418,8 @@ struct ShowcaseCandidate {
     contract_months: i16,
     world_reputation: i16,
     is_famous: bool,
+    /// How every club reads him.
+    summary: PlayerSummary,
 }
 
 /// A monitoring row to write in the mutable pass.
@@ -427,6 +436,7 @@ struct MonitorAction {
     age: u8,
     contract_months: i16,
     world_reputation: i16,
+    reading: FileReading,
 }
 
 /// A known-player memory to write in the mutable pass.
@@ -555,6 +565,8 @@ impl LeagueResult {
             };
             let (seller_league_rep, seller_club_rep) =
                 PlayerValuationCalculator::seller_context(country, weaker_club);
+            let weaker_ctx = SummaryClubContext::of(country, weaker_club, now, false);
+            let mut suitors: FxHashMap<u32, Suitor<'_>> = FxHashMap::default();
             let weaker_team = match weaker_club
                 .teams
                 .teams
@@ -675,6 +687,14 @@ impl LeagueResult {
                     contract_months,
                     world_reputation: player.player_attributes.world_reputation,
                     is_famous: player.player_attributes.world_reputation >= FAME_DISCOVERY_CEILING,
+                    summary: PlayerSummaryBuilder::build(
+                        country,
+                        weaker_club,
+                        &weaker_ctx,
+                        weaker_team,
+                        player,
+                        now,
+                    ),
                 });
             }
 
@@ -742,6 +762,23 @@ impl LeagueResult {
 
                 for idx in acted {
                     let cf = ordered[idx];
+                    let Some(recipient) = country.clubs.iter().find(|c| c.id == cf.club_id) else {
+                        continue;
+                    };
+                    let suitor = suitors
+                        .entry(cf.club_id)
+                        .or_insert_with(|| Suitor::of(country, recipient, now));
+                    // A showcase opens a file only where the gate lets the
+                    // club watch him. One country, so no geography to price.
+                    let assessment = TransferMovePlausibility::read(
+                        suitor,
+                        &cand.summary,
+                        MoveTerms::purchase(true),
+                        &MarketMap::default(),
+                    );
+                    if !assessment.reaches(PursuitAction::KeepFile.needs()) {
+                        continue;
+                    }
                     match cf.scout_id {
                         Some(scout_id) => monitor_actions.push(MonitorAction {
                             club_id: cf.club_id,
@@ -756,6 +793,7 @@ impl LeagueResult {
                             age: cand.age,
                             contract_months: cand.contract_months,
                             world_reputation: cand.world_reputation,
+                            reading: FileReading::of(&assessment, now),
                         }),
                         None => memory_actions.push(MemoryAction {
                             club_id: cf.club_id,
@@ -804,21 +842,24 @@ impl LeagueResult {
                     .find_monitoring(action.scout_id, action.player_id)
                     .map(|m| (m.confidence, m.matches_watched));
                 let confidence = ShowcaseAssessment::confidence(action.tier, existing);
-                club.transfer_plan.upsert_monitoring(
-                    action.scout_id,
-                    action.player_id,
-                    ScoutMonitoringSource::MatchStandout,
-                    None,
-                    None,
-                    None,
-                    action.assessed_ability,
-                    action.assessed_potential,
-                    confidence,
-                    1.0,
-                    action.estimated_value,
-                    risk_flags,
+                club.transfer_plan.keep_file(
+                    action.reading,
+                    FileObservation {
+                        scout_staff_id: action.scout_id,
+                        player_id: action.player_id,
+                        source: ScoutMonitoringSource::MatchStandout,
+                        transfer_request_id: None,
+                        origin_assignment_id: None,
+                        region: None,
+                        assessed_ability: action.assessed_ability,
+                        assessed_potential: action.assessed_potential,
+                        confidence,
+                        role_fit: 1.0,
+                        estimated_value: action.estimated_value,
+                        risk_flags,
+                        is_match: true,
+                    },
                     now,
-                    true,
                 );
             }
         }
@@ -833,6 +874,7 @@ impl LeagueResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transfers::gate::TransferMoveStage;
 
     fn base_line() -> ShowcaseStatLine {
         ShowcaseStatLine {
@@ -1046,21 +1088,28 @@ mod tests {
                 .find_monitoring(scout, player)
                 .map(|m| (m.confidence, m.matches_watched));
             let confidence = ShowcaseAssessment::confidence(ShowcaseTier::Elite, existing);
-            plan.upsert_monitoring(
-                scout,
-                player,
-                ScoutMonitoringSource::MatchStandout,
-                None,
-                None,
-                None,
-                120,
-                130,
-                confidence,
-                1.0,
-                1_000_000.0,
-                vec![],
+            plan.keep_file(
+                FileReading {
+                    stage: TransferMoveStage::CanCompleteMove,
+                    stopped_by: None,
+                    read_on: date,
+                },
+                FileObservation {
+                    scout_staff_id: scout,
+                    player_id: player,
+                    source: ScoutMonitoringSource::MatchStandout,
+                    transfer_request_id: None,
+                    origin_assignment_id: None,
+                    region: None,
+                    assessed_ability: 120,
+                    assessed_potential: 130,
+                    confidence,
+                    role_fit: 1.0,
+                    estimated_value: 1_000_000.0,
+                    risk_flags: vec![],
+                    is_match: true,
+                },
                 date,
-                true,
             );
         };
 

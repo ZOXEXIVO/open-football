@@ -527,16 +527,7 @@ impl ScoutMarketDesk {
         // judging — the club kept "scouting" Colombia with nobody on it —
         // so the row is released instead, and the next `assign_scouts` pass
         // re-fills it from the department that actually exists.
-        for assignment in club.transfer_plan.scouting_assignments.iter_mut() {
-            if let Some(scout_id) = assignment.scout_staff_id
-                && retired.contains(&scout_id)
-            {
-                assignment.scout_staff_id = None;
-            }
-        }
-        club.transfer_plan
-            .scout_monitoring
-            .retain(|row| !retired.contains(&row.scout_staff_id));
+        club.transfer_plan.release_scouts(&retired);
     }
 
     /// What this club would pay a specialist, on the same reputation curve

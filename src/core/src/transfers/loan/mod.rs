@@ -33,8 +33,8 @@ use crate::club::team::squad::SquadAssetClass;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::MarketMap;
 use crate::transfers::deal::negotiation::NegotiationStatus;
-use crate::transfers::gate::TransferPlausibilityEvaluator;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, TransferMovePlausibility};
 use crate::transfers::loan::legacy::LegacyLoanGuard;
 use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::market::{TransferListing, TransferListingType};
@@ -701,31 +701,19 @@ impl ForeignLoanStance {
     /// `(importance, sporting_drop)`. Falls back to the mid-range read the
     /// foreign fee resolver already uses when the summary cannot be
     /// assessed at all.
-    fn read(
-        buyer_ctx: &BuyerPlausibilityContext,
-        target: &PlayerSummary,
-        date: NaiveDate,
-    ) -> (f32, f32) {
+    fn read(suitor: &Suitor<'_>, target: &PlayerSummary, market_map: &MarketMap) -> (f32, f32) {
         // A man his club has loan-listed is not a cold call. Reading every
         // foreign loan as unsolicited held a genuinely advertised target
         // to the stricter unsolicited bar and withheld the
         // seller-advertised read from his own importance.
-        let is_unsolicited = !target.is_loan_listed;
-        TransferPlausibilityBuilder::from_summary(
-            buyer_ctx,
+        let diagnostics = TransferMovePlausibility::read(
+            suitor,
             target,
-            true,
-            is_unsolicited,
-            date,
-            None,
+            MoveTerms::loan(!target.is_loan_listed),
+            market_map,
         )
-        .map(|inputs| {
-            (
-                TransferPlausibilityEvaluator::player_importance(&inputs),
-                TransferPlausibilityEvaluator::sporting_drop(&inputs),
-            )
-        })
-        .unwrap_or((0.55, 0.0))
+        .diagnostics;
+        (diagnostics.importance, diagnostics.sporting_drop)
     }
 }
 

@@ -94,3 +94,89 @@ and never a wall.
 #### Scenario: A strange country is not a wall
 - **WHEN** a borrower's division is at or above the player's floor, but in a country he has no familiarity with
 - **THEN** his consent is reduced but not zero
+
+### Requirement: A club does not lend a man it holds back
+
+A parent club SHALL hold back from lending three kinds of player at its key-player level:
+
+- a player inside the starting slots there, at any age
+- a player past development age who is within reach of its best at his position, whether or not he currently ranks
+  among the starters there
+- a player who is starting most of the first team's matches, read off the first team's own team sheet and never off a
+  season spent on loan elsewhere
+
+Only his own request or his own plan to go out and play SHALL open the door, and then only while he is not starting
+most of the matches. A loan listing, a pathway stage or any other decision of the club's own SHALL NOT open it. No route
+to a loan SHALL stage, list, approach or agree one for a man the club holds back, at home or abroad.
+
+#### Scenario: A star third in line at a giant
+
+- **WHEN** a 27-year-old at a giant's key level is third in line at his position, has started few recent matches, and
+  has not asked to go
+- **THEN** his club reads lending him as below the point it entertains the idea, and no loan is agreed for him
+
+#### Scenario: A boy behind a better man
+
+- **WHEN** a 21-year-old at the same level is third in line at his position
+- **THEN** a season away remains open to him
+
+#### Scenario: A man well behind the best at his position
+
+- **WHEN** a 27-year-old who only just reaches the club's key level sits well behind its best at his position and is
+  not starting
+- **THEN** the club reads him as a man who needs football elsewhere
+
+#### Scenario: The club's own stamp is no consent
+
+- **WHEN** a club's loan list, a depth sweep or its pathway names a 27-year-old at its key level who starts most of its
+  matches
+- **THEN** no loan is staged, listed or agreed for him
+
+#### Scenario: He asked, and he is out of the side
+
+- **WHEN** a player at the key level who is not starting has formally asked to go
+- **THEN** a loan is open to him
+
+#### Scenario: He asked, and he is in the side
+
+- **WHEN** a player at the key level who starts most of the matches has asked to go
+- **THEN** his club does not lend him, whether the borrower is at home or abroad
+
+### Requirement: Every route to a loan asks whether the parent entertains it
+
+A loan SHALL be staged, listed, approached or agreed only when the parent club's reading of lending him is at or above
+the point where it entertains the idea, whichever route raised it: its own pathway, a squad sweep, an unsold listing, a
+borrower's approach at home or abroad, or his own request. The reading SHALL count every spell the club has already sent
+him on. A man the club is developing (young, and below its level) SHALL need more to justify each further spell. Any
+other man SHALL be lent by it at most twice, after which his answer is the market. Lending a man who is not in the
+first-team squad SHALL NOT count against the first team's depth. A man the club would not lend SHALL be left to the
+routes that keep, sell or release him.
+
+#### Scenario: A third season away for a man it is not developing
+
+- **WHEN** a 26-year-old squad player has been sent out twice by his club and a depth sweep or a borrower would send him again
+- **THEN** no loan is staged or agreed, and he stays to be kept, sold or released
+
+#### Scenario: A second spell
+
+- **WHEN** the same player has had one spell and is not playing
+- **THEN** a loan remains open to him
+
+#### Scenario: A boy's third spell
+
+- **WHEN** a 21-year-old below his club's level has been sent out twice
+- **THEN** a third loan remains open to him, harder to justify than the second
+
+#### Scenario: A reserve the first team does not need
+
+- **WHEN** a reserve-squad player is loan-listed at a club whose first team is thin in his position
+- **THEN** his listing reaches the loan market
+
+### Requirement: A contract's clauses read the club that holds the contract
+
+A clause in a loaned player's parent contract SHALL NOT read the squad or the wages of the club he is lent to.
+
+#### Scenario: A loan to a richer club
+
+- **WHEN** a player whose parent contract matches his club's top earner is on loan at a club paying far more
+- **THEN** his parent contract is unchanged

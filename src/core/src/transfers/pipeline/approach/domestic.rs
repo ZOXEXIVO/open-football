@@ -2,7 +2,7 @@
 //!
 //! Three passes, the same shape as [`super::foreign`]: read every club's
 //! shortlists and decide an offer for the candidate at the cursor, write the
-//! negotiations, then mark the candidates the realism gate refused so their
+//! negotiations, then mark the candidates the gate refused so their
 //! shortlist cursor advances instead of stalling on a dud.
 //!
 //! The offer is [`super::ApproachBuilder`], shared with the cross-border pass.
@@ -10,6 +10,7 @@
 //! already negotiating for the man, whether he is on loan or protected, and
 //! which of the buyer's own shortlists is next in line.
 
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::view::club::ClubView;
@@ -27,6 +28,8 @@ use super::*;
 struct DomesticBuyer<'a> {
     country: &'a Country,
     club: &'a Club,
+    suitor: Suitor<'a>,
+    market_map: &'a MarketMap,
     team: &'a Team,
     plan: &'a ClubTransferPlan,
     rep_level: ReputationLevel,
@@ -69,7 +72,11 @@ enum TargetOutcome<'a> {
 pub(in crate::transfers::pipeline) struct DomesticApproachPass;
 
 impl DomesticApproachPass {
-    pub(in crate::transfers::pipeline) fn run(country: &mut Country, date: NaiveDate) {
+    pub(in crate::transfers::pipeline) fn run(
+        country: &mut Country,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         let mut actions: Vec<NegotiationAction> = Vec::new();
         let mut plausibility_rejected: Vec<PlausibilityReject> = Vec::new();
         let price_level = country.settings.pricing.price_level;
@@ -77,7 +84,7 @@ impl DomesticApproachPass {
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
-            let Some(buyer) = Self::buyer(country, club, date) else {
+            let Some(buyer) = Self::buyer(country, club, market_map, date) else {
                 continue;
             };
             Self::pursue(
@@ -101,6 +108,7 @@ impl DomesticApproachPass {
     fn buyer<'a>(
         country: &'a Country,
         club: &'a Club,
+        market_map: &'a MarketMap,
         date: NaiveDate,
     ) -> Option<DomesticBuyer<'a>> {
         let plan = &club.transfer_plan;
@@ -127,35 +135,16 @@ impl DomesticApproachPass {
             return None;
         }
 
-        // Same FFP discipline the evaluation pass applies when it
-        // sizes allocations — the raw read here fed the offer /
-        // escalation strategy full spending power while the plan
-        // itself was operating on half, so the two layers disagreed
-        // about the same sanction.
-        let raw_budget = club
-            .finance
-            .transfer_budget
-            .as_ref()
-            .map(|b| b.amount)
-            .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
-        let budget = if club.finance.is_ffp_breach(date) {
-            raw_budget * 0.5
-        } else {
-            raw_budget
-        };
-
         if club.teams.teams.is_empty() {
             return None;
         }
 
-        let team = &club.teams.teams[0];
+        let suitor = Suitor::of(country, club, date);
+        let budget = suitor.spend();
+        let team = club.teams.main().unwrap_or(&club.teams.teams[0]);
         let rep_level = team.reputation.level();
-        let buying_rep_score = team.reputation.overall_score();
-        let buying_league_reputation = team
-            .league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
+        let buying_rep_score = suitor.standing;
+        let buying_league_reputation = suitor.division;
 
         let avg_ability = {
             let avg = team.players.current_ability_avg();
@@ -183,6 +172,8 @@ impl DomesticApproachPass {
         Some(DomesticBuyer {
             country,
             club,
+            suitor,
+            market_map,
             team,
             plan,
             rep_level,
@@ -321,6 +312,7 @@ impl DomesticApproachPass {
             let outcome = ApproachBuilder::build(
                 &ApproachBuyer {
                     club,
+                    suitor: &buyer.suitor,
                     team,
                     plan,
                     rep_score: buying_rep_score,
@@ -343,7 +335,7 @@ impl DomesticApproachPass {
                     // One country, so it is both reaches at once.
                     buy_country: country,
                     sell_country: country,
-                    market_map: &MarketMap::default(),
+                    market_map: buyer.market_map,
                     price_level,
                     date,
                     shortlist_request_id: shortlist.transfer_request_id,
@@ -676,7 +668,7 @@ impl DomesticApproachPass {
         }
     }
 
-    /// Mark every candidate the realism gate refused as unavailable and
+    /// Mark every candidate the gate refused as unavailable and
     /// advance its shortlist past the dud ONCE.
     ///
     /// These never opened a negotiation, so routing them through

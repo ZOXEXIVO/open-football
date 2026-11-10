@@ -68,20 +68,24 @@ loan salary, match fee, wage contribution, minimum appearances).
 - **THEN** the system SHALL return the page with no contract detail, no bonuses, and no clauses
 
 ### Requirement: Player career-events feed page
-The system SHALL provide, for a player, a chronological feed combining three sources: happiness events (things
-that happened to him), decision-register entries (roster/contract decisions the club made about him), and mind
-journal notes (his own formed wants and convictions) — each event carrying a positive/negative/big classification
-and, where available, cause/evidence detail and a follow-up hint.
+The system SHALL provide, for a player, a chronological feed combining four sources: happiness events (things
+that happened to him), decision-register entries (roster/contract decisions the club made about him), mind
+journal notes (his own formed wants and convictions), and career chapters (the turning points of his career) — each
+event carrying a positive/negative/big classification and, where available, cause/evidence detail and a follow-up hint.
 
 #### Scenario: Requesting the events feed
 - **WHEN** a user requests the events page for a player
 - **THEN** the system SHALL return happiness events (routine noise filtered out), every decision-register row
-  (unlimited, unlike the happiness feed which is capped), and every mind journal note, merged and sorted
-  newest-first
+  (unlimited, unlike the happiness feed which is capped), every mind journal note and every career chapter, merged and
+  sorted newest-first
 
 #### Scenario: Legacy Decisions tab link
 - **WHEN** a user requests the retired `/decisions` URL for a player
 - **THEN** the system SHALL respond with a permanent redirect to the player's events page
+
+#### Scenario: A chapter in the feed
+- **WHEN** a player's feed includes the day he arrived at the level he dreamed of
+- **THEN** the event names the club and the division, and is classified as big and positive
 
 ### Requirement: Player events severity and mood filter
 The player's events page SHALL let the reader filter the feed by severity and by mood.
@@ -254,9 +258,10 @@ their shared dressing-room pool with whom they have a bond/friendship/tension/ri
 The system SHALL provide, for a player, a personal/psychological profile: personality radar (eight hidden
 traits), morale reading with a positive/negative happiness-factor ledger, current concerns, manager relationship,
 favourite clubs, biographical info (age, languages, condition, contract), reputation ladder (current/home/world),
-career plan, active wants, and remembered-club sentiment. A happiness factor SHALL be listed among current concerns
-only when the ledger itself rates it a major concern. The club's development pathway SHALL describe a planned loan as a
-plan while the player is still at his club, and as a loan only while he is actually away.
+his dream and how it stands, his summit, career plan, active wants, and remembered-club sentiment. A happiness factor
+SHALL be listed among current concerns only when the ledger itself rates it a major concern. The club's development
+pathway SHALL describe a planned loan as a plan while the player is still at his club, and as a loan only while he is
+actually away.
 
 #### Scenario: Requesting the personal profile
 - **WHEN** a user requests the personal page for a player
@@ -285,6 +290,24 @@ plan while the player is still at his club, and as a loan only while he is actua
 #### Scenario: A player away on loan reads as on loan
 - **WHEN** the club's pathway has him on a loan and he is currently away at the borrowing club
 - **THEN** the club's view of him reads "Out on loan"
+
+#### Scenario: His dream is shown in words
+- **WHEN** a user requests the personal page of a player with a dream
+- **THEN** the page states what he dreams of, in a sentence that names the club or the level, how firmly he holds it,
+  and whether it is alive, being lived, or given up, with the date it last turned
+
+#### Scenario: His summit is shown
+- **WHEN** a player has been a regular at some level
+- **THEN** the page names the division and club of his summit and when he reached it
+- **AND** a player who has never been a regular anywhere shows no summit rather than an empty one
+
+#### Scenario: A retired player's page tells how it ended
+- **WHEN** a user requests the personal page of a retired player
+- **THEN** the page states whether he lived his dream, and his summit
+
+#### Scenario: New text exists in every language
+- **WHEN** the page or the feed is viewed in any supported language
+- **THEN** every dream, summit, chapter and refusal line is translated, and no raw key is shown
 
 ### Requirement: Manual roster-editing actions
 The system SHALL provide mutating actions, invoked against a specific player id, for an editor to directly alter

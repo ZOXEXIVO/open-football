@@ -24,33 +24,104 @@
 //!   judgement; whether a move is legal is a fact. The plausibility model,
 //!   affordability and the seller's own protections are untouched.
 
+use crate::transfers::MarketMap;
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::scouting::ScoutingPass;
 use crate::transfers::scouting::watch::FormWatch;
+use crate::transfers::view::world::WorldPool;
 use chrono::{Datelike, NaiveDate, Weekday};
 use rayon::prelude::*;
+use std::cmp::Reverse;
 
 use crate::club::player::personality::Language;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::loan::interest::ClubOpinion;
 use crate::transfers::pipeline::processor::PlayerSummary;
-use crate::transfers::pipeline::trace::TransferTrace;
+use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
 use crate::transfers::pipeline::{
-    ClubTransferPlan, KnownPlayerMemory, WatchAvailability, WatchlistEntry,
+    ClubTransferPlan, FileObservation, FileReading, KnownPlayerMemory, WatchAvailability,
+    WatchlistEntry,
 };
 use crate::transfers::scouting::breakout::{BreakoutInputs, BreakoutPerformanceSignal};
-use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
+use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
+use crate::transfers::squad::plan::BriefSlot;
 use crate::transfers::squad::standing::{StandingInputs, StandingSignal};
 use crate::{Club, Country, PlayerFieldPositionGroup};
 
 /// One candidate, scored once per country so every club in it can be judged
 /// against the same cheap arithmetic instead of recomputing the signals
 /// forty times.
+#[derive(Clone, Copy)]
 struct WatchCandidate<'a> {
     summary: &'a PlayerSummary,
     /// The stronger of the two discovery reads — form and standing measure
     /// the same question from opposite ends, so the honest signal is the max.
     discovery: f32,
     availability: WatchAvailability,
+    /// The facts every club tests first, kept beside the summary so the
+    /// board rules most of the world out without reading it.
+    player_id: u32,
+    skill_ability: u8,
+    age: u8,
+    club_id: u32,
+    estimated_value: f64,
+    is_loan_listed: bool,
+}
+
+/// The country's candidates, by the shirt group they can fill and then by
+/// the region they play in, so a club walks only the regions it reaches.
+/// Each bucket runs strongest first, so a walk ends at the first name too
+/// weak for the shirt.
+struct WatchPool<'a> {
+    buckets: [[Vec<WatchCandidate<'a>>; ReachMask::WIDTH]; PlayerFieldPositionGroup::COUNT],
+}
+
+impl<'a> WatchPool<'a> {
+    fn of(
+        candidates: impl IntoIterator<Item = (PlayerFieldPositionGroup, WatchCandidate<'a>)>,
+    ) -> Self {
+        let mut buckets: [[Vec<WatchCandidate<'a>>; ReachMask::WIDTH];
+            PlayerFieldPositionGroup::COUNT] = Default::default();
+        for (group, candidate) in candidates {
+            buckets[group.index()][ReachMask::slot(candidate.summary.region)].push(candidate);
+        }
+        for bucket in buckets.iter_mut().flatten() {
+            bucket.sort_unstable_by_key(|candidate| Reverse(candidate.skill_ability));
+        }
+        WatchPool { buckets }
+    }
+
+    /// The group's names in `reach`, of `weakest` ability and above.
+    fn walk(
+        &self,
+        group: PlayerFieldPositionGroup,
+        reach: ReachMask,
+        weakest: u8,
+    ) -> impl Iterator<Item = &WatchCandidate<'a>> {
+        let buckets = &self.buckets[group.index()];
+        reach.slots().flat_map(move |region| {
+            buckets[region]
+                .iter()
+                .take_while(move |candidate| candidate.skill_ability >= weakest)
+        })
+    }
+}
+
+impl<'a> WatchCandidate<'a> {
+    fn of(summary: &'a PlayerSummary, discovery: f32, availability: WatchAvailability) -> Self {
+        WatchCandidate {
+            summary,
+            discovery,
+            availability,
+            player_id: summary.player_id,
+            skill_ability: summary.skill_ability,
+            age: summary.age,
+            club_id: summary.club_id,
+            estimated_value: summary.estimated_value,
+            is_loan_listed: summary.is_loan_listed,
+        }
+    }
 }
 
 /// The club's standing board of names it is carrying.
@@ -66,10 +137,11 @@ impl Watchlist {
     /// side reads.
     pub fn refresh_watchlists(
         country: &mut Country,
-        world_pool: &[PlayerSummary],
+        world_pool: WorldPool<'_>,
+        market_map: &MarketMap,
         date: NaiveDate,
     ) {
-        MarketKnowledge::refresh(country, world_pool, date);
+        MarketKnowledge::refresh(country, world_pool, market_map, date);
     }
 }
 
@@ -98,25 +170,148 @@ impl ReachMask {
         ReachMask(regions.iter().fold(0u32, |mask, r| mask | Self::bit(*r)))
     }
 
+    /// One bucket per bit the mask can hold.
+    const WIDTH: usize = 32;
+
     fn covers(self, region: ScoutingRegion) -> bool {
         self.0 & Self::bit(region) != 0
     }
+
+    /// The bucket a region's players sit in.
+    fn slot(region: ScoutingRegion) -> usize {
+        region as usize
+    }
+
+    /// The buckets this mask reaches.
+    fn slots(self) -> impl Iterator<Item = usize> {
+        (0..Self::WIDTH).filter(move |i| self.0 & (1u32 << i) != 0)
+    }
+
+    fn union(self, other: ReachMask) -> Self {
+        ReachMask(self.0 | other.0)
+    }
+
+    /// Where a club whose first team stands at `overall_score` sends its
+    /// scouts.
+    fn of_club(home_region: ScoutingRegion, overall_score: f32) -> Self {
+        Self::of(&ScoutingPass::reputation_scout_regions(
+            home_region,
+            overall_score,
+        ))
+    }
 }
 
-/// A bounded "best `capacity` so far" board.
+/// What the country's briefed shirts could take: where their scouts go, and
+/// per shirt group the weakest man any shirt could believe over its bar, the
+/// widest age band and the most any shirt's money reaches. A name outside it
+/// is on no board in the country, so it is never scored.
+struct WatchDemand {
+    reach: ReachMask,
+    groups: [Option<ShirtDemand>; PlayerFieldPositionGroup::COUNT],
+}
+
+#[derive(Clone, Copy)]
+struct ShirtDemand {
+    weakest: u8,
+    ages: (u8, u8),
+    /// The dearest valuation a shirt with a fee envelope watches.
+    dearest: f64,
+    /// A shirt with no envelope watches who could come without a fee.
+    borrows: bool,
+}
+
+impl WatchDemand {
+    fn of(country: &Country) -> Self {
+        let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+        let mut demand = WatchDemand {
+            reach: ReachMask::default(),
+            groups: [None; PlayerFieldPositionGroup::COUNT],
+        };
+        for club in &country.clubs {
+            let Some(brief) = club.transfer_plan.brief.as_ref() else {
+                continue;
+            };
+            if brief.slots.is_empty() {
+                continue;
+            }
+            let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) else {
+                continue;
+            };
+            demand.reach = demand.reach.union(ReachMask::of_club(
+                home_region,
+                team.reputation.overall_score(),
+            ));
+            let kindest = ClubOpinion::kindest(
+                team.staffs
+                    .resolve_for_transfers()
+                    .best_scout_judging_ability(),
+            );
+            for slot in &brief.slots {
+                let Some(weakest) = MarketKnowledge::weakest_over_bar(&kindest, slot) else {
+                    continue;
+                };
+                let ceiling = MarketKnowledge::envelope_ceiling(slot);
+                let buys = ceiling > 0.0;
+                let shirt = ShirtDemand {
+                    weakest,
+                    ages: slot.age_band,
+                    dearest: if buys { ceiling } else { f64::NEG_INFINITY },
+                    borrows: !buys,
+                };
+                let held = &mut demand.groups[slot.group.index()];
+                *held = Some(held.map_or(shirt, |held| held.widen(shirt)));
+            }
+        }
+        demand
+    }
+
+    fn wants(
+        &self,
+        group: PlayerFieldPositionGroup,
+        summary: &PlayerSummary,
+        availability: WatchAvailability,
+    ) -> bool {
+        self.groups[group.index()].is_some_and(|shirt| {
+            summary.skill_ability >= shirt.weakest
+                && summary.age >= shirt.ages.0
+                && summary.age <= shirt.ages.1
+                && (summary.estimated_value <= shirt.dearest
+                    || shirt.borrows
+                        && MarketKnowledge::comes_without_a_fee(
+                            summary.is_loan_listed,
+                            availability,
+                        ))
+        })
+    }
+}
+
+impl ShirtDemand {
+    fn widen(self, other: ShirtDemand) -> Self {
+        ShirtDemand {
+            weakest: self.weakest.min(other.weakest),
+            ages: (self.ages.0.min(other.ages.0), self.ages.1.max(other.ages.1)),
+            dearest: self.dearest.max(other.dearest),
+            borrows: self.borrows || other.borrows,
+        }
+    }
+}
+
+/// A bounded "best `capacity`" board.
 ///
 /// The candidate pool for one shirt is the world, and only eight names ever
 /// survive — so the pass keeps the eight rather than sorting sixty thousand.
 /// Insertion is `O(capacity)` and the whole board fits in a cache line or
 /// two, which matters because this runs per club per briefed shirt every
-/// Monday.
+/// Monday. Names rank by score, then by the lower player id, so the board
+/// holds the same eight in whatever order the pool is walked.
 struct TopBoard<'a> {
     capacity: usize,
     /// `(candidate, score, believed ability)`, worst-to-best is NOT
-    /// maintained — only the running minimum is tracked, and the final sort
-    /// is over at most `capacity` rows.
-    rows: Vec<(&'a WatchCandidate<'a>, f32, f32)>,
-    worst: f32,
+    /// maintained — only the weakest is tracked, and the final sort is over
+    /// at most `capacity` rows.
+    rows: Vec<(&'a WatchCandidate<'a>, f32, f32, FileReading)>,
+    /// `(score, player id)` of the weakest row once the board is full.
+    worst: Option<(f32, u32)>,
 }
 
 impl<'a> TopBoard<'a> {
@@ -124,47 +319,57 @@ impl<'a> TopBoard<'a> {
         TopBoard {
             capacity,
             rows: Vec::with_capacity(capacity),
-            worst: f32::NEG_INFINITY,
+            worst: None,
         }
     }
 
-    fn offer(&mut self, candidate: &'a WatchCandidate<'a>, score: f32, believed: f32) {
+    fn outranks(a: (f32, u32), b: (f32, u32)) -> bool {
+        a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
+    }
+
+    /// Whether this name would take a place on the board.
+    fn admits(&self, score: f32, player_id: u32) -> bool {
+        self.rows.len() < self.capacity
+            || self
+                .worst
+                .is_some_and(|worst| Self::outranks((score, player_id), worst))
+    }
+
+    fn offer(
+        &mut self,
+        candidate: &'a WatchCandidate<'a>,
+        score: f32,
+        believed: f32,
+        reading: FileReading,
+    ) {
+        let key = (score, candidate.player_id);
         if self.rows.len() < self.capacity {
-            self.rows.push((candidate, score, believed));
-            if self.rows.len() == self.capacity {
-                self.worst = self
-                    .rows
-                    .iter()
-                    .map(|(_, s, _)| *s)
-                    .fold(f32::INFINITY, f32::min);
+            self.rows.push((candidate, score, believed, reading));
+        } else if self.worst.is_some_and(|worst| Self::outranks(key, worst)) {
+            let weakest = self
+                .rows
+                .iter()
+                .position(|(c, s, _, _)| Some((*s, c.player_id)) == self.worst);
+            if let Some(weakest) = weakest {
+                self.rows[weakest] = (candidate, score, believed, reading);
             }
+        } else {
             return;
         }
-        if score <= self.worst {
-            return;
+        if self.rows.len() == self.capacity {
+            self.worst = self
+                .rows
+                .iter()
+                .map(|(c, s, _, _)| (*s, c.player_id))
+                .reduce(|w, r| if Self::outranks(w, r) { r } else { w });
         }
-        // Replace the current weakest, then re-read the new minimum. Ties
-        // break on the lower player id so a board is reproducible across
-        // runs at the same seed.
-        if let Some(slot) = self.rows.iter_mut().min_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.0.summary.player_id.cmp(&a.0.summary.player_id))
-        }) {
-            *slot = (candidate, score, believed);
-        }
-        self.worst = self
-            .rows
-            .iter()
-            .map(|(_, s, _)| *s)
-            .fold(f32::INFINITY, f32::min);
     }
 
-    fn into_sorted(mut self) -> Vec<(&'a WatchCandidate<'a>, f32, f32)> {
+    fn into_sorted(mut self) -> Vec<(&'a WatchCandidate<'a>, f32, f32, FileReading)> {
         self.rows.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.summary.player_id.cmp(&b.0.summary.player_id))
+                .then_with(|| a.0.player_id.cmp(&b.0.player_id))
         });
         self.rows
     }
@@ -198,7 +403,12 @@ impl MarketKnowledge {
     /// Runs on the same Monday cadence as the breakout watch, and outside
     /// the window gate for the same reason: scouts do not stop watching
     /// football in October.
-    pub fn refresh(country: &mut Country, world_pool: &[PlayerSummary], date: NaiveDate) {
+    pub fn refresh(
+        country: &mut Country,
+        world_pool: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         if date.weekday() != Weekday::Mon {
             return;
         }
@@ -209,48 +419,44 @@ impl MarketKnowledge {
         // arithmetic over the summary, so they are computed once here and
         // shared by every club. Only the belief noise and the per-club gates
         // run inside the fan-out below.
-        let country_reputation = country.reputation;
-        let mut by_group: [Vec<WatchCandidate<'_>>; PlayerFieldPositionGroup::COUNT] =
-            Default::default();
-        for summary in world_pool.iter() {
-            // Clubs recruit at or below their own country's standing; an
-            // openly-available player is the exception that proves it, since
-            // availability is precisely the signal that overrides the normal
-            // direction of travel.
-            if summary.country_reputation > country_reputation
-                && !Self::is_openly_available(summary)
-            {
-                continue;
-            }
-            // Free agents are the free-agent market's business; a watchlist
-            // is about players somebody else owns.
-            if summary.contract_months_remaining <= 0 {
-                continue;
-            }
-            let discovery = Self::discovery_score(summary);
-            let availability = Self::availability_of(summary);
-            let candidate = WatchCandidate {
-                summary,
-                discovery,
-                availability,
-            };
-            for group in PlayerFieldPositionGroup::ALL {
-                if summary.coverage.covers_group(group) {
-                    by_group[group.index()].push(WatchCandidate {
-                        summary: candidate.summary,
-                        discovery: candidate.discovery,
-                        availability: candidate.availability,
-                    });
-                }
-            }
-        }
+        let demand = &WatchDemand::of(country);
+        let pool = WatchPool::of(
+            world_pool
+                .summaries()
+                .iter()
+                // Free agents are the free-agent market's business; a
+                // watchlist is about players somebody else owns.
+                .filter(|summary| {
+                    summary.contract_months_remaining > 0 && demand.reach.covers(summary.region)
+                })
+                .flat_map(|summary| {
+                    let availability = Self::availability_of(summary);
+                    let mut discovery = None;
+                    PlayerFieldPositionGroup::ALL
+                        .into_iter()
+                        .filter(move |&group| {
+                            summary.coverage.covers_group(group)
+                                && demand.wants(group, summary, availability)
+                        })
+                        .map(move |group| {
+                            let discovery =
+                                *discovery.get_or_insert_with(|| Self::discovery_score(summary));
+                            (group, WatchCandidate::of(summary, discovery, availability))
+                        })
+                }),
+        );
 
         // ── Per-club fan-out (read only) ────────────────────────────
         let country_ref: &Country = country;
-        let staged: Vec<(u32, Vec<WatchlistEntry>)> = country_ref
+        let staged: Vec<(u32, Vec<(WatchlistEntry, FileReading)>)> = country_ref
             .clubs
             .par_iter()
-            .map(|club| (club.id, Self::for_club(country_ref, club, &by_group, date)))
+            .map(|club| {
+                (
+                    club.id,
+                    Self::for_club(country_ref, club, &pool, market_map, date),
+                )
+            })
             .collect();
 
         for (club_id, entries) in staged {
@@ -276,7 +482,11 @@ impl MarketKnowledge {
                                 .or_else(|| resolved.scouts.first().map(|s| s.id))
                                 .unwrap_or(team.staffs.head_coach().id)
                         });
-                Self::merge(&mut club.transfer_plan, entries, date);
+                for (entry, reading) in entries {
+                    club.transfer_plan.board(reading, entry);
+                }
+                club.transfer_plan
+                    .prune_watchlist(date, Self::ENTRY_FRESH_DAYS, Self::MAX_ENTRIES);
                 if let Some(watcher_id) = watcher_id {
                     Self::follow(&mut club.transfer_plan, watcher_id, overall_score, date);
                 }
@@ -320,28 +530,33 @@ impl MarketKnowledge {
                 continue;
             }
 
-            let id = plan.next_monitoring_id();
-            let mut row = ScoutPlayerMonitoring::new(
-                id,
-                watcher_id,
-                entry.player_id,
-                ScoutMonitoringSource::StaffRecommendation,
-                date,
-            );
+            let Some(reading) = plan.file_reading(entry.player_id).copied() else {
+                continue;
+            };
             // Confidence starts low and grows with observation, exactly as a
             // demand-driven assignment's does — a name off a data board is a
             // lead, not a report.
-            row.record_observation(
-                entry.believed_ability,
-                entry.believed_ability,
-                Self::INITIAL_CONFIDENCE,
-                1.0,
-                entry.estimated_value,
-                Vec::new(),
+            if !plan.keep_file(
+                reading,
+                FileObservation {
+                    scout_staff_id: watcher_id,
+                    player_id: entry.player_id,
+                    source: ScoutMonitoringSource::StaffRecommendation,
+                    transfer_request_id: None,
+                    origin_assignment_id: None,
+                    region: None,
+                    assessed_ability: entry.believed_ability,
+                    assessed_potential: entry.believed_ability,
+                    confidence: Self::INITIAL_CONFIDENCE,
+                    role_fit: 1.0,
+                    estimated_value: entry.estimated_value,
+                    risk_flags: Vec::new(),
+                    is_match: false,
+                },
                 date,
-                false,
-            );
-            plan.scout_monitoring.push(row);
+            ) {
+                continue;
+            }
 
             // For a foreigner this is the only durable record of who and
             // where he is — he sits on no roster the recommendation
@@ -373,13 +588,16 @@ impl MarketKnowledge {
     /// One club's board. Every gate here is cheap and ordered cheapest
     /// first — an integer compare before a float, a float before the belief
     /// hash — because this runs for every club against the whole world every
-    /// Monday.
+    /// Monday. A bucket is left at the first name even the department's
+    /// kindest misreading would not lift over the shirt's bar; every name
+    /// after him is weaker.
     fn for_club(
         country: &Country,
         club: &Club,
-        by_group: &[Vec<WatchCandidate<'_>>; PlayerFieldPositionGroup::COUNT],
+        pool: &WatchPool<'_>,
+        market_map: &MarketMap,
         date: NaiveDate,
-    ) -> Vec<WatchlistEntry> {
+    ) -> Vec<(WatchlistEntry, FileReading)> {
         let plan = &club.transfer_plan;
         let Some(brief) = plan.brief.as_ref() else {
             return Vec::new();
@@ -404,53 +622,71 @@ impl MarketKnowledge {
         // it against a large share of the world every Monday — and a single
         // shift-and-and is an order of magnitude cheaper than a hash probe.
         let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-        let reach = ReachMask::of(&ScoutingPass::reputation_scout_regions(
-            home_region,
-            overall_score,
-        ));
+        let reach = ReachMask::of_club(home_region, overall_score);
         let home_language_mask = Language::country_language_mask(&country.code);
+        let suitor = Suitor::of(country, club, date);
+        let kindest = ClubOpinion::kindest(judging);
 
-        let mut entries: Vec<WatchlistEntry> = Vec::new();
+        let mut entries: Vec<(WatchlistEntry, FileReading)> = Vec::new();
         for slot in brief.slots.iter() {
-            let pool = &by_group[slot.group.index()];
-            // The reach, not the envelope: the transformative slot watches
-            // the whole pot's worth of names (see `BriefSlot::fee_reach`).
-            let envelope_ceiling = slot.fee_reach * Self::ENVELOPE_SLACK;
+            let envelope_ceiling = Self::envelope_ceiling(slot);
+            // A shirt with no envelope is filled on loan or on a free.
+            let terms = if envelope_ceiling > 0.0 {
+                MoveTerms::purchase(true)
+            } else {
+                MoveTerms::loan(true)
+            };
             // A bounded top-`WATCH_PER_ROLE` board rather than a sorted
             // list of everyone who survived the gates. The pool is the
             // world; sorting it per slot per club every Monday is the
             // difference between a weekly pass and a weekly stall, and the
             // board only ever keeps eight names anyway.
+            let Some(weakest) = Self::weakest_over_bar(&kindest, slot) else {
+                continue;
+            };
             let mut board = TopBoard::new(Self::WATCH_PER_ROLE);
-            for candidate in pool.iter() {
-                let s = candidate.summary;
-                if s.club_id == club.id || club.is_rival(s.club_id) {
+            for candidate in pool.walk(slot.group, reach, weakest) {
+                if candidate.age < slot.age_band.0 || candidate.age > slot.age_band.1 {
                     continue;
                 }
-                if s.age < slot.age_band.0 || s.age > slot.age_band.1 {
+                if candidate.club_id == club.id || club.is_rival(candidate.club_id) {
                     continue;
                 }
                 // The envelope is a real constraint on a WATCHLIST, not just
                 // on a bid: a department does not keep files on players its
-                // owner will never fund. A tier-C slot therefore watches the
-                // free and loan end of the market, which is exactly right.
-                if envelope_ceiling > 0.0 && s.estimated_value > envelope_ceiling {
+                // owner will never fund. A shirt with none watches the free
+                // and loan end of the market: men their clubs would lend, and
+                // men whose deals are running out.
+                if terms.is_loan {
+                    if !Self::comes_without_a_fee(candidate.is_loan_listed, candidate.availability)
+                    {
+                        continue;
+                    }
+                } else if candidate.estimated_value > envelope_ceiling {
                     continue;
                 }
-                if !reach.covers(s.region) {
-                    continue;
-                }
-
                 // ── Belief ──
                 // The club's own read of him, then everything a scout can
                 // see that is not his ability: how far he stands above his
                 // own league, what his club thinks of him, whether anyone
                 // could actually get him, and whether he could be spoken to
                 // in the dressing room.
-                let opinion = ClubOpinion::of(club.id, s.player_id, judging);
-                let believed = opinion.believed_ability(s.skill_ability);
+                let opinion = ClubOpinion::of(club.id, candidate.player_id, judging);
+                let believed = opinion.believed_ability(candidate.skill_ability);
                 let gain = believed - slot.incumbent_level as f32;
                 if gain < slot.min_gain as f32 {
+                    continue;
+                }
+                // His record is read only for a name whose best case — the
+                // shirt itself, the club's own tongue — would take a place.
+                let best = Self::board_score(gain, candidate, 1.0, Self::BEST_LANGUAGE);
+                if !board.admits(best, candidate.player_id) {
+                    continue;
+                }
+                let s = candidate.summary;
+                // His level and his wage against the club: two compares on
+                // readings he carries.
+                if !Self::fits(&suitor, s, terms) {
                     continue;
                 }
 
@@ -468,17 +704,27 @@ impl MarketKnowledge {
                 } else {
                     0.25
                 };
-                let score = gain * Self::GAIN_WEIGHT
-                    + candidate.discovery * Self::DISCOVERY_WEIGHT
-                    + role_fit * Self::ROLE_FIT_WEIGHT
-                    + candidate.availability.lift() * Self::AVAILABILITY_WEIGHT
-                    + language * Self::LANGUAGE_WEIGHT;
-                board.offer(candidate, score, believed);
+                let score = Self::board_score(gain, candidate, role_fit, language);
+                // The full read — market reach included — only for a name
+                // about to take a place.
+                if !board.admits(score, candidate.player_id) {
+                    continue;
+                }
+                let assessment = TransferMovePlausibility::read(&suitor, s, terms, market_map);
+                if !assessment.reaches(PursuitAction::KeepFile.needs()) {
+                    continue;
+                }
+                board.offer(
+                    candidate,
+                    score,
+                    believed,
+                    FileReading::of(&assessment, date),
+                );
             }
 
-            for (candidate, score, believed) in board.into_sorted() {
+            for (candidate, score, believed, reading) in board.into_sorted() {
                 let s = candidate.summary;
-                if entries.iter().any(|e| e.player_id == s.player_id) {
+                if entries.iter().any(|(e, _)| e.player_id == s.player_id) {
                     continue;
                 }
                 if TransferTrace::is(s.player_id) {
@@ -498,24 +744,71 @@ impl MarketKnowledge {
                         ),
                     );
                 }
-                entries.push(WatchlistEntry {
-                    player_id: s.player_id,
-                    club_id: s.club_id,
-                    country_id: s.country_id,
-                    position: s.position,
-                    position_group: slot.group,
-                    age: s.age,
-                    believed_ability: believed.round().clamp(1.0, 200.0) as u8,
-                    estimated_value: s.estimated_value,
-                    score,
-                    availability: candidate.availability,
-                    slot_position: slot.position,
-                    slot_tier: slot.tier,
-                    last_refreshed: date,
-                });
+                entries.push((
+                    WatchlistEntry {
+                        player_id: s.player_id,
+                        club_id: s.club_id,
+                        country_id: s.country_id,
+                        position: s.position,
+                        position_group: slot.group,
+                        age: s.age,
+                        believed_ability: believed.round().clamp(1.0, 200.0) as u8,
+                        estimated_value: s.estimated_value,
+                        score,
+                        availability: candidate.availability,
+                        slot_position: slot.position,
+                        slot_tier: slot.tier,
+                        last_refreshed: date,
+                        is_loan: terms.is_loan,
+                    },
+                    reading,
+                ));
             }
         }
         entries
+    }
+
+    /// The most a shirt's valuation may reach and stay on its board. The
+    /// reach, not the envelope: the transformative slot watches the whole
+    /// pot's worth of names (see `BriefSlot::fee_reach`).
+    fn envelope_ceiling(slot: &BriefSlot) -> f64 {
+        slot.fee_reach * Self::ENVELOPE_SLACK
+    }
+
+    /// Whether a shirt with no envelope watches him: his club would lend
+    /// him, or his deal is running out.
+    fn comes_without_a_fee(is_loan_listed: bool, availability: WatchAvailability) -> bool {
+        is_loan_listed || availability == WatchAvailability::Expiring
+    }
+
+    /// The weakest true ability the department's kindest read lifts over
+    /// the shirt's bar. Belief rises with ability, so nobody below him can
+    /// take a place, and a shirt with none takes nobody.
+    fn weakest_over_bar(kindest: &ClubOpinion, slot: &BriefSlot) -> Option<u8> {
+        let incumbent = slot.incumbent_level as f32;
+        let min_gain = slot.min_gain as f32;
+        (0..=u8::MAX).find(|&truth| kindest.believed_ability(truth) - incumbent >= min_gain)
+    }
+
+    /// Standing fit's level and wage reads, on the readings the summary
+    /// carries — what lets the board skip a name before believing anything
+    /// of him. The full read still runs for a name about to take a place.
+    fn fits(suitor: &Suitor<'_>, s: &PlayerSummary, terms: MoveTerms) -> bool {
+        if MarketSwitches::standing_fit_off() {
+            return true;
+        }
+        let below = s.level_floor.below(suitor.division as f32);
+        if terms.is_loan {
+            return below <= 0.0 || s.seller_ctx.is_transfer_requested;
+        }
+        // Holding a wage holds every smaller one, so the two asks are one
+        // read of the larger.
+        let wage = if below < 1.0 {
+            s.asking_wage
+        } else {
+            s.asking_wage.max(s.refusal_price)
+        };
+        suitor.can_hold(s, wage)
     }
 
     /// Weight of each axis in the belief score. Improvement dominates —
@@ -527,32 +820,16 @@ impl MarketKnowledge {
     const ROLE_FIT_WEIGHT: f32 = 12.0;
     const AVAILABILITY_WEIGHT: f32 = 14.0;
     const LANGUAGE_WEIGHT: f32 = 8.0;
+    /// The language read of a foreigner fluent in the club's tongue; no
+    /// name reads higher.
+    const BEST_LANGUAGE: f32 = 0.5;
 
-    /// Merge this week's board into the club's plan: refresh what is still
-    /// there, keep what is merely unseen this week, drop what has gone
-    /// stale.
-    fn merge(plan: &mut ClubTransferPlan, fresh: Vec<WatchlistEntry>, date: NaiveDate) {
-        for entry in fresh {
-            match plan
-                .watchlist
-                .iter_mut()
-                .find(|e| e.player_id == entry.player_id)
-            {
-                Some(existing) => *existing = entry,
-                None => plan.watchlist.push(entry),
-            }
-        }
-        plan.watchlist
-            .retain(|e| (date - e.last_refreshed).num_days() <= Self::ENTRY_FRESH_DAYS);
-        if plan.watchlist.len() > Self::MAX_ENTRIES {
-            plan.watchlist.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.player_id.cmp(&b.player_id))
-            });
-            plan.watchlist.truncate(Self::MAX_ENTRIES);
-        }
+    fn board_score(gain: f32, candidate: &WatchCandidate<'_>, role_fit: f32, language: f32) -> f32 {
+        gain * Self::GAIN_WEIGHT
+            + candidate.discovery * Self::DISCOVERY_WEIGHT
+            + role_fit * Self::ROLE_FIT_WEIGHT
+            + candidate.availability.lift() * Self::AVAILABILITY_WEIGHT
+            + language * Self::LANGUAGE_WEIGHT
     }
 
     /// The stronger of the two discovery reads. Form travels; so does
@@ -615,13 +892,6 @@ impl MarketKnowledge {
     /// model's own agent-circulation bar, so the watchlist and the gate
     /// agree about who is gettable.
     const CIRCULATED_INCLINATION: f32 = 0.22;
-
-    fn is_openly_available(s: &PlayerSummary) -> bool {
-        s.is_listed
-            || s.is_loan_listed
-            || s.seller_ctx.is_transfer_requested
-            || (s.contract_months_remaining > 0 && s.contract_months_remaining <= 12)
-    }
 }
 
 impl WatchAvailability {
@@ -651,8 +921,9 @@ impl WatchlistEntry {
 #[cfg(test)]
 mod watchlist_tests {
     use super::*;
-    use crate::club::board::mandate::ReservationVerdict;
     use crate::PlayerPositionType;
+    use crate::club::board::mandate::ReservationVerdict;
+    use crate::transfers::gate::TransferMoveStage;
     use crate::transfers::squad::ledger::{SellListEntry, SellMotive};
     use crate::transfers::squad::plan::BriefTier;
 
@@ -678,6 +949,15 @@ mod watchlist_tests {
                 slot_position: PlayerPositionType::MidfielderCenter,
                 slot_tier: BriefTier::B,
                 last_refreshed: Self::date(),
+                is_loan: false,
+            }
+        }
+
+        fn reading() -> FileReading {
+            FileReading {
+                stage: TransferMoveStage::CanCompleteMove,
+                stopped_by: None,
+                read_on: Self::date(),
             }
         }
     }
@@ -730,7 +1010,12 @@ mod watchlist_tests {
 
         let mut seen_again = Fx::entry(2, PlayerFieldPositionGroup::Midfielder, 10.0);
         seen_again.score = 55.0;
-        MarketKnowledge::merge(&mut plan, vec![seen_again], Fx::date());
+        plan.board(Fx::reading(), seen_again);
+        plan.prune_watchlist(
+            Fx::date(),
+            MarketKnowledge::ENTRY_FRESH_DAYS,
+            MarketKnowledge::MAX_ENTRIES,
+        );
 
         assert_eq!(
             plan.watchlist
@@ -745,10 +1030,17 @@ mod watchlist_tests {
     #[test]
     fn a_board_never_grows_without_bound() {
         let mut plan = ClubTransferPlan::new();
-        let fresh: Vec<WatchlistEntry> = (1..=200)
-            .map(|i| Fx::entry(i, PlayerFieldPositionGroup::Midfielder, i as f32))
-            .collect();
-        MarketKnowledge::merge(&mut plan, fresh, Fx::date());
+        for i in 1..=200 {
+            plan.board(
+                Fx::reading(),
+                Fx::entry(i, PlayerFieldPositionGroup::Midfielder, i as f32),
+            );
+        }
+        plan.prune_watchlist(
+            Fx::date(),
+            MarketKnowledge::ENTRY_FRESH_DAYS,
+            MarketKnowledge::MAX_ENTRIES,
+        );
         assert!(plan.watchlist.len() <= MarketKnowledge::MAX_ENTRIES);
         assert!(
             plan.watchlist.iter().all(|e| e.score > 100.0),
@@ -784,5 +1076,228 @@ mod watchlist_tests {
         assert!(!plan.is_marketed(8));
         assert_eq!(plan.asking_for(7), Some(30_000_000.0));
         assert_eq!(plan.asking_for(99), None);
+    }
+}
+
+#[cfg(test)]
+mod standing_board_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::PlayerSquadStatus;
+    use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
+    use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+
+    struct Fx;
+
+    impl Fx {
+        fn slot(envelope: f64) -> BriefSlot {
+            BriefSlot {
+                position: PlayerPositionType::MidfielderCenter,
+                group: PlayerFieldPositionGroup::Midfielder,
+                tier: BriefTier::A,
+                gap: 20,
+                min_gain: 1,
+                envelope,
+                fee_reach: envelope,
+                age_band: (16, 35),
+                promised_status: PlayerSquadStatus::FirstTeamRegular,
+                target_level: 110,
+                baseline_level: 80,
+                incumbent_level: 70,
+                incumbent: None,
+                reason: TransferNeedReason::QualityUpgrade,
+                priority: TransferNeedPriority::Important,
+            }
+        }
+
+        /// A small club in a division of 2 000 that has briefed one shirt.
+        fn country(envelope: f64) -> Country {
+            let mut club = TestClub::new(1).reputation(2_000).build();
+            club.transfer_plan.brief = Some(RecruitmentBrief {
+                slots: vec![Self::slot(envelope)],
+                ..RecruitmentBrief::empty(TestDate::today())
+            });
+            TestCountry::new(1)
+                .league_reputation(2_000)
+                .clubs(vec![club])
+                .build()
+        }
+
+        fn board(country: &Country, pool: &[PlayerSummary]) -> Vec<u32> {
+            let pool = WatchPool::of(pool.iter().map(|summary| {
+                (
+                    PlayerFieldPositionGroup::Midfielder,
+                    WatchCandidate::of(summary, 0.0, MarketKnowledge::availability_of(summary)),
+                )
+            }));
+            MarketKnowledge::for_club(
+                country,
+                &country.clubs[0],
+                &pool,
+                &MarketMap::default(),
+                TestDate::today(),
+            )
+            .into_iter()
+            .map(|(e, _)| e.player_id)
+            .collect()
+        }
+    }
+
+    /// Improvement is ranked inside standing fit, so the man furthest above
+    /// a small club is not the first name on its board.
+    #[test]
+    fn the_best_player_in_the_pool_is_not_the_first_name_on_a_small_clubs_board() {
+        let country = Fx::country(5_000_000.0);
+        let far_above = TestSummary::new(10)
+            .club_id(2)
+            .ability(175)
+            .reputation(7_500)
+            .league(8_000, 0.85)
+            .salary(9_000_000)
+            .value(2_000_000.0)
+            .build();
+        let modest = TestSummary::new(11)
+            .club_id(3)
+            .ability(95)
+            .league(2_000, 0.2)
+            .salary(80_000)
+            .value(300_000.0)
+            .build();
+        assert_eq!(Fx::board(&country, &[far_above, modest]), vec![11]);
+    }
+
+    /// A shirt with no envelope watches the loan and free end of the market.
+    #[test]
+    fn a_shirt_with_no_fee_envelope_watches_only_who_could_come_without_a_fee() {
+        let country = Fx::country(0.0);
+        let settled = TestSummary::new(20)
+            .club_id(2)
+            .ability(95)
+            .league(2_000, 0.2)
+            .salary(80_000)
+            .contract_months(36)
+            .build();
+        let lent = TestSummary::new(21)
+            .club_id(3)
+            .ability(95)
+            .league(2_000, 0.2)
+            .salary(80_000)
+            .loan_listed()
+            .build();
+        assert_eq!(Fx::board(&country, &[settled, lent]), vec![21]);
+    }
+
+    /// A walk ends at the first name too weak for the shirt, in whatever
+    /// order the pool was filled.
+    #[test]
+    fn a_walk_stops_at_the_shirts_weakest_name() {
+        let summaries: Vec<PlayerSummary> = [(1, 80), (2, 140), (3, 100), (4, 60)]
+            .into_iter()
+            .map(|(id, ability)| TestSummary::new(id).ability(ability).build())
+            .collect();
+        let pool = WatchPool::of(summaries.iter().map(|summary| {
+            (
+                PlayerFieldPositionGroup::Midfielder,
+                WatchCandidate::of(summary, 0.0, WatchAvailability::None),
+            )
+        }));
+        let reach = ReachMask::of(&[summaries[0].region]);
+        let walked: Vec<u32> = pool
+            .walk(PlayerFieldPositionGroup::Midfielder, reach, 100)
+            .map(|candidate| candidate.player_id)
+            .collect();
+        assert_eq!(walked, vec![2, 3]);
+    }
+
+    /// A name's record is opened only when his best case would take a place,
+    /// so no record may score him above it.
+    #[test]
+    fn no_name_scores_above_his_best_case() {
+        let summary = TestSummary::new(1).build();
+        for availability in [WatchAvailability::None, WatchAvailability::Requested] {
+            let candidate = WatchCandidate::of(&summary, 37.5, availability);
+            for gain in [-3.0f32, 0.0, 12.5, 80.0] {
+                let best = MarketKnowledge::board_score(
+                    gain,
+                    &candidate,
+                    1.0,
+                    MarketKnowledge::BEST_LANGUAGE,
+                );
+                for role_fit in [0.6, 1.0] {
+                    for language in [-0.5, -0.25, 0.15, 0.25, 0.5] {
+                        let score =
+                            MarketKnowledge::board_score(gain, &candidate, role_fit, language);
+                        assert!(score <= best, "{score} above the best case {best}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The shirt's weakest name is the first ability the kindest read lifts
+    /// over its bar.
+    #[test]
+    fn the_weakest_name_is_the_first_the_kindest_read_lifts_over_the_bar() {
+        let slot = Fx::slot(1_000_000.0);
+        let kindest = ClubOpinion::kindest(10);
+        let clears = |truth: u8| {
+            kindest.believed_ability(truth) - slot.incumbent_level as f32 >= slot.min_gain as f32
+        };
+        let weakest = MarketKnowledge::weakest_over_bar(&kindest, &slot).unwrap();
+        assert!(clears(weakest));
+        assert!(!clears(weakest - 1));
+    }
+}
+
+#[cfg(test)]
+mod top_board_tests {
+    use super::*;
+    use crate::transfers::gate::TransferMoveStage;
+    use crate::transfers::tests::kit::{TestDate, TestSummary};
+
+    fn reading() -> FileReading {
+        FileReading {
+            stage: TransferMoveStage::CanCompleteMove,
+            stopped_by: None,
+            read_on: TestDate::today(),
+        }
+    }
+
+    fn board<'a>(walk: &[(&'a WatchCandidate<'a>, f32)]) -> Vec<u32> {
+        let mut board = TopBoard::new(2);
+        for (candidate, score) in walk {
+            if board.admits(*score, candidate.player_id) {
+                board.offer(candidate, *score, 0.0, reading());
+            }
+        }
+        board
+            .into_sorted()
+            .into_iter()
+            .map(|(c, _, _, _)| c.player_id)
+            .collect()
+    }
+
+    /// Two names level on score at the edge of the board: the lower id
+    /// keeps the place, whichever the pool reached first.
+    #[test]
+    fn the_board_holds_the_same_names_in_any_walk_order() {
+        let summaries: Vec<PlayerSummary> = [5, 3, 9]
+            .into_iter()
+            .map(|id| TestSummary::new(id).build())
+            .collect();
+        let candidates: Vec<WatchCandidate<'_>> = summaries
+            .iter()
+            .map(|s| WatchCandidate::of(s, 0.0, WatchAvailability::None))
+            .collect();
+        let (five, three, nine) = (&candidates[0], &candidates[1], &candidates[2]);
+
+        for walk in [
+            vec![(five, 10.0), (three, 10.0), (nine, 20.0)],
+            vec![(three, 10.0), (five, 10.0), (nine, 20.0)],
+            vec![(nine, 20.0), (five, 10.0), (three, 10.0)],
+        ] {
+            assert_eq!(board(&walk), vec![9, 3]);
+        }
     }
 }

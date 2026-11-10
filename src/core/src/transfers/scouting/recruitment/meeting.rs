@@ -28,11 +28,12 @@ use log::debug;
 
 use crate::Club;
 use crate::club::staff::StaffPosition;
-use crate::transfers::pipeline::TransferNeedPriority;
+use crate::transfers::gate::PursuitAction;
 use crate::transfers::pipeline::{
     ClubTransferPlan, ReportRiskFlag, ShortlistCandidate, ShortlistCandidateStatus,
-    TransferRequestStatus, TransferShortlist,
+    TransferRequestStatus,
 };
+use crate::transfers::pipeline::{FileReading, TransferNeedPriority};
 use crate::transfers::scouting::recruitment::{
     BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
     ScoutMonitoringStatus, ScoutPlayerMonitoring, ScoutVote, ScoutVoteChoice, ScoutVoteReason,
@@ -87,6 +88,7 @@ struct PromotionPlan {
     risk_flag_count: u8,
     chief_scout_support: bool,
     lead_scout_staff_id: Option<u32>,
+    reading: FileReading,
 }
 
 /// The room, once it has been assembled: who is voting, what the analyst
@@ -397,15 +399,7 @@ impl MeetingPass {
                             );
                         }
                         RecruitmentDecisionType::KeepMonitoring => {
-                            // Demote ReportReady -> Active so further
-                            // observations are required before re-vote.
-                            for m in plan.scout_monitoring.iter_mut() {
-                                if m.player_id == d.player_id
-                                    && matches!(m.status, ScoutMonitoringStatus::ReportReady)
-                                {
-                                    m.status = ScoutMonitoringStatus::Active;
-                                }
-                            }
+                            plan.resume_watching(d.player_id, ScoutMonitoringStatus::ReportReady);
                         }
                     }
                 }
@@ -870,8 +864,8 @@ impl MeetingPass {
             .map(|r| matches!(r.priority, TransferNeedPriority::Critical))
             .unwrap_or(false);
 
-        let decision_type: RecruitmentDecisionType;
-        let reason_key: &'static str;
+        let mut decision_type: RecruitmentDecisionType;
+        let mut reason_key: &'static str;
         if consensus_score >= 1.8 && budget_fit <= 1.4 && risk_flag_count <= 2 {
             if priority_critical && chief_scout_support && consensus_score >= 2.5 {
                 decision_type = RecruitmentDecisionType::StartNegotiation;
@@ -891,6 +885,26 @@ impl MeetingPass {
             reason_key = "meeting_reason_split_or_insufficient_confidence";
         }
 
+        // The room votes; the department's last reading of the move says how
+        // far the vote may take it. A vote the reading does not allow leaves
+        // the file as it is, to be watched further.
+        let reading = plan.file_reading(player_id).copied();
+        let allows = |action: PursuitAction| reading.is_some_and(|r| r.allows(action));
+        if matches!(decision_type, RecruitmentDecisionType::StartNegotiation)
+            && !allows(PursuitAction::Negotiate)
+        {
+            decision_type = RecruitmentDecisionType::PromoteToShortlist;
+            reason_key = "meeting_reason_consensus_signing";
+        }
+        if matches!(
+            decision_type,
+            RecruitmentDecisionType::PromoteToShortlist | RecruitmentDecisionType::AskBoardApproval
+        ) && !allows(PursuitAction::Shortlist)
+        {
+            decision_type = RecruitmentDecisionType::KeepMonitoring;
+            reason_key = "meeting_reason_split_or_insufficient_confidence";
+        }
+
         // For Reject decisions, push onto the rejection blocklist
         // for the standard window (so re-scouting doesn't re-flag).
         if matches!(decision_type, RecruitmentDecisionType::Reject) {
@@ -906,6 +920,7 @@ impl MeetingPass {
                 | RecruitmentDecisionType::AskBoardApproval
                 | RecruitmentDecisionType::StartNegotiation
         ) && let Some(req_id) = request_id
+            && let Some(reading) = reading
         {
             let lead_scout = monitorings
                 .iter()
@@ -925,6 +940,7 @@ impl MeetingPass {
                 risk_flag_count,
                 chief_scout_support,
                 lead_scout_staff_id: lead_scout,
+                reading,
             });
         }
 
@@ -978,37 +994,31 @@ impl MeetingOutcome {
         };
         let _ = promo.lead_scout_staff_id; // reserved for future shortlist surface
 
-        if let Some(shortlist) = plan
+        // Insert AT the pursuit cursor so the meeting's pick is pursued
+        // next. Re-sorting the whole vec corrupted the position-based cursor
+        // mid-window: already-tried candidates shifted past the cursor and
+        // were re-approached, while the promoted candidate could land BEHIND
+        // it — promoted yet never pursued.
+        let cursor = plan
             .shortlists
-            .iter_mut()
+            .iter()
             .find(|s| s.transfer_request_id == promo.request_id)
+            .map(|s| s.current_pursuit_index.min(s.candidates.len()));
+        let allocation = plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.id == promo.request_id)
+            .map(|r| r.budget_allocation)
+            .unwrap_or(promo.estimated_fee);
+        let opened = cursor.is_none();
+        if plan.shortlist(
+            promo.reading,
+            promo.request_id,
+            allocation,
+            candidate,
+            cursor,
+        ) && opened
         {
-            if !shortlist
-                .candidates
-                .iter()
-                .any(|c| c.player_id == promo.player_id)
-            {
-                // Insert AT the pursuit cursor so the meeting's pick is
-                // pursued next. Re-sorting the whole vec corrupted the
-                // position-based cursor mid-window: already-tried candidates
-                // shifted past the cursor and were re-approached, while the
-                // promoted candidate could land BEHIND it — promoted yet
-                // never pursued.
-                let idx = shortlist
-                    .current_pursuit_index
-                    .min(shortlist.candidates.len());
-                shortlist.candidates.insert(idx, candidate);
-            }
-        } else {
-            let allocation = plan
-                .transfer_requests
-                .iter()
-                .find(|r| r.id == promo.request_id)
-                .map(|r| r.budget_allocation)
-                .unwrap_or(promo.estimated_fee);
-            let mut shortlist = TransferShortlist::new(promo.request_id, allocation);
-            shortlist.candidates.push(candidate);
-            plan.shortlists.push(shortlist);
             // Move the request status forward so downstream sees a shortlist.
             if let Some(req) = plan
                 .transfer_requests
@@ -1210,5 +1220,152 @@ mod tests {
         );
         let (choice, _) = MeetingOutcome::vote_from_monitoring(&m, &scout, 0.6);
         assert_eq!(choice, ScoutVoteChoice::NeedsMoreInfo);
+    }
+}
+
+#[cfg(test)]
+mod chair_reading_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::gate::{TransferMoveStage, TransferPlausibilityReason};
+    use crate::transfers::pipeline::{FileObservation, TransferNeedReason, TransferRequest};
+    use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
+    use crate::transfers::tests::kit::{TestClub, TestDate};
+
+    const PLAYER: u32 = 99;
+    const REQUEST: u32 = 5;
+
+    struct Fx;
+
+    impl Fx {
+        /// A club with one open request and a file on him read at
+        /// `stage`, stopped by `reason`.
+        fn club(
+            priority: TransferNeedPriority,
+            stage: TransferMoveStage,
+            reason: Option<TransferPlausibilityReason>,
+        ) -> Club {
+            let mut club = TestClub::new(1).reputation(2_000).build();
+            club.transfer_plan
+                .transfer_requests
+                .push(TransferRequest::new(
+                    REQUEST,
+                    PlayerPositionType::MidfielderCenter,
+                    priority,
+                    TransferNeedReason::QualityUpgrade,
+                    90,
+                    110,
+                    1_000_000.0,
+                ));
+            club.transfer_plan.keep_file(
+                FileReading {
+                    stage,
+                    stopped_by: reason,
+                    read_on: TestDate::today(),
+                },
+                FileObservation {
+                    scout_staff_id: 1,
+                    player_id: PLAYER,
+                    source: ScoutMonitoringSource::TransferRequest,
+                    transfer_request_id: Some(REQUEST),
+                    origin_assignment_id: None,
+                    region: None,
+                    assessed_ability: 140,
+                    assessed_potential: 150,
+                    confidence: 0.9,
+                    role_fit: 1.1,
+                    estimated_value: 900_000.0,
+                    risk_flags: Vec::new(),
+                    is_match: false,
+                },
+                TestDate::today(),
+            );
+            club
+        }
+
+        /// The room's verdict on him: `consensus` with the chief behind it,
+        /// at a fee inside the allocation.
+        fn decide(club: &Club, consensus: f32) -> (RecruitmentDecision, Vec<PromotionPlan>) {
+            let monitorings = club.transfer_plan.monitorings_for_player(PLAYER);
+            let case = MeetingCase {
+                consensus_score: consensus,
+                budget_fit: 0.9,
+                risk_flag_count: 0,
+                board_risk_score: 0.2,
+                data_support: true,
+                chief_scout_support: true,
+                estimated_fee: 900_000.0,
+                assessed_ability: 140,
+                role_fit: 1.1,
+                request_id: Some(REQUEST),
+                monitorings: &monitorings,
+            };
+            let mut rejections = Vec::new();
+            let mut promotions = Vec::new();
+            let decision =
+                MeetingPass::chair_decides(club, PLAYER, &case, &mut rejections, &mut promotions);
+            (decision, promotions)
+        }
+    }
+
+    #[test]
+    fn a_well_rated_player_his_club_will_not_release_is_not_shortlisted() {
+        let club = Fx::club(
+            TransferNeedPriority::Important,
+            TransferMoveStage::CanScoutQuietly,
+            Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub),
+        );
+
+        let (decision, promotions) = Fx::decide(&club, 2.2);
+
+        assert_eq!(decision.decision, RecruitmentDecisionType::KeepMonitoring);
+        assert!(promotions.is_empty());
+        assert_eq!(club.transfer_plan.monitorings_for_player(PLAYER).len(), 1);
+    }
+
+    #[test]
+    fn a_critical_need_does_not_open_talks_the_gate_would_refuse() {
+        let club = Fx::club(
+            TransferNeedPriority::Critical,
+            TransferMoveStage::CanShowPublicInterest,
+            Some(TransferPlausibilityReason::UnaffordableFee),
+        );
+
+        let (decision, promotions) = Fx::decide(&club, 3.0);
+
+        assert_ne!(decision.decision, RecruitmentDecisionType::StartNegotiation);
+        assert_eq!(
+            decision.decision,
+            RecruitmentDecisionType::PromoteToShortlist
+        );
+        assert_eq!(promotions.len(), 1);
+    }
+
+    #[test]
+    fn a_critical_need_opens_talks_the_reading_allows() {
+        let club = Fx::club(
+            TransferNeedPriority::Critical,
+            TransferMoveStage::CanCompleteMove,
+            None,
+        );
+
+        let (decision, _) = Fx::decide(&club, 3.0);
+
+        assert_eq!(decision.decision, RecruitmentDecisionType::StartNegotiation);
+    }
+
+    #[test]
+    fn a_player_with_no_reading_is_only_watched() {
+        let mut club = Fx::club(
+            TransferNeedPriority::Critical,
+            TransferMoveStage::CanCompleteMove,
+            None,
+        );
+        club.transfer_plan.file_readings.clear();
+
+        let (decision, promotions) = Fx::decide(&club, 3.0);
+
+        assert_eq!(decision.decision, RecruitmentDecisionType::KeepMonitoring);
+        assert!(promotions.is_empty());
     }
 }

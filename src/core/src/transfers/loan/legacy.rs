@@ -233,7 +233,7 @@ impl LegacyLoanGuard {
             target.estimated_value,
             target.salary,
             target.is_loan_listed,
-            target.level_floor(),
+            target.level_floor,
         );
         if TransferTrace::is(target.player_id) {
             let verdict = guard.assess(borrower, 1.0, 0.0);

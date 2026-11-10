@@ -25,10 +25,8 @@
 //! with reputation, so a giant's watch covers the world while a minnow's
 //! stops at its own border.
 //!
-//! Realism is identical to the in-window sweep: the same
-//! [`ListedTargetScreen::evaluate`] gates (tier window, affordability, wage
-//! headroom, reputation plausibility, squad need / upgrade / resale) plus the
-//! staged [`TransferPlausibilityBuilder`] veto run here — only with
+//! Realism is the in-window sweep's: the staged model, read through its one
+//! entry, plus [`ListedTargetScreen::evaluate`]'s need — run here with
 //! `form_discovery_mode`, so a not-yet-listed breakout can be discovered on
 //! form rather than on a for-sale sign. A flat-track scorer in a weak division
 //! is league-rep discounted inside the breakout signal and so never clears the
@@ -57,9 +55,10 @@ use std::cmp::Ordering;
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
+use crate::transfers::MarketMap;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::gate::TransferPlausibilityVerdict;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::loan::interest::{ClubOpinion, InterestDraw};
 use crate::transfers::pipeline::advice::{
     ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
@@ -68,14 +67,15 @@ use crate::transfers::pipeline::circulation::BuyerScan;
 use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
-    KnownPlayerMemory, RecommendationSource, RecommendationType, StaffRecommendation,
+    FileObservation, FileReading, KnownPlayerMemory, RecommendationSource, RecommendationType,
+    StaffRecommendation,
 };
 use crate::transfers::scouting::breakout::{
     BreakoutInputs, BreakoutPerformanceSignal, LeaguePerformanceLookup,
 };
 use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
 use crate::transfers::squad::standing::{CareerRecordSnapshot, StandingInputs, StandingSignal};
-use crate::transfers::view::player::ClubGroupRanks;
+use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType};
 
 /// One discovered player the watch may surface — his market summary, the few
@@ -118,6 +118,7 @@ struct WatchAction {
     assessed_potential: u8,
     confidence: f32,
     estimated_value: f64,
+    reading: FileReading,
 }
 
 /// Whether a standing find is worth a file at THIS buyer.
@@ -221,7 +222,8 @@ struct BuyerRead<'a> {
     scan: &'a BuyerScan,
     relevance: &'a InvestmentRelevance,
     reach: &'a FxHashSet<ScoutingRegion>,
-    plausibility: &'a BuyerPlausibilityContext,
+    suitor: &'a Suitor<'a>,
+    market_map: &'a MarketMap,
 }
 
 /// The year-round form sweep: who is playing above his level, anywhere.
@@ -319,6 +321,7 @@ impl FormWatch {
     pub fn scan_breakout_form(
         country: &mut Country,
         foreign_players: ForeignPool<'_>,
+        market_map: &MarketMap,
         date: NaiveDate,
     ) {
         // Weekly cadence, independent of the transfer window.
@@ -355,7 +358,7 @@ impl FormWatch {
             return;
         }
 
-        let actions = Self::evaluate_buyers(country, date, &candidates);
+        let actions = Self::evaluate_buyers(country, date, &candidates, market_map);
         if actions.is_empty() {
             return;
         }
@@ -384,10 +387,11 @@ impl FormWatch {
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
-            // One sorted-group snapshot per club. The standing read asks
-            // where every player sits in his own depth chart, and the
-            // per-call fallback re-sorts the group for each question.
-            let group_ranks = ClubGroupRanks::build(club);
+            // One context per club: the standing read asks where every
+            // player sits in his own depth chart, and the summary of an
+            // admitted candidate is projected against the same numbers.
+            let summary_ctx = SummaryClubContext::of(country, club, date, false);
+            let group_ranks = summary_ctx.ranks();
 
             for team in &club.teams.teams {
                 let is_youth_squad = team.team_type.is_youth();
@@ -469,16 +473,13 @@ impl FormWatch {
                         continue;
                     }
 
-                    // The candidate walk already holds the (club, player)
-                    // pair — build the summary directly instead of
-                    // re-finding the player with a country-wide scan, and
-                    // hand it the group snapshot so it doesn't re-sort.
-                    let summary = PlayerView::build_player_summary_ranked(
+                    let summary = PlayerSummaryBuilder::build(
                         country,
                         club,
+                        &summary_ctx,
+                        team,
                         player,
                         date,
-                        Some(&group_ranks),
                     );
 
                     let estimated_potential = skill_ability
@@ -553,13 +554,9 @@ impl FormWatch {
         // charts, awards or personality reads, so those signals are
         // simply absent: a foreigner clears the same bar on less
         // evidence, which makes his bar effectively higher, never lower.
-        // Clubs look for talent DOWN the football ladder, the same
-        // convention the scouting pass applies.
-        let country_reputation = country.reputation;
-        for s in foreign_players
-            .iter()
-            .filter(|s| s.country_reputation <= country_reputation)
-        {
+        // Whether a club may follow him is the gate's question, asked per
+        // buyer — not the reputation of the country he plays in.
+        for s in foreign_players.iter() {
             let breakout = BreakoutPerformanceSignal::compute(&BreakoutInputs {
                 position_group: s.position_group,
                 goals: s.goals,
@@ -661,12 +658,11 @@ impl FormWatch {
         country: &Country,
         date: NaiveDate,
         candidates: &[BreakoutCandidate],
+        market_map: &MarketMap,
     ) -> Vec<WatchAction> {
         let mut actions: Vec<WatchAction> = Vec::new();
-        // ── Per-buyer evaluation (immutable read). ──
-
         for club in &country.clubs {
-            Self::evaluate_buyer(country, club, date, candidates, &mut actions);
+            Self::evaluate_buyer(country, club, date, candidates, market_map, &mut actions);
         }
 
         actions
@@ -689,25 +685,30 @@ impl FormWatch {
                     })
                     .unwrap_or(0);
                 let plan = &mut club.transfer_plan;
-                // Upsert rather than create: a standing find on a player the
-                // department already has a stale file on must RAISE that
-                // file, not be dropped because one exists.
-                plan.upsert_monitoring(
-                    action.recommender_staff_id,
-                    action.player_id,
-                    ScoutMonitoringSource::StaffRecommendation,
-                    None,
-                    None,
-                    None,
-                    action.assessed_ability,
-                    action.assessed_potential,
-                    action.confidence,
-                    1.0,
-                    action.estimated_value,
-                    Vec::new(),
+                // A standing find on a player the department already has a
+                // stale file on RAISES that file rather than being dropped
+                // because one exists.
+                if !plan.keep_file(
+                    action.reading,
+                    FileObservation {
+                        scout_staff_id: action.recommender_staff_id,
+                        player_id: action.player_id,
+                        source: ScoutMonitoringSource::StaffRecommendation,
+                        transfer_request_id: None,
+                        origin_assignment_id: None,
+                        region: None,
+                        assessed_ability: action.assessed_ability,
+                        assessed_potential: action.assessed_potential,
+                        confidence: action.confidence,
+                        role_fit: 1.0,
+                        estimated_value: action.estimated_value,
+                        risk_flags: Vec::new(),
+                        is_match: false,
+                    },
                     date,
-                    false,
-                );
+                ) {
+                    continue;
+                }
 
                 // What the club now knows about him. For a foreigner this
                 // is the only durable record of who and where he is — he
@@ -739,22 +740,21 @@ impl FormWatch {
                 // marquee path, where the player's form creates the
                 // need. Queue bound: the same reputation-scaled cap
                 // every other recommendation source respects.
-                let already_recommended = plan
-                    .staff_recommendations
-                    .iter()
-                    .any(|r| r.player_id == action.player_id);
-                if !already_recommended && plan.staff_recommendations.len() < rec_cap {
-                    plan.staff_recommendations.push(StaffRecommendation {
-                        player_id: action.player_id,
-                        recommender_staff_id: action.recommender_staff_id,
-                        source: RecommendationSource::ScoutNetwork,
-                        recommendation_type: RecommendationType::PerformanceBreakout,
-                        assessed_ability: action.assessed_ability,
-                        assessed_potential: action.assessed_potential,
-                        confidence: action.confidence,
-                        estimated_fee: action.estimated_value,
-                        date_recommended: date,
-                    });
+                if plan.staff_recommendations.len() < rec_cap {
+                    plan.recommend(
+                        action.reading,
+                        StaffRecommendation {
+                            player_id: action.player_id,
+                            recommender_staff_id: action.recommender_staff_id,
+                            source: RecommendationSource::ScoutNetwork,
+                            recommendation_type: RecommendationType::PerformanceBreakout,
+                            assessed_ability: action.assessed_ability,
+                            assessed_potential: action.assessed_potential,
+                            confidence: action.confidence,
+                            estimated_fee: action.estimated_value,
+                            date_recommended: date,
+                        },
+                    );
                 }
             }
         }
@@ -767,6 +767,7 @@ impl FormWatch {
         club: &Club,
         date: NaiveDate,
         candidates: &[BreakoutCandidate],
+        market_map: &MarketMap,
         actions: &mut Vec<WatchAction>,
     ) {
         if club.teams.teams.is_empty() {
@@ -802,7 +803,7 @@ impl FormWatch {
             .map(|s| s.id)
             .or_else(|| resolved.scouts.first().map(|s| s.id))
             .unwrap_or(team.staffs.head_coach().id);
-        let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
+        let suitor = Suitor::of(country, club, date);
 
         // The club's scouting NETWORK — which regions of the world its
         // watch actually covers. Always includes the home backyard, so
@@ -839,7 +840,8 @@ impl FormWatch {
                 scan: &scan,
                 relevance: &relevance,
                 reach: &reach,
-                plausibility: &buyer_plaus_ctx,
+                suitor: &suitor,
+                market_map,
             },
         );
         let slate: Vec<(u32, f32)> = scored
@@ -881,6 +883,15 @@ impl FormWatch {
                 // straight into the shortlist when the window opens.
                 confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
                 estimated_value: s.estimated_value,
+                reading: FileReading::of(
+                    &TransferMovePlausibility::read(
+                        &suitor,
+                        s,
+                        MoveTerms::purchase(true),
+                        market_map,
+                    ),
+                    date,
+                ),
             });
         }
     }
@@ -898,7 +909,8 @@ impl FormWatch {
         let scan = read.scan;
         let relevance = read.relevance;
         let reach = read.reach;
-        let buyer_plaus_ctx = read.plausibility;
+        let suitor = read.suitor;
+        let market_map = read.market_map;
         let mut scored: Vec<(&BreakoutCandidate, f32)> = candidates
             .iter()
             .filter_map(|c| {
@@ -956,19 +968,9 @@ impl FormWatch {
                     }
                     return None;
                 }
-                // Staged plausibility veto — importance / country route /
-                // step-down realism. Unsolicited: we're scouting on form.
-                if matches!(
-                    TransferPlausibilityBuilder::evaluate_summary(
-                        buyer_plaus_ctx,
-                        s,
-                        false,
-                        true,
-                        date,
-                        None,
-                    ),
-                    Some(TransferPlausibilityVerdict::HardReject(_))
-                ) {
+                if !TransferMovePlausibility::read(suitor, s, MoveTerms::purchase(true), market_map)
+                    .reaches(PursuitAction::KeepFile.needs())
+                {
                     if TransferTrace::is(s.player_id) {
                         TransferTrace::line(
                             s.player_id,
@@ -1000,7 +1002,6 @@ impl FormWatch {
                     // to rank him with.
                     breakout_score: c.breakout_score.max(c.standing_score),
                     world_reputation: s.world_reputation,
-                    current_reputation: s.current_reputation,
                     ambition: c.ambition,
                     parent_club_score: s.seller_ctx.club_reputation_score,
                     parent_club_in_debt: s.seller_ctx.in_debt,
@@ -1009,7 +1010,6 @@ impl FormWatch {
                     low_usage: s.appearances < 8,
                     recent_interest_count: c.recent_interest_count,
                     failed_scans: c.failed_scans,
-                    last_block: None,
                 };
                 // Form-discovery mode: a not-yet-listed breakout is
                 // admitted, but the affordability / tier / reputation /
@@ -1043,6 +1043,7 @@ mod breakout_watch_tests {
     use crate::club::player::LanguageProfile;
     use crate::club::player::builder::PlayerBuilder;
     use crate::club::player::mind::{AnchorView, CareerPlanView};
+    use crate::club::player::transfer::LevelFloor;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
@@ -1051,6 +1052,7 @@ mod breakout_watch_tests {
     };
     use crate::transfers::squad::bands::TierBands;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
+    use crate::transfers::view::world::{WorldPool, WorldPoolIndex};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,
@@ -1192,7 +1194,7 @@ mod breakout_watch_tests {
         /// smaller football country, 23 goals in 23 games at an 8.4
         /// average — contented, unlisted, no market flag of any kind.
         fn massalyga(ability: u8) -> PlayerSummary {
-            PlayerSummary {
+            let mut s = PlayerSummary {
                 player_id: 9001,
                 club_id: 300,
                 country_id: 2,
@@ -1266,7 +1268,12 @@ mod breakout_watch_tests {
                 language_profile: LanguageProfile::default(),
                 international_apps: 0,
                 career_record: CareerRecordSnapshot::default(),
-            }
+                level_floor: LevelFloor::none(),
+                asking_wage: 0.0,
+                refusal_price: 0.0,
+            };
+            s.level_floor = PlayerSummaryBuilder::level_floor(&s);
+            s
         }
 
         /// Same player, ordinary output — the control.
@@ -1291,9 +1298,10 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
-        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
+        let index = WorldPoolIndex::build(std::slice::from_ref(&star));
+        let pool = WorldPool::new(std::slice::from_ref(&star), &index).foreign(country.id);
 
-        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, &MarketMap::default(), Fx::monday());
 
         let plan = &country.clubs[0].transfer_plan;
         assert!(
@@ -1313,6 +1321,31 @@ mod breakout_watch_tests {
         );
     }
 
+    /// The same find, for a club that could never hold what he would ask
+    /// to move: the watch does not follow him at all.
+    #[test]
+    fn a_foreign_breakout_whose_standing_does_not_fit_is_not_followed() {
+        let mut country = Fx::country(8_200);
+        let rep_score = country.clubs[0].teams.teams[0].reputation.overall_score();
+        let ability =
+            TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
+        let mut star = Fx::massalyga(ability);
+        star.asking_wage = 1.0e10;
+        let index = WorldPoolIndex::build(std::slice::from_ref(&star));
+        let pool = WorldPool::new(std::slice::from_ref(&star), &index).foreign(country.id);
+
+        FormWatch::scan_breakout_form(&mut country, pool, &MarketMap::default(), Fx::monday());
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert!(plan.monitorings_for_player(star.player_id).is_empty());
+        assert!(
+            !plan
+                .staff_recommendations
+                .iter()
+                .any(|r| r.player_id == star.player_id)
+        );
+    }
+
     /// …and the recommendation becomes a REQUEST — the marquee path.
     /// With no vacancy anywhere in the buyer's plan, the player's form
     /// itself opens the need, the shortlist, and so the road to a bid.
@@ -1323,12 +1356,18 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
-        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
+        let index = WorldPoolIndex::build(std::slice::from_ref(&star));
+        let pool = WorldPool::new(std::slice::from_ref(&star), &index).foreign(country.id);
 
-        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, &MarketMap::default(), Fx::monday());
         assert!(country.clubs[0].transfer_plan.transfer_requests.is_empty());
 
-        StaffRecommendations::process_staff_recommendations(&mut country, Fx::monday());
+        StaffRecommendations::process_staff_recommendations(
+            &mut country,
+            pool.world(),
+            &MarketMap::default(),
+            Fx::monday(),
+        );
 
         let plan = &country.clubs[0].transfer_plan;
         let request = plan
@@ -1357,9 +1396,10 @@ mod breakout_watch_tests {
         let ability =
             TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let plain = Fx::ordinary_foreigner(ability);
-        let pool = ForeignPool::of(std::slice::from_ref(&plain), country.id);
+        let index = WorldPoolIndex::build(std::slice::from_ref(&plain));
+        let pool = WorldPool::new(std::slice::from_ref(&plain), &index).foreign(country.id);
 
-        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, &MarketMap::default(), Fx::monday());
 
         assert!(
             country.clubs[0]
@@ -1382,9 +1422,10 @@ mod breakout_watch_tests {
             s.region = ScoutingRegion::from_country(3, "BR");
             s
         };
-        let pool = ForeignPool::of(std::slice::from_ref(&star), country.id);
+        let index = WorldPoolIndex::build(std::slice::from_ref(&star));
+        let pool = WorldPool::new(std::slice::from_ref(&star), &index).foreign(country.id);
 
-        FormWatch::scan_breakout_form(&mut country, pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, pool, &MarketMap::default(), Fx::monday());
 
         assert!(
             country.clubs[0]

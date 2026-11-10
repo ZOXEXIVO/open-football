@@ -66,3 +66,17 @@ When a board hears a loan option, the purpose it hears SHALL be the purpose the 
 #### Scenario: The hearing and the plan agree
 - **WHEN** a borrower's board hears an option on a loanee who was its rotation player, and then buys the player
 - **THEN** the purpose the board heard and the purpose the plan carries are both rotation
+
+### Requirement: A man the club is picking is not its depth surplus
+
+The season-start positional trim and the weekly first-team surplus walk SHALL pass over a first-team player who is
+starting most of the club's matches, without counting him against the surplus they set out to clear. Neither SHALL list,
+release, demote or loan him for depth.
+
+#### Scenario: A deep group's walk reaches its best player
+- **WHEN** a first-team group is over its cap and every man below its best is protected or already listed
+- **THEN** the trim leaves the best man alone if he is starting most matches, and the group simply runs deep
+
+#### Scenario: A reserve is still surplus
+- **WHEN** a reserve-squad player who starts for the reserves is the worst in an over-cap group
+- **THEN** the trim treats him as surplus as before

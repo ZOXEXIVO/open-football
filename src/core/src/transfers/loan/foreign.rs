@@ -22,10 +22,10 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
-use crate::transfers::gate::TransferPlausibilityVerdict;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::gate::stance::PlayerStanceBuilder;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::loan::interest::{
     BorrowerTaste, GroupPressure, InterestDraw, LoanCandidateProfile,
 };
@@ -92,7 +92,7 @@ struct ForeignBorrower<'a> {
     max_scans: usize,
     borrower_position_depth: BorrowerPositionDepth,
     foreign_borrower_profile: Option<LoanBorrowerProfile>,
-    buyer_loan_ctx: BuyerPlausibilityContext,
+    buyer_loan_ctx: Suitor<'a>,
     taste: BorrowerTaste,
     /// Its position under its league's foreigner quota, and the slots its
     /// in-flight approaches have already spent.
@@ -297,7 +297,7 @@ impl ForeignBorrower<'_> {
             p.estimated_value,
             p.salary,
             p.is_loan_listed,
-            p.level_floor(),
+            p.level_floor,
         );
         let verdict = borrower
             .as_ref()
@@ -414,7 +414,6 @@ impl<'c, 'p> ForeignTurn<'c, 'p> {
     fn claim(
         &self,
         board: &ForeignLoanBoard<'_>,
-        date: NaiveDate,
         claimed: &mut FxHashSet<u32>,
         actions: &mut Vec<ForeignLoanAction>,
     ) {
@@ -436,7 +435,6 @@ impl<'c, 'p> ForeignTurn<'c, 'p> {
                 actions.push(self.approach(
                     board,
                     best,
-                    date,
                     TransferReason::key(request.reason),
                     false,
                 ));
@@ -458,7 +456,6 @@ impl<'c, 'p> ForeignTurn<'c, 'p> {
                 actions.push(self.approach(
                     board,
                     best,
-                    date,
                     TransferReason::key("signing_reason_loan_foreign_prospect"),
                     borrower.compatriot_sweep,
                 ));
@@ -490,12 +487,11 @@ impl<'c, 'p> ForeignTurn<'c, 'p> {
         &self,
         board: &ForeignLoanBoard<'_>,
         best: &PlayerSummary,
-        date: NaiveDate,
         reason: TransferReason,
         from_compatriot_sweep: bool,
     ) -> ForeignLoanAction {
         let borrower = &self.borrower;
-        let staged = ForeignLoanStance::read(&borrower.buyer_loan_ctx, best, date);
+        let staged = ForeignLoanStance::read(&borrower.buyer_loan_ctx, best, borrower.market_map);
         ForeignLoanAction {
             club_id: borrower.club.id,
             player: best.clone(),
@@ -584,7 +580,7 @@ impl ForeignLoanScan {
         let mut claimed: FxHashSet<u32> = FxHashSet::default();
         for club_idx in InterestDraw::visit_order(turns.len()) {
             if let Some(turn) = &turns[club_idx] {
-                turn.claim(&board, date, &mut claimed, &mut actions);
+                turn.claim(&board, &mut claimed, &mut actions);
             }
         }
         drop(turns);
@@ -905,7 +901,7 @@ impl ForeignLoanScan {
         // scouting / permanent paths use. The candidate `PlayerSummary`
         // carries the seller-side context, so no selling-country ref is
         // needed here.
-        let buyer_loan_ctx = BuyerPlausibilityContext::build(country, club, date);
+        let buyer_loan_ctx = Suitor::of(country, club, date);
 
         // Same preference model the domestic scan uses. The cross-border
         // branches ranked on `(same_region, skill_ability)`, which made the
@@ -1097,17 +1093,13 @@ impl ForeignLoanScan {
                         p.home_return_wanted,
                         ForeignUnsolicitedLoanTarget::is_development(p.age),
                     )
-                    && !matches!(
-                        TransferPlausibilityBuilder::evaluate_summary(
-                            buyer_loan_ctx,
-                            p,
-                            true,
-                            true,
-                            date,
-                            Some(borrower.market_reach(board, p)),
-                        ),
-                        Some(TransferPlausibilityVerdict::HardReject(_))
+                    && TransferMovePlausibility::read_at(
+                        buyer_loan_ctx,
+                        p,
+                        MoveTerms::loan(true),
+                        borrower.market_reach(board, p),
                     )
+                    .reaches(PursuitAction::FillNow.needs())
                     })
                     .filter_map(|p| Self::scored(borrower, board, p))
                     .collect();
@@ -1202,17 +1194,13 @@ impl ForeignLoanScan {
                 p.home_return_wanted,
                 true,
             )
-            && !matches!(
-                TransferPlausibilityBuilder::evaluate_summary(
-                    buyer_loan_ctx,
-                    p,
-                    true,
-                    true,
-                    date,
-                    Some(borrower.market_reach(board, p)),
-                ),
-                Some(TransferPlausibilityVerdict::HardReject(_))
+            && TransferMovePlausibility::read_at(
+                buyer_loan_ctx,
+                p,
+                MoveTerms::loan(true),
+                borrower.market_reach(board, p),
             )
+            .reaches(PursuitAction::FillNow.needs())
             })
             .filter_map(|p| Self::scored(borrower, board, p))
             .collect()

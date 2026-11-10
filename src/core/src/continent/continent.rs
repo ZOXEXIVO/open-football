@@ -327,6 +327,7 @@ mod continental_night_tests {
     use crate::country::core::country::fixture_calendar_tests::september_country;
     use crate::transfers::market::PlacementReachIndex;
     use crate::transfers::market::map::MarketMap;
+    use crate::transfers::view::world::WorldPool;
     use rustc_hash::FxHashMap;
 
     fn d(m: u32, day: u32) -> NaiveDate {
@@ -363,7 +364,7 @@ mod continental_night_tests {
                 date,
                 country_info: &country_info,
                 indexes: None,
-                world_pool: &[],
+                world_pool: WorldPool::empty(),
                 global_free_agents: &[],
                 market_map: &market_map,
                 placement_reach: &placement_reach,

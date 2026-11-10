@@ -32,3 +32,24 @@ When a player accepts a contract renewal, three rules SHALL apply:
 #### Scenario: A restated role does not bind
 - **WHEN** a key player accepts a renewal that restates his key role, and he holds no unexpired promise
 - **THEN** the new contract carries no role promise
+
+### Requirement: A renewal reads whether he has arrived
+
+The player's own verdict on signing a renewal SHALL weigh his dream as well as his current wants.
+
+A player who has arrived SHALL have a reason to sign, whatever else he currently wants. A want to be paid more SHALL
+stay a matter of terms for him and SHALL NOT become a refusal to sign at any price. A player whose dream is still above
+where he plays SHALL have a reason not to tie himself down, in proportion to his conviction and his remaining career,
+and SHALL still sign when the terms answer it, such as a shorter deal or a release clause.
+
+#### Scenario: A star at his dream club hears a fair offer
+- **WHEN** a player who has arrived, and who wants to be paid more, is offered terms at or above what he is worth
+- **THEN** he signs
+
+#### Scenario: A climber is slow to commit
+- **WHEN** a 23-year-old with strong conviction in a dream above his club is offered an ordinary long renewal
+- **THEN** his verdict argues against signing, by more than a content team-mate's
+
+#### Scenario: A man with no dream left to chase
+- **WHEN** a 31-year-old whose dream has settled into making a career is offered a fair renewal
+- **THEN** his dream gives him no reason to refuse

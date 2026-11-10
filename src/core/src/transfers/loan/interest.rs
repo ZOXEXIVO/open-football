@@ -76,12 +76,22 @@ impl ClubOpinion {
     /// `judging_player_ability` (1..20) — the scout's, or the manager's at a
     /// club that employs none.
     pub(in crate::transfers) fn of(club_id: u32, player_id: u32, judging: u8) -> Self {
-        let sharpness = (judging.clamp(1, 20) as f32 - 1.0) / 19.0;
-        let spread =
-            Self::BLURRIEST_SPREAD - (Self::BLURRIEST_SPREAD - Self::SHARPEST_SPREAD) * sharpness;
         ClubOpinion {
-            offset: Self::unit_offset(club_id, player_id) * spread,
+            offset: Self::unit_offset(club_id, player_id) * Self::spread(judging),
         }
+    }
+
+    /// The most generous read a department this sharp holds of anyone: it
+    /// believes no player above what this believes of him.
+    pub(in crate::transfers) fn kindest(judging: u8) -> Self {
+        ClubOpinion {
+            offset: Self::spread(judging),
+        }
+    }
+
+    fn spread(judging: u8) -> f32 {
+        let sharpness = (judging.clamp(1, 20) as f32 - 1.0) / 19.0;
+        Self::BLURRIEST_SPREAD - (Self::BLURRIEST_SPREAD - Self::SHARPEST_SPREAD) * sharpness
     }
 
     /// The club's believed ability for a player whose true ability is `truth`.
@@ -718,6 +728,24 @@ mod tests {
                 - reads.iter().cloned().fold(f32::MAX, f32::min)
         };
         assert!(spread_at(3) > spread_at(19));
+    }
+
+    /// The watchlist stops walking at the first name the kindest read leaves
+    /// short, so no club's own read of anyone may be kinder.
+    #[test]
+    fn no_read_is_kinder_than_the_kindest() {
+        for judging in [1u8, 8, 20] {
+            for truth in [1u8, 60, 120, 199, 200] {
+                let kindest = ClubOpinion::kindest(judging).believed_ability(truth);
+                for club in 1u32..=200 {
+                    let read = ClubOpinion::of(club, 4242, judging).believed_ability(truth);
+                    assert!(
+                        read <= kindest,
+                        "club {club} reads {read} above the kindest {kindest}"
+                    );
+                }
+            }
+        }
     }
 
     /// The draw must favour the strongest option without owning it.

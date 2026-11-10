@@ -915,7 +915,7 @@ impl SquadReviewPass {
                     // On re-evaluation: remove completed assignments and exhausted shortlists
                     // so new requests can be scouted fresh
                     plan.scouting_assignments.retain(|a| !a.completed);
-                    plan.shortlists.retain(|s| !s.all_exhausted());
+                    plan.drop_exhausted_shortlists();
                 }
 
                 plan.total_budget = eval.total_budget;

@@ -4401,7 +4401,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.8.300"
+version = "1.8.330"
 
 [[package]]
 name = "shlex"

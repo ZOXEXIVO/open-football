@@ -21,13 +21,11 @@ use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::PlayerStance;
-use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::gate::stance::{AvailabilityView, PlayerStanceBuilder, StanceInputs};
-use crate::transfers::gate::{
-    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityEvaluator,
-    TransferPlausibilityVerdict,
-};
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
+use crate::transfers::view::player::PlayerSummaryBuilder;
 mod domestic;
 mod foreign;
 
@@ -101,6 +99,7 @@ impl BuyingAggressiveness {
 /// welded into an 800-line loop, and welded into the DOMESTIC one at that.
 pub(in crate::transfers) struct ApproachBuyer<'a> {
     pub club: &'a Club,
+    pub suitor: &'a Suitor<'a>,
     pub team: &'a Team,
     pub plan: &'a ClubTransferPlan,
     /// Continuous 0..1 standing — what the aggressiveness curve reads.
@@ -620,7 +619,6 @@ impl ApproachBuilder {
         let selling_league_reputation = target.selling_league_reputation;
         let player_id = player.id;
         let is_rival = target.is_rival;
-        let buy_country = ctx.buy_country;
         let sell_country = ctx.sell_country;
         let date = ctx.date;
         let is_loan = ctx.is_loan;
@@ -667,20 +665,13 @@ impl ApproachBuilder {
         // never created downstream — see Pass 2 for the
         // matching skip.
         if let Some(estimated_fee) = drift.final_gate_fee {
-            let plausibility_inputs = TransferPlausibilityBuilder::from_global(
-                buy_country,
-                club,
-                sell_country,
-                selling_club,
-                player,
-                estimated_fee,
-                is_loan,
-                true, // unsolicited at the negotiation-entry point
-                date,
-                ctx.market_map,
-            );
-            if let TransferPlausibilityVerdict::HardReject(_reason) =
-                TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
+            let Some(summary) = PlayerSummaryBuilder::one(sell_country, selling_club, player, date)
+            else {
+                return ApproachOutcome::Refused;
+            };
+            let terms = MoveTerms::for_player(player, club, date, is_loan, true, estimated_fee);
+            if !TransferMovePlausibility::read(buyer.suitor, &summary, terms, ctx.market_map)
+                .reaches(PursuitAction::Negotiate.needs())
             {
                 return ApproachOutcome::Refused;
             }
@@ -991,8 +982,8 @@ impl ForeignRegistrationGuard {
 pub struct ApproachPass;
 
 impl ApproachPass {
-    pub fn initiate_negotiations(country: &mut Country, date: NaiveDate) {
-        DomesticApproachPass::run(country, date);
+    pub fn initiate_negotiations(country: &mut Country, market_map: &MarketMap, date: NaiveDate) {
+        DomesticApproachPass::run(country, market_map, date);
     }
 
     /// Determine whether to buy or loan a player.
@@ -1415,23 +1406,7 @@ impl ApproachPass {
     pub fn clear_player_interest(country: &mut Country, player_id: u32) {
         for club in &mut country.clubs {
             let plan = &mut club.transfer_plan;
-
-            // Scouting assignments: drop observations for this player
-            for assignment in &mut plan.scouting_assignments {
-                assignment.observations.retain(|o| o.player_id != player_id);
-            }
-
-            // Scouting reports
-            plan.scouting_reports.retain(|r| r.player_id != player_id);
-
-            // Shortlists: remove the candidate entry
-            for shortlist in &mut plan.shortlists {
-                shortlist.candidates.retain(|c| c.player_id != player_id);
-            }
-
-            // Staff recommendations
-            plan.staff_recommendations
-                .retain(|r| r.player_id != player_id);
+            plan.forget_player(player_id);
 
             // Loan-out candidates: a moved player is no longer at this
             // club's disposal to be loaned out — unless this IS the club
@@ -1449,10 +1424,6 @@ impl ApproachPass {
                 plan.loan_out_candidates
                     .retain(|c| c.player_id != player_id);
             }
-
-            // Drop active monitoring rows so the player no longer
-            // appears as "watched" by clubs that didn't sign them.
-            plan.scout_monitoring.retain(|m| m.player_id != player_id);
         }
     }
 
@@ -1647,25 +1618,10 @@ impl ApproachPass {
                             .filter(|id| signed.contains(id))
                             .collect();
                         let plan = &mut club.transfer_plan;
-                        for assignment in &mut plan.scouting_assignments {
-                            assignment
-                                .observations
-                                .retain(|o| !signed.contains(&o.player_id));
-                        }
-                        plan.scouting_reports
-                            .retain(|r| !signed.contains(&r.player_id));
-                        for shortlist in &mut plan.shortlists {
-                            shortlist
-                                .candidates
-                                .retain(|c| !signed.contains(&c.player_id));
-                        }
-                        plan.staff_recommendations
-                            .retain(|r| !signed.contains(&r.player_id));
+                        plan.forget_players(&signed);
                         plan.loan_out_candidates.retain(|c| {
                             !signed.contains(&c.player_id) || owned_signed.contains(&c.player_id)
                         });
-                        plan.scout_monitoring
-                            .retain(|m| !signed.contains(&m.player_id));
 
                         // Team-level selling lists mirror market listings
                         // (stalemate fallback, AI transfer-list manager). A

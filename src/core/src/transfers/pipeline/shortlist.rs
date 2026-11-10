@@ -14,12 +14,13 @@ use crate::club::player::contract::contract::ClubLevelAnchor;
 use crate::club::staff::StaffEventType;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::ClubTransferPlan;
+use crate::transfers::MarketMap;
 use crate::transfers::ScoutMonitoringStatus;
-use crate::transfers::gate::TransferPlausibilityVerdict;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
+    DetailedScoutingReport, FileReading, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
     ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
     TransferRequestStatus, TransferShortlist,
 };
@@ -27,6 +28,7 @@ use crate::transfers::squad::plan::{MoneySlack, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::value::upgrade::UpgradeMath;
 use crate::transfers::view::player::CountryPlayerLookup;
+use crate::transfers::view::world::WorldPool;
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
     TransferInterestSource, TransferInterestStage,
@@ -37,6 +39,8 @@ struct ShortlistResult {
     club_id: u32,
     shortlist: TransferShortlist,
     request_id: u32,
+    /// The gate's reading of each name on it.
+    readings: Vec<(u32, FileReading)>,
 }
 
 /// Squad depth snapshot at the main team — used to weight shortlist scoring
@@ -146,6 +150,14 @@ struct BoardClubFinances {
     league_reputation: u16,
 }
 
+/// The club a shortlist is built for: one account of it, and where it can
+/// read the names it is offered.
+struct ShortlistBuyer<'a> {
+    suitor: Suitor<'a>,
+    world: WorldPool<'a>,
+    market_map: &'a MarketMap,
+}
+
 /// Turning scouting reports and market rows into a ranked list, and putting the top name to the board.
 pub struct ShortlistPass;
 
@@ -188,7 +200,12 @@ impl ShortlistPass {
     // Step 5: Shortlist Building
     // ============================================================
 
-    pub fn build_shortlists(country: &mut Country, date: NaiveDate) {
+    pub fn build_shortlists(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         // One country walk up front so the per-report / per-listing summary
         // resolutions below are hash probes instead of country scans.
         // Rosters don't change inside this pass (results apply at the end).
@@ -203,7 +220,16 @@ impl ShortlistPass {
         let results: Vec<ShortlistResult> = country_ref
             .clubs
             .par_iter()
-            .map(|club| Self::build_club_shortlists(country_ref, club, &player_lookup, date))
+            .map(|club| {
+                Self::build_club_shortlists(
+                    country_ref,
+                    club,
+                    &player_lookup,
+                    world,
+                    market_map,
+                    date,
+                )
+            })
             .collect::<Vec<Vec<ShortlistResult>>>()
             .into_iter()
             .flatten()
@@ -216,7 +242,9 @@ impl ShortlistPass {
         for result in results {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == result.club_id) {
                 let plan = &mut club.transfer_plan;
-
+                if !plan.open_shortlist(result.shortlist, &result.readings) {
+                    continue;
+                }
                 if let Some(req) = plan
                     .transfer_requests
                     .iter_mut()
@@ -224,10 +252,35 @@ impl ShortlistPass {
                 {
                     req.status = TransferRequestStatus::Shortlisted;
                 }
-
-                plan.shortlists.push(result.shortlist);
             }
         }
+    }
+
+    /// The gate's reading of every name on a shortlist the pass built.
+    fn readings(
+        country: &Country,
+        player_lookup: &CountryPlayerLookup,
+        buyer: &ShortlistBuyer<'_>,
+        shortlist: &TransferShortlist,
+        unsolicited: bool,
+        date: NaiveDate,
+    ) -> Vec<(u32, FileReading)> {
+        shortlist
+            .candidates
+            .iter()
+            .filter_map(|c| {
+                let summary = player_lookup
+                    .find_summary(country, c.player_id, date)
+                    .or_else(|| buyer.world.find(c.player_id))?;
+                let reading = TransferMovePlausibility::read(
+                    &buyer.suitor,
+                    summary,
+                    MoveTerms::purchase(unsolicited),
+                    buyer.market_map,
+                );
+                Some((c.player_id, FileReading::of(&reading, date)))
+            })
+            .collect()
     }
 
     /// One club's shortlist build — pass 1 of [`Self::build_shortlists`],
@@ -237,12 +290,18 @@ impl ShortlistPass {
         country: &Country,
         club: &Club,
         player_lookup: &CountryPlayerLookup,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
         date: NaiveDate,
     ) -> Vec<ShortlistResult> {
         let mut results: Vec<ShortlistResult> = Vec::new();
         {
             let plan = &club.transfer_plan;
-            let buyer_ctx = BuyerPlausibilityContext::build(country, club, date);
+            let buyer = ShortlistBuyer {
+                suitor: Suitor::of(country, club, date),
+                world,
+                market_map,
+            };
 
             let existing_shortlist_request_ids: Vec<u32> = plan
                 .shortlists
@@ -256,7 +315,7 @@ impl ShortlistPass {
                 player_lookup,
                 date,
                 plan,
-                &buyer_ctx,
+                &buyer,
                 &existing_shortlist_request_ids,
                 &mut results,
             );
@@ -267,7 +326,7 @@ impl ShortlistPass {
                 player_lookup,
                 date,
                 plan,
-                &buyer_ctx,
+                &buyer,
                 &existing_shortlist_request_ids,
                 &mut results,
             );
@@ -337,7 +396,7 @@ impl ShortlistPass {
         player_lookup: &CountryPlayerLookup,
         date: NaiveDate,
         plan: &ClubTransferPlan,
-        buyer_ctx: &BuyerPlausibilityContext,
+        buyer: &ShortlistBuyer<'_>,
         existing_shortlist_request_ids: &[u32],
         results: &mut Vec<ShortlistResult>,
     ) {
@@ -387,19 +446,20 @@ impl ShortlistPass {
                 player_lookup,
                 date,
                 plan,
-                buyer_ctx,
+                buyer,
                 assignment,
                 budget_alloc,
                 &reports,
             );
 
             if !candidates.is_empty() {
-                let mut shortlist =
-                    TransferShortlist::new(assignment.transfer_request_id, budget_alloc);
-                shortlist.candidates = candidates;
+                let shortlist =
+                    TransferShortlist::new(assignment.transfer_request_id, budget_alloc)
+                        .with_candidates(candidates);
 
                 results.push(ShortlistResult {
                     club_id: club.id,
+                    readings: Self::readings(country, player_lookup, buyer, &shortlist, true, date),
                     shortlist,
                     request_id: assignment.transfer_request_id,
                 });
@@ -417,7 +477,7 @@ impl ShortlistPass {
         player_lookup: &CountryPlayerLookup,
         date: NaiveDate,
         plan: &ClubTransferPlan,
-        buyer_ctx: &BuyerPlausibilityContext,
+        buyer: &ShortlistBuyer<'_>,
         existing_shortlist_request_ids: &[u32],
         results: &mut Vec<ShortlistResult>,
     ) {
@@ -513,20 +573,17 @@ impl ShortlistPass {
                                 && p.age <= request.preferred_age_max.saturating_add(3)
                                 && Self::affordable_for_request(request, &p, fee_free_only)
                             {
-                                // Plausibility veto: drop HardReject
-                                // entries, soft-dampen the rest.
-                                let plausibility =
-                                    TransferPlausibilityBuilder::evaluate_summary(
-                                        buyer_ctx, &p, false, false, date, None,
-                                    );
-                                if let Some(TransferPlausibilityVerdict::HardReject(_)) =
-                                    plausibility
-                                {
+                                let reading = TransferMovePlausibility::read(
+                                    &buyer.suitor,
+                                    &p,
+                                    MoveTerms::purchase(false),
+                                    buyer.market_map,
+                                );
+                                if !reading.reaches(PursuitAction::FillNow.needs()) {
                                     return None;
                                 }
-                                let plausibility_mult = plausibility
-                                    .map(|v| v.adjustment().shortlist_score_multiplier)
-                                    .unwrap_or(1.0);
+                                let plausibility_mult =
+                                    reading.adjustment.shortlist_score_multiplier;
                                 let rival_penalty =
                                     if club.is_rival(l.club_id) { 0.75 } else { 1.0 };
                                 let budget_fit = if request.budget_allocation > 0.0 {
@@ -559,11 +616,19 @@ impl ShortlistPass {
             market_candidates.truncate(5);
 
             if !market_candidates.is_empty() {
-                let mut shortlist = TransferShortlist::new(request.id, request.budget_allocation);
-                shortlist.candidates = market_candidates;
+                let shortlist = TransferShortlist::new(request.id, request.budget_allocation)
+                    .with_candidates(market_candidates);
 
                 results.push(ShortlistResult {
                     club_id: club.id,
+                    readings: Self::readings(
+                        country,
+                        player_lookup,
+                        buyer,
+                        &shortlist,
+                        false,
+                        date,
+                    ),
                     shortlist,
                     request_id: request.id,
                 });
@@ -582,7 +647,7 @@ impl ShortlistPass {
         player_lookup: &CountryPlayerLookup,
         date: NaiveDate,
         plan: &ClubTransferPlan,
-        buyer_ctx: &BuyerPlausibilityContext,
+        buyer: &ShortlistBuyer<'_>,
         assignment: &ScoutingAssignment,
         budget_alloc: f64,
         reports: &[&DetailedScoutingReport],
@@ -607,40 +672,34 @@ impl ShortlistPass {
                 // Plausibility veto — drop HardReject candidates
                 // before scoring so they never become shortlist
                 // entries. Soft Allow adjustments dampen score.
-                let summary = player_lookup.find_summary(country, r.player_id, date);
+                // A report on a man who cannot be read shortlists nothing.
+                let summary = player_lookup
+                    .find_summary(country, r.player_id, date)
+                    .or_else(|| buyer.world.find(r.player_id))?;
                 // Squad-fit veto — the scout's own assessed numbers
                 // say this player would classify as surplus the day
                 // he arrived (below the squad-average gap, or ranked
                 // outside the rebalance depth cap in a full group).
-                // Foreign candidates have no domestic summary; the
-                // young-age fallback keeps the promising-youth
-                // exemption available so an unknown-age prospect is
-                // judged by his assessed upside, not over-rejected.
-                let candidate_age = summary.as_ref().map(|p| p.age).unwrap_or(21);
-                if fit.would_be_surplus(r.assessed_ability, r.assessed_potential, candidate_age) {
+                if fit.would_be_surplus(r.assessed_ability, r.assessed_potential, summary.age) {
                     return None;
                 }
                 // A club does not shortlist a player it could not
                 // register. Counting the slot AFTER the signing is
                 // what produced a champion dumping a marquee
                 // foreigner in January.
-                if summary
-                    .as_ref()
-                    .is_some_and(|p| fit.would_be_unregistrable(p.nationality_country_id))
-                {
+                if fit.would_be_unregistrable(summary.nationality_country_id) {
                     return None;
                 }
-                let plausibility = summary.as_ref().and_then(|p| {
-                    TransferPlausibilityBuilder::evaluate_summary(
-                        buyer_ctx, p, false, true, date, None,
-                    )
-                });
-                if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
+                let reading = TransferMovePlausibility::read(
+                    &buyer.suitor,
+                    summary,
+                    MoveTerms::purchase(true),
+                    buyer.market_map,
+                );
+                if !reading.reaches(PursuitAction::Shortlist.needs()) {
                     return None;
                 }
-                let plausibility_mult = plausibility
-                    .map(|v| v.adjustment().shortlist_score_multiplier)
-                    .unwrap_or(1.0);
+                let plausibility_mult = reading.adjustment.shortlist_score_multiplier;
                 // A manager who has been let down badly enough by a player
                 // will not have him at any price, and the club does not
                 // put a name in front of him that he has already answered.
@@ -1032,13 +1091,8 @@ impl ShortlistPass {
                 if !d.approved
                     && let Some(player_id) = d.named_target
                 {
-                    for m in club.transfer_plan.scout_monitoring.iter_mut() {
-                        if m.player_id == player_id
-                            && matches!(m.status, ScoutMonitoringStatus::PromotedToShortlist)
-                        {
-                            m.status = ScoutMonitoringStatus::Active;
-                        }
-                    }
+                    club.transfer_plan
+                        .resume_watching(player_id, ScoutMonitoringStatus::PromotedToShortlist);
                 }
             }
         }
@@ -1268,11 +1322,13 @@ mod market_fallback_age_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::MarketMap;
     use crate::transfers::market::{TransferListing, TransferListingType};
     use crate::transfers::pipeline::shortlist::ShortlistPass;
     use crate::transfers::pipeline::{
         TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
     };
+    use crate::transfers::view::world::WorldPool;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, Goalkeeping, Mental,
         PersonAttributes, Physical, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
@@ -1513,7 +1569,12 @@ mod market_fallback_age_tests {
         let date = MarketAgeFixtures::d(2026, 7, 1);
         let mut country = MarketAgeFixtures::world(date);
 
-        ShortlistPass::build_shortlists(&mut country, date);
+        ShortlistPass::build_shortlists(
+            &mut country,
+            WorldPool::empty(),
+            &MarketMap::default(),
+            date,
+        );
 
         let plan = &country.clubs[0].transfer_plan;
         let shortlist = plan
@@ -1540,6 +1601,85 @@ mod market_fallback_age_tests {
         assert_eq!(
             plan.transfer_requests[0].status,
             TransferRequestStatus::Shortlisted
+        );
+    }
+}
+
+#[cfg(test)]
+mod readable_report_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::pipeline::{DetailedScoutingReport, ScoutingRecommendation};
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+    use crate::transfers::view::world::WorldPoolIndex;
+
+    struct Fx;
+
+    impl Fx {
+        fn report(player_id: u32) -> DetailedScoutingReport {
+            DetailedScoutingReport {
+                player_id,
+                assignment_id: 1,
+                assessed_ability: 120,
+                assessed_potential: 125,
+                confidence: 0.8,
+                estimated_value: 500_000.0,
+                recommendation: ScoutingRecommendation::Buy,
+                role_fit: 1.0,
+                risk_flags: Vec::new(),
+            }
+        }
+    }
+
+    /// A foreign report on a man who no longer resolves reaches no
+    /// shortlist; one the gate can read and allows does.
+    #[test]
+    fn a_foreign_report_with_no_summary_reaches_no_shortlist() {
+        let mut club = TestClub::new(1).reputation(4_000).build();
+        club.transfer_plan.total_budget = 5_000_000.0;
+        let country = TestCountry::new(1).clubs(vec![club]).build();
+        let readable = [TestSummary::new(91)
+            .club_id(70)
+            .country(2, "es")
+            .league(4_000, 0.4)
+            .salary(100_000)
+            .value(500_000.0)
+            .build()];
+        let index = WorldPoolIndex::build(&readable);
+        let lookup = CountryPlayerLookup::build(&country);
+        let club = &country.clubs[0];
+        let map = MarketMap::default();
+        let buyer = ShortlistBuyer {
+            suitor: Suitor::of(&country, club, TestDate::today()),
+            world: WorldPool::new(&readable, &index),
+            market_map: &map,
+        };
+        let assignment = ScoutingAssignment::new(
+            1,
+            1,
+            None,
+            PlayerPositionType::MidfielderCenter,
+            90,
+            18,
+            32,
+            2_000_000.0,
+        );
+        let reports = [Fx::report(91), Fx::report(92)];
+        let refs: Vec<&DetailedScoutingReport> = reports.iter().collect();
+        let candidates = ShortlistPass::score_reported_candidates(
+            &country,
+            club,
+            &lookup,
+            TestDate::today(),
+            &club.transfer_plan,
+            &buyer,
+            &assignment,
+            2_000_000.0,
+            &refs,
+        );
+        assert_eq!(
+            candidates.iter().map(|c| c.player_id).collect::<Vec<_>>(),
+            vec![91]
         );
     }
 }

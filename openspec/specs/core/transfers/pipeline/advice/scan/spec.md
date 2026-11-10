@@ -40,3 +40,20 @@ The system SHALL compute a 0-100 breakout score for standout non-star performers
 #### Scenario: A player's own desire to leave can lower his discovery bar
 - **WHEN** a player privately wants to leave and the watching league's reputation exceeds his own club's league reputation by 1200 or more
 - **THEN** his effective breakout/discovery bar is lowered, down to a floor of 22.0
+
+### Requirement: Staff advice and its intake act only on a player the gate has read
+The system SHALL file a staff recommendation only for a player whose move the gate reads as at least "may be privately scouted", and SHALL open a transfer request or a shortlist place from a recommendation only when the gate reads the move as at least "may be shortlisted". This SHALL hold for every source of advice: the scout network, scouts' memories of players seen, expiring contracts, bargains, loans and players seeking game time.
+
+A recommended player who cannot be read, at home or abroad, SHALL be dropped. He SHALL NOT pass because no reading was available.
+
+#### Scenario: A remembered foreign player the club can no longer reach
+- **WHEN** a scout's memory names a foreign player whose standing no longer fits the club
+- **THEN** no recommendation is filed for him, and no file is opened
+
+#### Scenario: Intake does not open a request for an unreadable player
+- **WHEN** a recommendation names a player who no longer resolves to a readable player
+- **THEN** intake opens no transfer request and no shortlist place for him
+
+#### Scenario: A recommendation the club could act on
+- **WHEN** a recommendation names a player whose move the gate reads as "may be shortlisted"
+- **THEN** intake may fold it into an open request or open a new one, within the club's request cap

@@ -20,48 +20,36 @@ pub use desk::*;
 pub use recruitment::*;
 pub use watchlist::MarketKnowledge;
 
-use crate::club::staff::perception::AbilityEstimator;
-use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::scouting::assignment::ClubScan;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::player::PlayerView;
-use crate::transfers::view::world::ForeignPool;
+use crate::transfers::view::world::{ForeignPool, WorldPool};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
-use crate::club::player::language::{Language, LanguageProfile};
-use crate::club::player::mind::{GoalKind, MindClock};
-use crate::club::player::statistics::StuckCareerScan;
+use crate::club::player::language::Language;
+use crate::transfers::MarketMap;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
-use crate::transfers::gate::{SquadEvidenceSource, TransferMoveStage, TransferPlausibilityVerdict};
-use crate::transfers::loan::agreement::LoanMoney;
-use crate::transfers::loan::guard::LoanAssetGuard;
-use crate::transfers::loan::home::HomeLoanGates;
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::loan::interest::InterestDraw;
-use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
+use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::{
-    ClubTransferPlan, DetailedScoutingReport, LoanDestinationPreference, PlayerObservation,
-    ReportRiskFlag, ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation,
-    TransferNeedPriority, TransferRequest, TransferRequestStatus,
+    DetailedScoutingReport, FileObservation, FileReading, FileReview, PlayerObservation,
+    ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
+    TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
-use crate::transfers::scouting::config::{RealismTarget, ScoutingConfig};
-use crate::transfers::squad::standing::CareerRecordSnapshot;
+use crate::transfers::scouting::config::ScoutingConfig;
 use crate::transfers::value::PlayerValuationCalculator;
-use crate::transfers::view::player::ClubGroupRanks;
-use crate::transfers::{
-    ClubMarketKnowledge, ClubMarketLedger, MarketAffinity, MarketAffinityInputs, MarketMap,
-    MoveKind,
-};
+use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
 use crate::utils::IntegerUtils;
 use crate::utils::PerformanceProfiler;
 use crate::{
-    Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, PositionCoverage, StaffEventType, StaffPosition, TeamType,
-    TransferInterestSource, TransferInterestStage,
+    Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType,
+    StaffEventType, StaffPosition, TeamType, TransferInterestSource, TransferInterestStage,
 };
 use crate::{Player, Team};
 use chrono::Weekday;
@@ -108,109 +96,6 @@ struct MatchScoutingObservationResult {
 /// Per-club staged output of the parallel scouting scan (pass 1 of
 /// `process_scouting`). Merged in club order and applied by pass 2, so
 /// the apply order and dedup semantics match the old serial scan.
-/// One club's memo of how far its market reaches, per `(passport, league
-/// he plays in)`.
-///
-/// The answer depends on exactly that pair and on nothing else about the
-/// player, and a scouting pass scores thousands of candidates against a few
-/// hundred pairs — computing it per candidate is the difference between a
-/// run that finishes and one that does not (memory
-/// `transfer_geography_implementation_2026_09`).
-///
-/// Interior mutability because the pass reads it from a `Fn` filter closure
-/// that is used twice by value: a `&mut` capture would make the closure
-/// `FnMut` and non-`Copy`, and the domestic and foreign sweeps both need it.
-/// There is no reentrancy — every borrow is taken and dropped inside
-/// [`Self::reach`].
-struct MarketReachCache {
-    entries: std::cell::RefCell<FxHashMap<(u32, u32), f32>>,
-}
-
-impl MarketReachCache {
-    /// Floor under the knowledge term. A club may LOOK at a market it does
-    /// not work — what it cannot do is see that market as clearly as one it
-    /// has people in.
-    const KNOWLEDGE_FLOOR: f32 = 0.4;
-
-    fn new() -> Self {
-        MarketReachCache {
-            entries: std::cell::RefCell::new(FxHashMap::default()),
-        }
-    }
-
-    /// How well this club is placed to look at ONE foreign player: the
-    /// corridor into his market times what the club knows of it, 0..1.
-    ///
-    /// Keyed on `(nationality, country he plays in)`. Keying on the country
-    /// he plays in ALONE — the first cut — collides two different players: a
-    /// Brazilian at Porto and a Portuguese at Porto share one entry, and
-    /// whichever was scored first decides the reach for both.
-    /// `FreeAgentMarketVisibility::build` already keys on the pair; this is
-    /// the same key.
-    fn reach(
-        &self,
-        market_map: &MarketMap,
-        buyer_country_id: u32,
-        club: &Club,
-        player: &PlayerSummary,
-        date: NaiveDate,
-        best_scout_country_level: &dyn Fn(u32) -> u8,
-    ) -> f32 {
-        self.reach_for_pair(
-            market_map,
-            buyer_country_id,
-            &club.market_ledger,
-            (player.nationality_country_id, player.country_id),
-            date,
-            best_scout_country_level,
-        )
-    }
-
-    /// The same read, addressed by the pair directly. Separated so the key
-    /// is a thing a test can hold: the defect this cache carried was that
-    /// the key was the LEAGUE alone, and no test could see that without
-    /// building two whole player summaries.
-    fn reach_for_pair(
-        &self,
-        market_map: &MarketMap,
-        buyer_country_id: u32,
-        ledger: &ClubMarketLedger,
-        key: (u32, u32),
-        date: NaiveDate,
-        best_scout_country_level: &dyn Fn(u32) -> u8,
-    ) -> f32 {
-        if market_map.is_silent() {
-            return 1.0;
-        }
-        if let Some(cached) = self.entries.borrow().get(&key) {
-            return *cached;
-        }
-        let affinity = MarketAffinity::affinity(
-            market_map,
-            MarketAffinityInputs {
-                buyer_country_id,
-                nationality_country_id: key.0,
-                current_country_id: key.1,
-                kind: MoveKind::Talent,
-                // Discovery is the club's own scouting reach; owner money
-                // buys a name, it does not find one.
-                benefactor: 0.0,
-            },
-        );
-        let knowledge = ClubMarketKnowledge::knowledge(
-            market_map,
-            buyer_country_id,
-            ledger,
-            best_scout_country_level(key.1).max(best_scout_country_level(key.0)),
-            key.1,
-            date,
-        );
-        let reach = (affinity * knowledge.max(Self::KNOWLEDGE_FLOOR)).clamp(0.0, 1.0);
-        self.entries.borrow_mut().insert(key, reach);
-        reach
-    }
-}
-
 struct ClubScoutingStaged {
     observations: Vec<ScoutingObservationResult>,
     reports: Vec<ScoutingReportResult>,
@@ -228,55 +113,12 @@ struct ClubScoutingStaged {
     monitoring_updates: Vec<MonitoringUpdate>,
 }
 
-/// Rich update payload for an active monitoring row. Built during the
-/// immutable read pass of `process_scouting` / `process_match_scouting`
-/// and applied during pass 2 against the mutable `ClubTransferPlan`.
+/// A viewing to file, staged by the read pass with the gate's reading of
+/// the move and committed through the plan's door.
 struct MonitoringUpdate {
     club_id: u32,
-    scout_staff_id: u32,
-    player_id: u32,
-    source: ScoutMonitoringSource,
-    transfer_request_id: Option<u32>,
-    origin_assignment_id: Option<u32>,
-    assessed_ability: u8,
-    assessed_potential: u8,
-    confidence: f32,
-    role_fit: f32,
-    estimated_value: f64,
-    risk_flags: Vec<ReportRiskFlag>,
-    is_match: bool,
-    region: Option<ScoutingRegion>,
-}
-
-/// Writes a read-pass monitoring payload back onto a club's plan.
-struct MonitoringWriter;
-
-impl MonitoringWriter {
-    /// Apply a monitoring update against a `ClubTransferPlan`. Either
-    /// upserts an existing row for `(scout_staff_id, player_id)` or creates
-    /// a fresh one. Pure-state mutation — no side effects beyond the plan.
-    fn apply(plan: &mut ClubTransferPlan, update: MonitoringUpdate, date: NaiveDate) {
-        // The upsert itself lives on `ClubTransferPlan` so the match-result
-        // showcase path (`LeagueResult::record_domestic_cup_showcase_scouting`)
-        // shares the exact same row lifecycle — this wrapper just unpacks the
-        // pipeline's read-pass payload.
-        plan.upsert_monitoring(
-            update.scout_staff_id,
-            update.player_id,
-            update.source,
-            update.transfer_request_id,
-            update.origin_assignment_id,
-            update.region,
-            update.assessed_ability,
-            update.assessed_potential,
-            update.confidence,
-            update.role_fit,
-            update.estimated_value,
-            update.risk_flags,
-            date,
-            update.is_match,
-        );
-    }
+    reading: FileReading,
+    seen: FileObservation,
 }
 
 /// A player a scout actually got to look at tonight, and the standing
@@ -287,6 +129,8 @@ struct PlayerSeen<'a> {
     age: u8,
     /// The REGRESSED season average, never the raw one.
     match_rating: f32,
+    /// The gate's reading of a move for him.
+    reading: FileReading,
 }
 
 /// One fixture a scout was sent to, and the side he was sent to watch.
@@ -297,6 +141,10 @@ struct MatchWatch<'a> {
     /// How good this scout's eye is — the spread on every read below.
     judging_ability: u8,
     judging_potential: u8,
+    /// The scout's club, as every route reads it.
+    suitor: &'a Suitor<'a>,
+    /// The watched club, as every summary of its players reads it.
+    target_ctx: SummaryClubContext,
 }
 
 /// What one country's scouts saw at the weekend's fixtures. The read pass walks
@@ -311,121 +159,35 @@ struct MatchScoutingStaged {
     monitoring_updates: Vec<MonitoringUpdate>,
 }
 
-/// Everything a summary reads that is NOT the player: the country's constants
-/// and the club's, resolved once per club so a cross-country buyer can assess
-/// any of its players without re-walking the seller's roster.
-struct PoolContext<'c> {
-    country: &'c Country,
-    club: &'c Club,
-    date: NaiveDate,
-    price_level: f32,
-    country_id: u32,
-    country_reputation: u16,
-    country_region: ScoutingRegion,
-    seller_league_rep: u16,
-    seller_club_rep: u16,
-    club_world_rep: i16,
-    seller_club_rep_score: f32,
-    seller_league_id: Option<u32>,
-    seller_in_debt: bool,
-    seller_club_matches: u16,
-    group_ranks: ClubGroupRanks,
-    home_preferences: Vec<u32>,
-    stage_parent_loan: bool,
-}
-
-impl<'c> PoolContext<'c> {
-    fn of(
-        country: &'c Country,
-        club: &'c Club,
-        date: NaiveDate,
-        price_level: f32,
-        country_id: u32,
-        country_reputation: u16,
-        country_region: ScoutingRegion,
-        stage_parent_loan: bool,
-    ) -> Self {
-        // Seller market context once per club — flat 0/0 used to
-        // drag every domestic player to the same baseline regardless
-        // of the league/club they actually played for.
-        let (seller_league_rep, seller_club_rep) =
-            PlayerValuationCalculator::seller_context(country, club);
-        let club_world_rep = ClubView::club_world_reputation(club);
-        // Staged-plausibility seller context, resolved once per club so a
-        // cross-country buyer can assess this player without re-walking
-        // the seller's roster. `overall_score` (not market value) matches
-        // the legacy single-country builder's `seller_rep`.
-        let main_team = club.teams.main();
-        let seller_club_rep_score = main_team
-            .map(|t| t.reputation.overall_score())
-            .unwrap_or(0.3);
-        let seller_league_id = main_team.and_then(|t| t.league_id);
-        let seller_in_debt = club.finance.balance.balance < 0;
-        // Club match count, so a foreign buyer reads the same
-        // "is this season readable yet" signal a domestic one does.
-        let seller_club_matches =
-            SquadEvidenceContext::current_season_sample(date, club).club_matches_proxy();
-        // One sorted-group snapshot per club replaces the per-player
-        // rank/best re-sorts (same values, O(squad·log) once).
-        let group_ranks = ClubGroupRanks::build(club);
-        // Loan-out candidates the parent has already decided WHERE it
-        // would send — the `UnsettledAbroad` read that names a home
-        // country or a home region. That decision is itself a posting
-        // (C5), so a candidate identified this tick reaches the world
-        // in the same pass rather than a window later.
-        let home_preferences: Vec<u32> = club
-            .transfer_plan
-            .loan_out_candidates
-            .iter()
-            .filter(|c| c.preferred_destination != LoanDestinationPreference::Any)
-            .map(|c| c.player_id)
-            .collect();
-
-        Self {
-            country,
-            club,
-            date,
-            price_level,
-            country_id,
-            country_reputation,
-            country_region,
-            seller_league_rep,
-            seller_club_rep,
-            club_world_rep,
-            seller_club_rep_score,
-            seller_league_id,
-            seller_in_debt,
-            seller_club_matches,
-            group_ranks,
-            home_preferences,
-            stage_parent_loan,
-        }
-    }
-}
-
 /// The scouting tick: assignments, observations, match reports and the shadow board.
 pub struct ScoutingPass;
 
 impl ScoutingPass {
-    /// Contract months at or below which a player is publicly on his way
-    /// out — clubs abroad watch expiring contracts regardless of which
-    /// league he currently plays in.
-    const OPENLY_AVAILABLE_EXPIRY_MONTHS: i16 = 12;
-
-    /// The player's own club has advertised him, or he has advertised
-    /// himself, or his deal is running out. Any of these is public
-    /// knowledge that travels past the normal direction of the market, so
-    /// it lifts the country step-down on the foreign candidate pool.
-    /// Being merely unhappy does not: that is a mood, not an advert.
-    fn is_openly_available(candidate: &PlayerSummary) -> bool {
-        candidate.is_listed
-            || candidate.is_loan_listed
-            || candidate.seller_ctx.is_transfer_requested
-            || (candidate.contract_months_remaining > 0
-                && candidate.contract_months_remaining <= Self::OPENLY_AVAILABLE_EXPIRY_MONTHS)
+    /// A pool filed under every group each player can play, in pool order.
+    /// More than half a senior population is multi-position at identical
+    /// competence, so bucketing on the primary label alone hid every wide
+    /// forward who plays centre-forward from a club looking for one.
+    fn by_group<'p>(
+        pool: impl Iterator<Item = &'p PlayerSummary>,
+    ) -> [Vec<&'p PlayerSummary>; PlayerFieldPositionGroup::COUNT] {
+        let mut by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
+            Default::default();
+        for p in pool {
+            for group in PlayerFieldPositionGroup::ALL {
+                if p.coverage.covers_group(group) {
+                    by_group[group.index()].push(p);
+                }
+            }
+        }
+        by_group
     }
 
-    pub fn assign_scouts(country: &mut Country, _date: NaiveDate) {
+    pub fn assign_scouts(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         let mut actions: Vec<ScoutAssignmentAction> = Vec::new();
 
         for club in &country.clubs {
@@ -546,10 +308,35 @@ impl ScoutingPass {
 
         // After fresh assignments exist, seed any matching shadow reports
         // into the active window — saves clubs from cold-starting each window.
+        // A report is read again first: a man who has since moved out of
+        // the club's standing seeds nothing.
         for club_id in seeded_clubs {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                club.transfer_plan.seed_active_reports_from_shadow();
-            }
+            let Some(index) = country.clubs.iter().position(|c| c.id == club_id) else {
+                continue;
+            };
+            let keeps: FxHashSet<u32> = {
+                let club = &country.clubs[index];
+                let suitor = Suitor::of(country, club, date);
+                club.transfer_plan
+                    .shadow_reports
+                    .iter()
+                    .map(|s| s.report.player_id)
+                    .filter(|player_id| {
+                        world.find(*player_id).is_some_and(|summary| {
+                            TransferMovePlausibility::read(
+                                &suitor,
+                                summary,
+                                MoveTerms::purchase(true),
+                                market_map,
+                            )
+                            .reaches(PursuitAction::KeepFile.needs())
+                        })
+                    })
+                    .collect()
+            };
+            country.clubs[index]
+                .transfer_plan
+                .seed_active_reports_from_shadow(|player_id| keeps.contains(&player_id));
         }
     }
 
@@ -744,6 +531,9 @@ impl ScoutingPass {
         // Pass 1: Immutable reads
         for club in &country.clubs {
             let plan = &club.transfer_plan;
+            // Read once per club, and only for a club whose scout actually
+            // saw a match today.
+            let mut suitor: Option<Suitor<'_>> = None;
 
             for match_assignment in &plan.scout_match_assignments {
                 // Find the target club + team. The selling club's market
@@ -790,6 +580,9 @@ impl ScoutingPass {
                     StaffEventType::MatchObserved,
                 ));
 
+                let suitor: &Suitor<'_> =
+                    suitor.get_or_insert_with(|| Suitor::of(country, club, current_date));
+
                 Self::observe_target_team(
                     country,
                     club,
@@ -799,6 +592,13 @@ impl ScoutingPass {
                         target_team,
                         judging_ability,
                         judging_potential,
+                        suitor,
+                        target_ctx: SummaryClubContext::of(
+                            country,
+                            target_club,
+                            current_date,
+                            false,
+                        ),
                     },
                     current_date,
                     &mut staged,
@@ -834,7 +634,6 @@ impl ScoutingPass {
         current_date: NaiveDate,
         staged: &mut MatchScoutingStaged,
     ) {
-        let config = ScoutingConfig::default();
         let plan = &club.transfer_plan;
         let match_assignment = watch.assignment;
         let target_club = watch.target_club;
@@ -863,63 +662,23 @@ impl ScoutingPass {
             None => return,
         };
 
-        // Realism gate — the same policy the pool path applies via
-        // `is_target_realistic`. A scout at the match still sees
-        // everyone, but we don't open persistent monitoring on a
-        // player this club could never realistically sign (e.g. a
-        // much smaller side tracking a giant's first-choice keeper).
-        // Without this the match route bypasses the reputation band
-        // entirely and re-surfaces the very monitoring the pool
-        // gate blocks.
-        let buyer_world_rep = ClubView::club_world_reputation(club);
-        let seller_league_rep = target_team
-            .league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
-        let (target_contract_months, target_salary) = player
-            .contract
-            .as_ref()
-            .map(|c| {
-                let days = (c.expiration - current_date).num_days().max(0);
-                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-            })
-            .unwrap_or((0, 0));
-        let realism_target = RealismTarget {
-            club_world_reputation: ClubView::club_world_reputation(target_club),
-            world_reputation: player.player_attributes.world_reputation,
-            current_reputation: player.player_attributes.current_reputation,
-            home_reputation: player.player_attributes.home_reputation,
-            appearances: player.statistics.total_games(),
-            age: player_age,
-            contract_months_remaining: target_contract_months,
-            salary: target_salary,
-            estimated_value: player.value(
-                current_date,
-                seller_league_rep,
-                target_team.reputation.market_value_score(),
-            ),
-            is_listed: player.statuses.has(PlayerStatusType::Lst),
-            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-            squad_status: player
-                .contract
-                .as_ref()
-                .map(|c| c.squad_status.clone())
-                .unwrap_or(PlayerSquadStatus::NotYetSet),
-            days_on_market: player.days_available(current_date).min(i16::MAX as i64) as i16,
-            market_resignation: player.market_resignation(current_date),
-        };
-        // Real fee headroom (transfer budget × the negotiation
-        // fee-gate multiplier), so a funded club can scout up to
-        // what it can actually spend, not just its reputation tier.
-        let buyer_fee_capacity = club
-            .finance
-            .transfer_budget
-            .as_ref()
-            .map(|b| b.amount * 1.40)
-            .unwrap_or(0.0);
-        if !config.is_target_realistic_fields(buyer_world_rep, &realism_target, buyer_fee_capacity)
-        {
+        // A scout at the match sees everyone; the club opens a file only on
+        // a man the gate lets it watch. One country, so no geography.
+        let summary = PlayerSummaryBuilder::build(
+            country,
+            target_club,
+            &watch.target_ctx,
+            target_team,
+            player,
+            current_date,
+        );
+        let assessment = TransferMovePlausibility::read(
+            watch.suitor,
+            &summary,
+            MoveTerms::purchase(true),
+            &MarketMap::default(),
+        );
+        if !assessment.reaches(PursuitAction::KeepFile.needs()) {
             return;
         }
 
@@ -932,13 +691,14 @@ impl ScoutingPass {
                 assignment,
                 age: player_age,
                 match_rating,
+                reading: FileReading::of(&assessment, current_date),
             },
             current_date,
             staged,
         );
     }
 
-    /// What the scout writes down, once the realism gate has let this player
+    /// What the scout writes down, once the gate has let this player
     /// through. Assessment is from visible skills and match performance —
     /// never hidden potential — with the error narrowed for a live viewing.
     fn record_observation(
@@ -1094,19 +854,22 @@ impl ScoutingPass {
             // formed an opinion either way.
             monitoring_updates.push(MonitoringUpdate {
                 club_id: club.id,
-                scout_staff_id: match_assignment.scout_staff_id,
-                player_id: player.id,
-                source: ScoutMonitoringSource::MatchStandout,
-                transfer_request_id: Some(assignment.transfer_request_id),
-                origin_assignment_id: Some(assignment.id),
-                assessed_ability,
-                assessed_potential,
-                confidence,
-                role_fit,
-                estimated_value: estimated_value.amount,
-                risk_flags: risk_flags.clone(),
-                is_match: true,
-                region: None,
+                reading: seen.reading,
+                seen: FileObservation {
+                    scout_staff_id: match_assignment.scout_staff_id,
+                    player_id: player.id,
+                    source: ScoutMonitoringSource::MatchStandout,
+                    transfer_request_id: Some(assignment.transfer_request_id),
+                    origin_assignment_id: Some(assignment.id),
+                    region: None,
+                    assessed_ability,
+                    assessed_potential,
+                    confidence,
+                    role_fit,
+                    estimated_value: estimated_value.amount,
+                    risk_flags: risk_flags.clone(),
+                    is_match: true,
+                },
             });
 
             if recommendation != ScoutingRecommendation::Pass {
@@ -1211,7 +974,8 @@ impl ScoutingPass {
         // Apply monitoring updates — match-context scouting.
         for update in monitoring_updates {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == update.club_id) {
-                MonitoringWriter::apply(&mut club.transfer_plan, update, current_date);
+                club.transfer_plan
+                    .keep_file(update.reading, update.seen, current_date);
             }
         }
 
@@ -1240,13 +1004,6 @@ impl ScoutingPass {
         date: NaiveDate,
         stage_parent_loan: bool,
     ) -> Vec<PlayerSummary> {
-        let price_level = country.settings.pricing.price_level;
-        let country_id = country.id;
-        let country_reputation = country.reputation;
-        // Constant across every player in this country — derive it once
-        // rather than per foreign-scan later.
-        let country_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-
         // Per club, in parallel. Every summary is built from that club's own
         // roster plus country-constant facts, so the clubs are disjoint, and
         // the ordered flatten leaves the pool in exactly the sequence the
@@ -1258,23 +1015,15 @@ impl ScoutingPass {
             .par_iter()
             .map(|club| {
                 let mut players = Vec::new();
-                let ctx = PoolContext::of(
-                    country,
-                    club,
-                    date,
-                    price_level,
-                    country_id,
-                    country_reputation,
-                    country_region,
-                    stage_parent_loan,
-                );
-
+                let ctx = SummaryClubContext::of(country, club, date, stage_parent_loan);
                 for team in &club.teams.teams {
                     for player in &team.players.players {
                         if player.is_on_loan() {
                             continue;
                         }
-                        players.push(Self::player_summary(&ctx, team, player));
+                        players.push(PlayerSummaryBuilder::build(
+                            country, club, &ctx, team, player, date,
+                        ));
                     }
                 }
                 players
@@ -1333,7 +1082,6 @@ impl ScoutingPass {
         date: NaiveDate,
         market_map: &MarketMap,
     ) {
-        let country_reputation = country.reputation;
         // Single source of truth for observation/error/recommendation/risk-flag tuning.
         let config = ScoutingConfig::default();
         // Scoring-chart + recent-award lookup, built once so the data
@@ -1358,9 +1106,7 @@ impl ScoutingPass {
         // assignments × world pool) to find that out. Relative order inside
         // a group is preserved, so the filtered candidate sequences — and
         // everything downstream (data-prefilter sort, observation picks) —
-        // are identical to the unpartitioned scan. The country-reputation
-        // step-down on the foreign pool is country-constant, so it is folded
-        // into the partition instead of being re-tested per assignment.
+        // are identical to the unpartitioned scan.
         // A player is filed under EVERY group he can play, not just the one
         // his primary label falls in. More than half a senior population is
         // multi-position at identical competence, so that label is an
@@ -1371,38 +1117,11 @@ impl ScoutingPass {
         // filtered sequences (and the data-prefilter sort that reads them)
         // stay deterministic.
         let partition = PerformanceProfiler::stage_scope("scout_partition_pools", 4);
-        let mut domestic_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
-            Default::default();
-        for p in &all_players {
-            for group in PlayerFieldPositionGroup::ALL {
-                if p.coverage.covers_group(group) {
-                    domestic_by_group[group.index()].push(p);
-                }
-            }
-        }
-        let mut foreign_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
-            Default::default();
-        // The country step-down models the normal direction of the market:
-        // clubs recruit from countries at or below their own standing, and
-        // a cold approach up the pyramid isn't credible. Applied without
-        // exception, though, it made whole countries invisible to each
-        // other — a Portuguese club could not SEE an English player who was
-        // transfer-listed, had asked to leave, or was months from a free
-        // transfer, none of which depends on the buyer outranking the
-        // seller's country. Availability is precisely the signal that
-        // overrides the normal direction of travel, so it opens the pool;
-        // everything downstream (the realism band, the staged plausibility
-        // gates, reputation reach and affordability) still has to pass.
-        for p in foreign_players
-            .iter()
-            .filter(|p| p.country_reputation <= country_reputation || Self::is_openly_available(p))
-        {
-            for group in PlayerFieldPositionGroup::ALL {
-                if p.coverage.covers_group(group) {
-                    foreign_by_group[group.index()].push(p);
-                }
-            }
-        }
+        let domestic_by_group = Self::by_group(all_players.iter());
+        // The reputation of the country a player plays in does not decide
+        // whether a club may watch him: his level, his wage and the club's
+        // market do, as the gate reads them.
+        let foreign_by_group = Self::by_group(foreign_players.iter());
 
         // Pass 1 (PARALLEL): each club's scan is read-only — over the
         // shared pools, the country, and its own plan — and stages its
@@ -1582,9 +1301,9 @@ impl ScoutingPass {
                     }
                 }
 
-                // Pool-context scouting.
                 for update in staged.monitoring_updates {
-                    MonitoringWriter::apply(&mut club.transfer_plan, update, date);
+                    club.transfer_plan
+                        .keep_file(update.reading, update.seen, date);
                 }
 
                 for (_club_id, staff_id, event_type) in staged.staff_events {
@@ -1662,6 +1381,44 @@ impl ScoutingPass {
     /// assessed ability against the player's current state, then dampens the
     /// shift by the scout's judging skill. This keeps tracked players from
     /// drifting out of sync while the window is closed.
+    /// Once a week every club re-reads the files it holds on other clubs'
+    /// players and closes those whose case has gone. Read in parallel, one
+    /// club per worker; each club commits only its own review.
+    pub fn review_files(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
+        if date.weekday() != Weekday::Mon {
+            return;
+        }
+        let country_ref: &Country = country;
+        let reviews: Vec<FileReview> = country_ref
+            .clubs
+            .par_iter()
+            .map(|club| {
+                let suitor = Suitor::of(country_ref, club, date);
+                club.transfer_plan.review_files(
+                    &suitor,
+                    world,
+                    market_map,
+                    |player_id| {
+                        country_ref
+                            .transfer_market
+                            .has_active_negotiation_for(player_id, club.id)
+                    },
+                    date,
+                )
+            })
+            .collect();
+        country
+            .clubs
+            .par_iter_mut()
+            .zip(reviews.into_par_iter())
+            .for_each(|(club, review)| club.transfer_plan.apply_review(review));
+    }
+
     pub fn refresh_shadow_reports(country: &mut Country, date: NaiveDate) {
         if date.weekday() != Weekday::Mon {
             return;
@@ -1784,188 +1541,6 @@ impl ScoutingPass {
 
         players.last().unwrap()
     }
-
-    /// One player's entry in the world pool.
-    fn player_summary(ctx: &PoolContext<'_>, team: &Team, player: &Player) -> PlayerSummary {
-        let country = ctx.country;
-        let club = ctx.club;
-        let date = ctx.date;
-        let price_level = ctx.price_level;
-        let country_id = ctx.country_id;
-        let country_reputation = ctx.country_reputation;
-        let country_region = ctx.country_region;
-        let seller_league_rep = ctx.seller_league_rep;
-        let seller_club_rep = ctx.seller_club_rep;
-        let club_world_rep = ctx.club_world_rep;
-        let seller_club_rep_score = ctx.seller_club_rep_score;
-        let seller_league_id = ctx.seller_league_id;
-        let seller_in_debt = ctx.seller_in_debt;
-        let seller_club_matches = ctx.seller_club_matches;
-        let group_ranks = &ctx.group_ranks;
-        let home_preferences = &ctx.home_preferences;
-
-        let value = PlayerValuationCalculator::calculate_value_with_price_level(
-            player,
-            date,
-            price_level,
-            seller_league_rep,
-            seller_club_rep,
-        );
-        let (contract_months_remaining, salary) = player
-            .contract
-            .as_ref()
-            .map(|c| {
-                let days = (c.expiration - date).num_days().max(0);
-                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-            })
-            .unwrap_or((0, 0));
-        // `ClubGroupRanks` only indexes the FIRST-TEAM roster, so
-        // everyone below it came back `u8::MAX` and was then read
-        // as rank 1 — "the seller's second choice in his
-        // position". That inflated every B / reserve / youth
-        // player's market importance to near-untouchable, which
-        // is the opposite of the truth: he is not in the first
-        // team's depth chart at all. Rank him behind it instead.
-        let seller_rank = match group_ranks.rank(player.id) {
-            u8::MAX => group_ranks
-                .group_size(player.position().position_group())
-                .saturating_add(1),
-            r => r,
-        };
-        // A B / Second side's own "key player" label is standing
-        // in that dressing room, not a first-team promise the
-        // market should price against. Read it through the tier
-        // that awarded it.
-        let squad_status = player
-            .contract
-            .as_ref()
-            .map(|c| c.squad_status.as_first_team_designation(team.team_type))
-            .unwrap_or(PlayerSquadStatus::NotYetSet);
-        PlayerSummary {
-            player_id: player.id,
-            club_id: club.id,
-            country_id,
-            continent_id: country.continent_id,
-            region: country_region,
-            country_code: country.code.clone(),
-            // Where he is FROM, alongside where he plays. The
-            // loan market could not see the difference, so a
-            // Brazilian prospect's own league had no way to
-            // recognise one of its own exports.
-            nationality_country_id: player.country_id,
-            nationality_continent_id: player.nationality_continent_id,
-            nationality_region: player.home_region(),
-            starter_share: player.happiness.starter_ratio,
-            tenure_days: StuckCareerScan::club_tenure_days(player, date)
-                .unwrap_or(i64::from(u16::MAX))
-                .clamp(0, i64::from(u16::MAX)) as u16,
-            // Read off the weekly cache, not rebuilt here: the
-            // mind thinks weekly and `WantsReturnHome` fires on
-            // a 60-day cooldown, so a per-player-per-day
-            // `MindSituation` build bought nothing (C10).
-            return_home_desire: player.home_pull.desire,
-            // The parent's own posting: a foreigner the club
-            // has put on the loan market — by badge, by its own
-            // candidate list, or because the candidate carries
-            // a destination preference — whose want to go home
-            // has formed. This is the ONE bit that crosses a
-            // border (no `&mut` travels, the borrower reads a
-            // bool) and it is deliberately scoped to LOANS, so
-            // the home-visibility arm can never become a
-            // permanent-transfer discovery channel that
-            // bypasses the springboard reach model (Part VIII,
-            // "the compatriot loophole").
-            home_return_wanted: HomeLoanGates::is_posted(
-                player.home_pull.wanted,
-                home_preferences.contains(&player.id),
-            ),
-            ambition: player.attributes.ambition as u8,
-            loyalty: player.attributes.loyalty as u8,
-            adaptability: player.attributes.adaptability as u8,
-            leave_pressure: player
-                .mind
-                .pressure_of(GoalKind::GoOutOnLoan)
-                .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
-                .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
-                .clamp(0.0, 1.0),
-            stay_pressure: player
-                .mind
-                .pressure_of(GoalKind::StayAtThisClub)
-                .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
-                .clamp(0.0, 1.0),
-            parent_loan: ctx
-                .stage_parent_loan
-                .then(|| LoanAssetGuard::parent_view(club, player, date, group_ranks)),
-            career_plan: player.mind.career.plan_view(MindClock::day(date)),
-            anchors: player.anchor_view(date),
-            asks_for_a_bigger_stage: player.asks_only_for_a_bigger_stage(),
-            parent_subsidy: LoanMoney::parent_desire(
-                player.pathway_stage(),
-                player.plan.as_ref().and_then(|p| p.loan_purpose),
-            ),
-            player_name: player.full_name.to_string(),
-            club_name: club.name.clone(),
-            position: player.position(),
-            position_group: player.position().position_group(),
-            coverage: PositionCoverage::of(&player.positions),
-            age: player.age(date),
-            estimated_value: value.amount,
-            is_listed: player.statuses.has(PlayerStatusType::Lst),
-            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-            skill_ability: player
-                .skills
-                .calculate_ability_for_position(player.position()),
-            observable_level: AbilityEstimator::observable_level(player),
-            pathway_stage: player.pathway_stage(),
-            // Transfer-market candidate listing: regressed
-            // value so the candidate sorter / recommendation
-            // engine isn't fooled by a small-sample season.
-            average_rating: player
-                .statistics
-                .average_rating_realistic(player.position().position_group()),
-            goals: player.statistics.goals,
-            assists: player.statistics.assists,
-            appearances: player.statistics.total_games(),
-            determination: player.skills.mental.determination,
-            work_rate: player.skills.mental.work_rate,
-            composure: player.skills.mental.composure,
-            anticipation: player.skills.mental.anticipation,
-            technical_avg: player.skills.technical.average(),
-            mental_avg: player.skills.mental.average(),
-            physical_avg: player.skills.physical.average(),
-            current_reputation: player.player_attributes.current_reputation,
-            home_reputation: player.player_attributes.home_reputation,
-            world_reputation: player.player_attributes.world_reputation,
-            country_reputation,
-            club_world_reputation: club_world_rep,
-            club_best_in_group: group_ranks.best(player.position().position_group()),
-            is_injured: player.player_attributes.is_injured,
-            contract_months_remaining,
-            salary,
-            language_profile: LanguageProfile::from_languages(&player.languages),
-            international_apps: player.player_attributes.international_apps,
-            career_record: CareerRecordSnapshot::read(player, player.position().position_group()),
-            seller_ctx: SellerPlausibilityContext {
-                club_reputation_score: seller_club_rep_score,
-                league_reputation: seller_league_rep,
-                league_id: seller_league_id,
-                position_group_rank: seller_rank,
-                squad_status,
-                is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-                is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-                in_debt: seller_in_debt,
-                days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
-                market_resignation: player.market_resignation(date),
-                club_matches_played: SquadEvidenceSource::club_matches(
-                    team.team_type,
-                    team.league_id.is_some(),
-                    seller_club_matches,
-                ),
-                big_stage_inclination: player.big_stage_inclination,
-                is_marketed: club.transfer_plan.is_marketed(player.id),
-            },
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2025,154 +1600,496 @@ mod scout_reach_tests {
 }
 
 #[cfg(test)]
-mod tests {
-    use rustc_hash::FxHashMap;
-
+mod match_scouting_gate_tests {
     use super::*;
-    use crate::transfers::market::map::{
-        CorridorWeight, CountryTransferProfile, MarketCountryFacts,
-    };
+    use crate::PlayerPositionType;
+    use crate::club::team::MatchHistoryItem;
+    use crate::r#match::TeamScore;
+    use crate::transfers::pipeline::ScoutingAssignment;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer};
 
-    /// A miniature world: Portugal imports Brazilians heavily and Spaniards
-    /// hardly at all, and Spain is the club doing the looking.
-    struct ReachFixtures;
+    struct Fx;
 
-    impl ReachFixtures {
-        const BR: u32 = 1;
-        const PT: u32 = 2;
-        const ES: u32 = 3;
+    impl Fx {
+        const SCOUT: u32 = 501;
+        const AFFORDABLE: u32 = 21;
+        const OUT_OF_REACH: u32 = 22;
 
-        fn day() -> NaiveDate {
-            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap()
+        fn midfielder(id: u32, salary: u32) -> Player {
+            TestPlayer::new(id)
+                .position(PlayerPositionType::MidfielderCenter)
+                .ability(130)
+                .age(25)
+                .skills_match_ability()
+                .contract_until(salary, TestDate::on(2029, 6, 30))
+                .build()
         }
 
-        fn facts(id: u32, code: &str, continent: u32, top: u16) -> MarketCountryFacts {
-            MarketCountryFacts {
-                id,
-                code: code.to_string(),
-                continent_id: continent,
-                region: ScoutingRegion::from_country(continent, code),
-                reputation: top,
-                top_flight_reputation: top,
-                median_top_flight_wage: 500_000,
-            }
-        }
-
-        fn weight(country_id: u32, weight: f32) -> CorridorWeight {
-            CorridorWeight {
-                country_id,
-                weight,
-                money: false,
-            }
-        }
-
-        fn world() -> MarketMap {
-            let mut facts = FxHashMap::default();
-            for f in [
-                Self::facts(Self::BR, "br", 3, 7800),
-                Self::facts(Self::PT, "pt", 1, 7500),
-                Self::facts(Self::ES, "es", 1, 9200),
-            ] {
-                facts.insert(f.id, f);
-            }
-            let mut profiles = FxHashMap::default();
-            // Spain's clubs buy Brazilians; they do not import Portuguese
-            // nationals at anything like the same rate.
-            profiles.insert(
-                Self::ES,
-                CountryTransferProfile {
-                    import: vec![Self::weight(Self::BR, 1.0), Self::weight(Self::PT, 0.05)],
-                    ..Default::default()
-                },
+        /// A small club whose scout attends a big club's match today, sent
+        /// for a central midfielder.
+        fn country() -> Country {
+            let today = TestDate::today();
+            let mut buyer = TestClub::new(1).reputation(2_000).build();
+            let mut assignment = ScoutingAssignment::new(
+                7,
+                70,
+                Some(Self::SCOUT),
+                PlayerPositionType::MidfielderCenter,
+                60,
+                16,
+                35,
+                1_000_000.0,
             );
-            profiles.insert(
-                Self::BR,
-                CountryTransferProfile {
-                    export: vec![Self::weight(Self::ES, 1.0), Self::weight(Self::PT, 1.0)],
-                    ..Default::default()
-                },
-            );
-            profiles.insert(
-                Self::PT,
-                CountryTransferProfile {
-                    import: vec![Self::weight(Self::BR, 1.0)],
-                    export: vec![Self::weight(Self::ES, 0.05)],
-                    ..Default::default()
-                },
-            );
-            MarketMap::new(profiles, facts)
+            assignment.completed = false;
+            buyer.transfer_plan.scouting_assignments.push(assignment);
+            buyer
+                .transfer_plan
+                .scout_match_assignments
+                .push(ScoutMatchAssignment {
+                    scout_staff_id: Self::SCOUT,
+                    target_team_id: 20,
+                    target_club_id: 2,
+                    linked_assignment_ids: vec![7],
+                    last_attended: None,
+                });
+            let mut seller = TestClub::new(2)
+                .reputation(7_000)
+                .players(vec![
+                    Self::midfielder(Self::AFFORDABLE, 60_000),
+                    Self::midfielder(Self::OUT_OF_REACH, 40_000_000),
+                ])
+                .build();
+            seller.teams.teams[0]
+                .match_history
+                .add(MatchHistoryItem::new(
+                    today.and_hms_opt(0, 0, 0).unwrap(),
+                    99,
+                    (
+                        TeamScore::new_with_score(20, 2),
+                        TeamScore::new_with_score(99, 0),
+                    ),
+                ));
+            TestCountry::new(1).clubs(vec![buyer, seller]).build()
         }
     }
 
-    /// The defect the pair key exists for: a Brazilian at Porto and a
-    /// Portuguese at Porto are two different market questions, and keying
-    /// the memo on the LEAGUE alone let whichever was scored first decide
-    /// the reach for both.
+    /// The scout sees both men; the club opens a file only on the one the
+    /// gate lets it watch.
     #[test]
-    fn two_passports_at_one_club_are_two_different_markets() {
-        let map = ReachFixtures::world();
-        let ledger = ClubMarketLedger::default();
-        let cache = MarketReachCache::new();
-        let no_scouts = |_: u32| -> u8 { 0 };
-
-        let brazilian = cache.reach_for_pair(
-            &map,
-            ReachFixtures::ES,
-            &ledger,
-            (ReachFixtures::BR, ReachFixtures::PT),
-            ReachFixtures::day(),
-            &no_scouts,
-        );
-        let portuguese = cache.reach_for_pair(
-            &map,
-            ReachFixtures::ES,
-            &ledger,
-            (ReachFixtures::PT, ReachFixtures::PT),
-            ReachFixtures::day(),
-            &no_scouts,
+    fn a_standout_the_gate_does_not_let_his_club_watch_gets_no_file() {
+        let mut country = Fx::country();
+        let today = TestDate::today();
+        for _ in 0..3 {
+            ScoutingPass::process_match_scouting(&mut country, today);
+        }
+        let plan = &country.clubs[0].transfer_plan;
+        assert!(
+            !plan.monitorings_for_player(Fx::AFFORDABLE).is_empty(),
+            "the standout the club could pay is filed"
         );
         assert!(
-            brazilian > portuguese * 1.5,
-            "a Brazilian at Porto ({brazilian}) must read differently from a \
-             Portuguese at Porto ({portuguese})"
+            plan.monitorings_for_player(Fx::OUT_OF_REACH).is_empty(),
+            "the one on a wage it could never hold is not"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shadow_seed_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::pipeline::{ShadowReport, TransferNeedReason};
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+    use crate::transfers::view::world::WorldPoolIndex;
+
+    struct Fx;
+
+    impl Fx {
+        fn shadow(player_id: u32) -> ShadowReport {
+            ShadowReport {
+                report: DetailedScoutingReport {
+                    player_id,
+                    assignment_id: 1,
+                    assessed_ability: 110,
+                    assessed_potential: 120,
+                    confidence: 0.8,
+                    estimated_value: 500_000.0,
+                    recommendation: ScoutingRecommendation::Buy,
+                    role_fit: 1.0,
+                    risk_flags: Vec::new(),
+                },
+                position_group: PlayerFieldPositionGroup::Midfielder,
+                observed_ability: 110,
+                recorded_on: TestDate::on(2026, 1, 31),
+            }
+        }
+    }
+
+    /// A new window reads last window's reports again before they seed
+    /// anything: the man who has since moved out of the club's standing
+    /// seeds no report.
+    #[test]
+    fn a_report_from_last_window_is_read_again_before_it_is_used() {
+        let mut club = TestClub::new(1).reputation(2_000).build();
+        club.transfer_plan.initialized = true;
+        club.transfer_plan
+            .transfer_requests
+            .push(TransferRequest::new(
+                5,
+                PlayerPositionType::MidfielderCenter,
+                TransferNeedPriority::Important,
+                TransferNeedReason::QualityUpgrade,
+                90,
+                110,
+                1_000_000.0,
+            ));
+        club.transfer_plan.shadow_reports.push(Fx::shadow(30));
+        club.transfer_plan.shadow_reports.push(Fx::shadow(31));
+        let mut country = TestCountry::new(1)
+            .league_reputation(2_000)
+            .clubs(vec![club])
+            .build();
+
+        let still_in_reach = TestSummary::new(30)
+            .club_id(2)
+            .league(2_000, 0.2)
+            .salary(80_000)
+            .build();
+        let moved_on = TestSummary::new(31)
+            .club_id(3)
+            .league(8_000, 0.85)
+            .ability(150)
+            .reputation(7_000)
+            .salary(9_000_000)
+            .build();
+        let pool = vec![still_in_reach, moved_on];
+        let index = WorldPoolIndex::build(&pool);
+        ScoutingPass::assign_scouts(
+            &mut country,
+            WorldPool::new(&pool, &index),
+            &MarketMap::default(),
+            TestDate::today(),
         );
 
-        // And the order they are asked in must not change either answer.
-        let fresh = MarketReachCache::new();
-        let portuguese_first = fresh.reach_for_pair(
-            &map,
-            ReachFixtures::ES,
-            &ledger,
-            (ReachFixtures::PT, ReachFixtures::PT),
-            ReachFixtures::day(),
-            &no_scouts,
-        );
-        let brazilian_second = fresh.reach_for_pair(
-            &map,
-            ReachFixtures::ES,
-            &ledger,
-            (ReachFixtures::BR, ReachFixtures::PT),
-            ReachFixtures::day(),
-            &no_scouts,
-        );
-        assert_eq!(portuguese_first, portuguese);
-        assert_eq!(brazilian_second, brazilian);
+        let seeded: Vec<u32> = country.clubs[0]
+            .transfer_plan
+            .scouting_reports
+            .iter()
+            .map(|r| r.player_id)
+            .collect();
+        assert_eq!(seeded, vec![30]);
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::shared::{Currency, CurrencyValue};
+    use crate::transfers::deal::negotiation::TransferNegotiation;
+    use crate::transfers::deal::offer::TransferOffer;
+    use crate::transfers::gate::{TransferMoveStage, TransferPlausibilityReason};
+    use crate::transfers::pipeline::{
+        ShortlistCandidate, ShortlistCandidateStatus, TransferNeedReason,
+    };
+    use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+    use crate::transfers::view::world::WorldPoolIndex;
+
+    const STILL_FITS: u32 = 30;
+    const MOVED_ON: u32 = 31;
+
+    struct Fx;
+
+    impl Fx {
+        fn monday() -> NaiveDate {
+            TestDate::on(2026, 7, 6)
+        }
+
+        fn seen(player_id: u32) -> FileObservation {
+            FileObservation {
+                scout_staff_id: 1,
+                player_id,
+                source: ScoutMonitoringSource::StaffRecommendation,
+                transfer_request_id: None,
+                origin_assignment_id: None,
+                region: None,
+                assessed_ability: 110,
+                assessed_potential: 120,
+                confidence: 0.7,
+                role_fit: 1.0,
+                estimated_value: 500_000.0,
+                risk_flags: Vec::new(),
+                is_match: false,
+            }
+        }
+
+        /// A small club holding a file on each man, both read as fitting
+        /// when they were filed.
+        fn country() -> Country {
+            let mut club = TestClub::new(1).reputation(2_000).build();
+            let filed = FileReading {
+                stage: TransferMoveStage::CanCompleteMove,
+                stopped_by: None,
+                read_on: TestDate::today(),
+            };
+            for player_id in [STILL_FITS, MOVED_ON] {
+                club.transfer_plan
+                    .keep_file(filed, Fx::seen(player_id), TestDate::today());
+            }
+            TestCountry::new(1)
+                .league_reputation(2_000)
+                .clubs(vec![club])
+                .build()
+        }
+
+        /// One man still on a wage the club can carry; the other has since
+        /// signed at a big club on a wage it could not hold for one shirt.
+        fn pool() -> Vec<PlayerSummary> {
+            vec![
+                TestSummary::new(STILL_FITS)
+                    .club_id(2)
+                    .league(2_000, 0.2)
+                    .salary(80_000)
+                    .build(),
+                TestSummary::new(MOVED_ON)
+                    .club_id(3)
+                    .league(2_000, 0.85)
+                    .salary(9_000_000)
+                    .build(),
+            ]
+        }
+
+        fn review(country: &mut Country) {
+            let pool = Fx::pool();
+            let index = WorldPoolIndex::build(&pool);
+            ScoutingPass::review_files(
+                country,
+                WorldPool::new(&pool, &index),
+                &MarketMap::default(),
+                Fx::monday(),
+            );
+        }
+
+        fn negotiate(country: &mut Country, player_id: u32) {
+            let offer = TransferOffer::new(
+                CurrencyValue::new(5_000_000.0, Currency::Usd),
+                1,
+                Fx::monday(),
+            );
+            let negotiation = TransferNegotiation::new(
+                7001,
+                player_id,
+                0,
+                3,
+                1,
+                offer,
+                Fx::monday(),
+                0.7,
+                0.18,
+                27,
+                10.0,
+            );
+            country
+                .transfer_market
+                .negotiations
+                .insert(7001, negotiation);
+        }
     }
 
     #[test]
-    fn a_world_with_no_geography_reads_every_market_as_open() {
-        let cache = MarketReachCache::new();
-        let ledger = ClubMarketLedger::default();
+    fn a_man_who_moved_out_of_reach_has_his_file_closed() {
+        let mut country = Fx::country();
+
+        Fx::review(&mut country);
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert!(plan.monitorings_for_player(MOVED_ON).is_empty());
+        let reading = plan.file_reading(MOVED_ON).copied().unwrap();
+        assert_eq!(reading.read_on, Fx::monday());
+        assert!(!reading.allows(PursuitAction::KeepFile));
         assert_eq!(
-            cache.reach_for_pair(
-                &MarketMap::default(),
-                ReachFixtures::ES,
-                &ledger,
-                (ReachFixtures::BR, ReachFixtures::PT),
-                ReachFixtures::day(),
-                &|_| 0,
-            ),
-            1.0
+            reading.stopped_by,
+            Some(TransferPlausibilityReason::UnaffordableWages),
+            "the club remembers why"
+        );
+    }
+
+    #[test]
+    fn a_file_that_still_stands_is_kept_as_it_is() {
+        let mut country = Fx::country();
+        let before = country.clubs[0]
+            .transfer_plan
+            .monitorings_for_player(STILL_FITS)
+            .iter()
+            .map(|m| (m.times_watched, m.confidence, m.last_observed))
+            .collect::<Vec<_>>();
+
+        Fx::review(&mut country);
+
+        let plan = &country.clubs[0].transfer_plan;
+        let after = plan
+            .monitorings_for_player(STILL_FITS)
+            .iter()
+            .map(|m| (m.times_watched, m.confidence, m.last_observed))
+            .collect::<Vec<_>>();
+        assert_eq!(before.len(), 1);
+        assert_eq!(after, before);
+        assert!(
+            plan.file_reading(STILL_FITS)
+                .is_some_and(|r| r.allows(PursuitAction::KeepFile) && r.read_on == Fx::monday())
+        );
+    }
+
+    /// A shortlist whose next name has moved out of reach: the review
+    /// closes his place, the cursor moves on to the man still in reach, and
+    /// a list it empties sends the request back to be searched again.
+    #[test]
+    fn a_closed_shortlist_place_does_not_hold_the_cursor() {
+        let mut country = Fx::country();
+        let plan = &mut country.clubs[0].transfer_plan;
+        plan.transfer_requests.push(TransferRequest::new(
+            5,
+            PlayerPositionType::MidfielderCenter,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+            90,
+            110,
+            1_000_000.0,
+        ));
+        plan.transfer_requests[0].status = TransferRequestStatus::Shortlisted;
+        let filed = FileReading {
+            stage: TransferMoveStage::CanCompleteMove,
+            stopped_by: None,
+            read_on: TestDate::today(),
+        };
+        for player_id in [MOVED_ON, STILL_FITS] {
+            plan.shortlist(
+                filed,
+                5,
+                1_000_000.0,
+                ShortlistCandidate {
+                    player_id,
+                    score: 0.5,
+                    estimated_fee: 500_000.0,
+                    status: ShortlistCandidateStatus::Available,
+                },
+                None,
+            );
+        }
+
+        Fx::review(&mut country);
+
+        let plan = &country.clubs[0].transfer_plan;
+        let list = &plan.shortlists[0];
+        assert_eq!(
+            list.candidates[0].status,
+            ShortlistCandidateStatus::Unavailable
+        );
+        assert_eq!(
+            list.current_candidate().map(|c| c.player_id),
+            Some(STILL_FITS)
+        );
+        assert_eq!(
+            plan.transfer_requests[0].status,
+            TransferRequestStatus::Shortlisted
+        );
+    }
+
+    #[test]
+    fn a_shortlist_the_review_empties_reopens_its_request() {
+        let mut country = Fx::country();
+        let plan = &mut country.clubs[0].transfer_plan;
+        plan.transfer_requests.push(TransferRequest::new(
+            5,
+            PlayerPositionType::MidfielderCenter,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+            90,
+            110,
+            1_000_000.0,
+        ));
+        plan.transfer_requests[0].status = TransferRequestStatus::Shortlisted;
+        plan.shortlist(
+            FileReading {
+                stage: TransferMoveStage::CanCompleteMove,
+                stopped_by: None,
+                read_on: TestDate::today(),
+            },
+            5,
+            1_000_000.0,
+            ShortlistCandidate {
+                player_id: MOVED_ON,
+                score: 0.5,
+                estimated_fee: 500_000.0,
+                status: ShortlistCandidateStatus::Available,
+            },
+            None,
+        );
+
+        Fx::review(&mut country);
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert!(plan.shortlists[0].all_exhausted());
+        assert_eq!(
+            plan.transfer_requests[0].status,
+            TransferRequestStatus::Pending
+        );
+    }
+
+    #[test]
+    fn a_negotiation_holds_the_file_open() {
+        let mut country = Fx::country();
+        Fx::negotiate(&mut country, MOVED_ON);
+
+        Fx::review(&mut country);
+
+        let plan = &country.clubs[0].transfer_plan;
+        assert_eq!(plan.monitorings_for_player(MOVED_ON).len(), 1);
+        assert!(
+            plan.file_reading(MOVED_ON)
+                .is_some_and(|r| !r.allows(PursuitAction::KeepFile))
+        );
+    }
+
+    /// A board approval marks his rows as negotiating before any talks
+    /// open; with none live, the mark holds nothing at the review.
+    #[test]
+    fn a_negotiating_mark_with_no_talks_does_not_hold_the_file() {
+        let mut country = Fx::country();
+        country.clubs[0]
+            .transfer_plan
+            .set_monitoring_status_for_player(MOVED_ON, ScoutMonitoringStatus::Negotiating);
+
+        Fx::review(&mut country);
+
+        assert!(
+            country.clubs[0]
+                .transfer_plan
+                .monitorings_for_player(MOVED_ON)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_review_runs_on_mondays_only() {
+        let mut country = Fx::country();
+        let pool = Fx::pool();
+        let index = WorldPoolIndex::build(&pool);
+
+        ScoutingPass::review_files(
+            &mut country,
+            WorldPool::new(&pool, &index),
+            &MarketMap::default(),
+            Fx::monday().succ_opt().unwrap(),
+        );
+
+        assert_eq!(
+            country.clubs[0]
+                .transfer_plan
+                .monitorings_for_player(MOVED_ON)
+                .len(),
+            1
         );
     }
 }

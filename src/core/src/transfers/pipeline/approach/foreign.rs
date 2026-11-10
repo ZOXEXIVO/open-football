@@ -13,6 +13,7 @@
 //! seller-side facts staged here because the buying country's resolver cannot
 //! reach back over the border to recompute them.
 
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::loan::LoanAssetGuard;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::value::asking::AskingPrice;
@@ -325,38 +326,32 @@ impl ForeignApproachPass {
         // negotiation — refuse it here so no synthetic listing is created
         // and the shortlist advances past the dud. This is the gate that
         // stops Sambenedettese opening talks for a Spartak first-teamer.
-        let plausibility_inputs = TransferPlausibilityBuilder::from_global(
-            buy_country,
-            buy_club,
-            sell_country,
-            sell_club,
-            player,
-            asking_price.amount,
-            is_loan,
-            true, // unsolicited — the buyer is reaching out abroad
-            date,
+        let Some(summary) = PlayerSummaryBuilder::one(sell_country, sell_club, player, date) else {
+            return Resolution::Skip;
+        };
+        let assessment = TransferMovePlausibility::read(
+            &buyer.suitor,
+            &summary,
+            MoveTerms::for_player(player, buy_club, date, is_loan, true, asking_price.amount),
             market_map,
         );
-        let assessment = TransferMovePlausibility::assess(&plausibility_inputs);
         if TransferTrace::is(cand.player_id) {
             TransferTrace::line(
                 cand.player_id,
                 "plaus",
                 format!(
-                    "buyer={} ({}) seller={} stage={:?} asking={:.0} budget={:.0} \
-             agent_channel={} — {}",
+                    "buyer={} ({}) seller={} stage={:?} asking={:.0} budget={:.0} — {}",
                     buy_club.name,
                     buy_club.id,
                     selling_club_name,
                     assessment.stage,
                     asking_price.amount,
                     budget,
-                    plausibility_inputs.is_agent_circulated(),
                     assessment.diagnostics.explain(),
                 ),
             );
         }
-        if !assessment.reaches(TransferMoveStage::CanStartNegotiation) {
+        if !assessment.reaches(PursuitAction::Negotiate.needs()) {
             debug!(
                 "Foreign negotiation suppressed: club {} won't pursue {} ({}) from {} — {}",
                 cand.buying_club_id,
@@ -398,8 +393,7 @@ impl ForeignApproachPass {
         // this the cross-border path could only fall back to a bare
         // prestige wall, which is precisely what refused every money
         // move before the money was looked at (L1).
-        let staged_sporting_drop =
-            TransferPlausibilityEvaluator::sporting_drop(&plausibility_inputs);
+        let staged_sporting_drop = assessment.diagnostics.sporting_drop;
         // No listing is bound to a cross-border approach — the buyer
         // reads his badges, not a row in its own market.
         let availability = AvailabilityView::read(player, is_loan, None);
@@ -473,24 +467,15 @@ impl ForeignApproachPass {
             .iter()
             .find(|c| c.id == cand.buying_club_id)?;
 
-        let buying_rep = buy_club
-            .teams
-            .teams
-            .first()
-            .map(|t| t.reputation.world as f32 / 10000.0)
-            .unwrap_or(0.3);
+        let suitor = Suitor::of(buy_country, buy_club, date);
+        let buying_rep = suitor.standing;
         let rep_level = buy_club
             .teams
-            .teams
-            .first()
+            .main()
+            .or_else(|| buy_club.teams.teams.first())
             .map(|t| t.reputation.level())
             .unwrap_or(ReputationLevel::Amateur);
-        let budget = buy_club
-            .finance
-            .transfer_budget
-            .as_ref()
-            .map(|b| b.amount)
-            .unwrap_or_else(|| (buy_club.finance.balance.balance.max(0) as f64) * 0.3);
+        let budget = suitor.spend();
 
         let request = buy_club
             .transfer_plan
@@ -519,14 +504,7 @@ impl ForeignApproachPass {
             .map(|m| m.confidence)
             .or_else(|| scouting_report.map(|r| r.confidence));
 
-        let buying_league_reputation = buy_club
-            .teams
-            .teams
-            .first()
-            .and_then(|t| t.league_id)
-            .and_then(|lid| buy_country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
+        let buying_league_reputation = suitor.division;
 
         // Same "gettable" / wage-room signals as the domestic path.
         let target_available = player.statuses.has(PlayerStatusType::Lst)
@@ -588,6 +566,7 @@ impl ForeignApproachPass {
         Some(ForeignBuyer {
             country: buy_country,
             club: buy_club,
+            suitor,
             rep: buying_rep,
             league_reputation: buying_league_reputation,
             budget,
@@ -641,6 +620,7 @@ impl ForeignApproachPass {
             is_loan,
             has_option_to_buy,
             is_prospect_purchase,
+            suitor,
         } = buyer;
         let StagedSellerFacts {
             seller_importance: foreign_seller_importance,
@@ -684,6 +664,7 @@ impl ForeignApproachPass {
         let outcome = ApproachBuilder::build(
             &ApproachBuyer {
                 club: buy_club,
+                suitor: &suitor,
                 team: buy_team,
                 plan: &buy_club.transfer_plan,
                 rep_score: buying_rep,
@@ -1023,6 +1004,7 @@ struct ForeignTick<'a> {
 struct ForeignBuyer<'a> {
     country: &'a Country,
     club: &'a Club,
+    suitor: Suitor<'a>,
     rep: f32,
     league_reputation: u16,
     budget: f64,

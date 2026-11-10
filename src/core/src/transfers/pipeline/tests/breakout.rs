@@ -25,12 +25,7 @@ impl BreakoutFixtures {
     fn top_domestic_buyer(weak_group: bool) -> BuyerContext {
         BuyerContext {
             buyer_rep_score: 0.72,
-            buyer_world_rep: 5800,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 20_000_000,
-            buyer_wage_budget: 60_000_000,
             plan_total_budget: 30_000_000.0,
-            max_recommend_value: 60_000_000.0,
             buyer_best_in_group: if weak_group { 118 } else { 135 },
             has_open_request: false,
             has_aging_starter: false,
@@ -56,7 +51,6 @@ impl BreakoutFixtures {
             is_loan_listed: true,
             breakout_score: 55.0,
             world_reputation: 5000,
-            current_reputation: 4800,
             ambition: 0.7,
             parent_club_score: 0.40,
             parent_club_in_debt: false,
@@ -65,7 +59,6 @@ impl BreakoutFixtures {
             low_usage: false,
             recent_interest_count: 0,
             failed_scans: 0,
-            last_block: None,
         }
     }
 }
@@ -113,12 +106,7 @@ fn elite_club_skips_breakout_player_who_is_no_upgrade_no_resale_no_need() {
     // The breakout score does not manufacture a reason to buy.
     let elite = BuyerContext {
         buyer_rep_score: 0.90,
-        buyer_world_rep: 8500,
-        buyer_league_reputation: 9000,
-        buyer_total_wages: 120_000_000,
-        buyer_wage_budget: 250_000_000,
         plan_total_budget: 150_000_000.0,
-        max_recommend_value: 300_000_000.0,
         buyer_best_in_group: 165, // well-stocked
         has_open_request: false,
         has_aging_starter: false,
@@ -134,7 +122,6 @@ fn elite_club_skips_breakout_player_who_is_no_upgrade_no_resale_no_need() {
     target.is_listed = true;
     target.is_loan_listed = false;
     target.world_reputation = 6000;
-    target.current_reputation = 6000;
     target.breakout_score = 55.0;
     assert_eq!(
         ListedTargetScreen::evaluate(&target, &elite),
@@ -144,73 +131,25 @@ fn elite_club_skips_breakout_player_who_is_no_upgrade_no_resale_no_need() {
 }
 
 #[test]
-fn breakout_does_not_bypass_affordability() {
-    // Req: the breakout signal affects discovery but never the hard
-    // affordability gate. A strong breakout with an out-of-budget fee is
-    // still rejected as unaffordable.
-    let modest_buyer = BuyerContext {
-        buyer_rep_score: 0.55,
-        buyer_world_rep: 3800,
-        buyer_league_reputation: 4000,
-        buyer_total_wages: 3_000_000,
-        buyer_wage_budget: 6_000_000,
-        plan_total_budget: 500_000.0, // reach ≈ 700k
-        max_recommend_value: 1_000_000.0,
-        buyer_best_in_group: 95,
-        has_open_request: true,
-        has_aging_starter: false,
-        form_discovery_mode: false,
-        fit: SquadFitSnapshot::disabled(),
-    };
-    let mut target = BreakoutFixtures::loan_listed_breakout_striker();
-    target.ability = 110; // inside this tier's window
-    target.estimated_value = 5_000_000.0; // far beyond the buyer's reach
-    target.breakout_score = 60.0;
-    assert_eq!(
-        ListedTargetScreen::evaluate(&target, &modest_buyer),
-        ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee),
-        "a high breakout score must not rescue an unaffordable fee"
-    );
-}
-
-#[test]
-fn availability_sweep_admits_unlisted_breakout_only_for_a_clearly_bigger_buyer() {
-    // P1c: a not-yet-listed breakout (parent_club_score 0.40) is pursued
-    // by the in-window availability sweep (form_discovery_mode = false)
-    // ONLY when the buyer clearly outranks the parent club — the
-    // realistic "giant comes for the smaller club's breakout star". This
-    // converts the year-round breakout monitoring into an actual approach
-    // instead of a row that sits until the selling club lists an asset it
-    // has no reason to list. A peer/smaller buyer still can't pursue an
-    // unlisted player on form alone, and form-discovery mode admits him
-    // for monitoring regardless.
+fn availability_sweep_admits_an_unlisted_breakout_only_in_form_discovery() {
+    // A not-yet-listed breakout is not on the in-window availability sweep
+    // for anybody, however much bigger the buyer: whether a club may pursue
+    // him is the gate's question. The year-round watch admits him for
+    // monitoring on form alone.
     let mut target = BreakoutFixtures::loan_listed_breakout_striker();
     target.is_loan_listed = false; // not on any list at all
     target.breakout_score = 60.0;
 
-    // Clearly bigger buyer (0.72 vs parent 0.40): now pursued in-window.
-    let big_buyer = BreakoutFixtures::top_domestic_buyer(true);
-    assert!(
-        matches!(
-            ListedTargetScreen::evaluate(&target, &big_buyer),
-            ListedTargetVerdict::Accept(_)
-        ),
-        "a clearly bigger club must be able to pursue an unlisted breakout star"
-    );
+    for rep in [0.72, 0.45] {
+        let mut buyer = BreakoutFixtures::top_domestic_buyer(true);
+        buyer.buyer_rep_score = rep;
+        assert_eq!(
+            ListedTargetScreen::evaluate(&target, &buyer),
+            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
+            "an unlisted player is not pursued in-window on form alone"
+        );
+    }
 
-    // A buyer that does NOT clearly outrank the parent: still out. The
-    // availability gate is checked before the tier window, so this is a
-    // clean NotListed regardless of his tier fit.
-    let mut peer_buyer = BreakoutFixtures::top_domestic_buyer(true);
-    peer_buyer.buyer_rep_score = 0.45; // below parent 0.40 + 0.10 gap
-    assert_eq!(
-        ListedTargetScreen::evaluate(&target, &peer_buyer),
-        ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
-        "a peer/smaller club still can't pursue an unlisted player on form alone"
-    );
-
-    // Form-discovery mode (year-round watch): admitted for monitoring on
-    // form, independent of the rep gap.
     let mut watch_buyer = BreakoutFixtures::top_domestic_buyer(true);
     watch_buyer.form_discovery_mode = true;
     assert!(

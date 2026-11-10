@@ -13,7 +13,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Walks `src/transfers` and answers questions about what its sources say.
+/// Walks the crate's sources and answers questions about what they say.
 struct SourceScan;
 
 impl SourceScan {
@@ -23,15 +23,25 @@ impl SourceScan {
 
     /// Every `.rs` file under `src/transfers`, recursively.
     fn sources() -> Vec<PathBuf> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("transfers");
+        Self::sources_under(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("transfers"),
+        )
+    }
+
+    /// Every `.rs` file under `src/`, recursively.
+    fn crate_sources() -> Vec<PathBuf> {
+        Self::sources_under(&Path::new(env!("CARGO_MANIFEST_DIR")).join("src"))
+    }
+
+    fn sources_under(root: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
-        Self::walk(&root, &mut out);
+        Self::walk(root, &mut out);
         assert!(
             !out.is_empty(),
-            "no sources found under src/transfers — the scanner's path is wrong, \
-             not the codebase"
+            "no sources found under {} — the scanner's path is wrong, not the codebase",
+            root.display()
         );
         out
     }
@@ -94,6 +104,91 @@ impl SourceScan {
             let before = at.checked_sub(1).map(|i| bytes[i]);
             let after = bytes.get(at + name.len()).copied();
             !before.is_some_and(is_word) && !after.is_some_and(is_word)
+        })
+    }
+
+    /// A file that only builds tests: one under a `tests` folder, or a
+    /// `tests.rs` beside its module.
+    fn is_test_file(path: &Path) -> bool {
+        path.components().any(|c| c.as_os_str() == "tests")
+            || path.file_stem().and_then(|f| f.to_str()) == Some("tests")
+    }
+
+    /// The source before its test tail, comments dropped, with a method
+    /// chain continued on the next line folded into the line it continues,
+    /// so `plan\n.scout_monitoring\n.push(..)` reads as one statement. The
+    /// tail starts at the first `#[cfg(test)]` that opens an inline module.
+    fn production_statements(src: &str) -> Vec<(usize, String)> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut out: Vec<(usize, String)> = Vec::new();
+        for (index, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed == "#[cfg(test)]"
+                && lines[index + 1..]
+                    .iter()
+                    .map(|l| l.trim())
+                    .find(|l| !l.is_empty())
+                    .is_some_and(|next| next.starts_with("mod ") && next.ends_with('{'))
+            {
+                break;
+            }
+            if trimmed.starts_with("//") || trimmed.is_empty() {
+                continue;
+            }
+            match out.last_mut() {
+                Some((_, statement)) if trimmed.starts_with('.') => statement.push_str(trimmed),
+                _ => out.push((index + 1, trimmed.to_string())),
+            }
+        }
+        out
+    }
+
+    /// Whether `statement` opens or closes a place in one of a club's
+    /// attention collections — `scout_monitoring`, `watchlist`,
+    /// `staff_recommendations`, `shortlists` or a shortlist's `candidates`:
+    /// pushes, inserts, retains, removes, clears, truncates, extends,
+    /// drains, dedups or replaces it. Moving a row through its statuses is
+    /// the negotiation's lifecycle, not a file opened or closed.
+    fn writes_attention(statement: &str) -> bool {
+        const FIELDS: [&str; 5] = [
+            "scout_monitoring",
+            "watchlist",
+            "staff_recommendations",
+            "shortlists",
+            "candidates",
+        ];
+        const WRITES: [&str; 11] = [
+            "push(",
+            "insert(",
+            "retain(",
+            "remove(",
+            "clear(",
+            "truncate(",
+            "extend(",
+            "drain(",
+            "dedup",
+            "swap_remove(",
+            "append(",
+        ];
+        let assigns = |rest: &str| {
+            let rest = rest.trim_start();
+            rest.starts_with('=') && !rest.starts_with("==")
+        };
+        let bytes = statement.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        FIELDS.iter().any(|field| {
+            let needle = format!(".{field}");
+            statement.match_indices(&needle).any(|(at, _)| {
+                let end = at + needle.len();
+                if bytes.get(end).copied().is_some_and(is_word) {
+                    return false;
+                }
+                let rest = &statement[end..];
+                if let Some(call) = rest.trim_start().strip_prefix('.') {
+                    return WRITES.iter().any(|w| call.starts_with(w));
+                }
+                assigns(rest)
+            })
         })
     }
 
@@ -219,6 +314,129 @@ fn the_model_layer_never_names_a_world_object() {
         "the model layer decides from numbers and must not name the world. \
          Either the code belongs in this folder's hydration file, or the \
          value it wants should be read there and passed in.\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// A club's attention on another club's player is opened, kept and closed
+/// in one place: the door on `ClubTransferPlan`, which takes the gate's
+/// reading and remembers it. A route that pushes a monitoring row or a
+/// shortlist place itself skips the reading, and the weekly review can
+/// then only close what it never saw opened.
+///
+/// If this fails: hand the reading to `keep_file`, `board`, `recommend`,
+/// `shortlist` or `open_shortlist`, or add the lifecycle step you need as a
+/// method beside them.
+#[test]
+fn attention_state_is_written_only_through_the_plan() {
+    const OWNER: &str = "transfers/pipeline/mod.rs";
+
+    let mut offenders = Vec::new();
+    for path in SourceScan::crate_sources() {
+        let label = SourceScan::label(&path);
+        if label == OWNER || SourceScan::is_test_file(&path) {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for (line, statement) in SourceScan::production_statements(&src) {
+            if SourceScan::writes_attention(&statement) {
+                offenders.push(format!("{label}:{line}  {statement}"));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "attention state is written only by the plan's door in {OWNER}.\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// The guard above reads statements, not files: these are the shapes it
+/// must catch and the reads it must let through.
+#[test]
+fn the_attention_guard_knows_a_write_from_a_read() {
+    for write in [
+        "club.transfer_plan.scout_monitoring.push(row);",
+        "plan.watchlist = vec![entry];",
+        "plan.staff_recommendations.retain(|r| r.player_id != id);",
+        "shortlist.candidates = candidates;",
+        "list.candidates.insert(at, candidate),",
+        "plan.shortlists.push(TransferShortlist::new(request_id, 0.0));",
+    ] {
+        assert!(SourceScan::writes_attention(write), "missed: {write}");
+    }
+    for read in [
+        "plan.scout_monitoring.iter().filter(|m| m.is_active_interest())",
+        "if plan.watchlist.len() == 0 {",
+        "s.candidates.iter().any(|c| c.player_id == id)",
+        "plan.loan_out_candidates.retain(|c| c.player_id != id);",
+        "let n = plan.shortlists[0].candidates.len();",
+        "plan.staff_recommendations == other",
+        "for m in plan.scout_monitoring.iter_mut() {",
+        "shortlist.candidates[pos].status = ShortlistCandidateStatus::CurrentlyPursuing;",
+    ] {
+        assert!(
+            !SourceScan::writes_attention(read),
+            "flagged a read: {read}"
+        );
+    }
+    let folded = SourceScan::production_statements(
+        "club.transfer_plan\n    .scout_monitoring\n    .push(row);\n",
+    );
+    assert!(SourceScan::writes_attention(&folded[0].1));
+}
+
+/// The gates this crate retired stay retired. Standing fit in
+/// `transfers/gate` answers every route; a second, private realism check
+/// elsewhere is how a route drifted from the rest before.
+#[test]
+fn no_source_names_a_retired_gate() {
+    const RETIRED: [&str; 16] = [
+        "BuyerPlausibilityContext",
+        "MarketReachCache",
+        "RealismBuyer",
+        "RealismConfig",
+        "RealismTarget",
+        "TransferPlausibilityVerdict",
+        "assess_summary",
+        "buyer_outranks_parent",
+        "evaluate_summary",
+        "is_openly_available",
+        "is_target_realistic",
+        "is_target_realistic_fields",
+        "min_source_rep",
+        "selections_read_fringe",
+        "target_affordable_for_buyer",
+        "waives_wage_floor",
+    ];
+
+    let mut offenders = Vec::new();
+    for path in SourceScan::crate_sources() {
+        if path.file_name().and_then(|f| f.to_str()) == Some(SourceScan::SELF) {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for (index, line) in src.lines().enumerate() {
+            if let Some(name) = RETIRED.iter().find(|n| SourceScan::says(line, n)) {
+                offenders.push(format!(
+                    "{}:{}  [{name}]  {}",
+                    SourceScan::label(&path),
+                    index + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "a retired gate is named again — read standing fit through \
+         `TransferMovePlausibility::read` instead.\n{}",
         offenders.join("\n")
     );
 }

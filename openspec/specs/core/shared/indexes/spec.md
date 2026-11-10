@@ -113,9 +113,23 @@ The system SHALL let callers resolve a club's country and continent, and list a 
 ### Requirement: Player and staff monitoring/scouting state is aggregated into presentation-ready rows
 The system SHALL assemble scouting and monitoring information scattered across clubs' scouting departments into per-player and per-staff summary rows (status, confidence, observation counts, workload) ready for direct display, so presentation code does not need to traverse club scouting state itself.
 
+A player's rows SHALL show the files clubs hold on him, as they are stored. The system SHALL NOT read the gate again when the rows are requested. A club the gate would not let watch him holds no file, and a file whose case has gone is closed by that club's weekly review. The clubs shown as interested in public SHALL be those whose stored reading of the move reaches "may show public interest", and those in live talks for him.
+
 #### Scenario: A player being watched by multiple clubs
 - **WHEN** monitoring details are requested for a player who is being scouted by more than one club
 - **THEN** one row per club is returned, excluding the player's own current club and loan parent, ordered with actively-monitoring clubs first by most recent observation and all other interested clubs after
+
+#### Scenario: A club in a division he would not play in is not listed
+- **WHEN** monitoring details are requested for a giant's backup keeper, and a club whose division sits a full refusal span under his floor could not pay what carries him there
+- **THEN** no row is returned for that club, because it holds no file on him
+
+#### Scenario: A club negotiating for him is always listed
+- **WHEN** a club has a live negotiation for him
+- **THEN** its row is returned
+
+#### Scenario: The rows and the state agree
+- **WHEN** monitoring details are requested for any player
+- **THEN** every club that holds an active file on him has a row, and no row is left out by a rule applied at display time
 
 ### Requirement: Person full names produce a single consistent display and slug across nicknames and mononyms
 The system SHALL derive a person's displayed first/last name and a URL-safe slug from their stored first name, last name, optional middle name, and optional nickname, using one consistent rule: an effective (non-empty) nickname is shown alone, a person with no last name is treated as a mononym and shown by their first name alone, and everyone else is shown as first plus last name.

@@ -18,7 +18,6 @@ use crate::transfers::TransferWindowManager;
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::knowledge::PlacementReachIndex;
 use crate::transfers::pipeline::MarketCirculation;
-use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::shortlist::ShortlistPass;
@@ -28,6 +27,7 @@ use crate::transfers::scouting::watch::FormWatch;
 use crate::transfers::scouting::watchlist::Watchlist;
 use crate::transfers::squad::SquadReviewPass;
 use crate::transfers::view::world::ForeignPool;
+use crate::transfers::view::world::WorldPool;
 use crate::transfers::{MarketMap, ScoutMarketDesk};
 use crate::utils::PerformanceProfiler;
 use crate::world::SimulatorData;
@@ -139,7 +139,7 @@ impl TransferTick {
     pub(crate) fn simulate_transfer_market_local(
         country: &mut Country,
         current_date: NaiveDate,
-        world_pool: &[PlayerSummary],
+        world_pool: WorldPool<'_>,
         global_free_agents: &[GlobalFreeAgentSummary],
         market_map: &MarketMap,
         placement_reach: &PlacementReachIndex,
@@ -159,7 +159,7 @@ impl TransferTick {
         // exists year-round now: the breakout watch runs weekly whatever
         // the window says (scouts don't stop watching football in
         // October), while the negotiation-side passes stay window-gated.
-        let foreign_players = ForeignPool::of(world_pool, country_id);
+        let foreign_players = world_pool.foreign(country_id);
 
         let mut ops = DeferredTransferOps::empty(country_id);
         ops.window_open = window_open;
@@ -214,7 +214,7 @@ impl TransferTick {
             );
         }
 
-        Self::run_year_round_tail(country, current_date, foreign_players);
+        Self::run_year_round_tail(country, current_date, foreign_players, market_map);
 
         ops.pre_contract_signed = summary.signed_pre_contract;
         debug!(
@@ -562,7 +562,7 @@ impl TransferTick {
     fn run_year_round_passes(
         country: &mut Country,
         current_date: NaiveDate,
-        world_pool: &[PlayerSummary],
+        world_pool: WorldPool<'_>,
         foreign_players: ForeignPool<'_>,
         market_map: &MarketMap,
     ) {
@@ -592,13 +592,27 @@ impl TransferTick {
             "tm_staff_recommendations",
             3,
             || country_name.clone(),
-            || StaffRecommendations::generate_staff_recommendations(country, current_date),
+            || {
+                StaffRecommendations::generate_staff_recommendations(
+                    country,
+                    world_pool,
+                    market_map,
+                    current_date,
+                )
+            },
         );
         PerformanceProfiler::stage_labelled(
             "tm_process_staff_recs",
             3,
             || country_name.clone(),
-            || StaffRecommendations::process_staff_recommendations(country, current_date),
+            || {
+                StaffRecommendations::process_staff_recommendations(
+                    country,
+                    world_pool,
+                    market_map,
+                    current_date,
+                )
+            },
         );
         // The club's standing knowledge of the market: names within reach
         // and within the brief's envelope for each shirt it means to fill.
@@ -619,13 +633,13 @@ impl TransferTick {
             "tm_refresh_watchlists",
             3,
             || country_name.clone(),
-            || Watchlist::refresh_watchlists(country, world_pool, current_date),
+            || Watchlist::refresh_watchlists(country, world_pool, market_map, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_assign_scouts",
             3,
             || country_name.clone(),
-            || ScoutingPass::assign_scouts(country, current_date),
+            || ScoutingPass::assign_scouts(country, world_pool, market_map, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_assign_match_scouts",
@@ -681,13 +695,20 @@ impl TransferTick {
             "tm_circulate_available",
             3,
             || country_name.clone(),
-            || MarketCirculation::circulate_available_players(country, current_date),
+            || MarketCirculation::circulate_available_players(country, market_map, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_build_shortlists",
             3,
             || country_name.clone(),
-            || ShortlistPass::build_shortlists(country, current_date),
+            || {
+                ShortlistPass::build_shortlists(
+                    country,
+                    foreign_players.world(),
+                    market_map,
+                    current_date,
+                )
+            },
         );
         PerformanceProfiler::stage_labelled(
             "tm_board_approvals",
@@ -699,7 +720,7 @@ impl TransferTick {
             "tm_initiate_negotiations",
             3,
             || country_name.clone(),
-            || ApproachPass::initiate_negotiations(country, current_date),
+            || ApproachPass::initiate_negotiations(country, market_map, current_date),
         );
         // Seller-side push runs BEFORE the borrower scan: a National+ parent
         // evaluates the whole market and places each loan-listed development
@@ -754,8 +775,25 @@ impl TransferTick {
         country: &mut Country,
         current_date: NaiveDate,
         foreign_players: ForeignPool<'_>,
+        market_map: &MarketMap,
     ) {
         let country_name = country.name.clone();
+
+        // The department re-reads its own files weekly and closes those
+        // whose case has gone.
+        PerformanceProfiler::stage_labelled(
+            "tm_review_files",
+            3,
+            || country_name.clone(),
+            || {
+                ScoutingPass::review_files(
+                    country,
+                    foreign_players.world(),
+                    market_map,
+                    current_date,
+                )
+            },
+        );
 
         PerformanceProfiler::stage_labelled(
             "tm_shadow_reports",
@@ -771,7 +809,7 @@ impl TransferTick {
             "tm_breakout_form",
             3,
             || country_name.clone(),
-            || FormWatch::scan_breakout_form(country, foreign_players, current_date),
+            || FormWatch::scan_breakout_form(country, foreign_players, market_map, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_sync_wanted",

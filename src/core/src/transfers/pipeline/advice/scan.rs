@@ -29,25 +29,27 @@ use std::cmp::Ordering;
 use super::{
     BuyerContext, BuyerNeedPicture, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
 };
-use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::club::staff::recruitment::ResolvedStaff;
+use crate::transfers::MarketMap;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::gate::TransferPlausibilityVerdict;
-use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::gate::{
+    MoveTerms, PursuitAction, TransferMoveAssessment, TransferMovePlausibility,
+};
 use crate::transfers::loan::interest::{ClubOpinion, InterestDraw};
 use crate::transfers::pipeline::{
-    ClubTransferPlan, RecommendationSource, RecommendationType, StaffRecommendation,
-    TransferRequestStatus,
+    ClubTransferPlan, FileObservation, FileReading, RecommendationSource, RecommendationType,
+    StaffRecommendation, TransferRequestStatus,
 };
 use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
 use crate::transfers::scouting::exposure::{
     FreeAgentBuyerContext, FreeAgentRecommendationSignals, OpportunisticFreeAgentScout,
 };
 use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
-use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::view::player::CountryPlayerLookup;
+use crate::transfers::view::world::WorldPool;
 use crate::utils::IntegerUtils;
 use crate::utils::PerformanceProfiler;
 use crate::{
@@ -112,8 +114,6 @@ struct PlayerSnapshot {
     /// given club to land this player at all (Mbappé to Levante
     /// is reputation-implausible regardless of fee).
     world_reputation: i16,
-    /// Current reputation 0..10000 — drives wage proxy.
-    current_reputation: i16,
     // Observable performance
     average_rating: f32,
     appearances: u16,
@@ -128,8 +128,6 @@ struct PlayerSnapshot {
     recent_interest_count: u8,
     /// Consecutive weekly circulation scans that found no taker.
     failed_scans: u16,
-    /// Most recent circulation diagnosis of why the market stalled.
-    last_block: Option<AvailabilityBlockReason>,
     /// Performance-breakout discovery score (0..100), computed once
     /// here from the league performance lookup so the listed-star
     /// sweep and the scout-network scorer share one number.
@@ -260,7 +258,6 @@ impl SnapshotPass {
                                 is_unhappy: player.statuses.has(PlayerStatusType::Unh),
                                 ambition: player.attributes.ambition,
                                 world_reputation: player.player_attributes.world_reputation,
-                                current_reputation: player.player_attributes.current_reputation,
                                 // Recommendation feature row: regressed value.
                                 average_rating,
                                 appearances,
@@ -275,9 +272,6 @@ impl SnapshotPass {
                                     .availability_market_state()
                                     .map(|s| s.failed_scans)
                                     .unwrap_or(0),
-                                last_block: player
-                                    .availability_market_state()
-                                    .and_then(|s| s.last_block.map(|(_, reason)| reason)),
                                 breakout_score,
                             });
                         }
@@ -316,11 +310,11 @@ struct ClubAdviceScan<'a> {
     avg_ability: u8,
     club_rep: ReputationLevel,
     club_rep_score: f32,
-    club_world_rep: i16,
-    club_league_reputation: u16,
     club_total_wages: u32,
     club_wage_budget: u32,
-    buyer_plaus_ctx: BuyerPlausibilityContext,
+    suitor: Suitor<'a>,
+    world: WorldPool<'a>,
+    market_map: &'a MarketMap,
     already_recommended: Vec<u32>,
     max_recommend_value: f64,
     memory_recommender_id: Option<u32>,
@@ -346,6 +340,8 @@ impl<'a> ClubAdviceScan<'a> {
         club: &'a Club,
         snapshots: &'a [PlayerSnapshot],
         lookup: &'a CountryPlayerLookup,
+        world: WorldPool<'a>,
+        market_map: &'a MarketMap,
         tick: AdviceTick,
     ) -> Option<Self> {
         let date = tick.date;
@@ -377,12 +373,6 @@ impl<'a> ClubAdviceScan<'a> {
 
         let club_rep = team.reputation.level();
         let club_rep_score = team.reputation.overall_score();
-        let club_world_rep = team.reputation.world as i16;
-        let club_league_reputation = team
-            .league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .map(|l| l.reputation)
-            .unwrap_or(0);
         let club_total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
         let club_wage_budget: u32 = club
             .finance
@@ -391,10 +381,7 @@ impl<'a> ClubAdviceScan<'a> {
             .map(|b| b.amount.max(0.0) as u32)
             .unwrap_or(club_total_wages.saturating_mul(11) / 10);
 
-        // Buyer context for the plausibility gate. Built once per
-        // club so each recommendation sub-path can veto unrealistic
-        // targets without re-walking reputation / wage data.
-        let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
+        let suitor = Suitor::of(country, club, date);
 
         let already_recommended: Vec<u32> = plan
             .staff_recommendations
@@ -426,11 +413,11 @@ impl<'a> ClubAdviceScan<'a> {
             avg_ability,
             club_rep,
             club_rep_score,
-            club_world_rep,
-            club_league_reputation,
             club_total_wages,
             club_wage_budget,
-            buyer_plaus_ctx,
+            suitor,
+            world,
+            market_map,
             already_recommended,
             max_recommend_value,
             memory_recommender_id,
@@ -440,22 +427,29 @@ impl<'a> ClubAdviceScan<'a> {
     /// True when adding `player_id` to the recommendation list would push an
     /// impossible move (Maximenko-class step-down) into the pipeline.
     fn rejects(&self, player_id: u32, is_loan: bool) -> bool {
-        let date = self.date;
-        let summary = match self.lookup.find_summary(self.country, player_id, date) {
-            Some(s) => s,
-            None => return false,
+        !self
+            .reading(player_id, is_loan)
+            .is_some_and(|a| a.reaches(PursuitAction::FillNow.needs()))
+    }
+
+    /// The gate's reading of a move for him. A man who cannot be read has
+    /// none, and no reading is not a favourable one.
+    fn reading(&self, player_id: u32, is_loan: bool) -> Option<TransferMoveAssessment> {
+        let summary = self
+            .lookup
+            .find_summary(self.country, player_id, self.date)
+            .or_else(|| self.world.find(player_id))?;
+        let terms = if is_loan {
+            MoveTerms::loan(true)
+        } else {
+            MoveTerms::purchase(true)
         };
-        matches!(
-            TransferPlausibilityBuilder::evaluate_summary(
-                &self.buyer_plaus_ctx,
-                &summary,
-                is_loan,
-                true,
-                date,
-                None,
-            ),
-            Some(TransferPlausibilityVerdict::HardReject(_))
-        )
+        Some(TransferMovePlausibility::read(
+            &self.suitor,
+            summary,
+            terms,
+            self.market_map,
+        ))
     }
 
     /// Who signs a recommendation that came from the listed-star or
@@ -480,7 +474,7 @@ impl<'a> ClubAdviceScan<'a> {
 
     /// The six sources, in the order the old body ran them. The order is
     /// load-bearing: each source reads what the earlier ones staged.
-    fn run(&self) -> Vec<RecommendationAction> {
+    fn run(&self) -> Vec<(RecommendationAction, FileReading)> {
         let mut actions: Vec<RecommendationAction> = Vec::new();
         self.scout_memories(&mut actions);
         self.scout_network(&mut actions);
@@ -488,7 +482,21 @@ impl<'a> ClubAdviceScan<'a> {
         self.expiring_contracts(&mut actions);
         self.director_bargains(&mut actions);
         self.small_club_hunt(&mut actions);
+        // What the department files is filed with the reading it was
+        // judged on.
         actions
+            .into_iter()
+            .filter_map(|action| {
+                let is_loan = matches!(
+                    action.recommendation.recommendation_type,
+                    RecommendationType::LoanOpportunity
+                        | RecommendationType::CheapLoanAvailable
+                        | RecommendationType::ExperiencedLoanMentor
+                );
+                let reading = self.reading(action.recommendation.player_id, is_loan)?;
+                Some((action, FileReading::of(&reading, self.date)))
+            })
+            .collect()
     }
 
     /// The scouts' standing memory: names already on the club's books from
@@ -591,15 +599,6 @@ impl<'a> ClubAdviceScan<'a> {
                 continue;
             }
 
-            // Elite/Continental clubs require candidates from at least National-level clubs.
-            // This prevents top clubs from scouting players in semi-professional leagues
-            // whose inflated ability numbers don't reflect proven quality at a high level.
-            let min_source_rep = match club_rep {
-                ReputationLevel::Elite => ReputationLevel::National,
-                ReputationLevel::Continental => ReputationLevel::Regional,
-                _ => ReputationLevel::Amateur,
-            };
-
             // Filter candidates from other clubs.
             // Upper bound is tier-aware: an Elite-club scout can tag
             // genuine world-class targets; a small-club scout stays
@@ -618,8 +617,6 @@ impl<'a> ClubAdviceScan<'a> {
                         && p.ability >= avg_ability.saturating_sub(10)
                         && p.ability <= ceiling
                         && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
-                        && TierBands::rep_level_value(&p.parent_club_reputation)
-                            >= TierBands::rep_level_value(&min_source_rep)
                         && !already_recommended.contains(&p.id)
                         && !actions
                             .iter()
@@ -761,12 +758,7 @@ impl<'a> ClubAdviceScan<'a> {
         let team = self.team;
         let date = self.date;
         let club_rep_score = self.club_rep_score;
-        let club_world_rep = self.club_world_rep;
-        let club_league_reputation = self.club_league_reputation;
-        let club_total_wages = self.club_total_wages;
-        let club_wage_budget = self.club_wage_budget;
         let already_recommended = &self.already_recommended;
-        let max_recommend_value = self.max_recommend_value;
         let all_snapshots = self.snapshots;
         let listed_recommender_id = self.listed_recommender_id();
         let plausibility_rejects = |player_id: u32, is_loan: bool| self.rejects(player_id, is_loan);
@@ -789,12 +781,8 @@ impl<'a> ClubAdviceScan<'a> {
         //     • CA inside the club's tier window
         //         floor = baseline - 20
         //         ceiling = tier_target_ceiling_score
-        //     • affordability: estimated fee within plan.total_budget × 1.4
-        //         (40% margin lets the board approve a reach signing)
-        //     • wage realism: estimated wage fits headroom × 1.3
-        //         (some slack for board renegotiation)
-        //     • reputation plausibility: world-rep gap < 2200
-        //         (Mbappé to Levante stays unrealistic regardless of fee)
+        //     • the gate lets the club keep a file on him: his standing
+        //         fits (division, wage, market) and the move is credible
         //     • squad need: matching open request OR best-in-group
         //         below tier baseline OR aging starter (30+)
         //     • improvement: at least 3 CA above club's best-in-group,
@@ -903,7 +891,6 @@ impl<'a> ClubAdviceScan<'a> {
                     is_loan_listed: p.is_loan_listed,
                     breakout_score: p.breakout_score,
                     world_reputation: p.world_reputation,
-                    current_reputation: p.current_reputation,
                     ambition: p.ambition,
                     parent_club_score: p.parent_club_score,
                     parent_club_in_debt: p.club_in_debt,
@@ -913,16 +900,10 @@ impl<'a> ClubAdviceScan<'a> {
                     low_usage: p.appearances < 8,
                     recent_interest_count: p.recent_interest_count,
                     failed_scans: p.failed_scans,
-                    last_block: p.last_block,
                 };
                 let ctx = BuyerContext {
                     buyer_rep_score: club_rep_score,
-                    buyer_world_rep: club_world_rep,
-                    buyer_league_reputation: club_league_reputation,
-                    buyer_total_wages: club_total_wages,
-                    buyer_wage_budget: club_wage_budget,
                     plan_total_budget: plan.total_budget,
-                    max_recommend_value,
                     buyer_best_in_group: buyer_best_in_group
                         .get(&judged_group)
                         .copied()
@@ -1581,7 +1562,11 @@ impl<'a> ClubAdviceScan<'a> {
 struct AdviceCommit;
 
 impl AdviceCommit {
-    fn apply(country: &mut Country, actions: Vec<Vec<RecommendationAction>>, date: NaiveDate) {
+    fn apply(
+        country: &mut Country,
+        actions: Vec<Vec<(RecommendationAction, FileReading)>>,
+        date: NaiveDate,
+    ) {
         // Pass 2: Push recommendations into club transfer plans (small clubs
         // get a higher cap). The scan collects one bucket per club, in club
         // order, so the commit is an indexed zip rather than a club scan per
@@ -1593,7 +1578,7 @@ impl AdviceCommit {
             .par_iter_mut()
             .zip(actions.into_par_iter())
             .for_each(|(club, club_actions)| {
-                for action in club_actions {
+                for (action, reading) in club_actions {
                     debug_assert_eq!(
                         club.id, action.club_id,
                         "staff recommendations: staged actions must belong to their own club"
@@ -1626,7 +1611,9 @@ impl AdviceCommit {
                                 ScoutMonitoringSource::StaffRecommendation
                             }
                         };
-                        club.transfer_plan.staff_recommendations.push(rec);
+                        if !club.transfer_plan.recommend(reading, rec) {
+                            continue;
+                        }
 
                         // Mirror the recommendation into a monitoring row
                         // so the recruitment meeting and UI surfaces see
@@ -1636,25 +1623,25 @@ impl AdviceCommit {
                             .find_monitoring_mut(recommender_id, player_id)
                             .is_none()
                         {
-                            let id = plan.next_monitoring_id();
-                            let mut row = ScoutPlayerMonitoring::new(
-                                id,
-                                recommender_id,
-                                player_id,
-                                source,
+                            plan.keep_file(
+                                reading,
+                                FileObservation {
+                                    scout_staff_id: recommender_id,
+                                    player_id,
+                                    source,
+                                    transfer_request_id: None,
+                                    origin_assignment_id: None,
+                                    region: None,
+                                    assessed_ability,
+                                    assessed_potential,
+                                    confidence,
+                                    role_fit: 1.0,
+                                    estimated_value: estimated_fee,
+                                    risk_flags: Vec::new(),
+                                    is_match: false,
+                                },
                                 date,
                             );
-                            row.record_observation(
-                                assessed_ability,
-                                assessed_potential,
-                                confidence,
-                                1.0,
-                                estimated_fee,
-                                Vec::new(),
-                                date,
-                                false,
-                            );
-                            plan.scout_monitoring.push(row);
                         }
                     }
                 }
@@ -1667,7 +1654,12 @@ impl AdviceCommit {
 pub(in crate::transfers::pipeline) struct StaffAdvicePass;
 
 impl StaffAdvicePass {
-    pub(in crate::transfers::pipeline) fn run(country: &mut Country, date: NaiveDate) {
+    pub(in crate::transfers::pipeline) fn run(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         // One country walk so per-candidate plausibility re-checks below
         // resolve summaries via hash probe instead of a country scan.
         let player_lookup = PerformanceProfiler::stage("recs_player_lookup", 4, || {
@@ -1695,7 +1687,7 @@ impl StaffAdvicePass {
         // same order-of-execution dependence the tick already has at
         // country granularity.
         let scan_stage = PerformanceProfiler::stage_scope("recs_club_scan", 4);
-        let actions: Vec<Vec<RecommendationAction>> = {
+        let actions: Vec<Vec<(RecommendationAction, FileReading)>> = {
             let country: &Country = country;
             let snapshots = all_snapshots.as_slice();
             let lookup = &player_lookup;
@@ -1703,11 +1695,11 @@ impl StaffAdvicePass {
                 .clubs
                 .par_iter()
                 .map(|club| {
-                    ClubAdviceScan::open(country, club, snapshots, lookup, tick)
+                    ClubAdviceScan::open(country, club, snapshots, lookup, world, market_map, tick)
                         .map(|scan| scan.run())
                         .unwrap_or_default()
                 })
-                .collect::<Vec<Vec<RecommendationAction>>>()
+                .collect::<Vec<Vec<(RecommendationAction, FileReading)>>>()
         };
         drop(scan_stage);
 

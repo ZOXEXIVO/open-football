@@ -18,3 +18,16 @@ The system SHALL shrink a scout's observation error as judging skill and observa
 #### Scenario: Foreign-market assessment is less accurate
 - **WHEN** a scout assesses a player in a market the club has little coverage of
 - **THEN** the observation error is widened relative to an assessment of a similar player in a well-covered market, though never below a fixed accuracy floor
+
+### Requirement: The recruitment meeting acts on how far the move can go
+The system SHALL let a recruitment meeting promote a player to a shortlist only when the gate reads the move as "may be shortlisted", and SHALL let it open a negotiation only when the gate reads it as "may open negotiation". The meeting SHALL read what the department last concluded about him: the stage the move reached, and what stopped it.
+
+A vote the gate does not allow SHALL leave the file as it is, to be watched further.
+
+#### Scenario: A well-rated player his club will not release
+- **WHEN** the meeting's votes would promote a player whose move reaches "may be privately scouted" and no further, because his club would not release him
+- **THEN** he is not put on a shortlist, and his file stays open
+
+#### Scenario: A critical need does not open talks the gate would refuse
+- **WHEN** a critical request and a strong consensus would open a negotiation for a player whose fee is beyond what the club can reach
+- **THEN** no negotiation is opened

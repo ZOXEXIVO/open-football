@@ -28,13 +28,14 @@ use crate::transfers::gate::appraisal::{
     AppraisalConfig, OfferKind, OfferView, PlayerDisposition, PlayerOfferAppraisal, PlayerStance,
     TermsRefusalCause,
 };
-use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::gate::stance::{
     AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
 };
 use crate::transfers::gate::{
-    TransferPlausibilityEvaluator, TransferPlausibilityInputs, TransferPlausibilityVerdict,
+    MoveTerms, PursuitAction, TransferMoveAssessment, TransferMovePlausibility,
+    TransferPlausibilityInputs,
 };
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::loan::agreement::LoanTerms;
@@ -47,7 +48,7 @@ use crate::transfers::squad::ledger::{LedgerContext, LedgerPressure};
 use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::value::wage::{BuyerLevelWage, OwnerEnvelopeReservations, WagePower};
-use crate::transfers::view::player::PlayerView;
+use crate::transfers::view::player::{PlayerSummaryBuilder, PlayerView};
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
     Club, Country, Player, PlayerSquadStatus, PlayerStatusType, PlayerValueCalculator,
@@ -851,9 +852,10 @@ impl NegotiationPass {
         // in the club-negotiation phase via the seller reservation. See the
         // note where `chance` is finalized below.
         let (seller_delta, importance_penalty) = match &plausibility {
-            Some(TransferPlausibilityVerdict::Allow(adj)) => {
-                (adj.seller_acceptance_delta, adj.importance_penalty)
-            }
+            Some(reading) if reading.reaches(PursuitAction::Negotiate.needs()) => (
+                reading.adjustment.seller_acceptance_delta,
+                reading.adjustment.importance_penalty,
+            ),
             _ => (0.0_f32, 0.0_f32),
         };
 
@@ -1285,10 +1287,6 @@ impl NegotiationPass {
         if neg_data.selling_country_id.is_some() {
             return None;
         }
-        let buyer = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.buying_club_id)?;
         let seller = country
             .clubs
             .iter()
@@ -1297,16 +1295,7 @@ impl NegotiationPass {
         // The ONE importance formula, from the staged plausibility model —
         // the domestic and foreign paths must not disagree about what a
         // player is to his club (Part VIII, "two importance formulas").
-        let inputs = TransferPlausibilityBuilder::from_clubs(
-            country,
-            buyer,
-            seller,
-            player,
-            neg_data.asking_price.max(neg_data.offer_amount),
-            neg_data.is_loan,
-            neg_data.is_unsolicited,
-            date,
-        );
+        let reading = Self::plausibility_for(country, neg_data, date)?.diagnostics;
         let availability =
             AvailabilityView::read(player, neg_data.is_loan, neg_data.listing_origin);
         let stance = PlayerStanceBuilder::build(&StanceInputs {
@@ -1315,16 +1304,13 @@ impl NegotiationPass {
             seller_club: seller,
             buyer_club_id: neg_data.buying_club_id,
             rep_diff: neg_data.buying_rep - neg_data.selling_rep,
-            importance: TransferPlausibilityEvaluator::player_importance(&inputs),
+            importance: reading.importance,
             listed_by_club: availability.listed_by_club,
             available: availability.available_soft,
             months_to_tournament: country.months_to_tournament_for(player.nationality_continent_id),
             date,
         });
-        Some((
-            stance,
-            TransferPlausibilityEvaluator::sporting_drop(&inputs),
-        ))
+        Some((stance, reading.sporting_drop))
     }
 
     /// What is on the table, this round.
@@ -1742,15 +1728,15 @@ impl NegotiationPass {
             .max()
     }
 
-    /// Build the plausibility verdict for the current negotiation.
-    /// Returns `None` for cross-country deals (we don't carry the
-    /// selling-side context here) or when the buying / selling club /
-    /// player can't be located in this country.
+    /// The gate's reading of the current negotiation, from the live records.
+    /// `None` for cross-country deals (we don't carry the selling-side
+    /// context here) or when the buying / selling club / player can't be
+    /// located in this country.
     fn plausibility_for(
         country: &Country,
         neg_data: &NegotiationData,
         date: NaiveDate,
-    ) -> Option<TransferPlausibilityVerdict> {
+    ) -> Option<TransferMoveAssessment> {
         if neg_data.selling_country_id.is_some() {
             return None;
         }
@@ -1763,17 +1749,21 @@ impl NegotiationPass {
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)?;
         let player = CountryRoster::find(country, neg_data.player_id)?;
-        let inputs = TransferPlausibilityBuilder::from_clubs(
-            country,
-            buyer,
-            seller,
-            player,
-            neg_data.asking_price.max(neg_data.offer_amount),
-            neg_data.is_loan,
-            neg_data.is_unsolicited,
-            date,
-        );
-        Some(TransferPlausibilityEvaluator::evaluate(&inputs))
+        let target = PlayerSummaryBuilder::one(country, seller, player, date)?;
+        Some(TransferMovePlausibility::read(
+            &Suitor::of(country, buyer, date),
+            &target,
+            MoveTerms::for_player(
+                player,
+                buyer,
+                date,
+                neg_data.is_loan,
+                neg_data.is_unsolicited,
+                neg_data.asking_price.max(neg_data.offer_amount),
+            ),
+            // One country: the move has no geography to price.
+            &MarketMap::default(),
+        ))
     }
 
     /// Country-aware variant of [`Self::deadline_urgency`]. Reads the

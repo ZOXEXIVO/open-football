@@ -6,6 +6,7 @@
 //! recommendations back. Extracting them is what pays for the extraction.
 
 use super::*;
+use crate::transfers::gate::TransferMoveStage;
 use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer};
 
@@ -48,9 +49,20 @@ impl Fx {
             &country.clubs[0],
             &snapshots,
             &lookup,
+            WorldPool::empty(),
+            &MarketMap::default(),
             Fx::tick(date),
         )
         .map(|_| ())
+    }
+
+    /// A reading that lets the club do anything with him.
+    fn reading(date: NaiveDate) -> FileReading {
+        FileReading {
+            stage: TransferMoveStage::CanCompleteMove,
+            stopped_by: None,
+            read_on: date,
+        }
     }
 
     fn recommendation(player_id: u32, date: NaiveDate) -> StaffRecommendation {
@@ -141,11 +153,16 @@ fn the_commit_writes_no_more_than_the_club_rates() {
 
     // Twice the cap, staged. The commit is the only thing standing between a
     // productive week of scouting and a plan nobody can read.
-    let staged: Vec<Vec<RecommendationAction>> = vec![
+    let staged: Vec<Vec<(RecommendationAction, FileReading)>> = vec![
         (0..(cap as u32 * 2))
-            .map(|player_id| RecommendationAction {
-                club_id: 1,
-                recommendation: Fx::recommendation(player_id, date),
+            .map(|player_id| {
+                (
+                    RecommendationAction {
+                        club_id: 1,
+                        recommendation: Fx::recommendation(player_id, date),
+                    },
+                    Fx::reading(date),
+                )
             })
             .collect(),
     ];
@@ -166,10 +183,13 @@ fn every_committed_recommendation_reaches_the_scout_s_books() {
         .clubs(vec![Fx::scannable_club(1)])
         .build();
 
-    let staged: Vec<Vec<RecommendationAction>> = vec![vec![RecommendationAction {
-        club_id: 1,
-        recommendation: Fx::recommendation(4_242, date),
-    }]];
+    let staged: Vec<Vec<(RecommendationAction, FileReading)>> = vec![vec![(
+        RecommendationAction {
+            club_id: 1,
+            recommendation: Fx::recommendation(4_242, date),
+        },
+        Fx::reading(date),
+    )]];
 
     AdviceCommit::apply(&mut country, staged, date);
 
@@ -182,4 +202,68 @@ fn every_committed_recommendation_reaches_the_scout_s_books() {
         "a recommendation is mirrored into a monitoring row so the recruitment \
          meeting and the UI see the player on that scout's books too"
     );
+}
+
+/// What a scout remembers is read again before it is put forward: a foreign
+/// name the club can still reach is recommended, one whose standing no
+/// longer fits is not, and one who cannot be read at all is dropped.
+#[test]
+fn a_remembered_foreign_player_is_read_before_he_is_recommended() {
+    use crate::PlayerPositionType;
+    use crate::transfers::pipeline::KnownPlayerMemory;
+    use crate::transfers::tests::kit::TestSummary;
+    use crate::transfers::view::world::WorldPoolIndex;
+
+    let date = TestDate::today();
+    let mut club = Fx::scannable_club(1);
+    for player_id in [61, 62, 63] {
+        club.transfer_plan.remember_known_player(KnownPlayerMemory {
+            player_id,
+            last_known_club_id: 70,
+            last_known_country_id: 2,
+            position: PlayerPositionType::MidfielderCenter,
+            position_group: PlayerFieldPositionGroup::Midfielder,
+            age: 25,
+            assessed_ability: 125,
+            assessed_potential: 130,
+            confidence: 0.6,
+            estimated_fee: 1_000_000.0,
+            last_seen: date,
+            official_appearances_seen: 2,
+            friendly_appearances_seen: 0,
+        });
+    }
+    let country = TestCountry::new(1).clubs(vec![club]).build();
+    let in_reach = TestSummary::new(61)
+        .club_id(70)
+        .country(2, "es")
+        .league(4_000, 0.4)
+        .salary(100_000)
+        .build();
+    let out_of_reach = TestSummary::new(62)
+        .club_id(70)
+        .country(2, "es")
+        .league(4_000, 0.4)
+        .salary(100_000)
+        .asking_wage(1.0e10)
+        .build();
+    let pool = vec![in_reach, out_of_reach];
+    let index = WorldPoolIndex::build(&pool);
+    let lookup = CountryPlayerLookup::build(&country);
+    let snapshots: Vec<PlayerSnapshot> = Vec::new();
+    let map = MarketMap::default();
+    let scan = ClubAdviceScan::open(
+        &country,
+        &country.clubs[0],
+        &snapshots,
+        &lookup,
+        WorldPool::new(&pool, &index),
+        &map,
+        Fx::tick(date),
+    )
+    .expect("the club is scannable");
+    let mut actions = Vec::new();
+    scan.scout_memories(&mut actions);
+    let recommended: Vec<u32> = actions.iter().map(|a| a.recommendation.player_id).collect();
+    assert_eq!(recommended, vec![61]);
 }

@@ -34,8 +34,8 @@ use crate::shared::indexes::{CountryLookupIndex, SimulatorDataIndexes};
 use crate::transfers::MarketMap;
 use crate::transfers::TransferListing;
 use crate::transfers::market::knowledge::PlacementReachIndex;
-use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::view::world::WorldPool;
 use crate::utils::random::engine::RandomEngine;
 use crate::world::CountryInfo;
 use crate::world::SimulatorData;
@@ -671,7 +671,7 @@ pub struct WorldSnapshot<'a> {
     /// World-wide foreign-player pool — every country's transferable
     /// players, walked once before the parallel pass. Each country's
     /// `simulate_transfer_market_local` filters out own-country entries.
-    pub world_pool: &'a [PlayerSummary],
+    pub world_pool: WorldPool<'a>,
     /// Snapshot of the global "Move on Free" pool. Read-only during
     /// Phase A; `apply_deferred_transfer_ops` mutates `data.free_agents`
     /// in Phase C.

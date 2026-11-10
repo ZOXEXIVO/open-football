@@ -15,6 +15,7 @@
 //! [`ClubView`]: crate::transfers::view::club::ClubView
 
 mod breakout;
+mod door;
 mod group;
 mod role;
 mod slot;

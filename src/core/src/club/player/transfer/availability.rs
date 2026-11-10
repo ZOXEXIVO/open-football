@@ -107,25 +107,6 @@ impl AvailabilityBlockReason {
             AvailabilityBlockReason::PlayerWontStepDown => "player_wont_step_down",
         }
     }
-
-    /// True for reasons the seller can act on by lowering the asking
-    /// price. Drives the price-softening arm of the exposure curve.
-    pub fn seller_should_discount(self) -> bool {
-        matches!(
-            self,
-            AvailabilityBlockReason::AskingPriceTooHigh
-                | AvailabilityBlockReason::NoAffordableSquadNeed
-        )
-    }
-
-    /// True for reasons the player can act on by relaxing wage / level
-    /// demands. Drives the wage-softening arm of the exposure curve.
-    pub fn player_should_soften(self) -> bool {
-        matches!(
-            self,
-            AvailabilityBlockReason::WageTooHigh | AvailabilityBlockReason::PlayerWontStepDown
-        )
-    }
 }
 
 /// Continuous "market resignation" of a contracted player stuck on the
@@ -138,8 +119,8 @@ impl AvailabilityBlockReason {
 /// that, the seasons he has already gone without football
 /// ([`FootballDrought`]), which lower his sights on the day he is
 /// listed rather than half a year later. The plausibility
-/// level gates, the personal-terms resistance, and the scouting realism
-/// band all consume it, so a benched player at a big club *gradually*
+/// level gates and the personal-terms resistance both consume it, so a
+/// benched player at a big club *gradually*
 /// lowers his sights toward clubs where he would actually play instead
 /// of sitting listed for a year and walking on a free.
 ///

@@ -20,7 +20,11 @@ pub mod trace;
 
 use crate::club::board::mandate::MandateIncumbent;
 use crate::club::player::contract::PlayerSquadStatus;
-use crate::transfers::ScoutingRegion;
+use crate::transfers::gate::build::Suitor;
+use crate::transfers::gate::{
+    MoveTerms, PursuitAction, TransferMoveAssessment, TransferMovePlausibility, TransferMoveStage,
+    TransferPlausibilityReason,
+};
 use crate::transfers::loan::interest::LoanApproachMemory;
 use crate::transfers::scouting::config::ScoutingConfig;
 use crate::transfers::scouting::recruitment::{
@@ -28,6 +32,8 @@ use crate::transfers::scouting::recruitment::{
 };
 use crate::transfers::squad::ledger::SellListEntry;
 use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
+use crate::transfers::view::world::WorldPool;
+use crate::transfers::{MarketMap, ScoutingRegion};
 use crate::{Player, PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -36,36 +42,6 @@ pub use self::advice::StaffRecommendations;
 pub use self::circulation::MarketCirculation;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 pub use self::trace::TransferTrace;
-use crate::club::player::mind::MindSituation;
-use crate::club::player::transfer::{LevelFloor, StandingReading};
-use crate::transfers::gate::EffectivePlayerReputation;
-
-impl PlayerSummary {
-    /// The floor under the football he will play, as a borrowing country
-    /// can read it: his name as the world sees it, since the summary is
-    /// what crosses a border.
-    pub fn level_floor(&self) -> LevelFloor {
-        let seen = self.appearances >= MindSituation::TRACKED_APPS as u16;
-        LevelFloor::of(&StandingReading {
-            level: self.observable_level,
-            group: self.position_group,
-            effective_rep: EffectivePlayerReputation::compute(
-                self.world_reputation,
-                self.current_reputation,
-                self.home_reputation,
-                false,
-            ),
-            league_rep: self.seller_ctx.league_reputation,
-            starter_share: if seen { self.starter_share } else { 0.0 },
-            caps: self.international_apps,
-            age: self.age,
-            resignation: self.seller_ctx.market_resignation,
-            plan_widening: self.career_plan.renown_widening(),
-            held_summit: self.anchors.held_summit,
-            recency: self.anchors.recency,
-        })
-    }
-}
 use chrono::Duration;
 use std::cmp::Ordering;
 
@@ -73,6 +49,7 @@ pub(in crate::transfers) mod processor {
     use crate::PathwayStage;
     use crate::club::player::language::LanguageProfile;
     use crate::club::player::mind::{AnchorView, CareerPlanView};
+    use crate::club::player::transfer::LevelFloor;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::loan::guard::ParentLoanView;
@@ -156,8 +133,7 @@ pub(in crate::transfers) mod processor {
         pub in_debt: bool,
         /// Days the player has carried a market-availability status
         /// (`Lst`/`Req`/`Unh`/`Loa`) in the current sit; 0 when he is not
-        /// on the market. Drives the staleness widening of the scouting
-        /// realism band.
+        /// on the market. Drives the market-exposure staleness curve.
         pub days_on_market: i16,
         /// Continuous 0..1 market resignation of a listed / requested /
         /// benched player ([`crate::club::player::transfer::MarketResignation`]).
@@ -355,6 +331,16 @@ pub(in crate::transfers) mod processor {
         /// he done this before, or is this one season?" has to travel on
         /// the summary. See [`CareerRecordSnapshot`].
         pub career_record: CareerRecordSnapshot,
+        /// The lowest division he will play in, as a borrowing country can
+        /// read it. Read when the summary is built: no club asking changes it.
+        pub level_floor: LevelFloor,
+        /// The wage he would ask to move, by his own appraisal of a move that
+        /// changes nothing else about his football. What pushes him to leave
+        /// lowers it; what holds him where he is raises it.
+        pub asking_wage: f64,
+        /// The wage at which money alone carries him a full refusal span
+        /// under his floor.
+        pub refusal_price: f64,
     }
 }
 
@@ -1145,6 +1131,12 @@ impl TransferShortlist {
         }
     }
 
+    /// A shortlist built whole, to be handed to the plan's door.
+    pub fn with_candidates(mut self, candidates: Vec<ShortlistCandidate>) -> Self {
+        self.candidates = candidates;
+        self
+    }
+
     pub fn current_candidate(&self) -> Option<&ShortlistCandidate> {
         self.candidates.get(self.current_pursuit_index)
     }
@@ -1155,7 +1147,19 @@ impl TransferShortlist {
 
     pub fn advance_to_next(&mut self) -> bool {
         self.current_pursuit_index += 1;
+        self.skip_closed();
         self.current_pursuit_index < self.candidates.len()
+    }
+
+    /// The cursor never rests on a place the department has closed, or the
+    /// approach would wait on it for the rest of the window.
+    fn skip_closed(&mut self) {
+        while self
+            .current_candidate()
+            .is_some_and(|c| c.status == ShortlistCandidateStatus::Unavailable)
+        {
+            self.current_pursuit_index += 1;
+        }
     }
 
     pub fn all_exhausted(&self) -> bool {
@@ -1596,6 +1600,11 @@ pub struct ClubTransferPlan {
     /// See [`watchlist::MarketKnowledge`].
     pub watchlist: Vec<WatchlistEntry>,
 
+    /// What the department last concluded about each player it holds a
+    /// file on — see [`FileReading`]. Filled by the door and the weekly
+    /// review.
+    pub file_readings: FxHashMap<u32, FileReading>,
+
     /// Players the club would sell at a price — see
     /// [`asset_ledger::AssetLedger`]. Marketed, never listed: an entry here
     /// produces a Soft availability signal for buyers in the right band and
@@ -1673,6 +1682,9 @@ pub struct WatchlistEntry {
     pub slot_position: PlayerPositionType,
     pub slot_tier: BriefTier,
     pub last_refreshed: NaiveDate,
+    /// Watched for a loan or a free: the shirt was briefed with no fee
+    /// envelope.
+    pub is_loan: bool,
 }
 
 /// A scouting report preserved past its originating assignment, used to
@@ -1683,6 +1695,414 @@ pub struct ShadowReport {
     pub position_group: PlayerFieldPositionGroup,
     pub observed_ability: u8,
     pub recorded_on: NaiveDate,
+}
+
+/// What the department last concluded about a player it holds anything on:
+/// how far a move for him reached, what stopped it, and when it was read.
+/// Written by the door and by the weekly review; read by the meeting and
+/// the panels, which never ask the gate again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FileReading {
+    pub stage: TransferMoveStage,
+    pub stopped_by: Option<TransferPlausibilityReason>,
+    pub read_on: NaiveDate,
+}
+
+impl FileReading {
+    pub fn of(assessment: &TransferMoveAssessment, read_on: NaiveDate) -> Self {
+        FileReading {
+            stage: assessment.stage,
+            stopped_by: assessment.blocking_reason,
+            read_on,
+        }
+    }
+
+    pub fn allows(&self, action: PursuitAction) -> bool {
+        self.stage >= action.needs()
+    }
+}
+
+/// One viewing, as a scout files it.
+#[derive(Debug, Clone)]
+pub struct FileObservation {
+    pub scout_staff_id: u32,
+    pub player_id: u32,
+    pub source: ScoutMonitoringSource,
+    pub transfer_request_id: Option<u32>,
+    pub origin_assignment_id: Option<u32>,
+    pub region: Option<ScoutingRegion>,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence: f32,
+    pub role_fit: f32,
+    pub estimated_value: f64,
+    pub risk_flags: Vec<ReportRiskFlag>,
+    pub is_match: bool,
+}
+
+/// One club's weekly re-read of its own files, staged while the world is
+/// read and committed after: the reading for every player it holds a file
+/// on.
+#[derive(Debug, Clone, Default)]
+pub struct FileReview {
+    readings: Vec<(u32, FileReading)>,
+    /// Players a live negotiation keeps on file whatever they read.
+    negotiating: FxHashSet<u32>,
+}
+
+/// The one door through which a club's attention on another club's player
+/// is opened, kept or closed. A route states what it saw and hands in the
+/// gate's reading; the department decides, and remembers what it read.
+impl ClubTransferPlan {
+    /// What the department last concluded about him.
+    pub fn file_reading(&self, player_id: u32) -> Option<&FileReading> {
+        self.file_readings.get(&player_id)
+    }
+
+    fn remember_reading(&mut self, player_id: u32, reading: FileReading) {
+        self.file_readings.insert(player_id, reading);
+    }
+
+    /// A monitoring row, opened or deepened when the reading lets the club
+    /// keep a file on him.
+    pub fn keep_file(
+        &mut self,
+        reading: FileReading,
+        seen: FileObservation,
+        date: NaiveDate,
+    ) -> bool {
+        self.remember_reading(seen.player_id, reading);
+        if !reading.allows(PursuitAction::KeepFile) {
+            return false;
+        }
+        self.upsert_monitoring(seen, date);
+        true
+    }
+
+    /// A place on the standing watchlist, refreshed if he already holds one.
+    pub fn board(&mut self, reading: FileReading, entry: WatchlistEntry) -> bool {
+        self.remember_reading(entry.player_id, reading);
+        if !reading.allows(PursuitAction::KeepFile) {
+            return false;
+        }
+        match self
+            .watchlist
+            .iter_mut()
+            .find(|e| e.player_id == entry.player_id)
+        {
+            Some(existing) => *existing = entry,
+            None => self.watchlist.push(entry),
+        }
+        true
+    }
+
+    /// The board's housekeeping: a name not seen for `fresh_days` drops off,
+    /// and the board never outgrows `max_entries`, strongest kept.
+    pub fn prune_watchlist(&mut self, date: NaiveDate, fresh_days: i64, max_entries: usize) {
+        self.watchlist
+            .retain(|e| (date - e.last_refreshed).num_days() <= fresh_days);
+        if self.watchlist.len() > max_entries {
+            self.watchlist.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(Ordering::Equal)
+                    .then_with(|| a.player_id.cmp(&b.player_id))
+            });
+            self.watchlist.truncate(max_entries);
+        }
+    }
+
+    /// A staff recommendation, filed once per player.
+    pub fn recommend(&mut self, reading: FileReading, rec: StaffRecommendation) -> bool {
+        self.remember_reading(rec.player_id, reading);
+        if !reading.allows(PursuitAction::KeepFile)
+            || self
+                .staff_recommendations
+                .iter()
+                .any(|r| r.player_id == rec.player_id)
+        {
+            return false;
+        }
+        self.staff_recommendations.push(rec);
+        true
+    }
+
+    /// A place on the shortlist for `request_id`, opening that shortlist with
+    /// `allocation` when the request has none. `at` places him ahead of the
+    /// names already on it.
+    pub fn shortlist(
+        &mut self,
+        reading: FileReading,
+        request_id: u32,
+        allocation: f64,
+        candidate: ShortlistCandidate,
+        at: Option<usize>,
+    ) -> bool {
+        self.remember_reading(candidate.player_id, reading);
+        if !reading.allows(PursuitAction::Shortlist) {
+            return false;
+        }
+        let index = match self
+            .shortlists
+            .iter()
+            .position(|s| s.transfer_request_id == request_id)
+        {
+            Some(index) => index,
+            None => {
+                self.shortlists
+                    .push(TransferShortlist::new(request_id, allocation));
+                self.shortlists.len() - 1
+            }
+        };
+        let list = &mut self.shortlists[index];
+        if list
+            .candidates
+            .iter()
+            .any(|c| c.player_id == candidate.player_id)
+        {
+            return false;
+        }
+        match at {
+            Some(at) if at <= list.candidates.len() => list.candidates.insert(at, candidate),
+            _ => list.candidates.push(candidate),
+        }
+        true
+    }
+
+    /// A shortlist built whole for a request. Only the names whose reading
+    /// lets them be shortlisted go on it; an empty one is not opened.
+    pub fn open_shortlist(
+        &mut self,
+        mut shortlist: TransferShortlist,
+        readings: &[(u32, FileReading)],
+    ) -> bool {
+        for (player_id, reading) in readings {
+            self.remember_reading(*player_id, *reading);
+        }
+        shortlist.candidates.retain(|c| {
+            readings
+                .iter()
+                .find(|(player_id, _)| *player_id == c.player_id)
+                .is_some_and(|(_, reading)| reading.allows(PursuitAction::Shortlist))
+        });
+        if shortlist.candidates.is_empty() {
+            return false;
+        }
+        self.shortlists.push(shortlist);
+        true
+    }
+
+    /// A free agent the club is moving for. He has no club to read a move
+    /// against; the free-agent market reads his own floor.
+    pub fn pursue_free_agent(&mut self, request_id: u32, player_id: u32) {
+        let index = match self
+            .shortlists
+            .iter()
+            .position(|s| s.transfer_request_id == request_id)
+        {
+            Some(index) => index,
+            None => {
+                self.shortlists
+                    .push(TransferShortlist::new(request_id, 0.0));
+                self.shortlists.len() - 1
+            }
+        };
+        let shortlist = &mut self.shortlists[index];
+        if let Some(pos) = shortlist
+            .candidates
+            .iter()
+            .position(|c| c.player_id == player_id)
+        {
+            shortlist.candidates[pos].status = ShortlistCandidateStatus::CurrentlyPursuing;
+            shortlist.current_pursuit_index = pos;
+        } else {
+            shortlist.candidates.push(ShortlistCandidate {
+                player_id,
+                score: 0.5,
+                estimated_fee: 0.0,
+                status: ShortlistCandidateStatus::CurrentlyPursuing,
+            });
+            shortlist.current_pursuit_index = shortlist.candidates.len() - 1;
+        }
+    }
+
+    /// He has signed somewhere: every file the club kept on him closes.
+    pub fn forget_player(&mut self, player_id: u32) {
+        let mut signed = FxHashSet::default();
+        signed.insert(player_id);
+        self.forget_players(&signed);
+    }
+
+    /// They have signed somewhere: every file the club kept on them closes.
+    pub fn forget_players(&mut self, signed: &FxHashSet<u32>) {
+        for assignment in &mut self.scouting_assignments {
+            assignment
+                .observations
+                .retain(|o| !signed.contains(&o.player_id));
+        }
+        self.scouting_reports
+            .retain(|r| !signed.contains(&r.player_id));
+        for shortlist in &mut self.shortlists {
+            shortlist
+                .candidates
+                .retain(|c| !signed.contains(&c.player_id));
+        }
+        self.staff_recommendations
+            .retain(|r| !signed.contains(&r.player_id));
+        self.scout_monitoring
+            .retain(|m| !signed.contains(&m.player_id));
+    }
+
+    /// Scouts who have left the club: their open assignments are released
+    /// for the department that remains, and the rows they kept close.
+    pub fn release_scouts(&mut self, departed: &FxHashSet<u32>) {
+        for assignment in self.scouting_assignments.iter_mut() {
+            if let Some(scout_id) = assignment.scout_staff_id
+                && departed.contains(&scout_id)
+            {
+                assignment.scout_staff_id = None;
+            }
+        }
+        self.scout_monitoring
+            .retain(|row| !departed.contains(&row.scout_staff_id));
+    }
+
+    /// Exhausted shortlists go, so a request can be scouted afresh.
+    pub fn drop_exhausted_shortlists(&mut self) {
+        self.shortlists.retain(|s| !s.all_exhausted());
+    }
+
+    /// Every player this club holds a file on: a monitoring row still in
+    /// play, a watchlist place, a recommendation, a live shortlist place.
+    fn filed_players(&self) -> FxHashSet<u32> {
+        let mut players: FxHashSet<u32> = FxHashSet::default();
+        players.extend(
+            self.scout_monitoring
+                .iter()
+                .filter(|m| m.is_active_interest())
+                .map(|m| m.player_id),
+        );
+        players.extend(self.watchlist.iter().map(|e| e.player_id));
+        players.extend(self.staff_recommendations.iter().map(|r| r.player_id));
+        for shortlist in &self.shortlists {
+            players.extend(
+                shortlist
+                    .candidates
+                    .iter()
+                    .filter(|c| {
+                        matches!(
+                            c.status,
+                            ShortlistCandidateStatus::Available
+                                | ShortlistCandidateStatus::CurrentlyPursuing
+                        )
+                    })
+                    .map(|c| c.player_id),
+            );
+        }
+        players
+    }
+
+    /// The weekly re-read of every file the club holds. Read-only: the
+    /// readings are committed by [`Self::apply_review`]. A player who can
+    /// no longer be read reads as nothing to pursue.
+    pub(crate) fn review_files(
+        &self,
+        suitor: &Suitor<'_>,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        negotiating: impl Fn(u32) -> bool,
+        date: NaiveDate,
+    ) -> FileReview {
+        let mut review = FileReview::default();
+        for player_id in self.filed_players() {
+            if negotiating(player_id) {
+                review.negotiating.insert(player_id);
+            }
+            let on_loan = self
+                .watchlist
+                .iter()
+                .any(|e| e.player_id == player_id && e.is_loan);
+            let terms = if on_loan {
+                MoveTerms::loan(true)
+            } else {
+                MoveTerms::purchase(true)
+            };
+            let reading = match world.find(player_id) {
+                Some(summary) => FileReading::of(
+                    &TransferMovePlausibility::read(suitor, summary, terms, market_map),
+                    date,
+                ),
+                None => FileReading {
+                    stage: TransferMoveStage::Blocked,
+                    stopped_by: None,
+                    read_on: date,
+                },
+            };
+            review.readings.push((player_id, reading));
+        }
+        review
+    }
+
+    /// Commit a review. A file whose case has gone closes: a monitoring row,
+    /// watchlist place or recommendation that no longer reaches "may be
+    /// privately scouted" is removed, and a shortlist place that no longer
+    /// reaches "may be shortlisted" becomes unavailable. Live talks hold
+    /// their file until they resolve; a row still marked as negotiating with
+    /// no talks behind it holds nothing. A reading on a player the
+    /// club held nothing on this week is forgotten, so a closed file keeps
+    /// its reason for one week.
+    pub fn apply_review(&mut self, review: FileReview) {
+        let reviewed: FxHashSet<u32> = review.readings.iter().map(|(id, _)| *id).collect();
+        self.file_readings.retain(|id, _| reviewed.contains(id));
+        for (player_id, reading) in review.readings {
+            self.remember_reading(player_id, reading);
+            if review.negotiating.contains(&player_id) {
+                continue;
+            }
+            if !reading.allows(PursuitAction::Shortlist) {
+                for shortlist in &mut self.shortlists {
+                    let mut closed = false;
+                    for candidate in &mut shortlist.candidates {
+                        if candidate.player_id == player_id
+                            && matches!(
+                                candidate.status,
+                                ShortlistCandidateStatus::Available
+                                    | ShortlistCandidateStatus::CurrentlyPursuing
+                            )
+                        {
+                            candidate.status = ShortlistCandidateStatus::Unavailable;
+                            closed = true;
+                        }
+                    }
+                    if !closed {
+                        continue;
+                    }
+                    shortlist.skip_closed();
+                    // The need outlives the names: a list the review empties
+                    // sends its request back to be searched again.
+                    if shortlist.all_exhausted()
+                        && let Some(request) = self.transfer_requests.iter_mut().find(|r| {
+                            r.id == shortlist.transfer_request_id
+                                && matches!(
+                                    r.status,
+                                    TransferRequestStatus::Shortlisted
+                                        | TransferRequestStatus::Negotiating
+                                )
+                        })
+                    {
+                        request.status = TransferRequestStatus::Pending;
+                    }
+                }
+            }
+            if !reading.allows(PursuitAction::KeepFile) {
+                self.scout_monitoring
+                    .retain(|m| m.player_id != player_id || !m.is_active_interest());
+                self.watchlist.retain(|e| e.player_id != player_id);
+                self.staff_recommendations
+                    .retain(|r| r.player_id != player_id);
+            }
+        }
+    }
 }
 
 impl ClubTransferPlan {
@@ -1725,6 +2145,7 @@ impl ClubTransferPlan {
             brief: None,
             last_plan_date: None,
             watchlist: Vec::new(),
+            file_readings: FxHashMap::default(),
             sell_list: Vec::new(),
             last_ledger_date: None,
         }
@@ -2060,28 +2481,23 @@ impl ClubTransferPlan {
     /// Upsert a monitoring row for `(scout_staff_id, player_id)`. Either
     /// refreshes the existing active row (preserving its first-seen linkage
     /// and merging in any newly-known request/assignment/region) or creates
-    /// a fresh one. Single source of truth for the monitoring upsert so the
-    /// transfer-window scouting passes and the match-result showcase path
-    /// stay in lock-step — see `scouting::apply_monitoring_update` and
-    /// `LeagueResult::record_domestic_cup_showcase_scouting`.
-    #[allow(clippy::too_many_arguments)]
-    pub fn upsert_monitoring(
-        &mut self,
-        scout_staff_id: u32,
-        player_id: u32,
-        source: ScoutMonitoringSource,
-        transfer_request_id: Option<u32>,
-        origin_assignment_id: Option<u32>,
-        region: Option<ScoutingRegion>,
-        assessed_ability: u8,
-        assessed_potential: u8,
-        confidence: f32,
-        role_fit: f32,
-        estimated_value: f64,
-        risk_flags: Vec<ReportRiskFlag>,
-        date: NaiveDate,
-        is_match: bool,
-    ) {
+    /// a fresh one — the body of [`Self::keep_file`].
+    fn upsert_monitoring(&mut self, seen: FileObservation, date: NaiveDate) {
+        let FileObservation {
+            scout_staff_id,
+            player_id,
+            source,
+            transfer_request_id,
+            origin_assignment_id,
+            region,
+            assessed_ability,
+            assessed_potential,
+            confidence,
+            role_fit,
+            estimated_value,
+            risk_flags,
+            is_match,
+        } = seen;
         if let Some(existing) = self.find_monitoring_mut(scout_staff_id, player_id) {
             // Refresh linkage if monitoring originated from a different
             // request and now matches an active one — prefer the newer
@@ -2145,6 +2561,16 @@ impl ClubTransferPlan {
         for m in self.scout_monitoring.iter_mut() {
             if m.player_id == player_id && m.is_active_interest() {
                 m.status = status;
+            }
+        }
+    }
+
+    /// His rows that reached `from` go back to plain watching, so the
+    /// scouts must see him again before he is put forward.
+    pub fn resume_watching(&mut self, player_id: u32, from: ScoutMonitoringStatus) {
+        for m in self.scout_monitoring.iter_mut() {
+            if m.player_id == player_id && m.status == from {
+                m.status = ScoutMonitoringStatus::Active;
             }
         }
     }
@@ -2230,8 +2656,9 @@ impl ClubTransferPlan {
 
     /// Rehydrate shadow reports into the active window's report pool for any
     /// ScoutingAssignment whose position group matches. Gives newly opened
-    /// windows a warm start instead of rescouting from scratch.
-    pub fn seed_active_reports_from_shadow(&mut self) {
+    /// windows a warm start instead of rescouting from scratch — for the men
+    /// the club may still keep a file on.
+    pub fn seed_active_reports_from_shadow(&mut self, keeps_file: impl Fn(u32) -> bool) {
         if self.shadow_reports.is_empty() || self.scouting_assignments.is_empty() {
             return;
         }
@@ -2242,6 +2669,9 @@ impl ClubTransferPlan {
             .collect();
 
         for shadow in &self.shadow_reports {
+            if !keeps_file(shadow.report.player_id) {
+                continue;
+            }
             // Bind this shadow report to the first matching active assignment.
             // Dedupe against existing active reports for the same player.
             if let Some((assign_id, _)) = assignments

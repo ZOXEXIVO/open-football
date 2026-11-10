@@ -504,12 +504,7 @@ fn sweep_realistic_continental_acceptance_and_realism_gates() {
     // Continental club — Spartak-like context.
     let buyer = |open_request: bool, weak_group: bool| BuyerContext {
         buyer_rep_score: 0.72,
-        buyer_world_rep: 5800,
-        buyer_league_reputation: 5500,
-        buyer_total_wages: 30_000_000,
-        buyer_wage_budget: 60_000_000,
         plan_total_budget: 30_000_000.0,
-        max_recommend_value: 60_000_000.0,
         // Weak group: starter at 105 (under tier baseline).
         // Otherwise: starter at 130 (tier baseline).
         buyer_best_in_group: if weak_group { 105 } else { 130 },
@@ -531,7 +526,6 @@ fn sweep_realistic_continental_acceptance_and_realism_gates() {
         is_transfer_requested: true,
         is_unhappy: true,
         world_reputation: 5200,
-        current_reputation: 5000,
         ambition: 0.7,
         parent_club_score: 0.40, // smaller club
         parent_club_in_debt: false,
@@ -540,7 +534,6 @@ fn sweep_realistic_continental_acceptance_and_realism_gates() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
@@ -610,20 +603,15 @@ fn sweep_realistic_continental_acceptance_and_realism_gates() {
 }
 
 #[test]
-fn sweep_rejects_unaffordable_fee() {
+fn the_screen_leaves_the_fee_to_the_gate() {
     use crate::PlayerFieldPositionGroup;
     use crate::transfers::pipeline::advice::{
-        BuyerContext, ListedRejectReason, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
+        BuyerContext, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
     };
 
     let small_buyer = BuyerContext {
         buyer_rep_score: 0.40,
-        buyer_world_rep: 2400,
-        buyer_league_reputation: 3000,
-        buyer_total_wages: 1_000_000,
-        buyer_wage_budget: 1_500_000,
         plan_total_budget: 500_000.0,
-        max_recommend_value: 1_000_000.0,
         buyer_best_in_group: 75,
         has_open_request: true,
         has_aging_starter: false,
@@ -631,7 +619,8 @@ fn sweep_rejects_unaffordable_fee() {
         fit: SquadFitSnapshot::disabled(),
     };
 
-    // Asking 5M when budget allows ~700k → UnaffordableFee
+    // Asking 5M when the budget allows ~700k. Whether the club can fund him
+    // is the gate's question; the screen only asks whether it wants him.
     let pricey = ListedTargetView {
         nationality_country_id: 0,
         ability: 95,
@@ -643,7 +632,6 @@ fn sweep_rejects_unaffordable_fee() {
         is_transfer_requested: false,
         is_unhappy: false,
         world_reputation: 2500,
-        current_reputation: 1500,
         ambition: 0.5,
         parent_club_score: 0.55,
         parent_club_in_debt: false,
@@ -652,33 +640,27 @@ fn sweep_rejects_unaffordable_fee() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
-    assert_eq!(
+    assert!(matches!(
         ListedTargetScreen::evaluate(&pricey, &small_buyer),
-        ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee)
-    );
+        ListedTargetVerdict::Accept(_)
+    ));
 }
 
 #[test]
-fn sweep_rejects_unaffordable_wage_when_headroom_is_exhausted() {
+fn the_screen_leaves_the_wage_to_the_gate() {
     use crate::PlayerFieldPositionGroup;
     use crate::transfers::pipeline::advice::{
-        BuyerContext, ListedRejectReason, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
+        BuyerContext, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
     };
 
-    // Wage budget barely above current spend → almost no headroom.
-    // Even an at-tier player at this club would exceed the wage cap.
+    // Wage budget barely above current spend: whether the club could hold
+    // his wage is the gate's standing read, not the screen's.
     let cap_strapped = BuyerContext {
         buyer_rep_score: 0.40,
-        buyer_world_rep: 2400,
-        buyer_league_reputation: 3000,
-        buyer_total_wages: 1_000_000,
-        buyer_wage_budget: 1_010_000, // 10k headroom × 1.3 = 13k cap
         plan_total_budget: 5_000_000.0,
-        max_recommend_value: 10_000_000.0,
         buyer_best_in_group: 75,
         has_open_request: true,
         has_aging_starter: false,
@@ -697,7 +679,6 @@ fn sweep_rejects_unaffordable_wage_when_headroom_is_exhausted() {
         is_transfer_requested: false,
         is_unhappy: false,
         world_reputation: 2200,
-        current_reputation: 800,
         ambition: 0.5,
         parent_club_score: 0.55,
         parent_club_in_debt: false,
@@ -706,15 +687,14 @@ fn sweep_rejects_unaffordable_wage_when_headroom_is_exhausted() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
 
-    assert_eq!(
+    assert!(matches!(
         ListedTargetScreen::evaluate(&in_tier_listed, &cap_strapped),
-        ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableWage)
-    );
+        ListedTargetVerdict::Accept(_)
+    ));
 }
 
 #[test]
@@ -726,12 +706,7 @@ fn sweep_rejects_world_class_target_for_local_club() {
 
     let local_buyer = BuyerContext {
         buyer_rep_score: 0.20,
-        buyer_world_rep: 1500,
-        buyer_league_reputation: 2000,
-        buyer_total_wages: 200_000,
-        buyer_wage_budget: 600_000,
         plan_total_budget: 300_000.0,
-        max_recommend_value: 600_000.0,
         buyer_best_in_group: 60,
         has_open_request: true, // even with explicit demand, world-class is out of reach
         has_aging_starter: false,
@@ -750,7 +725,6 @@ fn sweep_rejects_world_class_target_for_local_club() {
         is_transfer_requested: false,
         is_unhappy: false,
         world_reputation: 9500,
-        current_reputation: 9000,
         ambition: 0.7,
         parent_club_score: 0.85,
         parent_club_in_debt: false,
@@ -759,19 +733,15 @@ fn sweep_rejects_world_class_target_for_local_club() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
 
-    let v = ListedTargetScreen::evaluate(&world_class, &local_buyer);
-    // Tier window or reputation gap blocks well before scoring.
-    match v {
-        ListedTargetVerdict::Reject(
-            ListedRejectReason::OutOfTierWindow | ListedRejectReason::ReputationGapTooLarge,
-        ) => {}
-        other => panic!("expected window / rep-gap reject, got {:?}", other),
-    }
+    // The tier window blocks well before scoring.
+    assert_eq!(
+        ListedTargetScreen::evaluate(&world_class, &local_buyer),
+        ListedTargetVerdict::Reject(ListedRejectReason::OutOfTierWindow)
+    );
 }
 
 #[test]
@@ -785,12 +755,7 @@ fn sweep_rejects_when_no_need_and_no_request() {
     // starter, no open request — sweep must NOT add filler.
     let buyer = BuyerContext {
         buyer_rep_score: 0.72,
-        buyer_world_rep: 5500,
-        buyer_league_reputation: 5500,
-        buyer_total_wages: 20_000_000,
-        buyer_wage_budget: 50_000_000,
         plan_total_budget: 25_000_000.0,
-        max_recommend_value: 50_000_000.0,
         buyer_best_in_group: 135, // above tier baseline
         has_open_request: false,
         has_aging_starter: false,
@@ -809,7 +774,6 @@ fn sweep_rejects_when_no_need_and_no_request() {
         is_transfer_requested: false,
         is_unhappy: false,
         world_reputation: 4500,
-        current_reputation: 4000,
         ambition: 0.5,
         parent_club_score: 0.55,
         parent_club_in_debt: false,
@@ -818,7 +782,6 @@ fn sweep_rejects_when_no_need_and_no_request() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
@@ -841,12 +804,7 @@ fn sweep_rejects_player_without_listing_status() {
 
     let buyer = BuyerContext {
         buyer_rep_score: 0.72,
-        buyer_world_rep: 5500,
-        buyer_league_reputation: 5500,
-        buyer_total_wages: 20_000_000,
-        buyer_wage_budget: 50_000_000,
         plan_total_budget: 25_000_000.0,
-        max_recommend_value: 50_000_000.0,
         buyer_best_in_group: 105,
         has_open_request: true,
         has_aging_starter: false,
@@ -865,7 +823,6 @@ fn sweep_rejects_player_without_listing_status() {
         is_transfer_requested: false,
         is_unhappy: false,
         world_reputation: 5000,
-        current_reputation: 4500,
         ambition: 0.5,
         parent_club_score: 0.50,
         parent_club_in_debt: false,
@@ -874,7 +831,6 @@ fn sweep_rejects_player_without_listing_status() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
@@ -927,12 +883,7 @@ fn stale_market_opportunity_unlocks_signing_without_open_request() {
     // correctly rejected as filler.
     let buyer = BuyerContext {
         buyer_rep_score: 0.72,
-        buyer_world_rep: 5800,
-        buyer_league_reputation: 5500,
-        buyer_total_wages: 20_000_000,
-        buyer_wage_budget: 60_000_000,
         plan_total_budget: 40_000_000.0,
-        max_recommend_value: 0.0,
         buyer_best_in_group: 135,
         has_open_request: false,
         has_aging_starter: false,
@@ -951,7 +902,6 @@ fn stale_market_opportunity_unlocks_signing_without_open_request() {
         is_transfer_requested: true,
         is_unhappy: true,
         world_reputation: 5200,
-        current_reputation: 5000,
         ambition: 0.6,
         parent_club_score: 0.40,
         parent_club_in_debt: false,
@@ -960,7 +910,6 @@ fn stale_market_opportunity_unlocks_signing_without_open_request() {
         low_usage: false,
         recent_interest_count: 0,
         failed_scans: 0,
-        last_block: None,
         is_loan_listed: false,
         breakout_score: 0.0,
     };
@@ -985,74 +934,5 @@ fn stale_market_opportunity_unlocks_signing_without_open_request() {
             ListedTargetVerdict::Accept(_)
         ),
         "a stale, affordable, in-tier available player must become a market opportunity"
-    );
-}
-
-#[test]
-fn staleness_softening_makes_borderline_fee_reachable() {
-    use crate::PlayerFieldPositionGroup;
-    use crate::transfers::pipeline::advice::{
-        BuyerContext, ListedRejectReason, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
-    };
-
-    // Open request so the need / upgrade gates pass — we want to
-    // isolate the FEE gate and its staleness-driven softening.
-    let buyer = BuyerContext {
-        buyer_rep_score: 0.72,
-        buyer_world_rep: 5800,
-        buyer_league_reputation: 5500,
-        buyer_total_wages: 10_000_000,
-        buyer_wage_budget: 100_000_000,
-        plan_total_budget: 10_000_000.0, // reach = 14M
-        max_recommend_value: 0.0,
-        buyer_best_in_group: 110,
-        has_open_request: true,
-        has_aging_starter: false,
-        form_discovery_mode: false,
-        fit: SquadFitSnapshot::disabled(),
-    };
-
-    let mut player = ListedTargetView {
-        nationality_country_id: 0,
-        ability: 128,
-        estimated_potential: 132,
-        age: 27,
-        estimated_value: 17_000_000.0, // just beyond the fresh reach
-        position_group: PlayerFieldPositionGroup::Forward,
-        is_listed: true,
-        is_transfer_requested: false,
-        is_unhappy: false,
-        world_reputation: 4800,
-        current_reputation: 4500,
-        ambition: 0.5,
-        parent_club_score: 0.55,
-        parent_club_in_debt: false,
-        days_available: 5,
-        contract_months_remaining: 24,
-        low_usage: false,
-        recent_interest_count: 0,
-        failed_scans: 0,
-        last_block: None,
-        is_loan_listed: false,
-        breakout_score: 0.0,
-    };
-
-    // Fresh: a 17M asking sits above the ~14M reach → unaffordable.
-    assert_eq!(
-        ListedTargetScreen::evaluate(&player, &buyer),
-        ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee)
-    );
-
-    // A year unsold with a dozen dry scans: the seller has quietly
-    // dropped the asking enough to bring the deal into reach — but the
-    // softening stays bounded, so it never becomes a giveaway.
-    player.days_available = 365;
-    player.failed_scans = 12;
-    assert!(
-        matches!(
-            ListedTargetScreen::evaluate(&player, &buyer),
-            ListedTargetVerdict::Accept(_)
-        ),
-        "asking-price softening after a long market failure must bring a borderline fee into reach"
     );
 }

@@ -37,6 +37,7 @@
 //! Nothing else scores a player's willingness.
 
 use crate::PlayerFieldPositionGroup;
+use crate::club::CareerRunway;
 use crate::club::player::contract::agent::PlayerAgent;
 use crate::club::player::language::LanguageProfile;
 use crate::club::player::mind::{
@@ -376,6 +377,29 @@ impl PlayerStance {
             ambition_drive: ambition.clamp(0.0, 1.0),
             loyalty_drive: 0.0,
             available_soft: true,
+            ..PlayerStance::neutral()
+        }
+    }
+
+    /// The money half of a man read off his contract alone: his wage, his
+    /// age and how long his deal has left — what a market summary carries
+    /// across a border.
+    ///
+    /// No valuation is knowable from that, so his own wage stands as what
+    /// he is worth. That is not what silences the money axis on a loan:
+    /// a loan pays the deal he already has, so the OFFER's wage equals the
+    /// anchor on every path.
+    pub fn on_contract(age: u8, contract_months_remaining: i16, current_wage: u32) -> Self {
+        let runway = CareerRunway::at(age);
+        let wage = (current_wage as f64).max(1.0);
+        PlayerStance {
+            current_wage: wage,
+            fair_wage_at_current: wage,
+            age,
+            career_runway: runway,
+            career_spent: 1.0 - runway,
+            contract_pressure: (1.0_f32 - (contract_months_remaining.max(0) as f32 * 30.0) / 730.0)
+                .clamp(0.0, 1.0),
             ..PlayerStance::neutral()
         }
     }
@@ -917,14 +941,7 @@ impl PlayerOfferAppraisal {
         // 2× — the veteran payday and the prime refusal become the same
         // term with a different weight.
         let anchor = Self::anchor(stance);
-        let mut money_weight = (cfg.money_base
-            + cfg.money_career * stance.career_spent
-            + cfg.money_contract * stance.contract_pressure
-            + cfg.money_secure_future * stance.secure_future_pressure)
-            .clamp(cfg.money_base, cfg.money_cap);
-        if loan {
-            money_weight *= cfg.loan_money_factor;
-        }
+        let money_weight = Self::money_weight(stance, loan, cfg);
         let offered = offer.offered_wage.max(Self::WAGE_FLOOR);
         let money = money_weight * (offered / anchor).ln() as f32;
 
@@ -1021,30 +1038,10 @@ impl PlayerOfferAppraisal {
             .unwrap_or(0.0);
 
         // ── D · push ────────────────────────────────────────────
-        let push = (cfg.push_soft * f32::from(stance.available_soft)
-            + cfg.push_unhappy * f32::from(stance.unhappy)
-            + cfg.push_requested
-                * f32::from(stance.requested)
-                * stance.request_answered_by(drop, cfg)
-            + cfg.push_listed * f32::from(stance.listed_by_club)
-            + cfg.push_contract * stance.contract_pressure
-            + cfg.push_bench * (-stance.playing_time_gap).max(0.0)
-            + cfg.push_goals * stance.leave_pressure
-            + cfg.push_deadline * offer.deadline_urgency.clamp(0.0, 1.0)
-            // His own deadline, not the window's. A man whose plan is
-            // nearly out of time takes the move he would have haggled
-            // over in August.
-            + cfg.plan_deadline_push * stance.plan.deadline_pressure)
-            .clamp(0.0, cfg.push_cap);
+        let push = Self::push(stance, drop, offer.deadline_urgency, cfg);
 
         // ── A · attachment ──────────────────────────────────────
-        let long_service =
-            (stance.days_at_club as f32 / cfg.attachment_long_service_days).clamp(0.0, 1.0);
-        let attachment = stance.loyalty_drive
-            * (cfg.attachment_base
-                + cfg.attachment_favourite * f32::from(stance.at_favourite_club)
-                + cfg.attachment_long_service * long_service)
-            + cfg.attachment_goals * stance.stay_pressure;
+        let attachment = Self::attachment(stance, cfg);
 
         // ── F · memory and circumstance ─────────────────────────
         let memory = cfg.memory_favourite_destination * f32::from(offer.is_favourite_club)
@@ -1131,6 +1128,72 @@ impl PlayerOfferAppraisal {
         }
         let current = stance.current_wage.max(Self::WAGE_FLOOR);
         (current * fair).sqrt().max(Self::WAGE_FLOOR)
+    }
+
+    /// What pushes him toward any move at all.
+    fn push(stance: &PlayerStance, drop: f32, deadline_urgency: f32, cfg: &AppraisalConfig) -> f32 {
+        (cfg.push_soft * f32::from(stance.available_soft)
+            + cfg.push_unhappy * f32::from(stance.unhappy)
+            + cfg.push_requested
+                * f32::from(stance.requested)
+                * stance.request_answered_by(drop, cfg)
+            + cfg.push_listed * f32::from(stance.listed_by_club)
+            + cfg.push_contract * stance.contract_pressure
+            + cfg.push_bench * (-stance.playing_time_gap).max(0.0)
+            + cfg.push_goals * stance.leave_pressure
+            + cfg.push_deadline * deadline_urgency.clamp(0.0, 1.0)
+            // His own deadline, not the window's. A man whose plan is
+            // nearly out of time takes the move he would have haggled
+            // over in August.
+            + cfg.plan_deadline_push * stance.plan.deadline_pressure)
+            .clamp(0.0, cfg.push_cap)
+    }
+
+    /// What holds him where he is.
+    fn attachment(stance: &PlayerStance, cfg: &AppraisalConfig) -> f32 {
+        let long_service =
+            (stance.days_at_club as f32 / cfg.attachment_long_service_days).clamp(0.0, 1.0);
+        stance.loyalty_drive
+            * (cfg.attachment_base
+                + cfg.attachment_favourite * f32::from(stance.at_favourite_club)
+                + cfg.attachment_long_service * long_service)
+            + cfg.attachment_goals * stance.stay_pressure
+    }
+
+    /// The wage he would ask to move: the reservation wage of a move that
+    /// changes nothing else about his football, at no disposition. Read
+    /// before any club names terms, so it carries no buyer.
+    pub fn asking_wage(stance: &PlayerStance, cfg: &AppraisalConfig) -> f64 {
+        let money_weight = Self::money_weight(stance, false, cfg);
+        let held = Self::push(stance, 0.0, 0.0, cfg) - Self::attachment(stance, cfg);
+        (Self::anchor(stance) * (-(held / money_weight) as f64).exp())
+            .clamp(Self::WAGE_FLOOR, u32::MAX as f64)
+    }
+
+    /// The wage at which money alone carries him into a division a full
+    /// refusal span under his floor, where the floor term weighs all it
+    /// can. Late in a career, or at the end of a deal, it falls toward the
+    /// anchor; in his prime it is many times his wage.
+    pub fn refusal_price(stance: &PlayerStance, cfg: &AppraisalConfig) -> f64 {
+        let money_weight = Self::money_weight(stance, false, cfg);
+        let floor = cfg.level_floor_cost * (1.0 - money_weight);
+        Self::anchor(stance) * f64::from(floor / money_weight).exp()
+    }
+
+    /// `w_m` — how much the money matters to him. Climbs with the career
+    /// clock, a deal running down and a want to secure his future; a loan
+    /// pays the deal he already has, so it counts for less there.
+    fn money_weight(stance: &PlayerStance, loan: bool, cfg: &AppraisalConfig) -> f32 {
+        let weight = (cfg.money_base
+            + cfg.money_career * stance.career_spent
+            + cfg.money_contract * stance.contract_pressure
+            + cfg.money_secure_future * stance.secure_future_pressure)
+            .clamp(cfg.money_base, cfg.money_cap);
+        if loan {
+            weight * cfg.loan_money_factor
+        } else {
+            weight
+        }
     }
 
     /// `w_s` — how much the football matters to him. Carries age, ambition,
@@ -1281,6 +1344,48 @@ mod tests {
         assert!((a.money_weight - 0.30).abs() < 1e-5, "{}", a.money_weight);
         assert!((b.money_weight - 1.00).abs() < 1e-5, "{}", b.money_weight);
         assert!(b.money > a.money);
+    }
+
+    #[test]
+    fn the_refusal_price_falls_with_the_career_clock() {
+        let cfg = AppraisalConfig::default();
+        let multiple = |age: u8, months: i16| {
+            let stance = PlayerStance::on_contract(age, months, 1_000_000);
+            PlayerOfferAppraisal::refusal_price(&stance, &cfg) / 1_000_000.0
+        };
+        let prime = multiple(26, 48);
+        let thirty = multiple(30, 10);
+        let veteran = multiple(33, 1);
+        assert!((20.0..22.5).contains(&prime), "26 on four years: {prime}");
+        assert!((2.2..2.5).contains(&thirty), "30 with ten months: {thirty}");
+        assert!((1.05..1.2).contains(&veteran), "33 at expiry: {veteran}");
+    }
+
+    #[test]
+    fn an_offer_at_the_refusal_price_just_clears_the_floor() {
+        let cfg = AppraisalConfig::default();
+        let stance = PlayerStance {
+            level_floor: LevelFloor {
+                standing: 6_500.0,
+                tolerance: 1_000.0,
+                plays_in: 6_500.0,
+            },
+            ..PlayerStance::on_contract(30, 10, 1_290_000)
+        };
+        let offer = OfferView {
+            offered_wage: PlayerOfferAppraisal::refusal_price(&stance, &cfg),
+            league_level: 1_900,
+            ..OfferView::neutral()
+        };
+        assert_eq!(stance.level_floor.below(offer.league_level as f32), 1.0);
+        let a = PlayerOfferAppraisal::appraise(&stance, &offer, 0.0, &cfg);
+        assert!(a.floor < 0.0, "the floor is priced: {}", a.floor);
+        assert!(
+            (a.floor + a.money).abs() < 1e-3,
+            "floor {} + money {}",
+            a.floor,
+            a.money
+        );
     }
 
     #[test]
@@ -2335,6 +2440,58 @@ mod tests {
         assert_eq!(
             a,
             PlayerDisposition::for_negotiation(1, 17, 4242, 900, 0.22)
+        );
+    }
+
+    /// A settled man whose role, place and level a neutral offer leaves
+    /// exactly as they are, so only money, push and attachment are read.
+    fn settled() -> PlayerStance {
+        PlayerStance {
+            importance: 0.5,
+            starter_ratio: 0.5,
+            ..PlayerStance::neutral()
+        }
+    }
+
+    #[test]
+    fn the_ask_is_the_reservation_of_a_move_that_changes_nothing_else() {
+        let cfg = AppraisalConfig::default();
+        let stance = settled();
+        let reservation = PlayerOfferAppraisal::appraise(&stance, &OfferView::neutral(), 0.0, &cfg)
+            .reservation_wage as f64;
+        let ask = PlayerOfferAppraisal::asking_wage(&stance, &cfg);
+        assert!(
+            (ask - reservation).abs() <= 1.0,
+            "ask {ask:.0} against the reservation {reservation:.0}"
+        );
+    }
+
+    #[test]
+    fn a_listing_lowers_the_ask() {
+        let cfg = AppraisalConfig::default();
+        let listed = PlayerStance {
+            available_soft: true,
+            listed_by_club: true,
+            ..settled()
+        };
+        assert!(
+            PlayerOfferAppraisal::asking_wage(&listed, &cfg)
+                < PlayerOfferAppraisal::asking_wage(&settled(), &cfg)
+        );
+    }
+
+    #[test]
+    fn attachment_raises_the_ask() {
+        let cfg = AppraisalConfig::default();
+        let attached = PlayerStance {
+            loyalty_drive: 0.95,
+            at_favourite_club: true,
+            days_at_club: 2_000,
+            ..settled()
+        };
+        assert!(
+            PlayerOfferAppraisal::asking_wage(&attached, &cfg)
+                > PlayerOfferAppraisal::asking_wage(&settled(), &cfg)
         );
     }
 }

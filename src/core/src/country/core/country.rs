@@ -1254,6 +1254,7 @@ pub(crate) mod fixture_calendar_tests {
     use crate::shared::Location;
     use crate::transfers::market::PlacementReachIndex;
     use crate::transfers::market::map::MarketMap;
+    use crate::transfers::view::world::WorldPool;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PeopleNameGeneratorData,
         PlayerCollection, PlayerGenerator, PlayerPositionType, PlayerSkills, StaffCollection,
@@ -1409,7 +1410,7 @@ pub(crate) mod fixture_calendar_tests {
             date,
             country_info: &country_info,
             indexes: None,
-            world_pool: &[],
+            world_pool: WorldPool::empty(),
             global_free_agents: &[],
             market_map: &market_map,
             placement_reach: &placement_reach,

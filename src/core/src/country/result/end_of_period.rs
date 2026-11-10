@@ -18,14 +18,16 @@ use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
 use crate::league::LeagueLadder;
 use crate::transfers::MarketMap;
 use crate::transfers::deal::offer::PromisedSquadStatus;
-use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::build::Suitor;
 use crate::transfers::gate::{
-    AppraisalConfig, OfferKind, OfferViewBuilder, PlayerDisposition, PlayerOfferAppraisal,
-    PlayerStanceBuilder, StanceInputs, TermsRefusalCause, TransferPlausibilityEvaluator,
+    AppraisalConfig, MoveTerms, OfferKind, OfferViewBuilder, PlayerDisposition,
+    PlayerOfferAppraisal, PlayerStanceBuilder, StanceInputs, TermsRefusalCause,
+    TransferMovePlausibility,
 };
 use crate::transfers::loan::LoanPipeline;
 use crate::transfers::squad::LevelBand;
 use crate::transfers::value::wage::BuyerLevelWage;
+use crate::transfers::view::player::{PlayerSummaryBuilder, SummaryClubContext};
 use crate::utils::{DateUtils, FormattingUtils};
 use crate::world::SimulatorData;
 use crate::world::bootstrap::ClubIdentity;
@@ -1222,29 +1224,43 @@ impl CountryResult {
             .as_ref()
             .and_then(|loan| PromisedSquadStatus::of_status(&loan.squad_status));
         // What he is where he has been playing all season, and how far
-        // the club that owns him sits above it.
-        let here = TransferPlausibilityBuilder::from_clubs(
-            country, borrower, borrower, player, fee as f64, false, false, date,
-        );
-        let from_parent = TransferPlausibilityBuilder::from_global(
-            country,
-            borrower,
-            parent_country,
-            parent,
-            player,
-            fee as f64,
-            false,
-            false,
-            date,
+        // the club that owns him sits above it. Neither read prices a
+        // market, so neither needs the world's geography.
+        let suitor = Suitor::of(country, borrower, date);
+        let terms = MoveTerms::for_player(player, borrower, date, false, false, fee as f64);
+        let here = TransferMovePlausibility::read(
+            &suitor,
+            &PlayerSummaryBuilder::one(country, borrower, player, date)?,
+            terms,
             &MarketMap::default(),
-        );
+        )
+        .diagnostics;
+        let registered = borrower
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.players.find(player.id).is_some())?;
+        let from_parent = TransferMovePlausibility::read(
+            &suitor,
+            &PlayerSummaryBuilder::build(
+                parent_country,
+                parent,
+                &SummaryClubContext::of(parent_country, parent, date, false),
+                registered,
+                player,
+                date,
+            ),
+            terms,
+            &MarketMap::default(),
+        )
+        .diagnostics;
         let stance = PlayerStanceBuilder::build(&StanceInputs {
             player,
             seller_country: parent_country,
             seller_club: parent,
             buyer_club_id: borrower.id,
             rep_diff: borrower_rep - parent_rep,
-            importance: TransferPlausibilityEvaluator::player_importance(&here),
+            importance: here.importance,
             listed_by_club: false,
             available: false,
             months_to_tournament: country.months_to_tournament_for(player.nationality_continent_id),
@@ -1264,7 +1280,7 @@ impl CountryResult {
             &stance,
             wage as f64,
             promised,
-            TransferPlausibilityEvaluator::sporting_drop(&from_parent),
+            from_parent.sporting_drop,
             borrower_rep,
             &MarketMap::default(),
         );

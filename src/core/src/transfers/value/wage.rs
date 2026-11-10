@@ -200,16 +200,28 @@ impl WagePower {
             .map(|t| t.owner_envelopes.remaining(tier, reserved))
             .unwrap_or(0.0);
 
-        let ceiling = (level_wage * Self::LEVEL_STRETCH)
-            .max(wage_headroom)
-            .max(owner_subsidy);
+        Self::of_parts(level_wage, wage_headroom, owner_subsidy)
+    }
 
+    /// The same read, from the two halves that do not depend on who is
+    /// named — so a pass can fold them once per club.
+    pub fn of_parts(level_wage: f64, wage_headroom: f64, owner_subsidy: f64) -> Self {
         WagePower {
             level_wage,
-            ceiling,
+            ceiling: (level_wage * Self::LEVEL_STRETCH)
+                .max(wage_headroom)
+                .max(owner_subsidy),
             owner_subsidy,
             wage_headroom,
         }
+    }
+
+    /// The most the club could hold for any one shirt before it knows who
+    /// wears it: the room its wage structure gives one shirt, or its
+    /// owner's top-tier envelope. With nobody named there is no level wage
+    /// to stretch.
+    pub fn shirt_ceiling(club: &Club) -> f64 {
+        Self::for_player(club, 0.0, BriefTier::A, 0.0).ceiling
     }
 
     /// The part of an agreed wage the club's own level cannot explain —
@@ -351,6 +363,125 @@ impl BuyerLevelWage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::board::SeasonTargets;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, Team, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        fn player(id: u32, salary: u32) -> Player {
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Wage".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(1996, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::MidfielderCenter,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .contract(Some(PlayerClubContract::new(
+                    salary,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        fn club(salaries: &[u32], targets: SeasonTargets) -> Club {
+            let players = salaries
+                .iter()
+                .zip(1..)
+                .map(|(salary, id)| Self::player(id, *salary))
+                .collect();
+            let team = Team::builder()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(1)
+                .name("Club".to_string())
+                .slug("club".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(5000, 5000, 5000))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+            let mut club = Club::new(
+                1,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![team]),
+                ClubFacilities::default(),
+            );
+            club.board.season_targets = Some(targets);
+            club
+        }
+    }
+
+    #[test]
+    fn a_shirt_ceiling_is_what_one_unnamed_shirt_could_draw() {
+        let with_room = Fx::club(
+            &[1_000_000, 400_000],
+            SeasonTargets {
+                wage_budget: 5_000_000,
+                ..SeasonTargets::default()
+            },
+        );
+        let with_owner = Fx::club(
+            &[300_000],
+            SeasonTargets {
+                wage_budget: 300_000,
+                owner_envelopes: OwnerEnvelopes::split(20_000_000.0),
+                ..SeasonTargets::default()
+            },
+        );
+        let with_neither = Fx::club(
+            &[300_000],
+            SeasonTargets {
+                wage_budget: 300_000,
+                ..SeasonTargets::default()
+            },
+        );
+
+        for club in [&with_room, &with_owner] {
+            assert_eq!(
+                WagePower::shirt_ceiling(club),
+                WagePower::for_player(club, 0.0, BriefTier::A, 0.0).ceiling
+            );
+        }
+        assert_eq!(
+            WagePower::shirt_ceiling(&with_room),
+            1_000_000.0 * WagePower::WAGE_STRUCTURE_STRETCH,
+            "room is capped at the structure's stretch on the top earner"
+        );
+        assert_eq!(
+            WagePower::shirt_ceiling(&with_owner),
+            20_000_000.0 * WagePower::tier_share(BriefTier::A)
+        );
+        assert_eq!(WagePower::shirt_ceiling(&with_neither), 0.0);
+    }
 
     #[test]
     fn the_tier_shares_commit_the_owners_cheque_exactly_once() {

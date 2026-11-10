@@ -17,11 +17,18 @@ use rustc_hash::FxHashMap;
 use std::cmp::Reverse;
 use std::sync::OnceLock;
 
+use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::language::LanguageProfile;
-use crate::club::player::mind::{GoalKind, MindClock};
+use crate::club::player::mind::{GoalKind, MindClock, MindSituation};
 use crate::club::player::statistics::StuckCareerScan;
+use crate::club::player::transfer::{LevelFloor, StandingReading};
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::gate::{
+    AppraisalConfig, AvailabilityView, EffectivePlayerReputation, PlayerOfferAppraisal,
+    PlayerStance, PlayerStanceBuilder, SquadEvidenceSource,
+};
+use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::pipeline::LoanDestinationPreference;
 use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
@@ -32,6 +39,297 @@ use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
     PositionCoverage, Team, TeamType,
 };
+
+/// Everything a summary reads that is NOT the player: the country's constants
+/// and the club's, resolved once per club so every player of the club is
+/// projected against the same numbers, whichever pass asks.
+pub(crate) struct SummaryClubContext {
+    price_level: f32,
+    country_reputation: u16,
+    country_region: ScoutingRegion,
+    seller_league_rep: u16,
+    seller_club_rep: u16,
+    club_world_rep: i16,
+    seller_club_rep_score: f32,
+    seller_league_id: Option<u32>,
+    seller_in_debt: bool,
+    seller_club_matches: u16,
+    group_ranks: ClubGroupRanks,
+    home_preferences: Vec<u32>,
+    stage_parent_loan: bool,
+}
+
+impl SummaryClubContext {
+    /// `stage_parent_loan` stages each parent's view of lending him, which
+    /// only the foreign loan scan reads off the world pool.
+    pub(crate) fn of(
+        country: &Country,
+        club: &Club,
+        date: NaiveDate,
+        stage_parent_loan: bool,
+    ) -> Self {
+        let (seller_league_rep, seller_club_rep) =
+            PlayerValuationCalculator::seller_context(country, club);
+        let main_team = club.teams.main();
+        SummaryClubContext {
+            price_level: country.settings.pricing.price_level,
+            country_reputation: country.reputation,
+            country_region: ScoutingRegion::from_country(country.continent_id, &country.code),
+            seller_league_rep,
+            seller_club_rep,
+            club_world_rep: ClubView::club_world_reputation(club),
+            seller_club_rep_score: main_team
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.3),
+            seller_league_id: main_team.and_then(|t| t.league_id),
+            seller_in_debt: club.finance.balance.balance < 0,
+            seller_club_matches: SquadEvidenceContext::current_season_sample(date, club)
+                .club_matches_proxy(),
+            group_ranks: ClubGroupRanks::build(club),
+            // Loan-out candidates the parent has already decided WHERE it
+            // would send. That decision is itself a posting, so a candidate
+            // identified this tick reaches the world in the same pass.
+            home_preferences: club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .filter(|c| c.preferred_destination != LoanDestinationPreference::Any)
+                .map(|c| c.player_id)
+                .collect(),
+            stage_parent_loan,
+        }
+    }
+
+    pub(in crate::transfers) fn ranks(&self) -> &ClubGroupRanks {
+        &self.group_ranks
+    }
+}
+
+/// The one projection of a player onto the market. The pool scan and a
+/// single-player lookup build him here, so both describe the same man.
+pub(crate) struct PlayerSummaryBuilder;
+
+impl PlayerSummaryBuilder {
+    /// One player, resolved to his club, with no context folded for it.
+    pub(crate) fn one(
+        country: &Country,
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+    ) -> Option<PlayerSummary> {
+        let team = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.players.find(player.id).is_some())?;
+        let ctx = SummaryClubContext::of(country, club, date, false);
+        Some(Self::build(country, club, &ctx, team, player, date))
+    }
+
+    pub(crate) fn build(
+        country: &Country,
+        club: &Club,
+        ctx: &SummaryClubContext,
+        team: &Team,
+        player: &Player,
+        date: NaiveDate,
+    ) -> PlayerSummary {
+        let group = player.position().position_group();
+        let value = PlayerValuationCalculator::calculate_value_with_price_level(
+            player,
+            date,
+            ctx.price_level,
+            ctx.seller_league_rep,
+            ctx.seller_club_rep,
+        );
+        let (contract_months_remaining, salary) = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let days = (c.expiration - date).num_days().max(0);
+                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+            })
+            .unwrap_or((0, 0));
+        // Not in the first team's depth chart at all reads as ranked BEHIND
+        // it, never folded into it at rank 1, which read every reserve as the
+        // seller's second choice.
+        let seller_rank = match ctx.group_ranks.rank(player.id) {
+            u8::MAX => ctx.group_ranks.group_size(group).saturating_add(1),
+            r => r,
+        };
+        // A B side's own "key player" label is standing in that dressing
+        // room, not a first-team promise the market should price against.
+        let squad_status = player
+            .contract
+            .as_ref()
+            .map(|c| c.squad_status.as_first_team_designation(team.team_type))
+            .unwrap_or(PlayerSquadStatus::NotYetSet);
+        let mut summary = PlayerSummary {
+            player_id: player.id,
+            club_id: club.id,
+            country_id: country.id,
+            continent_id: country.continent_id,
+            region: ctx.country_region,
+            country_code: country.code.clone(),
+            // Where he is FROM, alongside where he plays.
+            nationality_country_id: player.country_id,
+            nationality_continent_id: player.nationality_continent_id,
+            nationality_region: player.home_region(),
+            starter_share: player.happiness.starter_ratio,
+            tenure_days: StuckCareerScan::club_tenure_days(player, date)
+                .unwrap_or(i64::from(u16::MAX))
+                .clamp(0, i64::from(u16::MAX)) as u16,
+            // The weekly cache: the mind thinks weekly, so a per-player
+            // `MindSituation` build here bought nothing.
+            return_home_desire: player.home_pull.desire,
+            // The parent's own posting of a foreigner whose want to go home
+            // has formed. Scoped to loans, so it can never become a
+            // permanent-transfer discovery channel.
+            home_return_wanted: HomeLoanGates::is_posted(
+                player.home_pull.wanted,
+                ctx.home_preferences.contains(&player.id),
+            ),
+            ambition: player.attributes.ambition as u8,
+            loyalty: player.attributes.loyalty as u8,
+            adaptability: player.attributes.adaptability as u8,
+            leave_pressure: player
+                .mind
+                .pressure_of(GoalKind::GoOutOnLoan)
+                .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
+                .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
+                .clamp(0.0, 1.0),
+            stay_pressure: player
+                .mind
+                .pressure_of(GoalKind::StayAtThisClub)
+                .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
+                .clamp(0.0, 1.0),
+            parent_loan: ctx
+                .stage_parent_loan
+                .then(|| LoanAssetGuard::parent_view(club, player, date, &ctx.group_ranks)),
+            career_plan: player.mind.career.plan_view(MindClock::day(date)),
+            anchors: player.anchor_view(date),
+            asks_for_a_bigger_stage: player.asks_only_for_a_bigger_stage(),
+            parent_subsidy: player.loan_subsidy(),
+            player_name: player.full_name.to_string(),
+            club_name: club.name.clone(),
+            position: player.position(),
+            position_group: group,
+            coverage: PositionCoverage::of(&player.positions),
+            age: player.age(date),
+            estimated_value: value.amount,
+            is_listed: player.statuses.has(PlayerStatusType::Lst),
+            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+            skill_ability: PlayerView::position_evaluation_ability(player),
+            observable_level: AbilityEstimator::observable_level(player),
+            pathway_stage: player.pathway_stage(),
+            // Regressed, so a small-sample season does not fool the
+            // candidate sorter or the recommendation tiers.
+            average_rating: player.statistics.average_rating_realistic(group),
+            goals: player.statistics.goals,
+            assists: player.statistics.assists,
+            appearances: player.statistics.total_games(),
+            determination: player.skills.mental.determination,
+            work_rate: player.skills.mental.work_rate,
+            composure: player.skills.mental.composure,
+            anticipation: player.skills.mental.anticipation,
+            technical_avg: player.skills.technical.average(),
+            mental_avg: player.skills.mental.average(),
+            physical_avg: player.skills.physical.average(),
+            current_reputation: player.player_attributes.current_reputation,
+            home_reputation: player.player_attributes.home_reputation,
+            world_reputation: player.player_attributes.world_reputation,
+            country_reputation: ctx.country_reputation,
+            club_world_reputation: ctx.club_world_rep,
+            club_best_in_group: ctx.group_ranks.best(group),
+            is_injured: player.player_attributes.is_injured,
+            contract_months_remaining,
+            salary,
+            language_profile: LanguageProfile::from_languages(&player.languages),
+            international_apps: player.player_attributes.international_apps,
+            career_record: CareerRecordSnapshot::read(player, group),
+            seller_ctx: SellerPlausibilityContext {
+                club_reputation_score: ctx.seller_club_rep_score,
+                league_reputation: ctx.seller_league_rep,
+                league_id: ctx.seller_league_id,
+                position_group_rank: seller_rank,
+                squad_status,
+                is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+                in_debt: ctx.seller_in_debt,
+                days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
+                market_resignation: player.market_resignation(date),
+                club_matches_played: SquadEvidenceSource::club_matches(
+                    team.team_type,
+                    team.league_id.is_some(),
+                    ctx.seller_club_matches,
+                ),
+                big_stage_inclination: player.big_stage_inclination,
+                is_marketed: club.transfer_plan.is_marketed(player.id),
+            },
+            level_floor: LevelFloor::none(),
+            asking_wage: 0.0,
+            refusal_price: 0.0,
+        };
+        summary.level_floor = Self::level_floor(&summary);
+        let stance = PlayerStance {
+            fair_wage_at_current: Self::fair_wage(player, ctx, date) as f64,
+            ..PlayerStanceBuilder::from_summary(&summary, 0.0, ctx.country_region)
+        };
+        let cfg = AppraisalConfig::default();
+        summary.asking_wage = PlayerOfferAppraisal::asking_wage(&stance, &cfg);
+        summary.refusal_price = PlayerOfferAppraisal::refusal_price(&stance, &cfg);
+        summary
+    }
+
+    /// The floor under the football he will play, as a borrowing country
+    /// can read it: his name as the world sees it, since the summary is
+    /// what crosses a border.
+    pub(in crate::transfers) fn level_floor(summary: &PlayerSummary) -> LevelFloor {
+        let seen = summary.appearances >= MindSituation::TRACKED_APPS as u16;
+        LevelFloor::of(&StandingReading {
+            level: summary.observable_level,
+            group: summary.position_group,
+            effective_rep: EffectivePlayerReputation::compute(
+                summary.world_reputation,
+                summary.current_reputation,
+                summary.home_reputation,
+                false,
+            ),
+            league_rep: summary.seller_ctx.league_reputation,
+            starter_share: if seen { summary.starter_share } else { 0.0 },
+            caps: summary.international_apps,
+            age: summary.age,
+            resignation: summary.seller_ctx.market_resignation,
+            plan_widening: summary.career_plan.renown_widening(),
+            held_summit: summary.anchors.held_summit,
+            recency: summary.anchors.recency,
+        })
+    }
+
+    /// What a man of his standing is worth at the club he is at now: the
+    /// same valuation the live stance reads, so a man on a token wage is not
+    /// read as one whose price is a token.
+    fn fair_wage(player: &Player, ctx: &SummaryClubContext, date: NaiveDate) -> u32 {
+        let contract = player.contract.as_ref();
+        ContractValuation::evaluate(
+            player,
+            &ValuationContext {
+                age: player.age(date),
+                club_reputation_score: ctx.seller_club_rep_score,
+                league_reputation: ctx.seller_league_rep,
+                squad_status: contract
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular),
+                current_salary: contract.map(|c| c.salary).unwrap_or(0),
+                months_remaining: contract
+                    .map(|c| ((c.expiration - date).num_days() / 30) as i32)
+                    .unwrap_or(0),
+                has_market_interest: AvailabilityView::read(player, false, None).available_soft,
+            },
+        )
+        .expected_wage
+    }
+}
 
 /// Read-only questions the market asks about a player.
 pub(crate) struct PlayerView;
@@ -85,187 +383,6 @@ impl PlayerView {
             }
         }
         None
-    }
-
-    /// The market summary of a player already resolved to his club, with
-    /// an optional precomputed [`ClubGroupRanks`] for the club. The
-    /// per-call fallback re-sorts the main team's position group TWICE per
-    /// summary (rank + best);
-    /// passes that resolve many candidates per club (shortlists,
-    /// recommendation re-checks) hand the batched snapshot in instead —
-    /// same values by construction (see `ClubGroupRanks`).
-    pub(in crate::transfers) fn build_player_summary_ranked(
-        country: &Country,
-        club: &Club,
-        player: &Player,
-        date: NaiveDate,
-        ranks: Option<&ClubGroupRanks>,
-    ) -> PlayerSummary {
-        let skill_ability = PlayerView::position_evaluation_ability(player);
-        // Blended reputation, not just `world` — keeps domestic
-        // strength visible in valuation for clubs whose home
-        // standing exceeds their international footprint.
-        let (league_reputation, club_reputation) =
-            PlayerValuationCalculator::seller_context(country, club);
-        let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
-            player,
-            date,
-            country.settings.pricing.price_level,
-            league_reputation,
-            club_reputation,
-        )
-        .amount;
-        let (contract_months_remaining, salary) = player
-            .contract
-            .as_ref()
-            .map(|c| {
-                let days = (c.expiration - date).num_days().max(0);
-                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-            })
-            .unwrap_or((0, 0));
-        let pos_group = player.position().position_group();
-        let main_team = club.teams.main();
-        let seller_ctx = SellerPlausibilityContext {
-            club_reputation_score: main_team
-                .map(|t| t.reputation.overall_score())
-                .unwrap_or(0.3),
-            league_reputation,
-            league_id: main_team.and_then(|t| t.league_id),
-            // Not in the first team's depth chart at all ⇒ ranked BEHIND
-            // it, never folded into it at rank 1. See the matching note in
-            // `collect_player_pool`.
-            position_group_rank: match ranks
-                .map(|r| r.rank(player.id))
-                .unwrap_or_else(|| PlayerView::position_group_rank(club, player.id, pos_group))
-            {
-                u8::MAX => main_team
-                    .map(|t| {
-                        t.players
-                            .players
-                            .iter()
-                            .filter(|p| p.position().position_group() == pos_group)
-                            .count()
-                            .min(u8::MAX as usize) as u8
-                    })
-                    .unwrap_or(0)
-                    .saturating_add(1),
-                r => r,
-            },
-            squad_status: player
-                .contract
-                .as_ref()
-                .map(|c| {
-                    c.squad_status
-                        .as_first_team_designation(club.teams.squad_tier_of(player.id))
-                })
-                .unwrap_or(PlayerSquadStatus::NotYetSet),
-            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-            in_debt: club.finance.balance.balance < 0,
-            days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
-            market_resignation: player.market_resignation(date),
-            club_matches_played: SquadEvidenceContext::current_season_sample(date, club)
-                .club_matches_proxy(),
-            big_stage_inclination: player.big_stage_inclination,
-            is_marketed: club.transfer_plan.is_marketed(player.id),
-        };
-        PlayerSummary {
-            player_id: player.id,
-            club_id: club.id,
-            country_id: country.id,
-            continent_id: country.continent_id,
-            region: ScoutingRegion::from_country(country.continent_id, &country.code),
-            country_code: country.code.clone(),
-            // Where he is FROM — see the twin block in
-            // `collect_player_pool`. Both builders must agree, or a
-            // candidate row and a pool row would describe two players.
-            nationality_country_id: player.country_id,
-            nationality_continent_id: player.nationality_continent_id,
-            nationality_region: player.home_region(),
-            starter_share: player.happiness.starter_ratio,
-            tenure_days: StuckCareerScan::club_tenure_days(player, date)
-                .unwrap_or(i64::from(u16::MAX))
-                .clamp(0, i64::from(u16::MAX)) as u16,
-            // The weekly cache, exactly as `collect_player_pool` reads it
-            // — the two builders describe the same man or they describe
-            // two different ones.
-            return_home_desire: player.home_pull.desire,
-            home_return_wanted: HomeLoanGates::is_posted(
-                player.home_pull.wanted,
-                club.transfer_plan.loan_out_candidates.iter().any(|c| {
-                    c.player_id == player.id
-                        && c.preferred_destination != LoanDestinationPreference::Any
-                }),
-            ),
-            ambition: player.attributes.ambition as u8,
-            loyalty: player.attributes.loyalty as u8,
-            adaptability: player.attributes.adaptability as u8,
-            leave_pressure: player
-                .mind
-                .pressure_of(GoalKind::GoOutOnLoan)
-                .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
-                .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
-                .clamp(0.0, 1.0),
-            stay_pressure: player
-                .mind
-                .pressure_of(GoalKind::StayAtThisClub)
-                .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
-                .clamp(0.0, 1.0),
-            // The parent's own side of a loan, staged where his club is
-            // still in scope — a borrowing country cannot read any of
-            // the three from its own borrow. Its view of lending him is
-            // read off the world pool alone.
-            parent_loan: None,
-            career_plan: player.mind.career.plan_view(MindClock::day(date)),
-            anchors: player.anchor_view(date),
-            asks_for_a_bigger_stage: player.asks_only_for_a_bigger_stage(),
-            parent_subsidy: player.loan_subsidy(),
-            player_name: player.full_name.to_string(),
-            club_name: club.name.clone(),
-            position: player.position(),
-            position_group: player.position().position_group(),
-            coverage: PositionCoverage::of(&player.positions),
-            age: player.age(date),
-            estimated_value,
-            is_listed: player.statuses.has(PlayerStatusType::Lst),
-            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-            skill_ability,
-            observable_level: AbilityEstimator::observable_level(player),
-            pathway_stage: player.pathway_stage(),
-            // Sample-size-regressed: this candidate row
-            // feeds the same scouting recommendation tier
-            // logic as the scouting pipeline above.
-            average_rating: player
-                .statistics
-                .average_rating_realistic(player.position().position_group()),
-            goals: player.statistics.goals,
-            assists: player.statistics.assists,
-            appearances: player.statistics.total_games(),
-            determination: player.skills.mental.determination,
-            work_rate: player.skills.mental.work_rate,
-            composure: player.skills.mental.composure,
-            anticipation: player.skills.mental.anticipation,
-            technical_avg: player.skills.technical.average(),
-            mental_avg: player.skills.mental.average(),
-            physical_avg: player.skills.physical.average(),
-            current_reputation: player.player_attributes.current_reputation,
-            home_reputation: player.player_attributes.home_reputation,
-            world_reputation: player.player_attributes.world_reputation,
-            country_reputation: country.reputation,
-            club_world_reputation: ClubView::club_world_reputation(club),
-            club_best_in_group: ranks
-                .map(|r| r.best(player.position().position_group()))
-                .unwrap_or_else(|| {
-                    PlayerView::best_observable_in_group(club, player.position().position_group())
-                }),
-            is_injured: player.player_attributes.is_injured,
-            contract_months_remaining,
-            salary,
-            seller_ctx,
-            language_profile: LanguageProfile::from_languages(&player.languages),
-            international_apps: player.player_attributes.international_apps,
-            career_record: CareerRecordSnapshot::read(player, pos_group),
-        }
     }
 
     /// Canonical "evaluate this player against a tier baseline" ability.
@@ -344,19 +461,6 @@ impl PlayerView {
             }
         }
         ahead.min(u8::MAX as usize - 1) as u8
-    }
-
-    /// Best CA at the given position group across the club's first-team
-    /// depth chart — see [`Self::ranks_with_first_team`].
-    pub(crate) fn best_ca_in_group(club: &Club, group: PlayerFieldPositionGroup) -> u8 {
-        club.teams
-            .iter()
-            .filter(|t| PlayerView::ranks_with_first_team(t.team_type))
-            .flat_map(|t| t.players.players.iter())
-            .filter(|p| p.position().position_group() == group)
-            .map(|p| p.player_attributes.current_ability)
-            .max()
-            .unwrap_or(0)
     }
 
     /// The same, on the scale a loan is actually priced on. Hidden
@@ -466,20 +570,16 @@ impl PlayerView {
 pub(in crate::transfers) struct CountryPlayerLookup {
     /// Club index and summary slot of every rostered player.
     slot_by_player: FxHashMap<u32, (u32, u32)>,
-    /// Per-club [`ClubGroupRanks`], indexed like `Country::clubs`.
-    /// Pre-built for every club (one group sort per club — trivial next
-    /// to the scans this index serves) so `find_summary` stays `&self`
-    /// and the lookup can be shared across parallel per-club scans.
-    /// Rosters and CA don't move inside a pass — same freshness
-    /// contract as `club_idx_by_player`.
-    ranks_by_club: Vec<ClubGroupRanks>,
+    /// Per-club [`SummaryClubContext`], indexed like `Country::clubs` and
+    /// folded on first use, so `find_summary` stays `&self` and the lookup
+    /// can be shared across parallel per-club scans.
+    contexts: Vec<OnceLock<SummaryClubContext>>,
     summaries: Vec<OnceLock<Box<PlayerSummary>>>,
 }
 
 impl CountryPlayerLookup {
     pub(in crate::transfers) fn build(country: &Country) -> Self {
         let mut slot_by_player = FxHashMap::default();
-        let mut ranks_by_club = Vec::with_capacity(country.clubs.len());
         let mut slots = 0u32;
         for (club_idx, club) in country.clubs.iter().enumerate() {
             for team in &club.teams.teams {
@@ -488,11 +588,10 @@ impl CountryPlayerLookup {
                     slots += 1;
                 }
             }
-            ranks_by_club.push(ClubGroupRanks::build(club));
         }
         CountryPlayerLookup {
             slot_by_player,
-            ranks_by_club,
+            contexts: (0..country.clubs.len()).map(|_| OnceLock::new()).collect(),
             summaries: (0..slots).map(|_| OnceLock::new()).collect(),
         }
     }
@@ -505,14 +604,17 @@ impl CountryPlayerLookup {
     ) -> Option<&PlayerSummary> {
         let &(club_idx, slot) = self.slot_by_player.get(&player_id)?;
         let club = country.clubs.get(club_idx as usize)?;
-        let player = PlayerView::find_player_in_club(club, player_id)?;
+        let team = club
+            .teams
+            .teams
+            .iter()
+            .find(|t| t.players.find(player_id).is_some())?;
+        let player = team.players.find(player_id)?;
+        let ctx = self.contexts[club_idx as usize]
+            .get_or_init(|| SummaryClubContext::of(country, club, date, false));
         Some(self.summaries[slot as usize].get_or_init(|| {
-            Box::new(PlayerView::build_player_summary_ranked(
-                country,
-                club,
-                player,
-                date,
-                self.ranks_by_club.get(club_idx as usize),
+            Box::new(PlayerSummaryBuilder::build(
+                country, club, ctx, team, player, date,
             ))
         }))
     }
@@ -768,5 +870,176 @@ mod rank_table_tests {
         }
         assert!(tied > 0, "the fixture must rank tied abilities");
         assert_eq!(ClubGroupRanks::build(&clubs[0]).ability_rank(201), u8::MAX);
+    }
+}
+
+#[cfg(test)]
+mod summary_builder_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::gate::build::Suitor;
+    use crate::transfers::scouting::ScoutingPass;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer, TestTeam};
+
+    struct Fx;
+
+    impl Fx {
+        /// A club with a first team and a B side, and a reserve centre-half
+        /// registered with the B side.
+        fn country() -> Country {
+            let today = TestDate::today();
+            let first_team = TestTeam::new(10)
+                .club_id(1)
+                .team_type(TeamType::Main)
+                .reputation(6_500)
+                .players(vec![
+                    TestPlayer::new(1)
+                        .position(PlayerPositionType::DefenderCenter)
+                        .ability(140)
+                        .skills_match_ability()
+                        .contract_until(2_000_000, TestDate::on(2029, 6, 30))
+                        .build(),
+                    TestPlayer::new(2)
+                        .position(PlayerPositionType::DefenderCenter)
+                        .ability(130)
+                        .skills_match_ability()
+                        .contract_until(1_500_000, TestDate::on(2029, 6, 30))
+                        .build(),
+                ])
+                .build();
+            let reserves = TestTeam::new(11)
+                .club_id(1)
+                .team_type(TeamType::B)
+                .league_id(None)
+                .reputation(2_000)
+                .players(vec![
+                    TestPlayer::new(3)
+                        .position(PlayerPositionType::DefenderCenter)
+                        .ability(95)
+                        .age(20)
+                        .skills_match_ability()
+                        .contract_until(150_000, TestDate::on(2028, 6, 30))
+                        .on(today)
+                        .build(),
+                ])
+                .build();
+            let buyer = TestClub::new(2).reputation(4_000).build();
+            TestCountry::new(1)
+                .league_reputation(6_000)
+                .clubs(vec![
+                    TestClub::new(1).teams(vec![first_team, reserves]).build(),
+                    buyer,
+                ])
+                .build()
+        }
+    }
+
+    /// The pool scan, the country lookup and the single-player build are one
+    /// projection: a reserve player reads the same on all three.
+    #[test]
+    fn a_reserve_reads_the_same_from_the_pool_and_a_single_lookup() {
+        let country = Fx::country();
+        let today = TestDate::today();
+        let pool = ScoutingPass::collect_player_pool(&country, today, false);
+        let from_pool = pool.iter().find(|s| s.player_id == 3).expect("on the pool");
+        let club = &country.clubs[0];
+        let player = PlayerView::find_player_in_club(club, 3).unwrap();
+        let single = PlayerSummaryBuilder::one(&country, club, player, today).unwrap();
+        let lookup = CountryPlayerLookup::build(&country);
+        let looked_up = lookup.find_summary(&country, 3, today).unwrap();
+
+        let suitor = Suitor::of(&country, &country.clubs[1], today);
+        for other in [&single, looked_up] {
+            assert_eq!(other.skill_ability, from_pool.skill_ability);
+            assert_eq!(
+                other.seller_ctx.position_group_rank,
+                from_pool.seller_ctx.position_group_rank
+            );
+            assert_eq!(
+                other.seller_ctx.club_matches_played,
+                from_pool.seller_ctx.club_matches_played
+            );
+            assert_eq!(other.estimated_value, from_pool.estimated_value);
+            assert_eq!(
+                suitor.level_wage_for(other),
+                suitor.level_wage_for(from_pool)
+            );
+            assert_eq!(other.asking_wage, from_pool.asking_wage);
+        }
+        assert!(
+            from_pool.seller_ctx.position_group_rank >= 2,
+            "a B-side player ranks behind the first team's depth chart, not inside it"
+        );
+    }
+
+    /// The floor travels as it was read: the stored figure is the one the
+    /// summary's own fields give.
+    #[test]
+    fn the_stored_floor_is_the_one_its_fields_give() {
+        let country = Fx::country();
+        let today = TestDate::today();
+        for summary in ScoutingPass::collect_player_pool(&country, today, false) {
+            assert_eq!(
+                summary.level_floor,
+                PlayerSummaryBuilder::level_floor(&summary)
+            );
+            assert!(summary.asking_wage >= 500.0);
+            assert!(summary.refusal_price >= 500.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod token_wage_tests {
+    use super::*;
+    use crate::PlayerPositionType;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer};
+
+    /// A first-team regular at a top-flight club on a token wage. Read off
+    /// his contract alone, his refusal price is a token too, and a club in a
+    /// division of reputation 1200 could pay it; read at what a man of his
+    /// standing is worth there, it cannot.
+    #[test]
+    fn a_token_wage_does_not_make_a_refused_division_payable() {
+        let today = TestDate::today();
+        let player = TestPlayer::new(1)
+            .position(PlayerPositionType::MidfielderCenter)
+            .ability(150)
+            .age(25)
+            .skills_match_ability()
+            .contract_until(444, TestDate::on(2029, 6, 30))
+            .build();
+        let country = TestCountry::new(1)
+            .league_reputation(8_000)
+            .clubs(vec![
+                TestClub::new(1)
+                    .reputation(8_000)
+                    .players(vec![player])
+                    .build(),
+            ])
+            .build();
+        let club = &country.clubs[0];
+        let player = PlayerView::find_player_in_club(club, 1).unwrap();
+        let summary = PlayerSummaryBuilder::one(&country, club, player, today).unwrap();
+        assert!(
+            summary.level_floor.below(1_200.0) >= 1.0,
+            "a division of reputation 1200 is one he refuses outright"
+        );
+
+        let on_contract = PlayerOfferAppraisal::refusal_price(
+            &PlayerStance::on_contract(summary.age, summary.contract_months_remaining, 444),
+            &AppraisalConfig::default(),
+        );
+        // What a small club could hold for one shirt: well above the token
+        // price, well under his own.
+        let shirt = (on_contract * summary.refusal_price).sqrt();
+        assert!(summary.refusal_price > 10.0 * on_contract);
+        assert!(shirt >= on_contract, "the contract-only read would pay it");
+        assert!(
+            shirt < summary.refusal_price,
+            "his price {:.0} against the contract-only {:.0}",
+            summary.refusal_price,
+            on_contract
+        );
     }
 }

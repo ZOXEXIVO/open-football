@@ -345,4 +345,11 @@ impl MarketSwitches {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_CAREER_ANCHORS_OFF"))
     }
+
+    /// `OF_STANDING_FIT_OFF` — standing fit passes everyone, so the routes
+    /// still read the one entry and the arm measures the rule alone.
+    pub fn standing_fit_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_STANDING_FIT_OFF"))
+    }
 }

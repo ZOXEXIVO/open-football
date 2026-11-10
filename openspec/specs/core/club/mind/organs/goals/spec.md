@@ -87,3 +87,30 @@ This holds for players and managers alike.
 - **WHEN** the block on a goal is lifted
 - **THEN** from the next weekly review it weakens the goals it competes with in proportion to its own pressure, as if
   it had never been blocked
+
+### Requirement: A want is answered by what a move gave him
+
+A change of club SHALL answer a want only when the move gave him what the want was for.
+
+A want to leave this club SHALL be met by leaving it, because that is all it asks. A want to move up, to play at a
+stronger level or to play continental football is about his career and not about the club he happens to be at. It
+SHALL travel through a move like every other want about himself, and SHALL be met only when his situation actually
+provides it. A journal note that says he got what he wanted SHALL be written only when he did.
+
+Wants that travel with him SHALL still lose some heat and be held back until he has settled, as they do today.
+
+#### Scenario: Sold to a smaller club
+
+- **WHEN** a player who wants a bigger club is sold to a smaller one
+- **THEN** he still wants a bigger club at the new club, held back until he has settled
+- **AND** nothing records that he got what he wanted
+
+#### Scenario: Sold to the level he wanted
+
+- **WHEN** a player who wants a bigger club becomes a regular at the level his dream names
+- **THEN** the want to move up is met, and the note says so
+
+#### Scenario: Leaving is all he asked
+
+- **WHEN** a player who wants only to leave this club moves anywhere
+- **THEN** the want to leave is met

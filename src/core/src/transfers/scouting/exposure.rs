@@ -10,12 +10,9 @@
 //! scoring over observable signals so it is trivially unit-testable and
 //! never reaches into the simulator world.
 //!
-//! Three outputs feed the pipeline:
+//! Two outputs feed the pipeline:
 //!   * `circulation_boost` lifts a stale, untouched player up the
 //!     listed-sweep ranking so he doesn't vanish behind newer candidates.
-//!   * `price_softening` / `wage_softening` model the seller dropping the
-//!     asking price and the player relaxing his wage demand as the dry
-//!     weeks accumulate — natural market feedback, not a forced transfer.
 //!   * [`MarketDiscoveryDiagnosis`] reduces the per-buyer rejection
 //!     reasons into a single [`AvailabilityBlockReason`] so a quality
 //!     player with no interest accumulates a coherent explanation.
@@ -39,7 +36,7 @@ pub(in crate::transfers) enum ExposureStage {
     Building,
     /// Stale — months on the market with little to show; circulate wider.
     Stale,
-    /// Stranded — a very long sit; maximum softening and circulation.
+    /// Stranded — a very long sit; maximum circulation.
     Stranded,
 }
 
@@ -94,15 +91,10 @@ pub(in crate::transfers) struct AvailabilitySignals {
     pub recent_interest_count: u8,
     /// Consecutive circulation scans that found no taker.
     pub failed_scans: u16,
-    /// The circulation pass's most recent diagnosis of WHY the market
-    /// stalled. Steers which softening arm accelerates: a price-shaped
-    /// block pushes the seller's discount, a wage/level-shaped block
-    /// pushes the player's own softening.
-    pub last_block: Option<AvailabilityBlockReason>,
 }
 
-/// The exposure verdict — a discoverability score plus the staleness
-/// stage and the three behavioural feedback channels the pipeline reads.
+/// The exposure verdict — a discoverability score, the staleness stage and
+/// the circulation lift the pipeline reads.
 #[derive(Debug, Clone, Copy)]
 pub(in crate::transfers) struct AvailabilityExposure {
     /// 0..100 — how strongly the market should be discovering this player.
@@ -112,12 +104,6 @@ pub(in crate::transfers) struct AvailabilityExposure {
     /// Additive bonus folded into the listed-sweep soft score so stale,
     /// untouched players don't fall behind a churn of newer candidates.
     pub circulation_boost: f32,
-    /// Fraction (0..0.30) the seller will quietly knock off the asking
-    /// price after a long market failure.
-    pub price_softening: f32,
-    /// Fraction (0..0.25) the player relaxes his wage / level expectation
-    /// over a dry spell.
-    pub wage_softening: f32,
 }
 
 impl AvailabilityExposure {
@@ -190,39 +176,10 @@ impl AvailabilityExposure {
         };
         let circulation_boost = (stage_boost + no_interest_boost).clamp(0.0, 12.0);
 
-        // ── Softening curves ──
-        let stale_frac = (s.days_available as f32 / 365.0).clamp(0.0, 1.0);
-        let scan_frac = (s.failed_scans as f32 / 12.0).clamp(0.0, 1.0);
-        // The recorded diagnosis aims the feedback at the side that can
-        // act on it: "asking too high / no affordable need" is the
-        // seller's to fix, "wage too high / won't step down" the player's.
-        let seller_block_nudge = match s.last_block {
-            Some(b) if b.seller_should_discount() => 0.05,
-            _ => 0.0,
-        };
-        let player_block_nudge = match s.last_block {
-            Some(b) if b.player_should_soften() => 0.05,
-            _ => 0.0,
-        };
-        // Seller drops the price the longer it sits — more so when the tag
-        // sits above the player's value.
-        let overpriced = (s.asking_to_value_ratio - 1.0).clamp(0.0, 0.6);
-        let price_softening =
-            (stale_frac * 0.18 + scan_frac * 0.08 + overpriced * 0.10 + seller_block_nudge)
-                .clamp(0.0, 0.30);
-        // The player relaxes his wage / level demand over a dry spell; a
-        // player who actually handed in a request softens a touch faster.
-        let request_bonus = if s.is_transfer_requested { 0.03 } else { 0.0 };
-        let wage_softening =
-            (stale_frac * 0.14 + scan_frac * 0.07 + request_bonus + player_block_nudge)
-                .clamp(0.0, 0.25);
-
         AvailabilityExposure {
             score,
             stage,
             circulation_boost,
-            price_softening,
-            wage_softening,
         }
     }
 }
@@ -242,9 +199,6 @@ impl MarketDiscoveryDiagnosis {
             // point of view — too early / not really on the market.
             ListedRejectReason::NotListed => AvailabilityBlockReason::TooEarly,
             ListedRejectReason::OutOfTierWindow => AvailabilityBlockReason::ReputationTooHigh,
-            ListedRejectReason::UnaffordableFee => AvailabilityBlockReason::AskingPriceTooHigh,
-            ListedRejectReason::UnaffordableWage => AvailabilityBlockReason::WageTooHigh,
-            ListedRejectReason::ReputationGapTooLarge => AvailabilityBlockReason::ReputationTooHigh,
             ListedRejectReason::NoSquadNeed => AvailabilityBlockReason::NoAffordableSquadNeed,
             ListedRejectReason::NotAnUpgrade => AvailabilityBlockReason::NoAffordableSquadNeed,
             // The buyer's own surplus projection said the player would be
@@ -273,6 +227,7 @@ impl MarketDiscoveryDiagnosis {
             TransferPlausibilityReason::DomesticStepDownForPrimeStarter
             | TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub
             | TransferPlausibilityReason::LoanNotCredible
+            | TransferPlausibilityReason::BelowHisLevel
             // Refusing the manager is refusing the move, and from the
             // market's side it looks the same: he would not come.
             | TransferPlausibilityReason::RefusesToWorkForThatManager => {
@@ -433,7 +388,6 @@ mod tests {
                 low_usage_despite_ability: false,
                 recent_interest_count: 0,
                 failed_scans: 0,
-                last_block: None,
             }
         }
     }
@@ -473,103 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn softening_grows_with_failed_market_weeks() {
-        // Asking price AND wage expectation soften naturally after long
-        // market failure — the spec's softening requirement.
-        let fresh = ExposureFixtures::fresh_listed();
-        let mut long_failed = fresh;
-        long_failed.is_transfer_requested = true;
-        long_failed.days_available = 300;
-        long_failed.failed_scans = 10;
-        long_failed.asking_to_value_ratio = 1.3;
-
-        let e0 = AvailabilityExposure::compute(&fresh);
-        let e1 = AvailabilityExposure::compute(&long_failed);
-        assert!(
-            e1.price_softening > e0.price_softening,
-            "price must soften after long failure: {} !> {}",
-            e1.price_softening,
-            e0.price_softening
-        );
-        assert!(
-            e1.wage_softening > e0.wage_softening,
-            "wage must soften after long failure: {} !> {}",
-            e1.wage_softening,
-            e0.wage_softening
-        );
-        // Softening stays bounded — never a giveaway.
-        assert!(e1.price_softening <= 0.30 && e1.wage_softening <= 0.25);
-    }
-
-    #[test]
-    fn stale_availability_softens_gradually_not_instantly() {
-        // Spec: stale availability softens price/wage GRADUALLY, never
-        // instantly — a first-team player isn't suddenly a giveaway the
-        // week he's listed.
-        let mut s = ExposureFixtures::fresh_listed();
-        s.is_transfer_requested = true;
-        s.is_listed = false;
-
-        // Just available → essentially no softening yet.
-        let fresh = AvailabilityExposure::compute(&s);
-        assert!(
-            fresh.price_softening < 0.05 && fresh.wage_softening < 0.06,
-            "fresh availability must barely soften: price {} wage {}",
-            fresh.price_softening,
-            fresh.wage_softening
-        );
-
-        // A month in, one dry scan → a little more.
-        let mut month = s;
-        month.days_available = 30;
-        month.failed_scans = 1;
-        let mid = AvailabilityExposure::compute(&month);
-        assert!(mid.price_softening > fresh.price_softening);
-
-        // A full year stranded with a dozen dry scans → near the cap but
-        // still strictly bounded (never a giveaway).
-        let mut year = s;
-        year.days_available = 365;
-        year.failed_scans = 12;
-        let long = AvailabilityExposure::compute(&year);
-        assert!(long.price_softening > mid.price_softening);
-        assert!(long.price_softening <= 0.30 && long.wage_softening <= 0.25);
-    }
-
-    #[test]
-    fn block_diagnosis_steers_the_matching_softening_arm() {
-        // The recorded market diagnosis aims the feedback at the side that
-        // can act on it — previously `seller_should_discount` /
-        // `player_should_soften` were documented but consumed by nothing.
-        let mut base = ExposureFixtures::fresh_listed();
-        base.days_available = 90;
-        base.failed_scans = 4;
-
-        let neutral = AvailabilityExposure::compute(&base);
-
-        let mut price_blocked = base;
-        price_blocked.last_block = Some(AvailabilityBlockReason::AskingPriceTooHigh);
-        let pb = AvailabilityExposure::compute(&price_blocked);
-        assert!(
-            pb.price_softening > neutral.price_softening,
-            "a price-shaped block accelerates the seller's discount"
-        );
-        assert_eq!(
-            pb.wage_softening, neutral.wage_softening,
-            "…and leaves the player's arm alone"
-        );
-
-        let mut level_blocked = base;
-        level_blocked.last_block = Some(AvailabilityBlockReason::PlayerWontStepDown);
-        let lb = AvailabilityExposure::compute(&level_blocked);
-        assert!(
-            lb.wage_softening > neutral.wage_softening,
-            "a level/wage-shaped block accelerates the player's softening"
-        );
-        assert_eq!(lb.price_softening, neutral.price_softening);
-    }
-
-    #[test]
     fn recent_interest_suppresses_exposure() {
         // A player several clubs are already chasing needs less "market
         // discovery" help than an identical, untouched one.
@@ -596,18 +453,6 @@ mod tests {
 
     #[test]
     fn diagnosis_maps_reject_reasons() {
-        assert_eq!(
-            MarketDiscoveryDiagnosis::from_listed_reject(ListedRejectReason::UnaffordableFee),
-            AvailabilityBlockReason::AskingPriceTooHigh
-        );
-        assert_eq!(
-            MarketDiscoveryDiagnosis::from_listed_reject(ListedRejectReason::UnaffordableWage),
-            AvailabilityBlockReason::WageTooHigh
-        );
-        assert_eq!(
-            MarketDiscoveryDiagnosis::from_listed_reject(ListedRejectReason::ReputationGapTooLarge),
-            AvailabilityBlockReason::ReputationTooHigh
-        );
         assert_eq!(
             MarketDiscoveryDiagnosis::from_listed_reject(ListedRejectReason::NoSquadNeed),
             AvailabilityBlockReason::NoAffordableSquadNeed

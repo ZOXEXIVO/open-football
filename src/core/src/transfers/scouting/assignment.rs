@@ -5,13 +5,13 @@
 //! Strictly read-only against the world: every mutation is staged on the
 //! [`ClubScoutingStaged`] the scan returns, and pass 2 commits it.
 //!
-//! The club's **lens** — what it can see, what it can afford, and what it
-//! could credibly move for — is folded once in [`ClubScan::new`] and read by
-//! every assignment. Building it per assignment was the same three walks over
-//! the staff list and the reputation table, repeated for every open shirt.
+//! The club is read once, in [`ClubScan::new`]: which regions its network
+//! reaches, and its [`Suitor`] account, which every candidate is read against
+//! through the gate's one entry.
 
 use super::*;
 use crate::StaffKnowledge;
+use crate::transfers::gate::{MoveTerms, PursuitAction, TransferMovePlausibility};
 use crate::transfers::scouting::ScoutingPass;
 use crate::transfers::scouting::judgement::ScoutJudgement;
 use crate::transfers::view::club::ClubView;
@@ -28,14 +28,9 @@ pub(in crate::transfers::scouting) struct ClubScan<'a> {
     /// foreign shortlist toward candidates who could communicate in the
     /// dressing room (local language first, English/Spanish as bridges).
     home_language_mask: u64,
-    buyer_world_rep: i16,
-    buyer_plausibility_ctx: BuyerPlausibilityContext,
-    buyer_fee_capacity: f64,
+    suitor: Suitor<'a>,
     /// Which regions of the world this club can spot talent in at all.
     club_scout_reach: FxHashSet<ScoutingRegion>,
-    market_reach_cache: MarketReachCache,
-    /// The department's best coverage of each market, folded once per club.
-    scout_coverage: FxHashMap<u32, u8>,
     staged: ClubScoutingStaged,
 }
 
@@ -62,29 +57,13 @@ impl<'a> ClubScan<'a> {
         // dressing room (local language first, English/Spanish as bridges).
         let home_language_mask = Language::country_language_mask(&country.code);
 
-        // Multi-factor realism gate (see `ScoutingConfig::is_target_realistic`):
-        // blocks first-team regulars at much-bigger clubs from
-        // appearing in the candidate pool, while leaving listed,
-        // loan-listed, expiring-contract, youth, and fringe players
-        // attainable regardless of selling-club tier.
-        let buyer_world_rep = ClubView::club_world_reputation(club);
-        // Shared plausibility gate: augments `is_target_realistic`
-        // with the player-importance + sporting-drop checks so a
-        // first-choice prime-age GK at a peer-tier club (where the
-        // simpler club-rep-gap test passes) still gets blocked.
-        let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club, date);
-        // Real fee headroom (transfer budget × the negotiation fee-gate
-        // multiplier). Lets a well-funded club scout up to what it can
-        // actually spend, not just its bare reputation tier — reconciling
-        // this gate with the negotiation's budget-based fee gate.
-        let buyer_fee_capacity = buyer_plausibility_ctx.buyer_transfer_budget * 1.40;
+        let suitor = Suitor::of(country, club, date);
 
         // The club's scouting NETWORK reach — which regions of the world it
         // can spot talent in. Widens CONTINUOUSLY with reputation (see
         // `reputation_scout_regions`): a minnow sees only its own backyard, a
         // mid club its main trade corridors, a giant the whole globe. No hard
-        // tier cutoff. Built once per club and shared by every assignment; the
-        // country-reputation step-down on the foreign filter still bounds it.
+        // tier cutoff. Built once per club and shared by every assignment.
         let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let club_overall_score = club
             .teams
@@ -97,37 +76,6 @@ impl<'a> ClubScan<'a> {
                 .into_iter()
                 .collect();
 
-        // Which markets this club actually works, by COUNTRY. The
-        // region reach above is the NETWORK'S BUDGET — how far it can
-        // look at all; this is what it looks AT inside that budget.
-        //
-        // Two clubs of identical size in the same league answer
-        // differently: one has a Brazil scout and eight Brazilians on
-        // the books, the other has neither. Before this they were
-        // interchangeable once a region was in reach, so Nigeria and
-        // Norway were equally visible to everyone above the reputation
-        // line and the whole planet was uniform above ~0.77.
-        //
-        // Cached per (passport, league he plays in), because the
-        // candidate lists run to thousands and the answer depends on
-        // exactly that pair.
-        let market_reach_cache = MarketReachCache::new();
-        // The department's best coverage of each market, folded once per
-        // club. Asking "who is our best man on Colombia?" per candidate
-        // walks every staff member's list every time; a scout knows a
-        // handful of countries, so inverting the walk turns a scan per
-        // question into one pass per club.
-        let scout_coverage: FxHashMap<u32, u8> = {
-            let mut coverage: FxHashMap<u32, u8> = FxHashMap::default();
-            for staff in club.teams.iter().flat_map(|t| t.staffs.iter()) {
-                for known in &staff.staff_attributes.knowledge.known_countries {
-                    let slot = coverage.entry(known.country_id).or_insert(0);
-                    *slot = (*slot).max(known.level);
-                }
-            }
-            coverage
-        };
-
         Self {
             club,
             performance_lookup,
@@ -136,12 +84,8 @@ impl<'a> ClubScan<'a> {
             market_map,
             country_id: country.id,
             home_language_mask,
-            buyer_world_rep,
-            buyer_plausibility_ctx,
-            buyer_fee_capacity,
+            suitor,
             club_scout_reach,
-            market_reach_cache,
-            scout_coverage,
             staged: ClubScoutingStaged {
                 observations: Vec::new(),
                 reports: Vec::new(),
@@ -258,9 +202,8 @@ impl<'a> ClubScan<'a> {
         let club = self.club;
         let date = self.date;
         let config = self.config;
-        let buyer_world_rep = self.buyer_world_rep;
-        let buyer_fee_capacity = self.buyer_fee_capacity;
-        let buyer_plausibility_ctx = &self.buyer_plausibility_ctx;
+        let suitor = &self.suitor;
+        let market_map = self.market_map;
         let club_scout_reach = &self.club_scout_reach;
 
         // Find matching players from OTHER clubs (domestic + foreign known regions)
@@ -303,37 +246,6 @@ impl<'a> ClubScan<'a> {
             if club.transfer_plan.is_rejected(p.player_id, date) {
                 return false;
             }
-            if !config.is_target_realistic(buyer_world_rep, p, buyer_fee_capacity) {
-                return false;
-            }
-            // Shared plausibility veto — closes the importance
-            // and step-down holes left open by the simpler
-            // scouting-config gate above. Unsolicited (we're
-            // scouting, not responding to a listing).
-            //
-            // Deliberately WITHOUT the market reach. The reach term
-            // caps a move at `CanScoutQuietly`, and
-            // `evaluate_summary` collapses every stage below
-            // `CanStartNegotiation` into a hard reject — so handing
-            // it in here would turn "the club may watch him, and
-            // that is all" into "the club never sees him", which is
-            // the opposite of what the stage means. Football is
-            // watched globally. The geography enters this pass as
-            // the graded data-department preference below, and as a
-            // GATE only at the public-interest step, where the
-            // question is whether the club will say so out loud.
-            if let Some(TransferPlausibilityVerdict::HardReject(_)) =
-                TransferPlausibilityBuilder::evaluate_summary(
-                    buyer_plausibility_ctx,
-                    p,
-                    false,
-                    true,
-                    date,
-                    None,
-                )
-            {
-                return false;
-            }
             let effective_min =
                 if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
                     ability_floor
@@ -351,7 +263,13 @@ impl<'a> ClubScan<'a> {
             // ~0 bonus, so a two-game fluke still can't sneak in.
             let form_bonus = config.stats_bonus(p.appearances, p.average_rating);
             let effective_ability = (p.skill_ability as i16 + form_bonus).clamp(1, 200) as u8;
-            p.age >= age_min && p.age <= age_max && effective_ability >= effective_min
+            // The gate is the dearest read here, so it runs last, on the
+            // few the shirt's age and level have not already ruled out.
+            p.age >= age_min
+                && p.age <= age_max
+                && effective_ability >= effective_min
+                && TransferMovePlausibility::read(suitor, p, MoveTerms::purchase(true), market_map)
+                    .reaches(PursuitAction::FillNow.needs())
         };
 
         // Domestic players (always visible) — this assignment's
@@ -365,13 +283,9 @@ impl<'a> ClubScan<'a> {
 
         // Foreign players are visible if their region falls inside the
         // club's reputation-driven network reach OR a scout personally
-        // knows it. Only countries with equal-or-lower reputation than our
-        // own are scoutable — e.g. an Italian club can scout Nigeria, but
-        // a Nigerian club can't scout Serie A. `club_scout_reach` always
-        // holds at least the home region, so the foreign sweep runs for
-        // every club; how far it reaches is what scales with reputation.
-        // (The country-reputation step-down is pre-folded into
-        // `foreign_by_group`.)
+        // knows it. `club_scout_reach` always holds at least the home
+        // region, so the foreign sweep runs for every club; how far it
+        // reaches is what scales with reputation.
         let foreign_matching: Vec<&PlayerSummary> = foreign_by_group[target_group.index()]
             .iter()
             .copied()
@@ -390,17 +304,12 @@ impl<'a> ClubScan<'a> {
     /// Higher data skill = tighter pool with less noise; low skill ≈ random.
     fn prefilter<'p>(&self, mut matching: Vec<&'p PlayerSummary>) -> Vec<&'p PlayerSummary> {
         let club = self.club;
-        let date = self.date;
         let config = self.config;
         let country_id = self.country_id;
         let home_language_mask = self.home_language_mask;
         let market_map = self.market_map;
         let performance_lookup = self.performance_lookup;
-        let market_reach_cache = &self.market_reach_cache;
-        let scout_coverage = &self.scout_coverage;
-        let best_scout_country_level = |source_country: u32| -> u8 {
-            scout_coverage.get(&source_country).copied().unwrap_or(0)
-        };
+        let suitor = &self.suitor;
 
         // Data-first pre-filter: the club's data department narrows the
         // candidate pool from "everyone who matches position/age/ability"
@@ -438,15 +347,7 @@ impl<'a> ClubScan<'a> {
                     // country nobody here has ever signed from,
                     // never to a wall: a scout may watch anyone.
                     let market_bonus = if p.country_id != country_id {
-                        (market_reach_cache.reach(
-                            market_map,
-                            country_id,
-                            club,
-                            p,
-                            date,
-                            &best_scout_country_level,
-                        ) - 0.35)
-                            * 24.0
+                        (suitor.reach_to(p, market_map) - 0.35) * 24.0
                     } else {
                         0.0
                     };
@@ -637,15 +538,9 @@ impl<'a> ClubScan<'a> {
     ) {
         let club = self.club;
         let config = self.config;
-        let date = self.date;
         let country_id = self.country_id;
         let market_map = self.market_map;
-        let buyer_plausibility_ctx = &self.buyer_plausibility_ctx;
-        let market_reach_cache = &self.market_reach_cache;
-        let scout_coverage = &self.scout_coverage;
-        let best_scout_country_level = |source_country: u32| -> u8 {
-            scout_coverage.get(&source_country).copied().unwrap_or(0)
-        };
+        let suitor = &self.suitor;
         let obs_count = assessed.obs_count;
         let target_region = assessed.target_region;
         let assessed_ability = assessed.assessed_ability;
@@ -658,6 +553,8 @@ impl<'a> ClubScan<'a> {
         let monitoring_updates = &mut self.staged.monitoring_updates;
 
         let is_new = !assignment.has_observation_for(target.player_id);
+        let assessment =
+            TransferMovePlausibility::read(suitor, target, MoveTerms::purchase(true), market_map);
 
         // Skip if we already queued an observation for this player this round
         if observations.iter().any(|o| {
@@ -716,19 +613,22 @@ impl<'a> ClubScan<'a> {
         if let Some(scout_id) = assignment.scout_staff_id {
             monitoring_updates.push(MonitoringUpdate {
                 club_id: club.id,
-                scout_staff_id: scout_id,
-                player_id: target.player_id,
-                source: ScoutMonitoringSource::TransferRequest,
-                transfer_request_id: Some(assignment.transfer_request_id),
-                origin_assignment_id: Some(assignment.id),
-                assessed_ability,
-                assessed_potential,
-                confidence,
-                role_fit: role_fit_now,
-                estimated_value: target.estimated_value,
-                risk_flags: risk_flags_now.clone(),
-                is_match: false,
-                region: Some(target_region),
+                reading: FileReading::of(&assessment, self.date),
+                seen: FileObservation {
+                    scout_staff_id: scout_id,
+                    player_id: target.player_id,
+                    source: ScoutMonitoringSource::TransferRequest,
+                    transfer_request_id: Some(assignment.transfer_request_id),
+                    origin_assignment_id: Some(assignment.id),
+                    region: Some(target_region),
+                    assessed_ability,
+                    assessed_potential,
+                    confidence,
+                    role_fit: role_fit_now,
+                    estimated_value: target.estimated_value,
+                    risk_flags: risk_flags_now.clone(),
+                    is_match: false,
+                },
             });
         }
 
@@ -753,25 +653,7 @@ impl<'a> ClubScan<'a> {
                 recommendation,
                 ScoutingRecommendation::StrongBuy | ScoutingRecommendation::Buy
             );
-            let assessment = TransferPlausibilityBuilder::assess_summary(
-                buyer_plausibility_ctx,
-                target,
-                false,
-                true,
-                date,
-                Some(market_reach_cache.reach(
-                    market_map,
-                    country_id,
-                    club,
-                    target,
-                    date,
-                    &best_scout_country_level,
-                )),
-            );
-            let public_interest_ok = buyable
-                && assessment
-                    .map(|a| a.reaches(TransferMoveStage::CanShowPublicInterest))
-                    .unwrap_or(false);
+            let public_interest_ok = buyable && assessment.reaches(PursuitAction::GoPublic.needs());
 
             if public_interest_ok {
                 if !wanted_targets.contains(&(club.id, target.player_id)) {
@@ -782,14 +664,12 @@ impl<'a> ClubScan<'a> {
                 // credibly go public yet — keep the private report
                 // (it still feeds the internal shortlist) and
                 // record WHY no public interest was shown.
-                if let Some(a) = assessment {
-                    debug!(
-                        "scouting: club {} watched player {} privately, no public interest — {}",
-                        club.id,
-                        target.player_id,
-                        a.diagnostics.explain()
-                    );
-                }
+                debug!(
+                    "scouting: club {} watched player {} privately, no public interest — {}",
+                    club.id,
+                    target.player_id,
+                    assessment.diagnostics.explain()
+                );
             }
             reports.push(ScoutingReportResult {
                 club_id: club.id,
@@ -807,5 +687,80 @@ impl<'a> ClubScan<'a> {
                 assignment_id: assignment.id,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod countryman_tests {
+    use super::*;
+    use crate::club::player::transfer::LevelFloor;
+    use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestSummary};
+    use crate::{PlayerPositionType, PlayerSquadStatus};
+
+    /// A club in a small country, and a countryman on the fringe of a club
+    /// in a far stronger one whose floor has widened to its division and
+    /// whose ask it could hold. The country he plays in outranks its own;
+    /// the gate, not that, decides whether it may watch him.
+    #[test]
+    fn a_countryman_abroad_may_be_watched_from_a_smaller_country() {
+        let mut club = TestClub::new(1).reputation(2_500).build();
+        club.transfer_plan.total_budget = 5_000_000.0;
+        let country = TestCountry::new(1)
+            .code("pt")
+            .reputation(3_000)
+            .league_reputation(2_500)
+            .clubs(vec![club])
+            .build();
+        let mut countryman = TestSummary::new(40)
+            .club_id(9)
+            .country(2, "es")
+            .nationality(1)
+            .ability(100)
+            .league(8_000, 0.85)
+            .squad_status(PlayerSquadStatus::MainBackupPlayer)
+            .rank(3)
+            .appearances(2, 20)
+            .salary(60_000)
+            .value(300_000.0)
+            .level_floor(LevelFloor {
+                standing: 3_000.0,
+                tolerance: 1_000.0,
+                plays_in: 8_000.0,
+            })
+            .build();
+        countryman.country_reputation = 8_000;
+        let foreign = [countryman];
+        let assignment = ScoutingAssignment::new(
+            1,
+            1,
+            None,
+            PlayerPositionType::MidfielderCenter,
+            80,
+            18,
+            32,
+            1_000_000.0,
+        );
+        let config = ScoutingConfig::default();
+        let lookup = LeaguePerformanceLookup::build(&country);
+        let map = MarketMap::default();
+        let scan = ClubScan::new(
+            &country,
+            &country.clubs[0],
+            &lookup,
+            &config,
+            TestDate::today(),
+            &map,
+        );
+        let domestic: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] = Default::default();
+        let candidates = scan.candidates(
+            &assignment,
+            &[],
+            &domestic,
+            &ScoutingPass::by_group(foreign.iter()),
+        );
+        assert_eq!(
+            candidates.iter().map(|p| p.player_id).collect::<Vec<_>>(),
+            vec![40]
+        );
     }
 }

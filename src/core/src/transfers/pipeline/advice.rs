@@ -1,15 +1,15 @@
+use crate::transfers::MarketMap;
 use crate::transfers::market::window::MarketCadence;
 use crate::transfers::squad::bands::TierBands;
+use crate::transfers::view::world::WorldPool;
 use chrono::NaiveDate;
 
-use crate::club::player::transfer::AvailabilityBlockReason;
-use crate::transfers::gate::EffectivePlayerReputation;
 use crate::transfers::gate::fit::SquadFitSnapshot;
 use crate::transfers::scouting::breakout::BreakoutPerformanceSignal;
 use crate::transfers::scouting::exposure::{
     AvailabilityExposure, AvailabilitySignals, ExposureStage,
 };
-use crate::{Country, PlayerFieldPositionGroup, PositionCoverage, ReputationLevel, WageCalculator};
+use crate::{Country, PlayerFieldPositionGroup, PositionCoverage, ReputationLevel};
 
 mod intake;
 mod scan;
@@ -48,12 +48,11 @@ pub(in crate::transfers) struct ListedTargetView {
     /// the affordability / tier / reputation gates below.
     pub breakout_score: f32,
     pub world_reputation: i16,
-    pub current_reputation: i16,
     pub ambition: f32,
     pub parent_club_score: f32,
     pub parent_club_in_debt: bool,
     /// Days since the player first became available. Drives the
-    /// market-exposure staleness curve — softening and circulation lift.
+    /// market-exposure staleness curve and its circulation lift.
     pub days_available: i64,
     /// Months left on contract; <= 6 reads as a bargain pickup.
     pub contract_months_remaining: i16,
@@ -65,9 +64,6 @@ pub(in crate::transfers) struct ListedTargetView {
     pub recent_interest_count: u8,
     /// Consecutive weekly circulation scans that found no taker.
     pub failed_scans: u16,
-    /// Most recent circulation diagnosis of why the market stalled —
-    /// steers which exposure softening arm accelerates.
-    pub last_block: Option<AvailabilityBlockReason>,
 }
 
 /// The buyer's need picture, one entry per position group.
@@ -138,16 +134,9 @@ impl BuyerNeedPicture {
 pub(in crate::transfers) struct BuyerContext {
     /// Continuous reputation score (0..1) of the buyer.
     pub buyer_rep_score: f32,
-    pub buyer_world_rep: i16,
-    pub buyer_league_reputation: u16,
-    pub buyer_total_wages: u32,
-    pub buyer_wage_budget: u32,
-    /// `plan.total_budget` — the transfer-budget cap.
+    /// `plan.total_budget` — read for how much headroom a price leaves, a
+    /// preference only: whether the club can fund him is the gate's.
     pub plan_total_budget: f64,
-    /// Soft cap from `plan.total_budget * 2.0` — scouts shouldn't tag
-    /// players the club cannot afford even with stretch. Pass 0.0 to
-    /// disable.
-    pub max_recommend_value: f64,
     /// Best CA at the target's position group on the buying squad.
     pub buyer_best_in_group: u8,
     /// Buyer has an open `TransferRequest` matching the target's group.
@@ -181,9 +170,6 @@ pub(in crate::transfers) enum ListedTargetVerdict {
 pub(in crate::transfers) enum ListedRejectReason {
     NotListed,
     OutOfTierWindow,
-    UnaffordableFee,
-    UnaffordableWage,
-    ReputationGapTooLarge,
     NoSquadNeed,
     NotAnUpgrade,
     /// The buyer's own surplus maths (squad-average gap / depth cap)
@@ -225,20 +211,19 @@ struct AdmittedTarget {
 }
 
 impl ListedTargetScreen {
-    /// Pure evaluator for the listed-star / breakout sweep.
+    /// Pure evaluator for the listed-star / breakout sweep: does the buyer
+    /// want him. Whether it can have him — his level, his wage, its market,
+    /// the fee — is the gate's question, read through its one entry.
     ///
     /// Hard gates (reject if any fail):
     ///   • availability: a public market flag (Lst|Req|Unh), OR loan-listed
     ///     with a strong breakout score, OR — in `form_discovery_mode` — a
     ///     strong breakout alone (the year-round watch discovers on form)
     ///   • CA inside the buyer's tier window
-    ///   • estimated fee within `plan_total_budget × 1.4`
-    ///   • estimated wage within `wage_headroom × 1.3`
-    ///   • world-reputation gap ≤ tier-scaled allowance
     ///   • a reason to act: a squad-need signal (weak group, open request,
     ///     aging starter) OR a market opportunity — a stale available player
     ///     or a genuine breakout who is at least depth-relevant or a resale
-    ///     prospect. A breakout never relaxes the fee / wage / tier / rep gates.
+    ///     prospect
     ///   • improvement: ≥ 3 CA above current best, an open request, or a
     ///     qualifying opportunity
     ///
@@ -274,9 +259,8 @@ impl ListedTargetScreen {
         Self::fills_a_need(target, ctx, reached)
     }
 
-    /// Can this buyer get near him at all: is he findable, inside the tier
-    /// window, and affordable in both fee and wage. Nothing here asks whether
-    /// the buyer actually wants him.
+    /// Is he findable, and inside the buyer's tier window. Nothing here asks
+    /// whether the buyer actually wants him.
     fn within_reach(
         target: &ListedTargetView,
         ctx: &BuyerContext,
@@ -288,26 +272,15 @@ impl ListedTargetScreen {
         // form is a genuine breakout (clubs buy the players smaller clubs only
         // meant to loan out); OR, in year-round form-discovery mode, his form
         // alone is a strong breakout (scouting monitoring opens on talent, not
-        // just on a for-sale sign). None of these relax the realism gates below
-        // — they only decide whether the player enters this path at all.
+        // just on a for-sale sign). They only decide whether the player
+        // enters this path at all.
         let strong_breakout =
             target.breakout_score >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
         let publicly_available =
             target.is_listed || target.is_transfer_requested || target.is_unhappy;
-        // A clearly bigger club may pursue a smaller club's breakout star even
-        // when he isn't listed — the realistic "giant comes for the second-
-        // division top scorer". Bounded by a genuine breakout AND a real
-        // reputation gap to the parent club; the tier-window, affordability and
-        // plausibility gates below still apply, so this never becomes a
-        // free-for-all. It converts the year-round breakout MONITORING that
-        // `scan_breakout_form` builds into an actual in-window approach instead
-        // of a row that just sits on the books waiting for the player to be
-        // listed (which his selling club, holding an asset, rarely does).
-        let buyer_outranks_parent = ctx.buyer_rep_score >= target.parent_club_score + 0.10;
         let available_enough = publicly_available
             || (target.is_loan_listed && strong_breakout)
-            || (ctx.form_discovery_mode && strong_breakout)
-            || (strong_breakout && buyer_outranks_parent);
+            || (ctx.form_discovery_mode && strong_breakout);
         if !available_enough {
             return Err(NotListed);
         }
@@ -318,8 +291,8 @@ impl ListedTargetScreen {
         // side signs the fringe player who'd normally be out of reach"; without
         // this lift he was too good for lower tiers (ceiling) yet not an upgrade
         // for his own-tier peers (`upgrade < 3` below), so no club could sign him
-        // and he sat listed forever. Affordability and the reputation-gap gate
-        // still bound how far above his level a club can actually reach.
+        // and he sat listed forever. The gate still bounds how far above his
+        // level a club can actually reach.
         const AVAILABLE_CEILING_RELAX: u8 = 20;
 
         let baseline = TierBands::tier_starter_ca_score(ctx.buyer_rep_score, target.position_group);
@@ -335,9 +308,9 @@ impl ListedTargetScreen {
             return Err(OutOfTierWindow);
         }
 
-        // Market-exposure verdict — staleness, the seller/player softening
-        // curves, and the circulation lift for the soft score. Pure function
-        // of the observable signals; never relaxes the tier window above.
+        // Market-exposure verdict — staleness and the circulation lift for
+        // the soft score. Pure function of the observable signals; never
+        // relaxes the tier window above.
         let exposure = AvailabilityExposure::compute(&AvailabilitySignals {
             days_available: target.days_available,
             is_listed: target.is_listed,
@@ -358,59 +331,9 @@ impl ListedTargetScreen {
             low_usage_despite_ability: target.low_usage,
             recent_interest_count: target.recent_interest_count,
             failed_scans: target.failed_scans,
-            last_block: target.last_block,
         });
 
-        // Affordability — fee. The asking price softens the longer the player
-        // sits unsold, so a stale listing becomes reachable for a club that
-        // couldn't fund the headline value — bounded, never a giveaway.
-        let asking_value = target.estimated_value * (1.0 - exposure.price_softening as f64);
         let affordability_cap = (ctx.plan_total_budget * 1.4).max(0.0);
-        if affordability_cap <= 0.0 || asking_value > affordability_cap {
-            return Err(UnaffordableFee);
-        }
-        if ctx.max_recommend_value > 0.0 && asking_value > ctx.max_recommend_value {
-            return Err(UnaffordableFee);
-        }
-
-        // Affordability — wage proxy
-        let estimated_wage = WageCalculator::expected_annual_wage_raw(
-            target.ability,
-            target.current_reputation,
-            matches!(target.position_group, PlayerFieldPositionGroup::Forward),
-            matches!(target.position_group, PlayerFieldPositionGroup::Goalkeeper),
-            target.age,
-            ctx.buyer_rep_score,
-            ctx.buyer_league_reputation,
-        );
-        // The player relaxes his wage expectation over a dry spell, again
-        // bounded by the softening curve.
-        let softened_wage = (estimated_wage as f64 * (1.0 - exposure.wage_softening as f64)) as u64;
-        let wage_headroom = (ctx.buyer_wage_budget as i64 - ctx.buyer_total_wages as i64).max(0);
-        let wage_cap = (wage_headroom as f64 * 1.3) as u64;
-        if wage_cap > 0 && softened_wage > wage_cap {
-            return Err(UnaffordableWage);
-        }
-
-        // Reputation plausibility — tier-scaled gap (never softened: an
-        // impossible-prestige move stays impossible regardless of staleness).
-        // Uses EFFECTIVE reputation, not bare world rep: a player who is a
-        // recognised name in his own market (high current/home standing) is
-        // gauged on that domestic renown, so a low-world-rep domestic star is
-        // not mistaken for a reachable bargain. `max(world, blend)` means a
-        // player whose current rep is at/below his world rep is judged exactly
-        // as before — the blend only ever raises the bar, never lowers it.
-        let effective_rep = EffectivePlayerReputation::compute(
-            target.world_reputation,
-            target.current_reputation,
-            target.current_reputation,
-            true,
-        )
-        .max(target.world_reputation);
-        let gap_allowed = (1200.0 + 2400.0 * ctx.buyer_rep_score) as i32;
-        if (effective_rep as i32 - ctx.buyer_world_rep as i32) > gap_allowed {
-            return Err(ReputationGapTooLarge);
-        }
         Ok(ReachedTarget {
             strong_breakout,
             baseline,
@@ -629,19 +552,29 @@ impl StaffRecommendations {
         }
     }
 
-    pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
+    pub fn generate_staff_recommendations(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         // Only runs weekly (same schedule as should_evaluate)
         if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
-        StaffAdvicePass::run(country, date);
+        StaffAdvicePass::run(country, world, market_map, date);
     }
 
-    pub fn process_staff_recommendations(country: &mut Country, date: NaiveDate) {
+    pub fn process_staff_recommendations(
+        country: &mut Country,
+        world: WorldPool<'_>,
+        market_map: &MarketMap,
+        date: NaiveDate,
+    ) {
         // Only runs weekly (same schedule as should_evaluate)
         if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
-        RecommendationIntake::run(country, date);
+        RecommendationIntake::run(country, world, market_map, date);
     }
 }
